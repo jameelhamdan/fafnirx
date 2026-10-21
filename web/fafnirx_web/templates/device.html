@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}{{ dev.name }} - fafnirx{% endblock %}
+{% block content %}
+<div class="row between">
+  <div class="row">
+    <span class="dot {% if dev.revoked %}off{% elif dev.online %}on{% endif %}"></span>
+    <h1 style="margin:0">{{ dev.name }}</h1>
+    <span class="muted">{% if dev.revoked %}Revoked{% elif dev.online %}Online{% else %}Offline{% endif %}</span>
+  </div>
+  <a class="link" href="/">Back</a>
+</div>
+
+{% if new_token %}
+<div class="notice" style="margin-top:1rem" x-data="copy('{{ new_token }}')">
+  <strong>Device token</strong>
+  <span class="muted">Shown once. Store it on the device, it cannot be displayed again.</span>
+  <pre class="code">{{ new_token }}</pre>
+  <button type="button" @click="copy()" x-text="done ? 'Copied' : 'Copy token'">Copy token</button>
+</div>
+{% endif %}
+
+<h2>Client setup</h2>
+<p class="muted">Download the <a class="link" href="/ca.pem">CA certificate</a> to the device, then:</p>
+<pre class="code">fafnirx enroll --server {{ server }} --token {{ new_token or '<token>' }} --ca fafnirx-ca.pem
+fafnirx add-folder "C:/Users/you/Documents" "C:/Users/you/Pictures"
+fafnirx run</pre>
+{% if not has_ca %}<p class="error">The engine has not generated the CA certificate yet. Start fafnirx-server first.</p>{% endif %}
+
+<h2>Details</h2>
+<div class="card">
+  <dl class="stats" style="margin:0">
+    <dt>Namespace</dt><dd>/devices/{{ dev.name }}/</dd>
+    <dt>Hostname</dt><dd>{{ dev.hostname or '-' }}</dd>
+    <dt>OS</dt><dd>{{ dev.os or '-' }}</dd>
+    <dt>IP</dt><dd>{{ dev.ip or '-' }}</dd>
+    <dt>Client version</dt><dd>{{ dev.client_version or '-' }}</dd>
+    <dt>Device disk</dt><dd>{% if dev.disk_total %}{{ dev.disk_free | bytes }} free of {{ dev.disk_total | bytes }}{% else %}-{% endif %}</dd>
+    <dt>Collected</dt><dd>{{ dev.collected_bytes | bytes }} in {{ dev.file_count }} file{{ '' if dev.file_count == 1 else 's' }}</dd>
+    <dt>Last seen</dt><dd>{{ dev.last_seen | ago }}</dd>
+    <dt>Last collected</dt><dd>{{ dev.last_collected | ago }}</dd>
+    <dt>Created</dt><dd>{{ dev.created_at | stamp }}</dd>
+  </dl>
+</div>
+
+<h2>Token</h2>
+<div class="row">
+  <form method="post" action="/devices/{{ dev.name }}/token" onsubmit="return confirm('Replace the token? The device stops working until it is given the new one.')">
+    <button type="submit">{{ 'New token (re-enables device)' if dev.revoked else 'Rotate token' }}</button>
+  </form>
+  {% if not dev.revoked %}
+  <form method="post" action="/devices/{{ dev.name }}/revoke" onsubmit="return confirm('Revoke this device? Its collected data is kept.')">
+    <button class="danger" type="submit">Revoke</button>
+  </form>
+  {% endif %}
+</div>
+
+<h2>Recent activity</h2>
+<table>
+  <thead><tr><th>Time (UTC)</th><th>Action</th><th>Path</th></tr></thead>
+  <tbody>
+  {% for e in events %}
+    <tr><td>{{ e.ts | stamp }}</td><td>{{ e.action | capitalize }}</td>
+        <td class="path">{{ e.path }}{% if e.detail %} <span class="muted">({{ e.detail }})</span>{% endif %}</td></tr>
+  {% else %}
+    <tr><td colspan="3" class="muted">Nothing collected yet</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

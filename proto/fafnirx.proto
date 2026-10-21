@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package fafnirx.v1;
+
+// Data path between clients and the orchestrator. Every call is authenticated
+// with the device token in the `authorization: Bearer <token>` metadata.
+// A client can only add data; there is no call that reads, lists or deletes
+// anything stored on the orchestrator.
+service Collector {
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // have/need: the orchestrator answers with the chunks it does not yet store.
+  rpc Negotiate(Manifest) returns (NegotiateResponse);
+
+  // Client-streaming upload of chunks. Every chunk is verified against its hash.
+  rpc UploadChunks(stream Chunk) returns (UploadSummary);
+
+  // Records a new version of a path. All chunks must already be stored.
+  rpc Commit(CommitRequest) returns (CommitResponse);
+
+  // Marks a path deleted on the device. Nothing is removed from the orchestrator.
+  rpc MarkDeleted(DeleteRequest) returns (DeleteResponse);
+
+  // Client binary updates, hosted by the orchestrator and signed off-box.
+  rpc GetUpdateInfo(UpdateInfoRequest) returns (UpdateInfo);
+  rpc DownloadUpdate(UpdateInfoRequest) returns (stream UpdateChunk);
+}
+
+message HeartbeatRequest {
+  string hostname = 1;
+  string os = 2;            // "windows" | "macos" | "linux"
+  string client_version = 3;
+  uint64 disk_total = 4;    // bytes, volume holding the collected folders
+  uint64 disk_free = 5;
+  repeated string errors = 6;  // recent upload errors, drained on every beat
+}
+
+message HeartbeatResponse {
+  string device_name = 1;
+  int64 server_time = 2;    // unix seconds
+}
+
+// A file is described by its ordered chunk hashes. Chunks are fixed 4 MiB
+// (the last one may be shorter). root_hash = blake3(chunk_hash_0 || ... || chunk_hash_n || size_le64).
+message Manifest {
+  string path = 1;          // relative, '/' separated, NFC normalized
+  uint64 size = 2;
+  bytes root_hash = 3;
+  repeated bytes chunk_hashes = 4;
+}
+
+message NegotiateResponse {
+  repeated uint32 missing = 1;  // indexes into Manifest.chunk_hashes
+  bool already_current = 2;     // the stored current version already has this root hash
+}
+
+message Chunk {
+  bytes hash = 1;
+  bytes data = 2;
+}
+
+message UploadSummary {
+  uint32 stored = 1;
+}
+
+message CommitRequest {
+  Manifest manifest = 1;
+  int64 mtime = 2;              // unix nanoseconds
+  uint32 mode = 3;              // best effort, 0 when unknown
+  string renamed_from = 4;      // set when this commit is a rename
+}
+
+message CommitResponse {
+  uint64 version_id = 1;
+}
+
+message DeleteRequest {
+  string path = 1;
+}
+
+message DeleteResponse {}
+
+message UpdateInfoRequest {
+  string platform = 1;          // e.g. "windows-x86_64"
+}
+
+message UpdateInfo {
+  bool available = 1;
+  string version = 2;
+  bytes sha256 = 3;
+  bytes signature = 4;          // ed25519 over "fafnirx-update\n<platform>\n<version>\n<sha256 hex>"
+  uint64 size = 5;
+}
+
+message UpdateChunk {
+  bytes data = 1;
+}

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Sources - fafnirx{% endblock %}
+{% block content %}
+<h1>Sources</h1>
+<p class="muted">The orchestrator collects these itself, on a schedule. Files land in <code>/sources/&lt;name&gt;/</code> and follow the same versions and retention as devices.</p>
+
+<table>
+  <thead><tr><th></th><th>Name</th><th>Collected</th><th>Every</th><th>Last run</th><th></th></tr></thead>
+  <tbody>
+  {% for s in sources %}
+    <tr>
+      <td><span class="dot {{ s.dot }}"></span></td>
+      <td>{{ s.name }} <span class="muted">Google Drive, {{ s.folders }} folder{{ '' if s.folders == 1 else 's' }}{% if not s.enabled %}, paused{% endif %}</span>
+        {% if s.last_message %}<pre class="msg">{{ s.last_message }}</pre>{% endif %}</td>
+      <td>{{ s.bytes | bytes }} in {{ s.files }} file{{ '' if s.files == 1 else 's' }}</td>
+      <td>{{ (s.interval_secs / 3600) | round(1) }} h</td>
+      <td>{% if s.last_status == 'running' %}Running{% else %}{{ s.last_run_at | ago }}{% endif %}</td>
+      <td class="actions">
+        <form method="post" action="/sources/{{ s.name }}/run"><button type="submit">Run now</button></form>
+        <form method="post" action="/sources/{{ s.name }}/toggle"><button type="submit">{{ 'Pause' if s.enabled else 'Resume' }}</button></form>
+        <form method="post" action="/sources/{{ s.name }}/delete" onsubmit="return confirm('Remove this source? Files already collected are kept for the retention period.')"><button class="danger" type="submit">Remove</button></form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="muted">No sources yet</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>Add Google Drive</h2>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<form method="post" action="/sources" class="form card">
+  <div class="two">
+    <div><label for="n">Name</label><input id="n" type="text" name="name" value="{{ form.name or '' }}" pattern="[a-z0-9][a-z0-9._\-]{0,62}" placeholder="drive" required></div>
+    <div><label for="i">Collect every (hours)</label><input id="i" type="number" name="interval_hours" value="{{ form.interval_hours or 24 }}" min="0.25" step="any" required></div>
+  </div>
+  <div>
+    <label for="f">Folders</label>
+    <textarea id="f" name="folders" placeholder="Folder ID or folder URL, one per line" required>{{ form.folders or '' }}</textarea>
+    <p class="hint">Share each folder with the service account's email (Viewer is enough). Raw files only: Google Docs, Sheets and Slides are skipped.</p>
+  </div>
+  <div>
+    <label for="k">Service account key (JSON)</label>
+    <textarea id="k" name="service_account" placeholder='{"type": "service_account", "client_email": "...", "private_key": "..."}' required></textarea>
+    <p class="hint">Stored on the orchestrator and never shown again.</p>
+  </div>
+  <div><button class="primary" type="submit">Add source</button></div>
+</form>
+{% endblock %}
