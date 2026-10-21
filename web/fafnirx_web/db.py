@@ -106,8 +106,8 @@ def set_setting(s: Session, key: str, value: int) -> None:
         s.add(Setting(key=key, value=str(value)))
 
 
-def devices(s: Session) -> list[dict]:
-    """Every device with its collected totals and online state."""
+def devices(s: Session, name: str | None = None) -> list[dict]:
+    """Devices (all, or just `name`) with their collected totals and online state."""
     offline_after = setting(s, "offline_after_secs", 60)
     stmt = (
         select(
@@ -121,6 +121,8 @@ def devices(s: Session) -> list[dict]:
         .group_by(Device.id)
         .order_by(Device.name)
     )
+    if name is not None:
+        stmt = stmt.where(Device.name == name)
     t = now()
     out = []
     for device, collected, count in s.execute(stmt):

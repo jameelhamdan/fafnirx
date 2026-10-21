@@ -15,7 +15,7 @@ import psycopg
 
 
 def create() -> tuple[str, callable]:
-    """Returns (url for FAFNIRX_DATABASE_URL, function that drops the schema again)."""
+    """Creates the schema, points FAFNIRX_DATABASE_URL at it and returns (url, function that drops it again)."""
     base = os.environ.get("FAFNIRX_TEST_DATABASE_URL")
     if not base:
         raise SystemExit("set FAFNIRX_TEST_DATABASE_URL (postgresql://user:password@host:port/database)")
@@ -23,6 +23,8 @@ def create() -> tuple[str, callable]:
     admin = psycopg.connect(base, autocommit=True)
     admin.execute(f"CREATE SCHEMA {schema}")
     url = f"{base}{'&' if '?' in base else '?'}options={quote(f'-c search_path={schema}')}"
+
+    os.environ["FAFNIRX_DATABASE_URL"] = url
 
     def drop():
         admin.execute(f"DROP SCHEMA {schema} CASCADE")

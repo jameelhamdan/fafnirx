@@ -3,7 +3,6 @@
 import contextlib
 import hmac
 import os
-import re
 import secrets
 import time
 from pathlib import Path
@@ -17,11 +16,10 @@ from sqlalchemy.exc import IntegrityError
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import browse, db, fmt, integrations, stats
+from .validate import NAME_RE, NAME_RULE
 from .models import Alert, Device, Event, as_dict
 
 BASE = Path(__file__).resolve().parent
-NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
-NAME_RULE = "Name: 1-63 characters, lowercase letters, digits, '.', '_' or '-'"
 LOGIN_WINDOW, LOGIN_MAX = 60, 5
 
 templates = Jinja2Templates(directory=BASE / "templates")
@@ -166,7 +164,7 @@ def create_app() -> FastAPI:
         return device_page(request, s, name, new_token=token)
 
     def device_page(request: Request, s, name: str, new_token: str | None = None):
-        dev = next((d for d in db.devices(s) if d["name"] == name), None)
+        dev = next(iter(db.devices(s, name)), None)
         if dev is None:
             raise HTTPException(404, "No such device")
         events = [

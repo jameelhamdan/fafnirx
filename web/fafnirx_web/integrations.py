@@ -13,12 +13,12 @@ from sqlalchemy import BigInteger, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import db, fmt
-from .fmt import status_class
+from . import db
+from . import stats
+from .stats import job_state
+from .validate import NAME_RE, NAME_RULE
 from .models import Alert, Device, File, Mirror, MirrorItem, Source, SourceItem, Version
 
-NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
-NAME_RULE = "Name: 1-63 characters, lowercase letters, digits, '.', '_' or '-'"
 FOLDER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,100}$")
 OPTION_KEY_RE = re.compile(r"^[a-z0-9_]{1,64}$")
 TYPE_RE = re.compile(r"^[a-z0-9]{1,32}$")
@@ -90,20 +90,6 @@ def get_row(s: Session, table: str, name: str):
     return row
 
 
-def job_state(row) -> dict:
-    """What the live status refresh shows for a source or mirror."""
-    running = row.last_status == "running"
-    return {
-        "name": row.name,
-        "dot": status_class(row.last_status),
-        "running": running,
-        "enabled": bool(row.enabled),
-        "last": "Running" if running else fmt.ago(row.last_run_at),
-        "message": row.last_message or "",
-        "files": getattr(row, "last_files", None),
-    }
-
-
 def register(app, session_dep, require_admin, render, flash):
     admin = [Depends(require_admin)]
 
@@ -125,12 +111,7 @@ def register(app, session_dep, require_admin, render, flash):
 
     @app.get("/api/jobs", dependencies=admin)
     def api_jobs(s=Depends(session_dep)):
-        return JSONResponse(
-            {
-                table: [job_state(r) for r in s.scalars(select(model).order_by(model.name))]
-                for table, model in MODELS.items()
-            }
-        )
+        return JSONResponse(stats.job_health(s))
 
     # --- sources ----------------------------------------------------------------------
 

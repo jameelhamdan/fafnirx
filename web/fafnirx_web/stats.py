@@ -88,23 +88,28 @@ def recent_events(s: Session, limit: int = 12) -> list[dict]:
     ]
 
 
+def job_state(row) -> dict:
+    """A source or mirror as the pages and the live status refresh show it."""
+    running = row.last_status == "running"
+    return {
+        "name": row.name,
+        "dot": fmt.status_class(row.last_status),
+        "status": row.last_status or "never run",
+        "running": running,
+        "enabled": bool(row.enabled),
+        "last": "Running" if running else fmt.ago(row.last_run_at),
+        "last_ok_at": row.last_ok_at,
+        "message": row.last_message or "",
+        "files": getattr(row, "last_files", None),
+    }
+
+
 def job_health(s: Session) -> dict:
     """Latest state of every source and mirror."""
-
-    def rows(model):
-        return [
-            {
-                "name": r.name,
-                "dot": fmt.status_class(r.last_status),
-                "status": r.last_status or "never run",
-                "last_ok_at": r.last_ok_at,
-                "last_run_at": r.last_run_at,
-                "enabled": bool(r.enabled),
-            }
-            for r in s.scalars(select(model).order_by(model.name))
-        ]
-
-    return {"sources": rows(Source), "mirrors": rows(Mirror)}
+    return {
+        table: [job_state(r) for r in s.scalars(select(model).order_by(model.name))]
+        for table, model in (("sources", Source), ("mirrors", Mirror))
+    }
 
 
 def dashboard(s: Session) -> dict:

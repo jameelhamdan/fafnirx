@@ -42,18 +42,11 @@ def main():
     print("working in", tmp)
     data, port = tmp / "data", free_port()
     db_url, drop_db = pgtest.create()
-    os.environ["FAFNIRX_DATABASE_URL"] = db_url
     server = Server(data, port)
     try:
         data.mkdir()
         server.start()
-        os.environ["FAFNIRX_DATA"] = str(data)
-        os.environ["FAFNIRX_ADMIN_PASSWORD"] = "pw"
-        from fastapi.testclient import TestClient
-        from fafnirx_web.app import create_app
-
-        web = TestClient(create_app(), follow_redirects=False)
-        web.post("/login", data={"password": "pw"})
+        web = e2e.web_client(data)
         token = re.search(
             r'<pre class="code">([\w-]{40,})</pre>', web.post("/devices", data={"name": "laptop"}).text
         ).group(1)

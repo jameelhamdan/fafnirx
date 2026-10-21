@@ -241,7 +241,6 @@ async fn finish_job(
 mod tests {
     use super::*;
     use crate::db::testing;
-    use postgres::Client;
 
     fn db() -> Db {
         let db = testing::db();
@@ -285,12 +284,9 @@ mod tests {
         let c = &mut *c;
         let id: i64 = c.query_one("SELECT id FROM sources", &[]).unwrap().get(0);
         finish(c, "sources", "source_failed", id, "d", "failed", "boom");
-        let open = |c: &mut Client| -> i64 {
-            c.query_one("SELECT COUNT(*) FROM alerts WHERE resolved_at IS NULL", &[]).unwrap().get(0)
-        };
-        assert_eq!(open(c), 1);
+        assert_eq!(testing::open_alerts(c), 1);
         finish(c, "sources", "source_failed", id, "d", "ok", "fine");
-        assert_eq!(open(c), 0);
+        assert_eq!(testing::open_alerts(c), 0);
         let row = c.query_one("SELECT last_status, last_ok_at FROM sources", &[]).unwrap();
         let (status, ok_at): (String, Option<i64>) = (row.get(0), row.get(1));
         assert_eq!(status, "ok");

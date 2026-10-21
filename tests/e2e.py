@@ -98,6 +98,18 @@ def reconstruct(data: Path, conn, path: str) -> bytes:
     return out
 
 
+def web_client(data: Path):
+    """The real web app on the test database, logged in as admin."""
+    os.environ["FAFNIRX_DATA"] = str(data)
+    os.environ["FAFNIRX_ADMIN_PASSWORD"] = "pw"
+    from fafnirx_web.app import create_app
+    from fastapi.testclient import TestClient
+
+    web = TestClient(create_app(), follow_redirects=False)
+    check(web.post("/login", data={"password": "pw"}).status_code == 303, "web login")
+    return web
+
+
 def main():
     for b in (SERVER, CLIENT, SIGN):
         if not b.exists():
@@ -106,7 +118,6 @@ def main():
     print("working in", tmp)
     data, port = tmp / "data", free_port()
     db_url, drop_db = pgtest.create()
-    os.environ["FAFNIRX_DATABASE_URL"] = db_url
     server = Server(data, port)
     proc = None
     try:
@@ -114,13 +125,7 @@ def main():
         server.start()
 
         # --- web UI creates the device -------------------------------------------------
-        os.environ["FAFNIRX_DATA"] = str(data)
-        os.environ["FAFNIRX_ADMIN_PASSWORD"] = "pw"
-        from fastapi.testclient import TestClient
-        from fafnirx_web.app import create_app
-
-        web = TestClient(create_app(), follow_redirects=False)
-        check(web.post("/login", data={"password": "pw"}).status_code == 303, "web login")
+        web = web_client(data)
         r = web.post("/devices", data={"name": "laptop"})
         token = re.search(r'<pre class="code">([\w-]{40,})</pre>', r.text).group(1)
         check(bool(token), "device created in the web UI, token shown once")

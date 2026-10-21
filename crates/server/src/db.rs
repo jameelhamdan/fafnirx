@@ -124,6 +124,11 @@ pub mod testing {
         open_with(config).expect("open test database")
     }
 
+    /// How many alerts are open.
+    pub fn open_alerts(c: &mut Client) -> i64 {
+        c.query_one("SELECT COUNT(*) FROM alerts WHERE resolved_at IS NULL", &[]).unwrap().get(0)
+    }
+
     /// `db()` with one ordinary device named `d` (id 1).
     pub fn db_with_device() -> Db {
         let db = db();
