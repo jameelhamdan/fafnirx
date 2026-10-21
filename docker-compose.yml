@@ -1,0 +1,55 @@
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fafnirx
+      POSTGRES_PASSWORD: "${FAFNIRX_DB_PASSWORD:?set FAFNIRX_DB_PASSWORD}"
+      POSTGRES_DB: fafnirx
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fafnirx -d fafnirx"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    volumes:
+      # Keep this on local storage (for example the ZFS pool), not on a network share.
+      - "${FAFNIRX_DB_DIR:-./pgdata}:/var/lib/postgresql/data"
+
+  engine:
+    build: .
+    restart: unless-stopped
+    command: ["fafnirx-server"]
+    user: "${FAFNIRX_UID:-1000}:${FAFNIRX_GID:-1000}"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      FAFNIRX_DATABASE_URL: "postgresql://fafnirx:${FAFNIRX_DB_PASSWORD}@db/fafnirx"
+      FAFNIRX_LISTEN: "0.0.0.0:7443"
+      # DNS names / IPs clients use to reach this server. They go into the server certificate.
+      FAFNIRX_TLS_HOSTS: "${FAFNIRX_TLS_HOSTS:-localhost,127.0.0.1}"
+      HOME: /tmp   # rclone wants a writable home for its cache
+    ports:
+      - "7443:7443"
+    volumes:
+      - "${FAFNIRX_DATA_DIR:-./data}:/data"
+
+  web:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "fafnirx_web"]
+    user: "${FAFNIRX_UID:-1000}:${FAFNIRX_GID:-1000}"
+    depends_on:
+      db:
+        condition: service_healthy
+      engine:
+        condition: service_started
+    environment:
+      FAFNIRX_DATABASE_URL: "postgresql://fafnirx:${FAFNIRX_DB_PASSWORD}@db/fafnirx"
+      FAFNIRX_ADMIN_PASSWORD: "${FAFNIRX_ADMIN_PASSWORD:?set FAFNIRX_ADMIN_PASSWORD}"
+      # Address shown to users in the client setup instructions.
+      FAFNIRX_PUBLIC_ADDR: "${FAFNIRX_PUBLIC_ADDR:-}"
+    ports:
+      - "8080:8080"
+    volumes:
+      - "${FAFNIRX_DATA_DIR:-./data}:/data"

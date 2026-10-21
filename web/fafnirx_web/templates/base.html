@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}fafnirx{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script>
+    try { if (localStorage.getItem("fx-theme") === "light") document.documentElement.classList.remove("dark"); } catch (e) {}
+  </script>
+  <script src="/static/app.js"></script>
+  <script defer src="/static/alpine.min.js"></script>
+</head>
+<body>
+  <header class="top" x-data="theme">
+    <div class="container">
+      <a class="brand" href="/">fafnirx</a>
+      {% if admin %}
+      <nav>
+        <a href="/">Devices</a>
+        <a href="/sources">Sources</a>
+        <a href="/mirrors">Mirrors</a>
+        <a href="/settings">Settings</a>
+        <a href="/ca.pem">CA certificate</a>
+      </nav>
+      <button class="ghost" type="button" @click="toggle()" x-text="dark ? 'Light' : 'Dark'">Light</button>
+      <a class="link" href="/logout">Log out</a>
+      {% endif %}
+    </div>
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

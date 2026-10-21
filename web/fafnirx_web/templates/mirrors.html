@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Mirrors - fafnirx{% endblock %}
+{% block content %}
+<h1>Mirrors</h1>
+<p class="muted">Everything the orchestrator holds is copied offsite as plain files: <code>files/</code> (current tree), <code>versions/</code> (what each run replaced or removed) and <code>meta/</code> (JSON statistics and file lists). Nothing is encrypted. Restoring is a manual copy.</p>
+
+<table>
+  <thead><tr><th></th><th>Name</th><th>Last run</th><th>Every</th><th></th></tr></thead>
+  <tbody>
+  {% for m in mirrors %}
+    <tr>
+      <td><span class="dot {{ m.dot }}"></span></td>
+      <td>{{ m.name }} <span class="muted">{{ m.remote_type }}:{{ m.remote_path }}{% if not m.enabled %}, paused{% endif %}</span>
+        <div class="muted">Options set: {{ m.option_keys | join(', ') or 'none' }}</div>
+        {% if m.last_message %}<pre class="msg">{{ m.last_message }}</pre>{% endif %}</td>
+      <td>{% if m.last_status == 'running' %}Running{% else %}{{ m.last_run_at | ago }}{% endif %}
+        {% if m.last_files is not none %}<div class="muted">{{ m.last_files }} files on the mirror</div>{% endif %}</td>
+      <td>{{ (m.interval_secs / 3600) | round(1) }} h, keeps {{ m.keep_runs }} runs</td>
+      <td class="actions">
+        <form method="post" action="/mirrors/{{ m.name }}/run"><button type="submit">Run now</button></form>
+        <form method="post" action="/mirrors/{{ m.name }}/toggle"><button type="submit">{{ 'Pause' if m.enabled else 'Resume' }}</button></form>
+        <form method="post" action="/mirrors/{{ m.name }}/resync" onsubmit="return confirm('Re-send every file on the next run?')"><button type="submit">Resync</button></form>
+        <form method="post" action="/mirrors/{{ m.name }}/delete" onsubmit="return confirm('Remove this mirror? Data already on the remote is not touched.')"><button class="danger" type="submit">Remove</button></form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="muted">No mirrors yet</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>Add mirror</h2>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<form method="post" action="/mirrors" class="form card" x-data="{ type: '{{ form.remote_type or 's3' }}', presets: {
+    s3: 'provider = Other\nendpoint = https://s3.example.com\nregion = \naccess_key_id = \nsecret_access_key = ',
+    sftp: 'host = \nuser = \nkey_file = /path/to/id_ed25519',
+    webdav: 'url = https://dav.example.com\nvendor = other\nuser = \npass = ',
+    local: ''
+  } }">
+  <div class="two">
+    <div><label for="n">Name</label><input id="n" type="text" name="name" value="{{ form.name or '' }}" pattern="[a-z0-9][a-z0-9._\-]{0,62}" placeholder="offsite" required></div>
+    <div>
+      <label for="t">Type (rclone backend)</label>
+      <input id="t" type="text" name="remote_type" x-model="type" list="types" pattern="[a-z0-9]+" required>
+      <datalist id="types"><option value="s3"><option value="sftp"><option value="webdav"><option value="b2"><option value="local"></datalist>
+    </div>
+  </div>
+  <div>
+    <label for="o">Options</label>
+    <textarea id="o" name="options" placeholder="key = value, one per line" x-ref="opts"></textarea>
+    <p class="hint">rclone backend options, written <code>key = value</code>. Passwords must be in rclone's obscured form (<code>rclone obscure</code>).
+      <a class="link" href="#" @click.prevent="if (presets[type] !== undefined) $refs.opts.value = presets[type]">Fill example for <span x-text="type"></span></a>.
+      Stored on the orchestrator and never shown again.</p>
+  </div>
+  <div>
+    <label for="p">Path on the remote</label>
+    <input id="p" type="text" name="remote_path" value="{{ form.remote_path or '' }}" placeholder="bucket/fafnirx" style="width:100%">
+  </div>
+  <div class="two">
+    <div><label for="i">Mirror every (hours)</label><input id="i" type="number" name="interval_hours" value="{{ form.interval_hours or 72 }}" min="0.25" step="any" required></div>
+    <div><label for="k">Runs of old versions kept</label><input id="k" type="number" name="keep_runs" value="{{ form.keep_runs or 3 }}" min="1" max="100" required></div>
+  </div>
+  <div><button class="primary" type="submit">Add mirror</button></div>
+</form>
+{% endblock %}

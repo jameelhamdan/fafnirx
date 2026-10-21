@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- case: dark rim, then the face in the status colour -->
+  <rect x="3" y="11" width="58" height="42" rx="7" fill="{body}"/>
+  <rect x="3" y="11" width="58" height="42" rx="7" fill="#000" fill-opacity=".45"/>
+  <rect x="5" y="13" width="54" height="38" rx="5.5" fill="{body}"/>
+  <!-- platter with a hub -->
+  <circle cx="25" cy="28" r="12.5" fill="#000" fill-opacity=".62"/>
+  <circle cx="25" cy="28" r="4" fill="#fff" fill-opacity=".15"/>
+  <circle cx="25" cy="28" r="1.4" fill="#000" fill-opacity=".62"/>
+  <!-- separator and vent slits -->
+  <rect x="9" y="41.5" width="46" height="1" rx=".5" fill="#000" fill-opacity=".3"/>
+  <g fill="#000" fill-opacity=".62">
+    <rect x="11" y="44.5" width="2" height="4" rx="1"/>
+    <rect x="16" y="44.5" width="2" height="4" rx="1"/>
+    <rect x="21" y="44.5" width="2" height="4" rx="1"/>
+    <rect x="26" y="44.5" width="2" height="4" rx="1"/>
+  </g>
+  <!-- activity light -->
+  <circle cx="49" cy="46.5" r="5.5" fill="{led}" fill-opacity="{glow}"/>
+  <circle cx="49" cy="46.5" r="3" fill="{led}"/>
+</svg>

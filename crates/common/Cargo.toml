@@ -1,0 +1,16 @@
+[package]
+name = "fafnirx-common"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sysinfo.workspace = true
+anyhow.workspace = true
+blake3.workspace = true
+prost.workspace = true
+tonic.workspace = true
+unicode-normalization.workspace = true
+
+[build-dependencies]
+tonic-build = "0.12"
+protoc-bin-vendored = "3"

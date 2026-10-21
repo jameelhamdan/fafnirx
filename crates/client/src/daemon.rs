@@ -1,0 +1,402 @@
+//! The long running client: heartbeat, watcher, periodic scan and update checks.
+
+use crate::config::Config;
+use crate::credentials;
+use crate::net::{self, Client};
+use crate::state::State;
+use crate::sync::{Engine, Report, SyncError};
+use crate::throttle::Limiter;
+use crate::update;
+use anyhow::Result;
+use fafnirx_common::{pb, unix_now};
+use notify::{RecursiveMode, Watcher};
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::sync::Notify;
+
+const HEARTBEAT_SECS: u64 = 20;
+const UPDATE_CHECK_SECS: u64 = 6 * 3600;
+/// How soon files that failed are tried again.
+const RETRY_SECS: u64 = 600;
+const DEBOUNCE: Duration = Duration::from_secs(2);
+
+/// What the engine is doing right now, shared with the status writer.
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct Activity {
+    /// idle | scanning | hashing | uploading
+    pub phase: String,
+    /// Remote path of the file being worked on.
+    pub current: String,
+    pub done: usize,
+    pub total: usize,
+    /// Bytes sent so far in this cycle.
+    pub bytes: u64,
+}
+
+#[derive(Serialize, Deserialize, Default, Clone)]
+#[serde(default)]
+pub struct Status {
+    pub version: String,
+    pub pid: u32,
+    /// When the daemon started (unix seconds).
+    pub started: i64,
+    pub server: String,
+    /// Device name on the orchestrator, as confirmed by the last heartbeat.
+    pub device: String,
+    pub online: bool,
+    /// Why the orchestrator is unreachable, when it is.
+    pub message: String,
+    pub last_cycle: i64,
+    /// True while a collection cycle (scan and upload) is running.
+    pub syncing: bool,
+    pub activity: Activity,
+    /// The last finished cycle.
+    pub last: Report,
+    pub folders: usize,
+    /// Everything the orchestrator has from this device, as of the last cycle.
+    pub synced_files: usize,
+    pub synced_bytes: u64,
+    /// Files that failed and are waiting to be retried.
+    pub failing: usize,
+    /// Totals since the daemon started.
+    pub session_files: usize,
+    pub session_bytes: u64,
+    /// When the next periodic scan is due (unix seconds).
+    pub next_scan: i64,
+    pub bandwidth_limit_kbps: u64,
+    pub last_error: String,
+    pub updated: i64,
+}
+
+pub struct StatusFile {
+    path: PathBuf,
+    inner: Mutex<Status>,
+}
+
+impl StatusFile {
+    pub fn new(path: PathBuf) -> Self {
+        let status = Status {
+            version: update::VERSION.into(),
+            pid: std::process::id(),
+            started: unix_now(),
+            ..Default::default()
+        };
+        Self { path, inner: Mutex::new(status) }
+    }
+
+    pub fn edit(&self, f: impl FnOnce(&mut Status)) {
+        let Ok(mut s) = self.inner.lock() else { return };
+        f(&mut s);
+        s.updated = unix_now();
+        if let Ok(json) = serde_json::to_vec_pretty(&*s) {
+            let tmp = self.path.with_extension("tmp");
+            if std::fs::write(&tmp, json).is_ok() {
+                let _ = std::fs::rename(&tmp, &self.path);
+            }
+        }
+    }
+}
+
+pub fn read_status(state_dir: &Path) -> Option<Status> {
+    serde_json::from_slice(&std::fs::read(state_dir.join("status.json")).ok()?).ok()
+}
+
+pub fn paused_marker(state_dir: &Path) -> PathBuf {
+    state_dir.join("paused")
+}
+
+/// Created by the tray (or by hand) to start a cycle now. The daemon removes it.
+pub fn sync_now_marker(state_dir: &Path) -> PathBuf {
+    state_dir.join("sync-now")
+}
+
+/// Created to ask the daemon to exit. The daemon removes it.
+pub fn stop_marker(state_dir: &Path) -> PathBuf {
+    state_dir.join("stop")
+}
+
+pub async fn send_heartbeat(client: &mut Client, cfg: &Config, errors: &Mutex<Vec<String>>) -> Result<String> {
+    let drained: Vec<String> = errors.lock().map(|mut e| std::mem::take(&mut *e)).unwrap_or_default();
+    let (total, free) = cfg.folders.first().and_then(|f| fafnirx_common::disk_usage(&f.path)).unwrap_or((0, 0));
+    let req = pb::HeartbeatRequest {
+        hostname: sysinfo::System::host_name().unwrap_or_default(),
+        os: std::env::consts::OS.to_string(),
+        client_version: update::VERSION.to_string(),
+        disk_total: total,
+        disk_free: free,
+        errors: drained.clone(),
+    };
+    match tokio::time::timeout(Duration::from_secs(15), client.heartbeat(req)).await {
+        Ok(Ok(resp)) => Ok(resp.into_inner().device_name),
+        other => {
+            // Keep the errors for the next beat.
+            if let Ok(mut e) = errors.lock() {
+                let mut restored = drained;
+                restored.append(&mut e);
+                restored.truncate(50);
+                *e = restored;
+            }
+            match other {
+                Ok(Err(s)) => Err(anyhow::anyhow!("{:?}: {}", s.code(), s.message())),
+                _ => Err(anyhow::anyhow!("timed out")),
+            }
+        }
+    }
+}
+
+fn spawn_watcher(folders: &[PathBuf], wake: Arc<Notify>) -> Option<notify::RecommendedWatcher> {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let mut watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        if res.is_ok() {
+            let _ = tx.send(());
+        }
+    }) {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::warn!("cannot start file watcher: {e}");
+            return None;
+        }
+    };
+    for f in folders {
+        if let Err(e) = watcher.watch(f, RecursiveMode::Recursive) {
+            tracing::warn!("cannot watch {}: {e}", f.display());
+        }
+    }
+    // Wait for the burst of events to settle before waking the sync loop.
+    tokio::spawn(async move {
+        while rx.recv().await.is_some() {
+            tokio::time::sleep(DEBOUNCE).await;
+            while rx.try_recv().is_ok() {}
+            wake.notify_one();
+        }
+    });
+    Some(watcher)
+}
+
+/// State shared by the daemon's background tasks.
+#[derive(Clone)]
+struct Shared {
+    status: Arc<StatusFile>,
+    /// Wakes the main loop: a watched file changed, the orchestrator came back, or the tray asked for a sync.
+    wake: Arc<Notify>,
+    online: Arc<AtomicBool>,
+    /// Problems to report with the next heartbeat.
+    errors: Arc<Mutex<Vec<String>>>,
+}
+
+/// Starts the new executable and exits. After an update only the daemon itself can do this on Windows
+/// (the Run key only fires at logon); systemd and launchd restart it on their own.
+fn restart_after_update() -> ! {
+    #[cfg(windows)]
+    let _ = crate::service::spawn_detached(std::env::args_os().skip(1));
+    std::process::exit(0)
+}
+
+/// Handles requests from the tray (sync now, stop) and copies what the engine is doing into the status file.
+fn spawn_control(shared: Shared, activity: Arc<Mutex<Activity>>, sent: Arc<AtomicU64>, dir: PathBuf) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_millis(500));
+        let mut last = Activity::default();
+        loop {
+            tick.tick().await;
+            if std::fs::remove_file(sync_now_marker(&dir)).is_ok() {
+                tracing::info!("sync requested");
+                shared.wake.notify_one();
+            }
+            if std::fs::remove_file(stop_marker(&dir)).is_ok() {
+                tracing::info!("stop requested, exiting");
+                // No status file means "not running" to the tray and to `fafnirx status`.
+                let _ = std::fs::remove_file(dir.join("status.json"));
+                std::process::exit(0);
+            }
+            let mut now = activity.lock().map(|a| a.clone()).unwrap_or_default();
+            if now.phase == "uploading" {
+                now.bytes = sent.load(Ordering::Relaxed);
+            }
+            if now != last {
+                last = now.clone();
+                shared.status.edit(|s| s.activity = now);
+            }
+        }
+    });
+}
+
+/// Keeps the orchestrator informed and notices when it is reachable again.
+fn spawn_heartbeat(shared: Shared, mut client: Client, config_path: PathBuf) {
+    tokio::spawn(async move {
+        loop {
+            if let Ok(cfg) = Config::load(&config_path) {
+                match send_heartbeat(&mut client, &cfg, &shared.errors).await {
+                    Ok(device) => {
+                        if !shared.online.swap(true, Ordering::SeqCst) {
+                            tracing::info!("connected to {}", cfg.server);
+                            shared.wake.notify_one();
+                        }
+                        shared.status.edit(|s| {
+                            s.online = true;
+                            s.message.clear();
+                            s.device = device;
+                            s.server = cfg.server.clone();
+                            s.bandwidth_limit_kbps = cfg.bandwidth_limit_kbps;
+                        });
+                    }
+                    Err(e) => {
+                        if shared.online.swap(false, Ordering::SeqCst) {
+                            tracing::warn!("lost connection: {e:#}");
+                        }
+                        shared.status.edit(|s| {
+                            s.online = false;
+                            s.message = format!("cannot reach the orchestrator: {e:#}");
+                        });
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(HEARTBEAT_SECS)).await;
+        }
+    });
+}
+
+/// Checks for a signed update now and then.
+fn spawn_updater(mut client: Client, config_path: PathBuf, work_dir: PathBuf) {
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        loop {
+            if let Ok(cfg) = Config::load(&config_path) {
+                match update::check_and_apply(&mut client, &cfg, &work_dir).await {
+                    Ok(true) => {
+                        tracing::info!("restarting to run the new version");
+                        restart_after_update();
+                    }
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!("update check failed: {e:#}"),
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(UPDATE_CHECK_SECS)).await;
+        }
+    });
+}
+
+/// Writes the outcome of one cycle into the status file.
+fn record_cycle(shared: &Shared, result: Result<Report, SyncError>) {
+    match result {
+        Ok(r) => {
+            log_report(&r);
+            let last_error = shared.errors.lock().ok().and_then(|e| e.last().cloned()).unwrap_or_default();
+            shared.status.edit(|s| {
+                s.last_cycle = unix_now();
+                s.last = r.clone();
+                s.session_files += r.uploaded + r.renamed;
+                s.session_bytes += r.bytes;
+                // Scan problems (an unreadable folder) are errors even when no single file failed.
+                s.last_error = if r.failed > 0 || !last_error.is_empty() { last_error } else { String::new() };
+            });
+        }
+        Err(SyncError::Paused) => {}
+        Err(SyncError::Offline(m)) => {
+            tracing::warn!("sync interrupted: {m}");
+            shared.online.store(false, Ordering::SeqCst);
+            shared.status.edit(|s| {
+                s.online = false;
+                s.message = format!("upload interrupted: {m}");
+            });
+        }
+        Err(SyncError::File(m)) => shared.status.edit(|s| s.last_error = m),
+    }
+}
+
+pub async fn run(config_path: PathBuf) -> Result<()> {
+    let mut cfg = Config::load(&config_path)?;
+    let state_dir = cfg.state_dir(&config_path);
+    std::fs::create_dir_all(&state_dir)?;
+    let token = credentials::load(&cfg.server, &config_path, cfg.token.as_deref())?;
+    let client = net::client(&cfg, &token)?;
+    let marker = paused_marker(&state_dir);
+
+    let shared = Shared {
+        status: Arc::new(StatusFile::new(state_dir.join("status.json"))),
+        wake: Arc::new(Notify::new()),
+        online: Arc::new(AtomicBool::new(false)),
+        errors: Arc::new(Mutex::new(Vec::new())),
+    };
+    shared.status.edit(|s| {
+        s.message = "starting".into();
+        s.server = cfg.server.clone();
+    });
+    let _ = std::fs::remove_file(stop_marker(&state_dir));
+
+    let mut engine = Engine::new(
+        client.clone(),
+        State::open(&state_dir.join("state.db"))?,
+        Arc::new(Limiter::new(cfg.bandwidth_limit_kbps)),
+        shared.errors.clone(),
+        marker.clone(),
+    );
+    spawn_control(shared.clone(), engine.activity.clone(), engine.sent.clone(), state_dir.clone());
+    spawn_heartbeat(shared.clone(), client.clone(), config_path.clone());
+    spawn_updater(client, config_path.clone(), state_dir);
+
+    let mut watched: Vec<PathBuf> = Vec::new();
+    let mut _watcher: Option<notify::RecommendedWatcher> = None;
+    let mut delay = Duration::from_secs(1);
+    tracing::info!("fafnirx {} running, config {}", update::VERSION, config_path.display());
+    loop {
+        tokio::select! {
+            _ = shared.wake.notified() => {}
+            _ = tokio::time::sleep(delay) => {}
+        }
+        if marker.exists() {
+            delay = Duration::from_secs(5);
+            continue;
+        }
+        if !shared.online.load(Ordering::SeqCst) {
+            // The heartbeat wakes us when the orchestrator is reachable again.
+            delay = Duration::from_secs(30);
+            continue;
+        }
+        match Config::load(&config_path) {
+            Ok(c) => cfg = c,
+            Err(e) => shared.status.edit(|s| s.last_error = format!("config: {e:#}")),
+        }
+        let folders: Vec<PathBuf> = cfg.folders.iter().map(|f| f.path.clone()).collect();
+        if cfg.watch && folders != watched {
+            _watcher = spawn_watcher(&folders, shared.wake.clone());
+            watched = folders;
+        } else if !cfg.watch {
+            _watcher = None;
+            watched.clear();
+        }
+
+        shared.status.edit(|s| s.syncing = true);
+        let result = engine.cycle(&cfg).await;
+        engine.set_activity("idle", "", 0, 0, 0);
+        let (synced_files, synced_bytes) = engine.state.totals().unwrap_or((0, 0));
+        let failing = engine.state.pending_failures().unwrap_or(0);
+        delay = next_delay(&cfg, failing > 0);
+        shared.status.edit(|s| {
+            s.syncing = false;
+            s.activity = Activity::default();
+            s.folders = cfg.folders.len();
+            s.synced_files = synced_files;
+            s.synced_bytes = synced_bytes;
+            s.failing = failing as usize;
+            s.next_scan = unix_now() + delay.as_secs() as i64;
+        });
+        record_cycle(&shared, result);
+    }
+}
+
+/// When the next cycle is due without a trigger: the scan interval, or sooner while files are waiting for a retry.
+fn next_delay(cfg: &Config, has_failures: bool) -> Duration {
+    let scan = if cfg.scan_interval_secs == 0 { 24 * 3600 } else { cfg.scan_interval_secs };
+    Duration::from_secs(if has_failures { scan.min(RETRY_SECS) } else { scan })
+}
+
+fn log_report(r: &Report) {
+    if *r != Report::default() {
+        tracing::info!("collected: {r}, {} bytes sent", r.bytes);
+    }
+}

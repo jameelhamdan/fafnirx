@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Settings - fafnirx{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+{% if saved %}<div class="notice">Saved</div>{% endif %}
+<form method="post" action="/settings" class="card" style="max-width:28rem; display:grid; gap:1rem">
+  <div>
+    <label for="vc">Versions kept per file</label>
+    <input id="vc" type="number" name="version_count" min="1" max="1000" value="{{ version_count }}" required>
+  </div>
+  <div>
+    <label for="rd">Retention for deleted files and old versions (days)</label>
+    <input id="rd" type="number" name="retention_days" min="1" max="3650" value="{{ retention_days }}" required>
+  </div>
+  <div><button class="primary" type="submit">Save</button></div>
+</form>
+{% endblock %}

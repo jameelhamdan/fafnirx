@@ -1,0 +1,8 @@
+target
+data
+.git
+web/.venv
+**/__pycache__
+pgdata
+docker-data
+.env
