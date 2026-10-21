@@ -193,9 +193,6 @@ mod tests {
         let db = testing::db_with_device();
         let mut c = db.get().unwrap();
         let c = &mut *c;
-        let open = |c: &mut Client| -> i64 {
-            c.query_one("SELECT COUNT(*) FROM alerts WHERE resolved_at IS NULL", &[]).unwrap().get(0)
-        };
         upsert_alert(c, "upload_error", "d", "disk full").unwrap();
         upsert_alert(c, "disk_usage", "", "90% full").unwrap();
         let age = |c: &mut Client, kind: &str, hours: i64| {
@@ -208,19 +205,19 @@ mod tests {
 
         age(c, "upload_error", 47);
         expire_upload_errors(c).unwrap();
-        assert_eq!(open(c), 2, "47 hours: still open");
+        assert_eq!(testing::open_alerts(c), 2, "47 hours: still open");
 
         age(c, "upload_error", 49);
         age(c, "disk_usage", 500);
         expire_upload_errors(c).unwrap();
-        assert_eq!(open(c), 1, "49 hours: the upload error is gone, other alerts are untouched");
+        assert_eq!(testing::open_alerts(c), 1, "49 hours: the upload error is gone, other alerts are untouched");
 
         // The client reporting the same error again keeps (and reopens) it.
         upsert_alert(c, "upload_error", "d", "disk full").unwrap();
         age(c, "upload_error", 47);
         upsert_alert(c, "upload_error", "d", "disk full").unwrap();
         expire_upload_errors(c).unwrap();
-        assert_eq!(open(c), 2, "a repeated report refreshes the alert");
+        assert_eq!(testing::open_alerts(c), 2, "a repeated report refreshes the alert");
     }
 
     #[test]
@@ -228,14 +225,11 @@ mod tests {
         let db = testing::db_with_device();
         let mut c = db.get().unwrap();
         let c = &mut *c;
-        let open = |c: &mut Client| -> i64 {
-            c.query_one("SELECT COUNT(*) FROM alerts WHERE resolved_at IS NULL", &[]).unwrap().get(0)
-        };
         c.execute("UPDATE devices SET last_seen = $1", &[&(unix_now() - 600)]).unwrap();
         offline_alerts(c).unwrap();
-        assert_eq!(open(c), 1);
+        assert_eq!(testing::open_alerts(c), 1);
         c.execute("UPDATE devices SET last_seen = $1", &[&unix_now()]).unwrap();
         offline_alerts(c).unwrap();
-        assert_eq!(open(c), 0);
+        assert_eq!(testing::open_alerts(c), 0);
     }
 }
