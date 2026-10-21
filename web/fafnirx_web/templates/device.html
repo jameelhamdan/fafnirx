@@ -1,17 +1,19 @@
 {% extends "base.html" %}
 {% block title %}{{ dev.name }} - fafnirx{% endblock %}
 {% block content %}
-<div class="row between">
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/devices">Devices</a><span aria-hidden="true">/</span><span aria-current="page">{{ dev.name }}</span></nav>
+
+<div class="row between page-head wrap">
   <div class="row">
-    <span class="dot {% if dev.revoked %}off{% elif dev.online %}on{% endif %}"></span>
-    <h1 style="margin:0">{{ dev.name }}</h1>
-    <span class="muted">{% if dev.revoked %}Revoked{% elif dev.online %}Online{% else %}Offline{% endif %}</span>
+    <span class="dot {% if dev.revoked %}off{% elif dev.online %}on{% endif %}" aria-hidden="true"></span>
+    <h1>{{ dev.name }}</h1>
+    <span class="badge">{% if dev.revoked %}Revoked{% elif dev.online %}Online{% else %}Offline{% endif %}</span>
   </div>
-  <a class="link" href="/">Back</a>
+  <a class="btn" href="/devices/{{ dev.name }}/files">Browse files</a>
 </div>
 
 {% if new_token %}
-<div class="notice" style="margin-top:1rem" x-data="copy('{{ new_token }}')">
+<div class="notice" x-data="copy('{{ new_token }}')">
   <strong>Device token</strong>
   <span class="muted">Shown once. Store it on the device, it cannot be displayed again.</span>
   <pre class="code">{{ new_token }}</pre>
@@ -35,7 +37,7 @@ fafnirx run</pre>
     <dt>IP</dt><dd>{{ dev.ip or '-' }}</dd>
     <dt>Client version</dt><dd>{{ dev.client_version or '-' }}</dd>
     <dt>Device disk</dt><dd>{% if dev.disk_total %}{{ dev.disk_free | bytes }} free of {{ dev.disk_total | bytes }}{% else %}-{% endif %}</dd>
-    <dt>Collected</dt><dd>{{ dev.collected_bytes | bytes }} in {{ dev.file_count }} file{{ '' if dev.file_count == 1 else 's' }}</dd>
+    <dt>Collected</dt><dd>{{ dev.collected_bytes | bytes }} in {{ dev.file_count | count('file') }}</dd>
     <dt>Last seen</dt><dd>{{ dev.last_seen | ago }}</dd>
     <dt>Last collected</dt><dd>{{ dev.last_collected | ago }}</dd>
     <dt>Created</dt><dd>{{ dev.created_at | stamp }}</dd>
@@ -43,27 +45,30 @@ fafnirx run</pre>
 </div>
 
 <h2>Token</h2>
-<div class="row">
-  <form method="post" action="/devices/{{ dev.name }}/token" onsubmit="return confirm('Replace the token? The device stops working until it is given the new one.')">
+<div class="row wrap">
+  <form method="post" action="/devices/{{ dev.name }}/token" data-confirm="The device stops uploading until it is given the new token." data-confirm-title="Replace the token?" data-confirm-label="Replace token">
     <button type="submit">{{ 'New token (re-enables device)' if dev.revoked else 'Rotate token' }}</button>
   </form>
   {% if not dev.revoked %}
-  <form method="post" action="/devices/{{ dev.name }}/revoke" onsubmit="return confirm('Revoke this device? Its collected data is kept.')">
+  <form method="post" action="/devices/{{ dev.name }}/revoke" data-confirm="The device can no longer upload. Everything it already sent is kept." data-confirm-title="Revoke this device?" data-confirm-label="Revoke">
     <button class="danger" type="submit">Revoke</button>
   </form>
   {% endif %}
 </div>
 
 <h2>Recent activity</h2>
+<div class="table-wrap">
 <table>
-  <thead><tr><th>Time (UTC)</th><th>Action</th><th>Path</th></tr></thead>
+  <caption class="sr-only">Recent activity of {{ dev.name }}</caption>
+  <thead><tr><th scope="col">Time (UTC)</th><th scope="col">Action</th><th scope="col">Path</th></tr></thead>
   <tbody>
   {% for e in events %}
-    <tr><td>{{ e.ts | stamp }}</td><td>{{ e.action | capitalize }}</td>
+    <tr><td>{{ e.ts | stamp }}</td><td><span class="badge a-{{ e.action }}">{{ e.action | capitalize }}</span></td>
         <td class="path">{{ e.path }}{% if e.detail %} <span class="muted">({{ e.detail }})</span>{% endif %}</td></tr>
   {% else %}
     <tr><td colspan="3" class="muted">Nothing collected yet</td></tr>
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% endblock %}

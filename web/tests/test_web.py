@@ -14,6 +14,7 @@ def client(tmp_path, monkeypatch, database_url):
     monkeypatch.setenv("FAFNIRX_ADMIN_PASSWORD", "hunter2")
     with TestClient(create_app(), follow_redirects=False) as c:
         yield c
+    db.dispose_engines()
 
 
 def login(c):
@@ -89,7 +90,8 @@ def test_alerts_and_settings(client, dbc):
     assert "disk 90% full" not in client.get("/").text
 
     assert client.post("/settings", data={"version_count": 9, "retention_days": 45}).status_code == 303
-    assert db.setting(dbc, "version_count", 0) == 9 and db.setting(dbc, "retention_days", 0) == 45
+    assert scalar(dbc, "SELECT value FROM settings WHERE key = 'version_count'") == "9"
+    assert scalar(dbc, "SELECT value FROM settings WHERE key = 'retention_days'") == "45"
     assert client.post("/settings", data={"version_count": 0, "retention_days": 45}).status_code == 400
 
 
@@ -199,3 +201,78 @@ def test_mirror_lifecycle_and_secrecy(client, dbc):
     assert scalar(dbc, "SELECT run_requested FROM mirrors") == 1
     client.post("/mirrors/offsite/delete")
     assert scalar(dbc, "SELECT COUNT(*) FROM mirrors") == 0
+
+
+def test_models_match_schema(database_url, monkeypatch):
+    """schema.sql is the source of truth; the ORM models must describe it."""
+    from sqlalchemy import inspect
+
+    from fafnirx_web.models import Base
+
+    monkeypatch.setenv("FAFNIRX_DATABASE_URL", database_url)
+    db.init()
+    insp = inspect(db.engine())
+    tables = set(insp.get_table_names())
+    assert set(Base.metadata.tables) == tables
+    for name, table in Base.metadata.tables.items():
+        cols = {c["name"]: c for c in insp.get_columns(name)}
+        assert set(table.columns.keys()) == set(cols), name
+        for col in table.columns:
+            assert col.nullable == cols[col.name]["nullable"] or col.primary_key, f"{name}.{col.name}"
+    db.dispose_engines()
+
+
+def seed_files(dbc):
+    dbc.execute(
+        "INSERT INTO devices (name, token_hash, created_at, last_seen) VALUES ('desk', 'x', 0, %s)", (db.now(),)
+    )
+    for path, size in (("docs/a.txt", 100), ("docs/sub/b.txt", 2048), ("top.txt", 5)):
+        f = dbc.execute("INSERT INTO files (device_id, path) VALUES (1, %s) RETURNING id", (path,)).fetchone()["id"]
+        v = dbc.execute(
+            "INSERT INTO versions (file_id, root_hash, size, mtime, manifest, created_at)"
+            " VALUES (%s, decode('00', 'hex'), %s, 1700000000000000000, ''::bytea, %s) RETURNING id",
+            (f, size, db.now()),
+        ).fetchone()["id"]
+        dbc.execute("UPDATE files SET current_version_id = %s WHERE id = %s", (v, f))
+        dbc.execute("INSERT INTO events (device_id, path, action, ts) VALUES (1, %s, 'add', %s)", (path, db.now()))
+    dbc.execute("UPDATE files SET deleted_at = %s WHERE path = 'top.txt'", (db.now(),))
+
+
+def test_dashboard(client, dbc):
+    login(client)
+    empty = client.get("/")
+    assert empty.status_code == 200 and "No changes in the last 14 days" in empty.text
+    seed_files(dbc)
+    page = client.get("/").text
+    assert "Devices online" in page and "2.0 KB" not in page and '<svg class="chart"' in page
+    assert "docs/sub/b.txt" in page, "recent activity lists the change"
+    assert ">1<" in page, "one file is marked deleted"
+
+
+def test_file_browser(client, dbc):
+    login(client)
+    seed_files(dbc)
+    root = client.get("/devices/desk/files").text
+    assert "docs" in root and "top.txt" not in root, "deleted files are hidden by default"
+    assert "top.txt" in client.get("/devices/desk/files?deleted=1").text
+    sub = client.get("/devices/desk/files?path=docs").text
+    assert "a.txt" in sub and "sub" in sub and "b.txt" not in sub
+    leaf = client.get("/devices/desk/files?path=docs/sub").text
+    assert "b.txt" in leaf and "2.0 KB" in leaf
+    versions = client.get("/devices/desk/files/versions?path=docs/sub/b.txt")
+    assert versions.status_code == 200 and "Current" in versions.text
+    assert client.get("/devices/desk/files/versions?path=nope").status_code == 404
+    assert client.get("/devices/nobody/files").status_code == 404
+    assert client.get("/sources/nobody/files").status_code == 404
+
+
+def test_flash_and_jobs_api(client, dbc):
+    login(client)
+    form = {"name": "Offsite", "remote_type": "s3", "options": "", "remote_path": "b"}
+    client.post("/mirrors", data=form)
+    assert "Mirror offsite added" in client.get("/mirrors").text
+    assert "Mirror offsite added" not in client.get("/mirrors").text, "a message is shown once"
+    jobs = client.get("/api/jobs").json()
+    assert jobs["sources"] == [] and jobs["mirrors"][0]["name"] == "offsite" and jobs["mirrors"][0]["running"] is False
+    client.post("/mirrors/offsite/run")
+    assert "Run requested" in client.get("/mirrors").text

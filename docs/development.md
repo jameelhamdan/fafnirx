@@ -89,6 +89,14 @@ from that:
 
 Unit tests get a fresh schema from `db::testing::db()`.
 
+## Database access in the web UI
+
+The web UI uses SQLAlchemy 2 (ORM, one `Session` per request, `db.session()`). `FAFNIRX_DATABASE_URL` is the same string the
+engine uses; `db.engine()` selects the `psycopg` driver. `models.py` describes the tables in `schema.sql`; it does not
+create them. Columns the database fills in (identity ids, defaults) carry a `server_default` so the ORM leaves them out of
+INSERTs. `tests/test_web.py::test_models_match_schema` fails when a model and the schema drift apart, so change both
+together.
+
 ## Changing the schema
 
 `schema.sql` is applied by both processes on every start under an advisory lock, so every statement must be
@@ -97,7 +105,7 @@ idempotent. There is no migration framework yet. To change the schema:
 1. Edit the `CREATE TABLE` for fresh installs.
 2. Append idempotent statements for existing installs, for example `ALTER TABLE files ADD COLUMN IF NOT EXISTS ...`.
 3. Keep both engine and web UI working against the old and the new shape until every deployment has started once.
-4. Update the [database diagram](architecture.md#database-structure).
+4. Update `web/fafnirx_web/models.py` and the [database diagram](architecture.md#database-structure).
 
 ## Changing the gRPC contract
 

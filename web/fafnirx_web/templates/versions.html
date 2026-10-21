@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}{{ path }} - fafnirx{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <a href="{{ base }}/files">{{ owner }}</a><span aria-hidden="true">/</span>
+  {% if parent %}<a href="{{ base }}/files?path={{ parent | urlencode }}{% if file.deleted_at %}&amp;deleted=1{% endif %}">{{ parent }}</a><span aria-hidden="true">/</span>{% endif %}
+  <span aria-current="page">{{ path.rpartition('/')[2] }}</span>
+</nav>
+
+<div class="row between page-head wrap">
+  <h1 class="path">{{ path.rpartition('/')[2] }}</h1>
+  {% if file.deleted_at %}<span class="badge a-delete">Deleted {{ file.deleted_at | ago }}</span>{% else %}<span class="badge a-add">Live</span>{% endif %}
+</div>
+
+{% if file.deleted_at %}
+<p class="muted">Marked deleted on {{ file.deleted_at | stamp }} UTC. Everything below stays recoverable for {{ retention | count('day') }} after that, then it is removed for good. If the device brings the file back, it is live again and these stay as earlier versions.</p>
+{% endif %}
+
+<div class="table-wrap">
+<table>
+  <caption class="sr-only">Versions of {{ path }}</caption>
+  <thead><tr><th scope="col">Version</th><th scope="col">Collected (UTC)</th><th scope="col" class="num">Size</th><th scope="col" class="num hide-sm">Modified (UTC)</th><th scope="col" class="num hide-sm">Chunks</th><th scope="col" class="hide-md">Root hash</th><th scope="col">State</th></tr></thead>
+  <tbody>
+  {% for v in versions %}
+    <tr>
+      <td>#{{ v.id }}</td>
+      <td>{{ v.created_at | stamp }}</td>
+      <td class="num">{{ v.size | bytes }}</td>
+      <td class="num hide-sm">{{ v.mtime | stamp }}</td>
+      <td class="num hide-sm">{{ v.chunks }}</td>
+      <td class="hide-md"><code title="{{ v.hash }}">{{ v.hash[:16] }}</code></td>
+      <td>
+        {% if v.current %}<span class="badge a-add">Current</span>
+        {% elif v.pruned_at %}<span class="badge" title="Beyond the version count; removed {{ retention }} days after {{ v.pruned_at | day }}">Pruned</span>
+        {% else %}<span class="badge">Earlier</span>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="hint">Chunk files are stored as <code>chunks/ab/cd/&lt;hash&gt;</code>; the root hash identifies the exact content.</p>
+{% endblock %}
