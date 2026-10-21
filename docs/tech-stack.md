@@ -11,7 +11,7 @@
 | Database | PostgreSQL 17 | Only supported database. `schema.sql` |
 | Engine database access | `postgres` 0.19 (synchronous) + `r2d2` pool | Called from `spawn_blocking`; see [Development](development.md#database-access-in-the-engine) |
 | Web UI backend | Python 3.12, FastAPI, Uvicorn, Jinja2 | `web/fafnirx_web`; server-rendered templates |
-| Web UI database access | `psycopg` 3 (binary) | One connection per request, dict rows |
+| Web UI database access | SQLAlchemy 2 ORM (`web/fafnirx_web/models.py`) over `psycopg` 3 | One session per request; `schema.sql` stays the source of truth and a test checks the models match it |
 | Web UI frontend | Hand-written CSS, Alpine.js (vendored, about 15 KB) | No build step, works offline on a LAN. Styling tokens from Beszel (MIT) and the Inter font |
 | Google Drive | Drive REST API v3 via `reqwest`, `jsonwebtoken` for the service-account JWT | `crates/server/src/gdrive.rs` |
 | Mirrors | `rclone` (external binary, in the Docker image) | `crates/server/src/mirror.rs`; options passed as environment variables |
@@ -33,7 +33,8 @@ crates/
   sign/      fafnirx-sign: keygen, publish
 proto/       fafnirx.proto
 web/
-  fafnirx_web/   app.py (routes), integrations.py (sources, mirrors), db.py, templates/, static/
+  fafnirx_web/   app.py (routes), integrations.py (sources, mirrors), browse.py (file browser), stats.py (dashboard),
+                 models.py (ORM), db.py (engine, sessions), fmt.py, templates/, static/
   tests/         pytest
 schema.sql   PostgreSQL schema, shared by engine and web UI
 tests/       end-to-end scripts (real server, web UI and client)

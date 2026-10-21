@@ -4,8 +4,11 @@
 <div class="login card">
   <h1>Log in</h1>
   <form method="post" action="/login">
-    <input type="password" name="password" placeholder="Admin password" autocomplete="current-password" autofocus required>
-    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    <div>
+      <label for="pw">Admin password</label>
+      <input id="pw" class="full" type="password" name="password" autocomplete="current-password" autofocus required>
+    </div>
+    {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
     <button class="primary" type="submit">Log in</button>
   </form>
 </div>

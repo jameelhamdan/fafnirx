@@ -2,8 +2,8 @@
 
 ## The web UI
 
-Log in at `http://<host>:8080` with the admin password. The top bar has **Devices**, **Sources**, **Mirrors**,
-**Settings** and the **CA certificate** download.
+Log in at `http://<host>:8080` with the admin password. The top bar has **Dashboard**, **Devices**, **Sources**, **Mirrors**,
+**Settings** and the **CA certificate** download. Actions confirm in a dialog where they matter, report back with a short message, and sources and mirrors update their status live while a run is going.
 
 | Page | What you do there |
 |---|---|
@@ -11,7 +11,8 @@ Log in at `http://<host>:8080` with the admin password. The top bar has **Device
 | Sources | Add Google Drive sources, **Run now**, **Pause**/**Resume**, delete. |
 | Mirrors | Add offsite mirrors, **Run now**, **Pause**/**Resume**, **Resync**, delete. |
 | Settings | Versions kept per file, retention for deleted files. |
-| Home alerts | Open alerts, each dismissible by hand. |
+| Dashboard | Summary cards (devices online, data held, files waiting for retention, disk, open alerts), changes per day for two weeks, health of sources and mirrors, the device list and recent activity. Open alerts sit on top, each dismissible by hand. |
+| File browser | **Browse files** on a device or source: folders, sizes, times, version history and delete status. Read only; there is no download. |
 
 The web UI is plain HTTP and has one shared password. Keep it on the LAN or behind a VPN.
 
