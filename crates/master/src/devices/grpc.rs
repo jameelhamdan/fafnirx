@@ -129,7 +129,10 @@ impl Collector for Service {
                     ],
                 )?;
                 if hb.phase.is_empty() || hb.phase == "idle" {
-                    c.execute("DELETE FROM device_activity WHERE device_id = $1", &[&dev.id])?;
+                    // Going from busy to idle means the sync is done: the totals shown for the device are brought up to date.
+                    if c.execute("DELETE FROM device_activity WHERE device_id = $1", &[&dev.id])? > 0 {
+                        crate::devices::totals::refresh(c, dev.id)?;
+                    }
                 } else {
                     c.execute(
                         "INSERT INTO device_activity (device_id, updated_at, phase, current_file, files_done,

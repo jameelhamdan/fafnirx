@@ -21,6 +21,7 @@ fn block<F: std::future::Future>(f: F) -> F::Output {
 
 struct Api {
     app: Router,
+    db: crate::platform::db::Db,
     cookie: String,
     _dir: tempfile::TempDir,
 }
@@ -29,11 +30,17 @@ impl Api {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(Store::open(dir.path()).unwrap());
-        let state = Arc::new(AppState::new(testing::db(), store, dir.path().to_path_buf(), "secret".into()).unwrap());
+        let db = testing::db();
+        let state = Arc::new(AppState::new(db.clone(), store, dir.path().to_path_buf(), "secret".into()).unwrap());
         let app =
             router(state.clone(), true, true).layer(MockConnectInfo("127.0.0.1:1".parse::<SocketAddr>().unwrap()));
-        Self { app, cookie: String::new(), _dir: dir }
+        Self { app, db, cookie: String::new(), _dir: dir }
     }
+    /// What the minute job does: the totals shown for devices catch up with their files.
+    async fn catch_up_totals(&self) {
+        crate::platform::db::with(&self.db, crate::devices::totals::refresh_stale).await.unwrap();
+    }
+
     async fn send(
         &self,
         method: Method,
@@ -200,6 +207,12 @@ fn upload_browse_download_history_and_delete() {
         api.upload("photos", "2024/b.txt", b"second").await;
         api.upload("photos", "top.txt", b"top").await;
 
+        let (_, before) = api.get("/api/files").await;
+        assert!(
+            before["entries"].as_array().unwrap().iter().any(|e| e["name"] == "photos" && e["files"] == 0),
+            "the totals of a device are not live"
+        );
+        api.catch_up_totals().await;
         let (_, root) = api.get("/api/files").await;
         assert!(root["entries"]
             .as_array()

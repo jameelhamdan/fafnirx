@@ -260,7 +260,10 @@ fn commit_inner(conn: &mut Client, store: &Store, staged: &Path, v: &NewVersion)
             }
             None => None,
         };
-        tx.execute("UPDATE devices SET last_seen = $1, last_collected = $1 WHERE id = $2", &[&ts, &dev.id])?;
+        tx.execute(
+            "UPDATE devices SET last_seen = $1, last_collected = $1, totals_stale = TRUE WHERE id = $2",
+            &[&ts, &dev.id],
+        )?;
         db::notify(&mut tx, "devices", &dev.name)?;
         Ok(vacated)
     })();
@@ -337,7 +340,7 @@ fn delete_locked(
 ) -> Result<bool> {
     let ts = unix_now();
     let deleted = delete_path(tx, device, path, ts, by_admin, None)?;
-    tx.execute("UPDATE devices SET last_seen = $1 WHERE id = $2", &[&ts, &device.id])?;
+    tx.execute("UPDATE devices SET last_seen = $1, totals_stale = TRUE WHERE id = $2", &[&ts, &device.id])?;
     db::notify(tx, "devices", &device.name)?;
     if let Some(version_id) = deleted {
         archive_deleted(store, device, path, version_id);
@@ -378,6 +381,7 @@ pub fn adopt_live(conn: &mut Client, store: &Store, device: &Device, path: &str,
     };
     log_event(&mut tx, device, path, action, ts, Some(&hex::encode(seen.root)), Some(detail))?;
     queue_meta(&mut tx, device, path, root)?;
+    tx.execute("UPDATE devices SET totals_stale = TRUE WHERE id = $1", &[&device.id])?;
     tx.commit()?;
     Ok(true)
 }
