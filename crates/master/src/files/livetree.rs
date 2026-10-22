@@ -394,36 +394,6 @@ mod tests {
         assert_eq!(live(&mut c).len(), 1);
     }
 
-    /// Waits until the watcher has reported one of `wanted` (device, path).
-    fn reports(rx: &mpsc::Receiver<Target>, wanted: &[(&str, &str)]) -> Result<(), String> {
-        let mut seen = HashSet::new();
-        while let Ok(target) = rx.recv_timeout(Duration::from_secs(5)) {
-            if wanted.iter().any(|(d, p)| target == (d.to_string(), p.to_string())) {
-                return Ok(());
-            }
-            seen.insert(target);
-        }
-        Err(format!("none of {wanted:?} was reported, got {seen:?}"))
-    }
-
-    #[test]
-    fn the_watcher_reports_what_is_written() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
-        fs::create_dir_all(root.join("three/docs")).unwrap();
-        let (watcher, rx) = watch(&root);
-        assert!(watcher.is_some());
-
-        fs::write(root.join("three/docs/a.txt"), b"x").unwrap();
-        reports(&rx, &[("three", "docs/a.txt")]).unwrap();
-
-        // A folder that is made now is watched a moment later, so a file written into it at once may only be
-        // reported through the folder, whose whole contents are then compared with the database.
-        fs::create_dir_all(root.join("three/new")).unwrap();
-        fs::write(root.join("three/new/b.txt"), b"y").unwrap();
-        reports(&rx, &[("three", "new/b.txt"), ("three", "new")]).unwrap();
-    }
-
     #[test]
     fn events_are_mapped_to_a_device_and_path() {
         let root = Path::new("data").join("files");

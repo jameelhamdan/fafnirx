@@ -48,8 +48,10 @@ Set `FAFNIRX_TOKEN_STORE=file` to avoid the OS keychain while developing.
 - The end-to-end scripts start the real `fafnirx-master`, the real client binary and a fake Google Drive. They look for the
   binaries in `target/debug`, or in `$FAFNIRX_BIN_DIR` (useful when `CARGO_TARGET_DIR` is elsewhere). They share
   `tests/lib.mjs`.
-- The file watcher tests rely on file events. On a mount that reports none (a Docker Desktop bind mount) the master falls
-  back to comparing the tree every 5 minutes, so run the end-to-end scripts on a normal disk.
+- Unit tests never wait for the clock or for the operating system: time is paused or compared with hours of margin, and the
+  watcher is tested through its two halves (which device and path an event stands for, and comparing a folder with the
+  database). The end-to-end scripts check the real watcher by polling. On a mount that reports no file events (a Docker
+  Desktop bind mount) the master compares the tree every 5 minutes instead, so run them on a normal disk.
 
 Before sending a change:
 
