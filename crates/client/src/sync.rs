@@ -1,5 +1,5 @@
 //! One collection cycle: scan, detect renames and deletes, upload what changed.
-//! Upload only: nothing here ever asks the orchestrator for data.
+//! Upload only: nothing here ever asks the master for data.
 
 use crate::config::{Config, Folder};
 use crate::daemon::Activity;
@@ -23,7 +23,7 @@ const UPLOAD_WORKERS: usize = 4;
 
 #[derive(Debug)]
 pub enum SyncError {
-    /// The orchestrator cannot be used right now. Nothing is lost: changes stay pending.
+    /// The master cannot be used right now. Nothing is lost: changes stay pending.
     Offline(String),
     /// A problem with this one file.
     File(String),
@@ -95,6 +95,8 @@ pub struct Engine {
     pub activity: Arc<Mutex<Activity>>,
     /// Bytes sent in the current cycle, updated per chunk.
     pub sent: Arc<AtomicU64>,
+    /// The client's own state folder, which is never collected.
+    pub exclude: Option<PathBuf>,
     logged_skips: HashSet<String>,
 }
 
@@ -127,13 +129,30 @@ impl Engine {
             pause_marker,
             activity: Arc::new(Mutex::new(Activity::default())),
             sent: Arc::new(AtomicU64::new(0)),
+            exclude: None,
             logged_skips: HashSet::new(),
         }
     }
 
     pub fn set_activity(&self, phase: &str, current: &str, done: usize, total: usize, bytes: u64) {
         if let Ok(mut a) = self.activity.lock() {
-            *a = Activity { phase: phase.into(), current: current.into(), done, total, bytes };
+            *a = Activity { phase: phase.into(), current: current.into(), done, total, bytes, ..Default::default() };
+        }
+    }
+
+    fn set_uploading(&self, file: &Candidate, n: usize, total: usize, total_bytes: u64, base_bytes: u64) {
+        if let Ok(mut a) = self.activity.lock() {
+            *a = Activity {
+                phase: "uploading".into(),
+                current: file.entry.remote.clone(),
+                done: n,
+                total,
+                total_bytes,
+                base_bytes,
+                file_size: file.hashed.size,
+                file_start: self.sent.load(Ordering::Relaxed),
+                ..Default::default()
+            };
         }
     }
 
@@ -154,16 +173,40 @@ impl Engine {
         }
     }
 
+    /// Makes sure what this client remembers sending was sent to the master it is talking to now.
+    async fn check_master(&mut self) -> Result<(), SyncError> {
+        let master_id = self.client.identify(pb::IdentifyRequest {}).await?.into_inner().master_id;
+        let cleared = self.state.adopt_master(&master_id)?;
+        if cleared > 0 {
+            tracing::warn!("this is not the master these {cleared} files were sent to: collecting everything again");
+        }
+        Ok(())
+    }
+
     pub async fn cycle(&mut self, cfg: &Config) -> Result<Report, SyncError> {
         let mut report = Report::default();
+        self.check_master().await?;
         self.limiter.set(cfg.bandwidth_limit_kbps);
         self.sent.store(0, Ordering::Relaxed);
         self.set_activity("scanning", "", 0, 0, 0);
         let (entries, scanned) = self.scan(cfg).await;
         let (changed, mut vanished) = self.detect_changes(&entries, &scanned)?;
-        let candidates = self.hash_changed(changed, &mut vanished, &mut report).await?;
-        self.upload_all(candidates, &mut report).await?;
-        self.delete_vanished(vanished, &mut report).await?;
+        let every_folder_read = !cfg.folders.is_empty() && scanned.len() == cfg.folders.len();
+        if vanished.is_empty() {
+            // Nothing can be a rename, so a file goes out as soon as it is hashed. The first sync of a big
+            // folder starts uploading at once, and an interruption loses at most the file in hand.
+            self.hash_and_upload(changed, &mut report).await?;
+        } else {
+            let candidates = self.hash_changed(changed, &mut vanished, &mut report).await?;
+            // Deletes go first: a file that became a folder (or the other way round) cannot be stored while the
+            // master still has the old path.
+            self.delete_vanished(vanished, &mut report).await?;
+            self.upload_all(candidates, &mut report).await?;
+        }
+        // The first sync is over once a cycle has gone through every folder and left nothing behind.
+        if every_folder_read && report.failed == 0 {
+            self.state.mark_initial_sync_done()?;
+        }
         Ok(report)
     }
 
@@ -172,8 +215,8 @@ impl Engine {
         let mut entries = Vec::new();
         let mut scanned = HashSet::new();
         for folder in &cfg.folders {
-            let f: Folder = folder.clone();
-            match tokio::task::spawn_blocking(move || scan_folder(&f)).await {
+            let (f, exclude): (Folder, Option<PathBuf>) = (folder.clone(), self.exclude.clone());
+            match tokio::task::spawn_blocking(move || scan_folder(&f, exclude.as_deref())).await {
                 Ok(Ok(scan)) => {
                     for note in scan.skipped {
                         if self.logged_skips.insert(note.clone()) {
@@ -232,15 +275,7 @@ impl Engine {
         for (n, (entry, is_new)) in changed.into_iter().enumerate() {
             self.check_paused()?;
             self.set_activity("hashing", &entry.remote, n, total, 0);
-            let p = entry.local.clone();
-            let hashed = match tokio::task::spawn_blocking(move || hash_file(&p)).await.map_err(anyhow::Error::from) {
-                Ok(Ok(h)) => h,
-                Ok(Err(e)) | Err(e) => {
-                    self.fail(&entry, &format!("{e:#}"));
-                    report.failed += 1;
-                    continue;
-                }
-            };
+            let Some(hashed) = self.hash_one(&entry, report).await else { continue };
             let renamed_from = if is_new {
                 vanished
                     .iter()
@@ -254,31 +289,78 @@ impl Engine {
         Ok(candidates)
     }
 
-    async fn upload_all(&mut self, candidates: Vec<Candidate>, report: &mut Report) -> Result<(), SyncError> {
-        let total = candidates.len();
-        for (n, c) in candidates.into_iter().enumerate() {
-            self.check_paused()?;
-            self.set_activity("uploading", &c.entry.remote, n, total, 0);
-            match self.upload(&c).await {
-                Ok(bytes) => {
-                    report.bytes += bytes;
-                    if c.renamed_from.is_some() {
-                        report.renamed += 1;
-                    } else {
-                        report.uploaded += 1;
-                    }
-                }
-                Err(SyncError::File(msg)) => {
-                    self.fail(&c.entry, &msg);
-                    report.failed += 1;
-                }
-                Err(other) => return Err(other),
+    /// Reads a file once to hash it. A failure is recorded against the file and counted; the cycle goes on.
+    async fn hash_one(&mut self, entry: &Entry, report: &mut Report) -> Option<Hashed> {
+        let p = entry.local.clone();
+        match tokio::task::spawn_blocking(move || hash_file(&p)).await.map_err(anyhow::Error::from) {
+            Ok(Ok(h)) => Some(h),
+            Ok(Err(e)) | Err(e) => {
+                self.fail(entry, &format!("{e:#}"));
+                report.failed += 1;
+                None
             }
+        }
+    }
+
+    /// Hashes each changed file and uploads it before moving to the next one.
+    async fn hash_and_upload(&mut self, changed: Vec<Changed>, report: &mut Report) -> Result<(), SyncError> {
+        let total = changed.len();
+        let total_bytes: u64 = changed.iter().map(|(e, _)| e.size).sum();
+        let mut base_bytes = 0;
+        for (n, (entry, _)) in changed.into_iter().enumerate() {
+            self.check_paused()?;
+            self.set_activity("hashing", &entry.remote, n, total, 0);
+            let Some(hashed) = self.hash_one(&entry, report).await else { continue };
+            let c = Candidate { entry, hashed, renamed_from: None };
+            self.upload_step(&c, n, total, total_bytes, &mut base_bytes, report).await?;
         }
         Ok(())
     }
 
-    /// The orchestrator keeps the data and only marks the path deleted.
+    async fn upload_all(&mut self, candidates: Vec<Candidate>, report: &mut Report) -> Result<(), SyncError> {
+        let total = candidates.len();
+        let total_bytes: u64 = candidates.iter().map(|c| c.hashed.size).sum();
+        let mut base_bytes = 0;
+        for (n, c) in candidates.into_iter().enumerate() {
+            self.check_paused()?;
+            self.upload_step(&c, n, total, total_bytes, &mut base_bytes, report).await?;
+        }
+        Ok(())
+    }
+
+    /// Uploads one file and counts it. Only a problem with the master ends the cycle; a problem with the
+    /// file is recorded and the next file goes on.
+    async fn upload_step(
+        &mut self,
+        c: &Candidate,
+        n: usize,
+        total: usize,
+        total_bytes: u64,
+        base_bytes: &mut u64,
+        report: &mut Report,
+    ) -> Result<(), SyncError> {
+        self.set_uploading(c, n, total, total_bytes, *base_bytes);
+        *base_bytes += c.hashed.size;
+        match self.upload(c).await {
+            Ok(bytes) => {
+                report.bytes += bytes;
+                if c.renamed_from.is_some() {
+                    report.renamed += 1;
+                } else {
+                    report.uploaded += 1;
+                }
+                Ok(())
+            }
+            Err(SyncError::File(msg)) => {
+                self.fail(&c.entry, &msg);
+                report.failed += 1;
+                Ok(())
+            }
+            Err(other) => Err(other),
+        }
+    }
+
+    /// The master keeps the data and only marks the path deleted.
     async fn delete_vanished(&mut self, vanished: Vec<Synced>, report: &mut Report) -> Result<(), SyncError> {
         for v in vanished {
             self.check_paused()?;
@@ -328,7 +410,7 @@ impl Engine {
                 .await?;
         }
         if let Some(old) = &c.renamed_from {
-            // The commit above already marked the old path deleted on the orchestrator.
+            // The commit above already marked the old path deleted on the master.
             self.state.remove_synced(old)?;
         }
         self.state.set_synced(&Synced {
@@ -353,8 +435,7 @@ impl Engine {
                 self.limiter.clone(),
                 self.sent.clone(),
                 local.to_path_buf(),
-                h.chunks.clone(),
-                h.size,
+                h.clone(),
                 g,
             ));
         }
@@ -376,14 +457,13 @@ impl Engine {
     }
 }
 
-/// Streams the chunks at `indexes` to the orchestrator over one gRPC stream.
+/// Streams the chunks at `indexes` to the master over one gRPC stream.
 async fn send_group(
     mut client: Client,
     limiter: Arc<Limiter>,
     sent: Arc<AtomicU64>,
     path: PathBuf,
-    hashes: Vec<[u8; 32]>,
-    size: u64,
+    h: Hashed,
     indexes: Vec<u32>,
 ) -> Result<u64, SyncError> {
     let (tx, rx) = mpsc::channel::<pb::Chunk>(2);
@@ -393,16 +473,18 @@ async fn send_group(
         let mut total = 0u64;
         for idx in indexes {
             let offset = idx as u64 * CHUNK_SIZE as u64;
-            let len = (size - offset).min(CHUNK_SIZE as u64) as usize;
+            let len = (h.size - offset).min(CHUNK_SIZE as u64) as usize;
             file.seek(SeekFrom::Start(offset)).await.map_err(io)?;
             let mut buf = vec![0u8; len];
             file.read_exact(&mut buf).await.map_err(|_| SyncError::File("file changed during upload".into()))?;
-            if chunk_hash(&buf) != hashes[idx as usize] {
+            if chunk_hash(&buf) != h.chunks[idx as usize] {
                 return Err(SyncError::File("file changed during upload".into()));
             }
             limiter.acquire(len).await;
             total += len as u64;
-            if tx.send(pb::Chunk { hash: hashes[idx as usize].to_vec(), data: buf }).await.is_err() {
+            let chunk =
+                pb::Chunk { hash: h.chunks[idx as usize].to_vec(), data: buf, root_hash: h.root.to_vec(), index: idx };
+            if tx.send(chunk).await.is_err() {
                 break;
             }
             sent.fetch_add(len as u64, Ordering::Relaxed);

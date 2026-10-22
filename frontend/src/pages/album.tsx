@@ -1,0 +1,140 @@
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { ArrowLeft, Image as ImageIcon, Pencil, Trash2 } from 'lucide-react'
+import { useCallback, useMemo, useState, type FormEvent } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { toast } from 'sonner'
+import { Confirm } from '@/components/confirm'
+import { Empty, ErrorNote, PageHeader } from '@/components/common'
+import { DayGrid } from '@/components/library/day-grid'
+import { SelectionBar } from '@/components/library/selection-bar'
+import { Viewer } from '@/components/library/viewer'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Textarea } from '@/components/ui/textarea'
+import { api, mediaUrl } from '@/lib/api'
+import { bytes, plural } from '@/lib/format'
+import { useRefreshLibrary } from '@/lib/library'
+import type { AlbumInfo, Asset } from '@/lib/types'
+
+/** Cells shown at first; an album of thousands would otherwise draw them all at once. */
+const FIRST = 2000
+
+function EditAlbum({ album, onClose }: { album: AlbumInfo; onClose: () => void }) {
+  const refresh = useRefreshLibrary()
+  const [name, setName] = useState(album.name)
+  const [description, setDescription] = useState(album.description)
+  const save = useMutation({
+    mutationFn: () => api.patch(`/api/albums/${album.id}`, { name, description }),
+    onSuccess: () => {
+      void refresh()
+      onClose()
+    },
+    onError: (e) => toast.error(e.message),
+  })
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    if (name.trim()) save.mutate()
+  }
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <form onSubmit={submit} className="space-y-4">
+          <DialogHeader>
+            <DialogTitle>Edit album</DialogTitle>
+            <DialogDescription>The name and description show on the album.</DialogDescription>
+          </DialogHeader>
+          <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} aria-label="Album name" maxLength={120} />
+          <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description (optional)" aria-label="Description" rows={3} />
+          <DialogFooter><Button type="submit" disabled={!name.trim() || save.isPending}>Save</Button></DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+export default function Album() {
+  const id = Number(useParams().id)
+  const navigate = useNavigate()
+  const refresh = useRefreshLibrary()
+  const { data, error } = useQuery({ queryKey: ['album', id], queryFn: () => api.get<{ album: AlbumInfo; assets: Asset[] }>(`/api/albums/${id}`), enabled: Number.isFinite(id) })
+  const [selected, setSelected] = useState<Map<number, Asset>>(new Map())
+  const [viewing, setViewing] = useState<number | null>(null)
+  const [dialog, setDialog] = useState<'edit' | 'delete' | null>(null)
+  const [showAll, setShowAll] = useState(false)
+
+  const assets = data?.assets
+  const shown = useMemo(() => (showAll ? assets : assets?.slice(0, FIRST)) ?? [], [assets, showAll])
+  const byId = useMemo(() => new Map((assets ?? []).map((a) => [a.id, a])), [assets])
+  const ids = useMemo(() => new Set(selected.keys()), [selected])
+  const toggle = useCallback((id: number) => setSelected((s) => { const n = new Map(s); const a = byId.get(id); if (!n.delete(id) && a) n.set(id, a); return n }), [byId])
+  const toggleMany = useCallback((list: number[], on: boolean) => setSelected((s) => { const n = new Map(s); list.forEach((id) => { const a = byId.get(id); if (on && a) n.set(id, a); else n.delete(id) }); return n }), [byId])
+  const clear = useCallback(() => setSelected(new Map()), [])
+
+  const cover = useMutation({
+    mutationFn: (file: number) => api.patch(`/api/albums/${id}`, { cover: file }),
+    onSuccess: () => { toast.success('Cover changed'); clear(); void refresh() },
+    onError: (e) => toast.error(e.message),
+  })
+  const remove = useMutation({
+    mutationFn: () => api.delete(`/api/albums/${id}`),
+    onSuccess: () => { toast.success('Album deleted. Its photos are untouched.'); void refresh(); navigate('/albums') },
+    onError: (e) => toast.error(e.message),
+  })
+
+  if (error) return <ErrorNote error={error} />
+  if (!data) return <Skeleton className="h-96" />
+  const { album } = data
+
+  return (
+    <div>
+      <Link to="/albums" className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="size-4" />Albums</Link>
+      <PageHeader
+        title={album.name}
+        description={
+          <>
+            {plural(album.count, 'item')} · {bytes(album.bytes)}
+            {album.description && <span className="mt-1 block whitespace-pre-line">{album.description}</span>}
+          </>
+        }
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setDialog('edit')}><Pencil className="size-4" />Edit</Button>
+            <Button variant="outline" onClick={() => setDialog('delete')}><Trash2 className="size-4" />Delete album</Button>
+          </>
+        }
+      />
+
+      {selected.size > 0 && (
+        <div className="sticky top-14 z-20 -mx-3 mb-2 flex items-center gap-2 bg-background/90 px-3 py-2 backdrop-blur md:-mx-6 md:px-6">
+          <div className="min-w-0 flex-1"><SelectionBar selected={[...selected.values()]} onClear={clear} albumId={id} /></div>
+          {selected.size === 1 && <Button variant="outline" size="sm" onClick={() => cover.mutate([...selected.keys()][0])}><ImageIcon className="size-4" />Use as cover</Button>}
+        </div>
+      )}
+
+      {assets && assets.length === 0 ? (
+        <Empty title="This album is empty">Open the timeline, select photos and choose Add to album.</Empty>
+      ) : (
+        <>
+          <DayGrid assets={shown} src={(a) => mediaUrl(a.id, 'thumb', a.hash)} selected={ids} onOpen={(a) => setViewing(a.id)} onToggle={toggle} onToggleMany={toggleMany} />
+          {assets && assets.length > shown.length && (
+            <div className="py-4 text-center"><Button variant="outline" onClick={() => setShowAll(true)}>Show all {assets.length.toLocaleString()}</Button></div>
+          )}
+        </>
+      )}
+
+      {viewing !== null && assets && <Viewer assets={assets} id={viewing} onChange={setViewing} onClose={() => setViewing(null)} />}
+      {dialog === 'edit' && <EditAlbum album={album} onClose={() => setDialog(null)} />}
+      <Confirm
+        open={dialog === 'delete'}
+        title={`Delete the album “${album.name}”?`}
+        description="The photos and videos stay where they are."
+        action="Delete album"
+        destructive
+        onCancel={() => setDialog(null)}
+        onConfirm={() => { setDialog(null); remove.mutate() }}
+      />
+    </div>
+  )
+}

@@ -1,77 +1,86 @@
 # Overview
 
-## What fafnirx is
-
-fafnirx collects data from your devices (Windows, macOS, Linux) into one server you own, the **orchestrator**, and
-mirrors it offsite from there. Data only flows one way:
+fafnirx collects the data of your devices (Windows, macOS, Linux) into one
+server you own, the **master**, and lets you browse it, copy it offsite and get any version of any file back.
 
 ```mermaid
 flowchart LR
-    D["Devices<br/>(client: fafnirx)"] -->|"upload only"| O["Orchestrator<br/>(fafnirx-server + web UI)"]
-    G["Google Drive"] -->|"scheduled import"| O
-    O -->|"scheduled mirror"| M["Offsite mirrors<br/>(S3, SFTP, WebDAV, ...)"]
+    D["Devices<br/>(client: fafnirx)"] -->|"upload only<br/>gRPC :7443"| M["Master<br/>fafnirx-master"]
+    G["Google Drive"] -->|"collected by the master"| M
+    A["Admin<br/>browser"] <-->|"web app and API :8080"| M
+    M --- PG[("PostgreSQL<br/>metadata")]
+    M --- FS[("Files on disk<br/>files/ and versions/")]
+    M -->|"rclone"| O["Offsite mirrors"]
 ```
 
-It is built for a small setup: a handful of devices, thousands of files, files up to 5 GB. It is named after Fafnir, the
-dragon who hoards treasure: data goes in and nothing comes out.
+## How a file travels
 
-The one rule everything else follows: **preserving the original data matters more than anything else.** A client can
-add and update data. It cannot read, list or delete anything on the orchestrator, and a delete on a device only
-*marks* the file deleted. Nothing is removed until the retention period has passed.
-
-## How it works
-
-1. **A client runs on each device.** It watches the folders you chose, plus a periodic full scan.
-2. **Files are split into 4 MiB chunks** and each chunk is hashed with BLAKE3. A file is described by its ordered list of
-   chunk hashes and a root hash.
-3. **The client sends the list; the orchestrator answers with the chunks it does not have yet.** Only those are
-   uploaded, so an edit to a large file sends only the changed chunk, a copied file sends nothing, and an interrupted
-   upload resumes where it stopped.
-4. **The orchestrator verifies every chunk** and records a new *version* of the path only once the whole file checks out.
-5. **A web UI** manages devices, tokens, sources, mirrors, retention and alerts.
-6. **Mirrors**: on a schedule, the orchestrator copies the current file tree (and what changed since the last run) to
-   any storage rclone supports, as plain files you can read without fafnirx.
+1. **The client notices a change** with a file watcher and a periodic scan, and waits for the file to settle.
+2. **It hashes the file in 4 MiB chunks** with BLAKE3. A file is its ordered chunk hashes plus a root hash over them.
+3. **It sends the list; the master answers with the chunks it still needs.** A changed file is sent whole; an
+   interrupted upload resumes with the missing chunks; content the device already has under another path (a copy or
+   a rename) needs no data at all.
+4. **The master verifies every chunk**, writes them into one file at their offsets, checks the root hash of the
+   result, and moves it to `files/<device>/<path>`. The file it replaces moves to `versions/<id>/<device>/<path>`.
+5. **Deleting on the device only marks the path deleted.** The data stays until the retention period has passed.
+6. **Mirrors** copy the current tree (and what changed since the last run) to storage you choose.
 
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant O as Orchestrator
-    C->>C: File changed: split into 4 MiB chunks, hash them
-    C->>O: Negotiate (chunk hashes + root hash)
-    O-->>C: Missing chunks
-    C->>O: UploadChunks (only the missing ones)
-    O->>O: Check every chunk against its hash
-    C->>O: Commit
-    O->>O: Check chunks are stored, record new version
-    O-->>C: Version id
+    participant M as Master
+    participant FS as files/ and versions/
+    C->>M: Identify (is this still the master my record is about?)
+    C->>C: file changed: hash it in 4 MiB chunks
+    C->>M: Negotiate (chunk hashes + root hash)
+    M-->>C: chunks still needed
+    C->>M: UploadChunks (parallel streams)
+    M->>FS: write each verified chunk at its offset
+    C->>M: Commit
+    M->>FS: re-hash, move into place, archive the old version
+    M-->>C: version id
 ```
 
-## What you get
+## Seeing and using the data
 
-- **Deduplication.** Identical content, from any device or file, is stored once.
-- **Versions.** The newest 5 versions of every file are kept (configurable).
-- **Safe deletes.** Deleted files stay recoverable for 30 days (configurable), then the file, its versions and chunks
-  nothing else uses are removed.
-- **Renames are free.** A moved file with the same content is recorded as a rename, with no re-upload.
-- **Offline tolerance.** Changes made while the device is offline are queued and uploaded later.
-- **Google Drive as a source**, collected by the orchestrator itself with a service account.
-- **Offsite mirrors** through rclone, with a plain file tree, a `versions/` history and JSON statistics.
-- **Signed self-update** of the client, from the orchestrator, with a key that is never on the server.
-- **Alerts** for offline devices, upload errors, failed mirror or source runs, and a disk over 80% full.
+The **web app** is the way in. Devices are folders; open one to browse its files, search, filter by type, sort,
+preview photos, read their metadata, see every version, download or upload. A zip download streams, so it works for
+any size. Everything on the pages updates live: a device's progress bar moves, a new file appears in an open folder.
+
+For photos and videos there is a **library** on top of the same files: a timeline by month and day with a scrubber,
+favorites, an archive, a trash, albums, a map, tags,
+ratings and descriptions, and corrections of dates and places. None of it touches the original files.
+
+Because the files are plain files, you can also reach them without the web app: share `data/files/` over SMB or NFS
+and use it as a **network drive**. Files you add or change there are noticed and recorded as versions.
+
+## Rules that do not change
+
+- Collection is one way. The client only reads the files it collects: it never writes, renames, moves or deletes
+  anything in them, and nothing is ever sent back to a device.
+- The device is the source of truth, the master is an aggregator. A file deleted on a device is marked deleted on the
+  master, kept in the trash, and removed for good after the retention period. A file renamed or moved on a device is
+  renamed and moved on the master, without sending it again.
+- A file deleted on the master is hidden and goes to the trash; it is not synced again, and nothing happens on the device.
+- Files a device or a source sent cannot be changed or renamed on the master. Only local folders, the files uploaded
+  to the master itself, are changed there.
+- A new install collects all the files of its folders, and the tray says that the first sync is sending all of them.
 
 ## What it is not
 
-- Not a sync tool: nothing is ever sent back to a device. Restoring is a manual copy (see [Usage](usage.md#restoring-data)).
-- Not multi-user: one admin password, meant for a LAN or VPN.
-- Not an encryption layer: data on the orchestrator and on mirrors is not encrypted by fafnirx. Bit-rot protection at
-  rest is left to the filesystem (ZFS is recommended); fafnirx verifies hashes on upload and again when it builds
-  files for a mirror.
+- Not a sync tool: nothing is ever sent back to a device. Restoring is a download or a copy.
+- Not an encryption layer: data on the master and on mirrors is not encrypted by fafnirx. Use an encrypted disk, and an
+  encrypting rclone remote (`crypt`) if the mirror needs it.
+- Not multi-user: one admin password. Put Cloudflare Access or a VPN in front if you need more.
 
-## Names
+## The pieces
 
-| Name | What |
+| Piece | What it is |
 |---|---|
-| `fafnirx` | The client, installed on devices |
-| `fafnirx-server` | The orchestrator's engine (Rust) |
-| web UI | The orchestrator's admin interface (Python) |
-| `fafnirx-sign` | Tool that creates the update signing key and publishes signed client builds |
+| `fafnirx` | The client: watcher, resumable upload, offline queue, tray icon, signed self-update |
+| `fafnirx-master` | The master: device API, admin API and web app, file store, background work |
+| `fafnirx-sign` | Creates the update signing key and publishes signed client builds |
+| PostgreSQL | All metadata: devices, files, versions, events, settings, jobs |
+| rclone | Performs mirror uploads (installed in the Docker image) |
+
+Read next: [Installation](installation.md), then [Usage](usage.md).

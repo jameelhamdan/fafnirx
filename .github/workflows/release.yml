@@ -1,0 +1,120 @@
+# Builds the client for every platform and attaches the files to the GitHub release: a Windows setup .exe, macOS and
+# Linux tarballs (with installer/install.sh) and Linux .deb packages, each with a .sha256.
+#
+# It runs when a release is published on GitHub, and by hand (Actions -> Release -> Run workflow, with the tag of an
+# existing release). The release tag is the version: v1.2.3 builds version 1.2.3, whatever Cargo.toml says, and the
+# binaries report it in `fafnirx --version`. Re-running replaces the files already attached.
+#
+# docker.yml and homebrew.yml stay off for now.
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build and attach to (for example v0.1.4)
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, name: linux-x86_64, deb: true }
+          - { os: ubuntu-22.04-arm, name: linux-aarch64, deb: true }
+          - { os: macos-15-intel, name: macos-x86_64 }
+          - { os: macos-latest, name: macos-aarch64 }
+          - { os: windows-latest, name: windows-x86_64 }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      # The tag decides the version; the workspace version in Cargo.toml is rewritten to match before building, so the
+      # binary, the installer, the .deb and the file names all carry the same number.
+      - name: Set the version from the tag
+        id: v
+        run: |
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "tag '$TAG' is not of the form v1.2.3" >&2; exit 1 ;;
+          esac
+          version=${TAG#v}
+          sed -i.bak "s/^version = \".*\"/version = \"$version\"/" Cargo.toml
+          rm Cargo.toml.bak
+          git diff --stat Cargo.toml
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Linux build packages (tray icon)
+        if: startsWith(matrix.name, 'linux')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev libxdo-dev
+
+      - name: Build (Linux, macOS)
+        if: ${{ !startsWith(matrix.name, 'windows') }}
+        run: |
+          cargo build --release -p fafnirx
+          test "$(target/release/fafnirx --version)" = "fafnirx ${{ steps.v.outputs.version }}"
+          mkdir out
+          stage=fafnirx-${{ steps.v.outputs.version }}-${{ matrix.name }}
+          mkdir "$stage"
+          cp target/release/fafnirx installer/install.sh "$stage/"
+          tar czf "out/$stage.tar.gz" "$stage"
+
+      - name: Debian package
+        if: matrix.deb
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb -p fafnirx --no-build --output out/
+
+      # build.ps1 reads the version from Cargo.toml and stops if the binary reports a different one.
+      - name: Windows installer
+        if: startsWith(matrix.name, 'windows')
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          installer\build.ps1
+          New-Item -ItemType Directory out | Out-Null
+          Copy-Item dist\fafnirx-setup-*.exe out\
+
+      - name: Checksums
+        run: cd out && for f in *; do sha256sum "$f" > "$f.sha256"; done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: out/*
+          if-no-files-found: error
+
+  attach:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$TAG" out/* --clobber

@@ -1,11 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["crates/common", "crates/server", "crates/client", "crates/sign"]
+members = ["crates/common", "crates/master", "crates/client", "crates/sign"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.4"
 edition = "2021"
 license = "MIT"
+repository = "https://github.com/jameelhamdan/fafnirx"
+homepage = "https://github.com/jameelhamdan/fafnirx"
+authors = ["Jameel Hamdan"]
 
 [workspace.dependencies]
 anyhow = "1"
@@ -24,7 +27,7 @@ tempfile = "3"
 time = { version = "0.3", features = ["parsing", "formatting"] }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
-tonic = { version = "0.12", features = ["tls", "gzip"] }
+tonic = { version = "0.12", features = ["tls", "tls-roots", "gzip"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-normalization = "0.1"

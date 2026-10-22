@@ -301,6 +301,11 @@ pub fn run(config_path: PathBuf) -> Result<()> {
     let cfg = Config::load(&config_path)?;
     let state_dir = cfg.state_dir(&config_path);
     std::fs::create_dir_all(&state_dir)?;
+    // A second tray would put a second icon in the notification area.
+    if !crate::instance::claim(&state_dir, "tray", 2)? {
+        println!("the fafnirx tray is already running");
+        return Ok(());
+    }
     let mut menus = Menus::build(&config_path, &state_dir, &cfg)?;
     let env = Env {
         config_path: config_path.clone(),

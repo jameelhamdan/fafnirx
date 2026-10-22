@@ -18,6 +18,7 @@ use std::time::Duration;
 use tokio::sync::Notify;
 
 const HEARTBEAT_SECS: u64 = 20;
+const PROGRESS_HEARTBEAT_SECS: u64 = 3;
 const UPDATE_CHECK_SECS: u64 = 6 * 3600;
 /// How soon files that failed are tried again.
 const RETRY_SECS: u64 = 600;
@@ -35,6 +36,16 @@ pub struct Activity {
     pub total: usize,
     /// Bytes sent so far in this cycle.
     pub bytes: u64,
+    /// Sizes of the files to upload this cycle, and of those already finished before the current one.
+    pub total_bytes: u64,
+    pub base_bytes: u64,
+    /// Size of the current file, and the cycle's sent counter when it started.
+    pub file_size: u64,
+    pub file_start: u64,
+    /// Filled in by the status writer: progress of the current file, of the whole cycle, and upload speed.
+    pub file_bytes: u64,
+    pub done_bytes: u64,
+    pub speed_bps: u64,
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -45,10 +56,10 @@ pub struct Status {
     /// When the daemon started (unix seconds).
     pub started: i64,
     pub server: String,
-    /// Device name on the orchestrator, as confirmed by the last heartbeat.
+    /// Device name on the master, as confirmed by the last heartbeat.
     pub device: String,
     pub online: bool,
-    /// Why the orchestrator is unreachable, when it is.
+    /// Why the master is unreachable, when it is.
     pub message: String,
     pub last_cycle: i64,
     /// True while a collection cycle (scan and upload) is running.
@@ -57,7 +68,7 @@ pub struct Status {
     /// The last finished cycle.
     pub last: Report,
     pub folders: usize,
-    /// Everything the orchestrator has from this device, as of the last cycle.
+    /// Everything the master has from this device, as of the last cycle.
     pub synced_files: usize,
     pub synced_bytes: u64,
     /// Files that failed and are waiting to be retried.
@@ -69,6 +80,11 @@ pub struct Status {
     pub next_scan: i64,
     pub bandwidth_limit_kbps: u64,
     pub last_error: String,
+    /// Why the client could not start or had to stop. Written as it exits, since nobody sees the output of a
+    /// hidden client; the tray shows it until the next start clears it.
+    pub fatal: String,
+    /// True until every file of the collected folders has been sent once: the first sync of a new install.
+    pub initial_sync: bool,
     pub updated: i64,
 }
 
@@ -86,6 +102,10 @@ impl StatusFile {
             ..Default::default()
         };
         Self { path, inner: Mutex::new(status) }
+    }
+
+    pub fn snapshot(&self) -> Status {
+        self.inner.lock().map(|s| s.clone()).unwrap_or_default()
     }
 
     pub fn edit(&self, f: impl FnOnce(&mut Status)) {
@@ -119,7 +139,12 @@ pub fn stop_marker(state_dir: &Path) -> PathBuf {
     state_dir.join("stop")
 }
 
-pub async fn send_heartbeat(client: &mut Client, cfg: &Config, errors: &Mutex<Vec<String>>) -> Result<String> {
+pub async fn send_heartbeat(
+    client: &mut Client,
+    cfg: &Config,
+    errors: &Mutex<Vec<String>>,
+    status: &Status,
+) -> Result<String> {
     let drained: Vec<String> = errors.lock().map(|mut e| std::mem::take(&mut *e)).unwrap_or_default();
     let (total, free) = cfg.folders.first().and_then(|f| fafnirx_common::disk_usage(&f.path)).unwrap_or((0, 0));
     let req = pb::HeartbeatRequest {
@@ -129,6 +154,13 @@ pub async fn send_heartbeat(client: &mut Client, cfg: &Config, errors: &Mutex<Ve
         disk_total: total,
         disk_free: free,
         errors: drained.clone(),
+        phase: if status.syncing { status.activity.phase.clone() } else { String::new() },
+        current_file: status.activity.current.clone(),
+        files_done: status.activity.done as u32,
+        files_total: status.activity.total as u32,
+        bytes_done: status.activity.done_bytes,
+        bytes_total: status.activity.total_bytes,
+        speed_bps: status.activity.speed_bps,
     };
     match tokio::time::timeout(Duration::from_secs(15), client.heartbeat(req)).await {
         Ok(Ok(resp)) => Ok(resp.into_inner().device_name),
@@ -181,16 +213,34 @@ fn spawn_watcher(folders: &[PathBuf], wake: Arc<Notify>) -> Option<notify::Recom
 #[derive(Clone)]
 struct Shared {
     status: Arc<StatusFile>,
-    /// Wakes the main loop: a watched file changed, the orchestrator came back, or the tray asked for a sync.
+    /// Wakes the main loop: a watched file changed, the master came back, or the tray asked for a sync.
     wake: Arc<Notify>,
     online: Arc<AtomicBool>,
     /// Problems to report with the next heartbeat.
     errors: Arc<Mutex<Vec<String>>>,
 }
 
-/// Starts the new executable and exits. After an update only the daemon itself can do this on Windows
+/// What the daemon connects with. `enroll` can change it while the daemon runs.
+#[derive(PartialEq)]
+struct Identity {
+    server: String,
+    token: String,
+}
+
+impl Identity {
+    fn load(cfg: &Config, config_path: &Path) -> Result<Self> {
+        Ok(Self {
+            server: cfg.server.clone(),
+            token: credentials::load(&cfg.server, config_path, cfg.token.as_deref())?,
+        })
+    }
+}
+
+/// Starts the executable again and exits, to run a new version or pick up a new enrollment. Only the daemon itself can do this on Windows
 /// (the Run key only fires at logon); systemd and launchd restart it on their own.
-fn restart_after_update() -> ! {
+fn restart() -> ! {
+    // The new process needs the instance lock.
+    crate::instance::release("daemon");
     #[cfg(windows)]
     let _ = crate::service::spawn_detached(std::env::args_os().skip(1));
     std::process::exit(0)
@@ -201,6 +251,7 @@ fn spawn_control(shared: Shared, activity: Arc<Mutex<Activity>>, sent: Arc<Atomi
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_millis(500));
         let mut last = Activity::default();
+        let (mut prev_sent, mut prev_at, mut speed) = (0u64, std::time::Instant::now(), 0f64);
         loop {
             tick.tick().await;
             if std::fs::remove_file(sync_now_marker(&dir)).is_ok() {
@@ -214,8 +265,20 @@ fn spawn_control(shared: Shared, activity: Arc<Mutex<Activity>>, sent: Arc<Atomi
                 std::process::exit(0);
             }
             let mut now = activity.lock().map(|a| a.clone()).unwrap_or_default();
+            let total_sent = sent.load(Ordering::Relaxed);
+            let secs = prev_at.elapsed().as_secs_f64();
+            if total_sent < prev_sent {
+                speed = 0.0; // a new cycle
+            } else if secs > 0.0 {
+                // Smoothed over about two seconds, so the number does not jump with every chunk.
+                speed = 0.75 * speed + 0.25 * (total_sent - prev_sent) as f64 / secs;
+            }
+            (prev_sent, prev_at) = (total_sent, std::time::Instant::now());
             if now.phase == "uploading" {
-                now.bytes = sent.load(Ordering::Relaxed);
+                now.bytes = total_sent;
+                now.file_bytes = total_sent.saturating_sub(now.file_start).min(now.file_size);
+                now.done_bytes = (now.base_bytes + now.file_bytes).min(now.total_bytes);
+                now.speed_bps = speed as u64;
             }
             if now != last {
                 last = now.clone();
@@ -225,12 +288,17 @@ fn spawn_control(shared: Shared, activity: Arc<Mutex<Activity>>, sent: Arc<Atomi
     });
 }
 
-/// Keeps the orchestrator informed and notices when it is reachable again.
-fn spawn_heartbeat(shared: Shared, mut client: Client, config_path: PathBuf) {
+/// Keeps the master informed and notices when it is reachable again.
+fn spawn_heartbeat(shared: Shared, mut client: Client, config_path: PathBuf, identity: Identity) {
     tokio::spawn(async move {
         loop {
             if let Ok(cfg) = Config::load(&config_path) {
-                match send_heartbeat(&mut client, &cfg, &shared.errors).await {
+                // Re-enrolling changes the token or the server; connections already made keep the old ones.
+                if Identity::load(&cfg, &config_path).is_ok_and(|now| now != identity) {
+                    tracing::info!("enrollment changed, restarting");
+                    restart();
+                }
+                match send_heartbeat(&mut client, &cfg, &shared.errors, &shared.status.snapshot()).await {
                     Ok(device) => {
                         if !shared.online.swap(true, Ordering::SeqCst) {
                             tracing::info!("connected to {}", cfg.server);
@@ -250,12 +318,20 @@ fn spawn_heartbeat(shared: Shared, mut client: Client, config_path: PathBuf) {
                         }
                         shared.status.edit(|s| {
                             s.online = false;
-                            s.message = format!("cannot reach the orchestrator: {e:#}");
+                            s.message = format!("cannot reach the master: {e:#}");
                         });
                     }
                 }
             }
-            tokio::time::sleep(Duration::from_secs(HEARTBEAT_SECS)).await;
+            // While files are going out the master gets a progress update every few seconds.
+            let was_syncing = shared.status.snapshot().syncing;
+            let wait = if was_syncing { PROGRESS_HEARTBEAT_SECS } else { HEARTBEAT_SECS };
+            for _ in 0..wait {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                if shared.status.snapshot().syncing != was_syncing {
+                    break;
+                }
+            }
         }
     });
 }
@@ -269,7 +345,7 @@ fn spawn_updater(mut client: Client, config_path: PathBuf, work_dir: PathBuf) {
                 match update::check_and_apply(&mut client, &cfg, &work_dir).await {
                     Ok(true) => {
                         tracing::info!("restarting to run the new version");
-                        restart_after_update();
+                        restart();
                     }
                     Ok(false) => {}
                     Err(e) => tracing::warn!("update check failed: {e:#}"),
@@ -309,11 +385,24 @@ fn record_cycle(shared: &Shared, result: Result<Report, SyncError>) {
 }
 
 pub async fn run(config_path: PathBuf) -> Result<()> {
-    let mut cfg = Config::load(&config_path)?;
+    let cfg = Config::load(&config_path)?;
     let state_dir = cfg.state_dir(&config_path);
     std::fs::create_dir_all(&state_dir)?;
+    if !crate::instance::claim(&state_dir, "daemon", 20)? {
+        println!("fafnirx is already running for {}", config_path.display());
+        return Ok(());
+    }
+    let result = serve(config_path, cfg, state_dir.clone()).await;
+    if let Err(e) = &result {
+        StatusFile::new(state_dir.join("status.json")).edit(|s| s.fatal = format!("{e:#}"));
+    }
+    result
+}
+
+async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Result<()> {
     let token = credentials::load(&cfg.server, &config_path, cfg.token.as_deref())?;
     let client = net::client(&cfg, &token)?;
+    let identity = Identity::load(&cfg, &config_path)?;
     let marker = paused_marker(&state_dir);
 
     let shared = Shared {
@@ -335,8 +424,10 @@ pub async fn run(config_path: PathBuf) -> Result<()> {
         shared.errors.clone(),
         marker.clone(),
     );
+    engine.exclude = Some(state_dir.clone());
+    shared.status.edit(|s| s.initial_sync = !engine.state.initial_sync_done());
     spawn_control(shared.clone(), engine.activity.clone(), engine.sent.clone(), state_dir.clone());
-    spawn_heartbeat(shared.clone(), client.clone(), config_path.clone());
+    spawn_heartbeat(shared.clone(), client.clone(), config_path.clone(), identity);
     spawn_updater(client, config_path.clone(), state_dir);
 
     let mut watched: Vec<PathBuf> = Vec::new();
@@ -353,7 +444,7 @@ pub async fn run(config_path: PathBuf) -> Result<()> {
             continue;
         }
         if !shared.online.load(Ordering::SeqCst) {
-            // The heartbeat wakes us when the orchestrator is reachable again.
+            // The heartbeat wakes us when the master is reachable again.
             delay = Duration::from_secs(30);
             continue;
         }
@@ -375,6 +466,7 @@ pub async fn run(config_path: PathBuf) -> Result<()> {
         engine.set_activity("idle", "", 0, 0, 0);
         let (synced_files, synced_bytes) = engine.state.totals().unwrap_or((0, 0));
         let failing = engine.state.pending_failures().unwrap_or(0);
+        let initial_done = engine.state.initial_sync_done();
         delay = next_delay(&cfg, failing > 0);
         shared.status.edit(|s| {
             s.syncing = false;
@@ -383,6 +475,7 @@ pub async fn run(config_path: PathBuf) -> Result<()> {
             s.synced_files = synced_files;
             s.synced_bytes = synced_bytes;
             s.failing = failing as usize;
+            s.initial_sync = !initial_done;
             s.next_scan = unix_now() + delay.as_secs() as i64;
         });
         record_cycle(&shared, result);

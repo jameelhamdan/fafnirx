@@ -1,6 +1,6 @@
 //! fafnirx-sign: generates the update signing key and publishes signed client
-//! builds into the orchestrator's `updates/` directory. Run it on a machine
-//! that is not the orchestrator: the secret key must never live there.
+//! builds into the master's `updates/` directory. Run it on a machine
+//! that is not the master: the secret key must never live there.
 
 use anyhow::{bail, Context, Result};
 use base64::Engine;
@@ -34,7 +34,7 @@ enum Cmd {
         version: String,
         #[arg(long)]
         bin: PathBuf,
-        /// The orchestrator's updates directory (<data>/updates)
+        /// The master's updates directory (<data>/updates)
         #[arg(long)]
         out: PathBuf,
     },

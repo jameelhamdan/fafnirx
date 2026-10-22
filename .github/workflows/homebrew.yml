@@ -1,0 +1,90 @@
+# Writes the Homebrew formula for a published release into the tap repository, so that
+#   brew install jameelhamdan/fafnirx/fafnirx
+# works. Off for now: it only runs by hand (Actions -> Homebrew -> Run workflow), after the Release workflow has
+# published v<version>.
+#
+# Needs: the repository jameelhamdan/homebrew-fafnirx (can be empty), and a secret HOMEBREW_TAP_TOKEN: a personal access
+# token with write access to that repository. The formula covers macOS (Intel and Apple silicon). `fafnirx enroll`
+# installs the LaunchAgent itself, so the formula has no service block.
+name: Homebrew
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without the v (default is the one in Cargo.toml)
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  formula:
+    runs-on: ubuntu-latest
+    env:
+      TAP: jameelhamdan/homebrew-fafnirx
+      INPUT_VERSION: ${{ inputs.version }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write the formula
+        run: |
+          version=$INPUT_VERSION
+          [ -n "$version" ] || version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
+          base="https://github.com/$REPO/releases/download/v$version"
+          sha() { curl -fsSL "$base/fafnirx-$version-$1.tar.gz.sha256" | cut -d' ' -f1; }
+          arm=$(sha macos-aarch64)
+          intel=$(sha macos-x86_64)
+          mkdir -p tap/Formula
+          cat > tap/Formula/fafnirx.rb <<RUBY
+          class Fafnirx < Formula
+            desc "Client that backs up folders to your own fafnirx master"
+            homepage "https://github.com/$REPO"
+            version "$version"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "$base/fafnirx-$version-macos-aarch64.tar.gz"
+                sha256 "$arm"
+              end
+              on_intel do
+                url "$base/fafnirx-$version-macos-x86_64.tar.gz"
+                sha256 "$intel"
+              end
+            end
+
+            def install
+              bin.install "fafnirx"
+            end
+
+            def caveats
+              <<~EOS
+                Enroll this device (this also starts the client now and at every login):
+                  fafnirx enroll --server http://<master>:7443 --token <token>
+                  fafnirx add-folder ~/Documents
+              EOS
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/fafnirx --version")
+            end
+          end
+          RUBY
+          sed -i 's/^          //' tap/Formula/fafnirx.rb
+          echo "version=$version" >> "$GITHUB_ENV"
+
+      - name: Push to the tap
+        env:
+          TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git clone "https://x-access-token:$TOKEN@github.com/$TAP.git" repo
+          mkdir -p repo/Formula
+          cp tap/Formula/fafnirx.rb repo/Formula/
+          cd repo
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add Formula/fafnirx.rb
+          git diff --cached --quiet || { git commit -m "fafnirx $version" && git push; }

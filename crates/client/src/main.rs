@@ -1,10 +1,11 @@
-//! fafnirx: the client. Collects folders from this device to the orchestrator.
+//! fafnirx: the client. Collects folders from this device to the master.
 
 mod commands;
 mod config;
 mod credentials;
 mod daemon;
 mod hash;
+mod instance;
 mod net;
 mod scan;
 mod service;
@@ -22,7 +23,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 #[derive(Parser)]
-#[command(name = "fafnirx", version, about = "Collects folders from this device to a fafnirx orchestrator")]
+#[command(name = "fafnirx", version, about = "Collects folders from this device to a fafnirx master")]
 struct Cli {
     /// Config file (default: per-OS location)
     #[arg(long, global = true)]
@@ -33,16 +34,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Connect this device to an orchestrator
+    /// Connect this device to a master. The device token is asked for (hidden), or read from standard input or
+    /// FAFNIRX_TOKEN; it is not an argument because other users of the machine can see arguments.
     Enroll {
+        /// Address of the master: http://host:7443 on a trusted network, https://... behind a TLS proxy
         #[arg(long)]
         server: String,
-        /// Device token. Tokens are URL-safe base64 and may start with `-`.
-        #[arg(long, allow_hyphen_values = true)]
-        token: String,
-        /// CA certificate downloaded from the orchestrator web UI
+        /// Do not start the client in the background and at every login (the default)
         #[arg(long)]
-        ca: PathBuf,
+        no_service: bool,
     },
     /// Add one or more folders to collect
     AddFolder {
@@ -52,7 +52,7 @@ enum Cmd {
         #[arg(long)]
         name: Option<String>,
     },
-    /// Stop collecting a folder (what is already on the orchestrator stays there)
+    /// Stop collecting a folder (what is already on the master stays there)
     RemoveFolder {
         name: String,
     },
@@ -140,9 +140,10 @@ fn main() -> Result<()> {
             init_logging(None);
             tokio_main(commands::update_now(config_path))
         }
-        Cmd::Enroll { server, token, ca } => {
+        Cmd::Enroll { server, no_service } => {
             init_logging(None);
-            tokio_main(commands::enroll(config_path, server, token, ca))
+            let token = commands::read_token()?;
+            tokio_main(commands::enroll(config_path, server, token, !no_service))
         }
         Cmd::AddFolder { paths, name } => commands::add_folders(&config_path, &paths, name.as_deref()),
         Cmd::RemoveFolder { name } => commands::remove_folder(&config_path, &name),
@@ -172,18 +173,4 @@ fn respawn_hidden(hidden: bool, log_file: bool) -> Result<bool> {
 
 fn tokio_main<F: std::future::Future<Output = Result<()>>>(f: F) -> Result<()> {
     tokio::runtime::Builder::new_multi_thread().enable_all().build()?.block_on(f)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_token_that_starts_with_a_dash_is_a_value_not_a_flag() {
-        let args = ["fafnirx", "enroll", "--server", "https://x:7443", "--token", "-xVeqMt4730Es_-", "--ca", "ca.pem"];
-        match Cli::try_parse_from(args).unwrap().cmd {
-            Cmd::Enroll { token, .. } => assert_eq!(token, "-xVeqMt4730Es_-"),
-            _ => panic!("expected enroll"),
-        }
-    }
 }
