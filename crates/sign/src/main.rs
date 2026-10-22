@@ -57,7 +57,11 @@ fn main() -> Result<()> {
                 bail!("{} already exists", out.display());
             }
             let key = SigningKey::generate(&mut rand::rngs::OsRng);
-            std::fs::write(&out, b64().encode(key.to_bytes()))?;
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            std::io::Write::write_all(&mut options.open(&out)?, b64().encode(key.to_bytes()).as_bytes())?;
             println!("secret key written to {}", out.display());
             println!("put this in the client config as update_public_key:");
             println!("update_public_key = \"{}\"", b64().encode(key.verifying_key().to_bytes()));

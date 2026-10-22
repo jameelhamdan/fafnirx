@@ -25,7 +25,10 @@ flowchart LR
 - **A photo library** on the same files, without moving them: a timeline by month and day with a scrubber (on a phone
   too), thumbnails and previews of photos and videos, favorites, archive, trash, albums, a map of where pictures were
   taken, and tags, ratings, descriptions and corrected dates and places. Originals are never changed.
-- **Sources and mirrors**: collect Google Drive folders on a schedule; copy everything to any storage rclone supports.
+- **Sources and mirrors**: collect Google Drive folders on a schedule; copy everything to any storage rclone supports,
+  spelled out in the web app or taken from your own `rclone.conf`.
+- **One configuration file**, `config/fafnirx.json`, with the settings, devices, mirrors and sources. The web app writes
+  it as you change things and the master reads it at start, so a master can be set up again from it on an empty database.
 - **A network drive**: `data/files/` is a plain tree you can share over SMB or NFS and write to; the master notices.
 - **Remote access** without a VPN through a Cloudflare tunnel, or plain HTTP on your own network.
 
@@ -36,7 +39,7 @@ On the server (Docker):
 ```sh
 git clone https://github.com/jameelhamdan/fafnirx.git fafnirx && cd fafnirx
 printf 'FAFNIRX_ADMIN_PASSWORD=choose-one\nFAFNIRX_DB_PASSWORD=another-one\n' > .env
-docker compose up -d --build
+docker compose up -d --build        # ./config is created by the clone; the master keeps fafnirx.json in it
 ```
 
 Open `http://<server>:8080`, log in, and add a device. It shows the command to run on that device:
@@ -55,11 +58,9 @@ fafnirx add-folder ~/Documents
 | [Overview](docs/overview.md) | What it is and how files move |
 | [Installation](docs/installation.md) | The master and the clients, on every platform |
 | [Usage](docs/usage.md) | The web app, the client, sources, mirrors, restoring |
-| [Deployment](docs/deployment.md) | Storage, backups, roles, Cloudflare tunnel, security |
+| [Deployment](docs/deployment.md) | Storage, backups, Cloudflare tunnel, security |
 | [Architecture](docs/architecture.md) | Components, data model, locking, live updates |
 | [Development](docs/development.md) | Building, running and testing |
-| [Specification](docs/spec.md) | Requirements and decisions |
-| [Tech stack](docs/tech-stack.md) | Libraries and where they are used |
 | [Plans](docs/plans/features.md) | Features that are not built |
 
 ## Repository

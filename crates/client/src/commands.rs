@@ -126,6 +126,7 @@ pub fn status(config_path: &Path) -> Result<()> {
     let age = unix_now() - s.updated;
     if age > 120 {
         println!("not running (last seen {age}s ago)");
+        return Ok(());
     }
     if s.online {
         println!("online");
@@ -170,6 +171,7 @@ pub async fn sync_once(config_path: PathBuf) -> Result<()> {
         Arc::new(Mutex::new(Vec::new())),
         daemon::paused_marker(&dir),
     );
+    engine.exclude = Some(dir);
     match engine.cycle(&cfg).await {
         Ok(r) => {
             println!("{r}, {} bytes sent", r.bytes);

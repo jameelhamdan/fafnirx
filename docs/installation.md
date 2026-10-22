@@ -29,11 +29,15 @@ Open `http://<server>:8080` and log in. More settings for `.env`:
 ```ini
 FAFNIRX_DATA_DIR=/tank/fafnirx/data      # files, versions, updates; share files/ as a network drive
 FAFNIRX_DB_DIR=/tank/fafnirx/pgdata      # PostgreSQL files (local disk)
-FAFNIRX_UID=1000                         # owner of the files in the data dir
+FAFNIRX_CONFIG_DIR=/tank/fafnirx/config  # fafnirx.json (and rclone.conf): the setup, kept outside the container
+FAFNIRX_UID=1000                         # owner of the files in the data and config dirs
 FAFNIRX_GID=1000
 ```
 
-Compose starts `db` (PostgreSQL 17) and `master`. The schema is created on first start.
+Compose starts `db` (PostgreSQL 17) and `master`. The schema is created on first start. The master also keeps its
+settings, devices, mirrors and sources in `fafnirx.json` in the config folder (`./config` by default, which must be
+writable by `FAFNIRX_UID`): see [Configuration file](configuration.md). To move a master that already runs onto the
+file, run `node scripts/export-config.mjs` before restarting it.
 
 ```sh
 docker compose ps                    # db is "healthy", master is "Up"
@@ -62,15 +66,17 @@ library. Photos need nothing extra.
 | `FAFNIRX_DATABASE_URL` | required | `postgresql://user:password@host/database` |
 | `FAFNIRX_ADMIN_PASSWORD` | required | Password of the web app |
 | `FAFNIRX_DATA` | `data` (`/data` in Docker) | Data directory |
-| `FAFNIRX_ROLE` | `all` | `all`, or a comma list of `api`, `transfer`, `worker` ([roles](deployment.md#splitting-the-roles)) |
 | `FAFNIRX_LISTEN` | `0.0.0.0:7443` | Device (gRPC) listen address |
 | `FAFNIRX_HTTP` | `0.0.0.0:8080` | Web app and admin API listen address |
 | `FAFNIRX_RCLONE` | `rclone` | rclone binary used by mirrors |
+| `FAFNIRX_CONFIG` | `<FAFNIRX_DATA>/fafnirx.json` (`/config/fafnirx.json` in Docker) | The [configuration file](configuration.md): devices, mirrors, sources and settings, read when the master starts and written by the web app as you change things |
+| `FAFNIRX_RCLONE_CONFIG` | `rclone.conf` next to the configuration file | rclone config file for mirrors that name a `remote` |
+| `FAFNIRX_CONFIG_POLL_SECS` | `2` | How often the database is checked for changes to write to the configuration file |
 | `FAFNIRX_TICK_SECS` | `15` | How often due sources and mirrors are looked for |
 | `FAFNIRX_FFMPEG`, `FAFNIRX_FFPROBE` | `ffmpeg`, `ffprobe` | Programs that read videos and make their pictures and playable copies |
 | `FAFNIRX_MAP_TILES` | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | Where the browser loads the map's pictures from; point it at a tile server of your own on a network without internet |
 | `RUST_LOG` | `info` | Log level |
-| Compose only: `FAFNIRX_DB_PASSWORD`, `FAFNIRX_DATA_DIR`, `FAFNIRX_DB_DIR`, `FAFNIRX_UID`, `FAFNIRX_GID` | | |
+| Compose only: `FAFNIRX_DB_PASSWORD`, `FAFNIRX_DATA_DIR`, `FAFNIRX_DB_DIR`, `FAFNIRX_CONFIG_DIR`, `FAFNIRX_UID`, `FAFNIRX_GID` | | |
 
 ## 2. Adding a device
 
@@ -89,7 +95,7 @@ Run the setup: it asks for the master's address, the token and the folder to bac
 the client now and at every login (no administrator rights). Silent install:
 
 ```powershell
-fafnirx-setup-0.1.4.exe /VERYSILENT /SERVER=nas.lan /TOKEN=<token> /FOLDER="C:\Users\me\Documents"
+fafnirx-setup-0.2.0.exe /VERYSILENT /SERVER=nas.lan /TOKEN=<token> /FOLDER="C:\Users\me\Documents"
 ```
 
 ### Linux and macOS

@@ -13,8 +13,10 @@ import { api, mediaUrl } from '@/lib/api'
 import { bytes, plural } from '@/lib/format'
 import { useAlbums, useRefreshLibrary } from '@/lib/library'
 import type { AlbumInfo } from '@/lib/types'
+import { useT } from '@/lib/i18n'
 
 function NewAlbum({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const t = useT()
   const refresh = useRefreshLibrary()
   const navigate = useNavigate()
   const [name, setName] = useState('')
@@ -37,11 +39,11 @@ function NewAlbum({ open, onClose }: { open: boolean; onClose: () => void }) {
       <DialogContent>
         <form onSubmit={submit} className="space-y-4">
           <DialogHeader>
-            <DialogTitle>New album</DialogTitle>
-            <DialogDescription>An album groups photos and videos without moving them. Add to it from the timeline: select some and choose Add to album.</DialogDescription>
+            <DialogTitle>{t('New album')}</DialogTitle>
+            <DialogDescription>{t('An album groups photos and videos without moving them. Add to it from the timeline: select some and choose Add to album.')}</DialogDescription>
           </DialogHeader>
-          <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Summer 2024" aria-label="Album name" maxLength={120} />
-          <DialogFooter><Button type="submit" disabled={!name.trim() || create.isPending}>Create</Button></DialogFooter>
+          <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder={t('Summer 2024')} aria-label={t('Album name')} maxLength={120} />
+          <DialogFooter><Button type="submit" disabled={!name.trim() || create.isPending}>{t('Create')}</Button></DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
@@ -49,19 +51,20 @@ function NewAlbum({ open, onClose }: { open: boolean; onClose: () => void }) {
 }
 
 export default function Albums() {
+  const t = useT()
   const albums = useAlbums()
   const [creating, setCreating] = useState(false)
   return (
     <div>
       <PageHeader
-        title="Albums"
-        description="Groups of photos and videos. The files stay where they are; deleting an album never deletes them."
-        actions={<Button onClick={() => setCreating(true)}><Plus className="size-4" />New album</Button>}
+        title={t('Albums')}
+        description={t('Groups of photos and videos. The files stay where they are; deleting an album never deletes them.')}
+        actions={<Button onClick={() => setCreating(true)}><Plus className="size-4" />{t('New album')}</Button>}
       />
       {albums.error ? <ErrorNote error={albums.error} /> : !albums.data ? (
         <Skeleton className="h-64" />
       ) : albums.data.length === 0 ? (
-        <Empty title="No albums yet">Create one, then add photos to it from the timeline.</Empty>
+        <Empty title={t('No albums yet')}>{t('Create one, then add photos to it from the timeline.')}</Empty>
       ) : (
         <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
           {albums.data.map((a) => (

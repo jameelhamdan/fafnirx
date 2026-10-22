@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
-import { CHUNK, CLIENT, MASTER, Master, check, clientIn, createSchema, freePort, mkdtemp, passedChecks, sleep, until } from './lib.mjs'
+import { CHUNK, check, enrollDevice, freePort, harness, passedChecks, sleep, until } from './lib.mjs'
 
 const rclone = (() => {
   if (process.env.FAFNIRX_RCLONE) return process.env.FAFNIRX_RCLONE
@@ -21,10 +21,6 @@ const rclone = (() => {
 })()
 if (!rclone) {
   console.error('rclone not found; install it or set FAFNIRX_RCLONE')
-  process.exit(1)
-}
-if (!fs.existsSync(MASTER) || !fs.existsSync(CLIENT)) {
-  console.error('missing binaries; run cargo build --workspace first')
   process.exit(1)
 }
 
@@ -125,23 +121,15 @@ function tree(root) {
   return out
 }
 
-const tmp = mkdtemp('fafnirx-e2e-io-')
-console.log('working in', tmp)
-const data = path.join(tmp, 'data')
-fs.mkdirSync(data)
-const schema = await createSchema()
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 const pem = privateKey.export({ type: 'pkcs8', format: 'pem' })
 const drive = new FakeDrive(publicKey, await freePort())
 await drive.listen()
 const sa = { client_email: 'bot@proj.iam.gserviceaccount.com', private_key: pem, token_uri: `http://127.0.0.1:${drive.port}/token` }
-const master = new Master({
-  data,
-  dbUrl: schema.url,
-  http: await freePort(),
-  grpc: await freePort(),
+const h = await harness('fafnirx-e2e-io-', {
   env: { FAFNIRX_GDRIVE_API: `http://127.0.0.1:${drive.port}`, FAFNIRX_RCLONE: rclone },
 })
+const { tmp, data, schema, master } = h
 
 const status = async (table, name) => (await schema.rows(`SELECT last_status, last_message, last_run_at FROM ${table} WHERE name = $1`, [name]))[0]
 const finished = async (table, name) => {
@@ -228,10 +216,7 @@ try {
   check(recovered[0] === 'ok' && !(await openAlerts()).some((a) => a.kind === 'source_failed'), 'the alert clears after a good run')
 
   // --- a device too, so the mirror has both kinds -----------------------------------------------------------------------------------
-  const token = (await admin.post('/api/devices', { name: 'laptop' })).json.token
-  const { cfg, c } = clientIn(path.join(tmp, 'client'))
-  c.enroll(token, `http://127.0.0.1:${master.grpc}`)
-  fs.writeFileSync(cfg, `state_dir = "${path.join(tmp, 'state').replaceAll('\\', '/')}"\n${fs.readFileSync(cfg, 'utf8')}`)
+  const { c } = await enrollDevice(h, admin)
   const docs = path.join(tmp, 'docs')
   fs.mkdirSync(path.join(docs, 'deep'), { recursive: true })
   fs.writeFileSync(path.join(docs, 'x.txt'), 'from a device')
@@ -313,9 +298,6 @@ try {
 
   console.log(`\nall ${passedChecks()} checks passed`)
 } finally {
-  await master.stop()
-  await schema.drop()
   drive.server.close()
-  if (process.env.FAFNIRX_KEEP === '1') console.log('kept', tmp)
-  else fs.rmSync(tmp, { recursive: true, force: true })
+  await h.cleanup()
 }

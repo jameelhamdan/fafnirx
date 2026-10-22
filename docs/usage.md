@@ -208,18 +208,21 @@ The change log (the activity lists) is kept 90 days.
 3. **Sources → Add Google Drive source**: a name, the folder ids or URLs (one per line), the key, and how often to collect.
 
 Files appear under the folder `source-<name>`, with the same versions and retention as any device's. The key is stored in
-the database and is never shown again.
+the database and in the [configuration file](configuration.md), and is never shown in the web app again.
 
 - Only raw files are collected. Google Docs, Sheets, Slides, forms and shortcuts are skipped and counted in the run message.
 - File names are made safe for all platforms (`/ \ : * ? " < > |` become `_`); duplicates get a ` (<id prefix>)` suffix.
 - Renamed or moved files with the same content are not downloaded again.
+- A file you delete in the web app stays deleted until it changes on Drive.
 - Files that disappear from Drive are marked deleted. If listing Drive fails, the run fails and deletes nothing.
 - A failed or partial run raises an alert; the next good run clears it.
 
 ## Mirrors: offsite copies
 
 **Mirrors → Add mirror**: a name, an rclone backend type, its options, a path on the remote, the interval (default 72 hours)
-and how many runs of history to keep (default 3).
+and how many runs of history to keep (default 3). Or, if you already have rclone remotes, the name of one (`remote`,
+as `name:path`, from the `rclone.conf` next to the [configuration file](configuration.md)). Mirrors are part of that
+file: one added here is written there, and one added there appears here after a restart.
 
 ```text
 # type: s3

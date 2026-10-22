@@ -11,11 +11,13 @@ pub struct View {
     pub text: String,
     /// Uploading or scanning right now: the activity light blinks.
     pub syncing: bool,
+    /// No client is running (not started, or it stopped with a fatal error): the menu offers to start it.
+    pub stopped: bool,
 }
 
 /// Works out what the icon should say from the status file and the pause marker.
 pub fn view(s: Option<&daemon::Status>, paused: bool, now: i64) -> View {
-    let mk = |light, text: String, syncing| View { light, text, syncing };
+    let mk = |light, text: String, syncing| View { light, text, syncing, stopped: light == Light::Stopped };
     if paused {
         return mk(Light::Paused, "Paused".into(), false);
     }
@@ -23,7 +25,7 @@ pub fn view(s: Option<&daemon::Status>, paused: bool, now: i64) -> View {
         return mk(Light::Stopped, "Not running".into(), false);
     };
     if !s.fatal.is_empty() {
-        return mk(Light::Error, format!("Stopped: {}", s.fatal), false);
+        return View { stopped: true, ..mk(Light::Error, format!("Stopped: {}", s.fatal), false) };
     }
     if now - s.updated > 120 {
         return mk(Light::Stopped, "Not running".into(), false);
@@ -62,10 +64,10 @@ pub fn progress(a: &daemon::Activity) -> Option<String> {
 pub fn human_bytes(n: u64) -> String {
     let mut v = n as f64;
     for unit in ["B", "KB", "MB", "GB"] {
-        if v < 1024.0 {
+        if v < 1000.0 {
             return if unit == "B" { format!("{n} B") } else { format!("{v:.1} {unit}") };
         }
-        v /= 1024.0;
+        v /= 1000.0;
     }
     format!("{v:.1} TB")
 }
@@ -270,21 +272,21 @@ mod tests {
             updated: 1_000,
             started: 1_000 - 4_000,
             last_cycle: 940,
-            last: crate::sync::Report { uploaded: 3, bytes: 2048, ..Default::default() },
+            last: crate::sync::Report { uploaded: 3, bytes: 2000, ..Default::default() },
             folders: 2,
             synced_files: 1,
-            synced_bytes: 6 << 20,
+            synced_bytes: 6_000_000,
             session_files: 5,
-            session_bytes: 3 << 30,
+            session_bytes: 3_000_000_000,
             activity: daemon::Activity {
                 phase: "uploading".into(),
                 current: "docs/big.bin".into(),
                 done: 1,
                 total: 4,
-                bytes: 5 << 20,
-                total_bytes: 20 << 20,
-                done_bytes: 5 << 20,
-                speed_bps: 2 << 20,
+                bytes: 5_000_000,
+                total_bytes: 20_000_000,
+                done_bytes: 5_000_000,
+                speed_bps: 2_000_000,
                 ..Default::default()
             },
             ..Default::default()
@@ -347,9 +349,9 @@ mod tests {
     #[test]
     fn sizes_and_spans() {
         assert_eq!(human_bytes(0), "0 B");
-        assert_eq!(human_bytes(1023), "1023 B");
-        assert_eq!(human_bytes(1536), "1.5 KB");
-        assert_eq!(human_bytes(5 << 20), "5.0 MB");
+        assert_eq!(human_bytes(999), "999 B");
+        assert_eq!(human_bytes(1500), "1.5 KB");
+        assert_eq!(human_bytes(5_000_000), "5.0 MB");
         assert_eq!(
             [span(5), span(59), span(60), span(7200), span(3 * 86400), span(-4)],
             ["5 s", "59 s", "1 min", "2 h", "3 d", "0 s"]

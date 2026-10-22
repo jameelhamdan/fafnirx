@@ -3,6 +3,7 @@ import { clock } from '@/lib/format'
 import type { Asset } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { Thumb } from './thumb'
+import { useT } from '@/lib/i18n'
 
 /** One square of a photo grid: the picture, a mark for videos and favorites, and a way to select it. */
 export function AssetCell({
@@ -21,13 +22,14 @@ export function AssetCell({
   onOpen: () => void
   onToggle: () => void
 }) {
+  const t = useT()
   return (
     <div className={cn('group relative aspect-square overflow-hidden bg-muted/60', selected && 'bg-primary/20')}>
       <button
         type="button"
         onClick={() => (selecting ? onToggle() : onOpen())}
         className={cn('absolute inset-0 outline-offset-[-3px] transition-transform', selected && 'scale-90 rounded-md')}
-        aria-label={`${asset.kind === 'video' ? 'Video' : 'Photo'} ${asset.name}`}
+        aria-label={asset.kind === 'video' ? t('Video {name}', { name: asset.name }) : t('Photo {name}', { name: asset.name })}
       >
         <Thumb src={src} className="size-full" fallback={<ImageIcon className="size-6 text-muted-foreground" />} />
       </button>
@@ -41,7 +43,7 @@ export function AssetCell({
       <button
         type="button"
         onClick={onToggle}
-        aria-label={selected ? `Deselect ${asset.name}` : `Select ${asset.name}`}
+        aria-label={selected ? t('Deselect {name}', { name: asset.name }) : t('Select {name}', { name: asset.name })}
         aria-pressed={selected}
         className={cn(
           'absolute top-1.5 left-1.5 grid size-5 place-items-center rounded-full border-2 border-white bg-black/30 text-white shadow transition-opacity focus-visible:opacity-100',

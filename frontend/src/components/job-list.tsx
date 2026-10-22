@@ -10,6 +10,7 @@ import { Confirm } from './confirm'
 import { Empty, StatusDot } from './common'
 import { Button } from './ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card'
+import { useT } from '@/lib/i18n'
 
 /** Sources and mirrors look alike: a status, the last message, and run / pause / delete. */
 export function JobList({
@@ -29,19 +30,20 @@ export function JobList({
 }) {
   const client = useQueryClient()
   const now = useNow()
+  const t = useT()
   const [removing, setRemoving] = useState<JobState | null>(null)
   const refresh = () => client.invalidateQueries({ queryKey: [kind] })
   const act = useMutation({
     mutationFn: ({ name, what }: { name: string; what: 'run' | 'toggle' }) => api.post(`/api/${kind}/${name}/${what}`),
     onSuccess: (_d, v) => {
-      if (v.what === 'run') toast.success(`Run requested for ${v.name}. It starts within a few seconds.`)
+      if (v.what === 'run') toast.success(t('Run requested for {name}. It starts within a few seconds.', { name: v.name }))
       void refresh()
     },
     onError: (e) => toast.error(e.message),
   })
   const remove = useMutation({
     mutationFn: (name: string) => api.delete(`/api/${kind}/${name}`),
-    onSuccess: (_d, name) => { toast.success(`${name} removed`); void refresh() },
+    onSuccess: (_d, name) => { toast.success(t('{name} removed', { name })); void refresh() },
     onError: (e) => toast.error(e.message),
   })
 
@@ -54,18 +56,18 @@ export function JobList({
             <div className="min-w-0">
               <CardTitle className="truncate">{j.name}</CardTitle>
               <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
-                <StatusDot status={j.enabled ? j.status : 'paused'} label={j.running ? 'Running' : j.enabled ? j.status : 'Paused'} />
-                <span>{j.running ? 'started' : 'last run'} {ago(j.last_run_at, now)}</span>
-                <span>every {duration(j.interval_secs)}</span>
+                <StatusDot status={j.enabled ? j.status : 'paused'} label={j.running ? t('Running') : j.enabled ? undefined : t('Paused')} />
+                <span>{j.running ? t('started') : t('last run')} {ago(j.last_run_at, now)}</span>
+                <span>{t('every {time}', { time: duration(j.interval_secs) })}</span>
               </div>
             </div>
             <div className="flex shrink-0 gap-1">
-              <Button variant="outline" size="sm" disabled={j.running} onClick={() => act.mutate({ name: j.name, what: 'run' })}><Play className="size-4" />Run now</Button>
-              <Button variant="outline" size="icon" className="size-8" aria-label={j.enabled ? 'Pause' : 'Resume'} onClick={() => act.mutate({ name: j.name, what: 'toggle' })}>
+              <Button variant="outline" size="sm" disabled={j.running} onClick={() => act.mutate({ name: j.name, what: 'run' })}><Play className="size-4" />{t('Run now')}</Button>
+              <Button variant="outline" size="icon" className="size-8" aria-label={j.enabled ? t('Pause') : t('Resume')} onClick={() => act.mutate({ name: j.name, what: 'toggle' })}>
                 {j.enabled ? <Pause className="size-4" /> : <RefreshCw className="size-4" />}
               </Button>
               {extraActions?.(j)}
-              <Button variant="outline" size="icon" className="size-8" aria-label="Delete" onClick={() => setRemoving(j)}><Trash2 className="size-4" /></Button>
+              <Button variant="outline" size="icon" className="size-8" aria-label={t('Delete')} onClick={() => setRemoving(j)}><Trash2 className="size-4" /></Button>
             </div>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
@@ -76,9 +78,9 @@ export function JobList({
       ))}
       <Confirm
         open={removing !== null}
-        title={`Remove ${removing?.name ?? ''}?`}
-        description={kind === 'sources' ? 'Its files are kept for the retention period, then removed.' : 'Data already on the remote is not touched.'}
-        action="Remove"
+        title={t('Remove {name}?', { name: removing?.name ?? '' })}
+        description={kind === 'sources' ? t('Its files are kept for the retention period, then removed.') : t('Data already on the remote is not touched.')}
+        action={t('Remove')}
         destructive
         onCancel={() => setRemoving(null)}
         onConfirm={() => { if (removing) remove.mutate(removing.name); setRemoving(null) }}

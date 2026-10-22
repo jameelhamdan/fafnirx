@@ -1,7 +1,7 @@
 //! Moving file contents: download (with ranges, so video and photos stream), previews, bulk zip, and
 //! chunked, resumable uploads that fit behind proxies with request size limits.
 
-use crate::files::browse::{expand, find_device, version_file};
+use crate::files::browse::{expand, find_device, version_file, FileRef};
 use crate::files::ingest::{self, NewVersion};
 use crate::library::meta;
 use crate::platform::db;
@@ -320,14 +320,9 @@ pub struct ZipForm {
     name: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct Item {
-    device: String,
-    path: String,
-}
-
 pub async fn zip(State(state): State<Shared>, Form(form): Form<ZipForm>) -> Result<Response, ApiError> {
-    let items: Vec<Item> = serde_json::from_str(&form.items).map_err(|_| ApiError::bad("items must be a JSON list"))?;
+    let items: Vec<FileRef> =
+        serde_json::from_str(&form.items).map_err(|_| ApiError::bad("items must be a JSON list"))?;
     if items.is_empty() {
         return Err(ApiError::bad("Nothing selected"));
     }

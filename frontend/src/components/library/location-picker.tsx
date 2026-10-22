@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { addTiles, L } from '@/lib/leaflet'
+import { useT } from '@/lib/i18n'
 
 export interface Place {
   lat: number
@@ -8,6 +9,7 @@ export interface Place {
 
 /** A small map: click it, or drag the pin, to choose a place. */
 export default function LocationPicker({ value, onChange, tiles }: { value: Place | null; onChange: (p: Place) => void; tiles: string }) {
+  const t = useT()
   const host = useRef<HTMLDivElement>(null)
   const map = useRef<L.Map | null>(null)
   const pin = useRef<L.Marker | null>(null)
@@ -55,7 +57,7 @@ export default function LocationPicker({ value, onChange, tiles }: { value: Plac
     if (!m.getBounds().contains(at)) m.panTo(at)
   }, [value])
 
-  return <div ref={host} className="isolate h-64 w-full overflow-hidden rounded-lg border" role="application" aria-label="Map: click to choose a place" />
+  return <div ref={host} className="isolate h-64 w-full overflow-hidden rounded-lg border" role="application" aria-label={t('Map: click to choose a place')} />
 }
 
 const round = (n: number) => Math.round(n * 1e6) / 1e6
@@ -63,4 +65,4 @@ const round = (n: number) => Math.round(n * 1e6) / 1e6
 const wrap = (lon: number) => ((((lon + 180) % 360) + 360) % 360) - 180
 
 const PIN =
-  '<svg width="26" height="34" viewBox="0 0 26 34" xmlns="http://www.w3.org/2000/svg"><path d="M13 0C5.8 0 0 5.8 0 13c0 9.7 13 21 13 21s13-11.3 13-21C26 5.8 20.2 0 13 0z" fill="#4f46e5" stroke="#fff" stroke-width="2"/><circle cx="13" cy="13" r="4.5" fill="#fff"/></svg>'
+  '<svg width="26" height="34" viewBox="0 0 26 34" xmlns="http://www.w3.org/2000/svg"><path d="M13 0C5.8 0 0 5.8 0 13c0 9.7 13 21 13 21s13-11.3 13-21C26 5.8 20.2 0 13 0z" fill="#40bf6b" stroke="#fff" stroke-width="2"/><circle cx="13" cy="13" r="4.5" fill="#fff"/></svg>'

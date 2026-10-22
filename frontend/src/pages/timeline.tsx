@@ -13,13 +13,14 @@ import { api, mediaUrl, query } from '@/lib/api'
 import { count, monthTitle } from '@/lib/format'
 import { monthBodyHeight, monthHeight, useGrid } from '@/lib/grid'
 import { monthQuery, useTags, type TimelineFilters } from '@/lib/library'
+import { msg, useT } from '@/lib/i18n'
 import type { Asset, Buckets, DeviceSummary, Scope } from '@/lib/types'
 
-const TITLES: Record<Scope, string> = { timeline: 'Photos', favorites: 'Favorites', archive: 'Archive' }
+const TITLES: Record<Scope, string> = { timeline: msg('Photos'), favorites: msg('Favorites'), archive: msg('Archive') }
 const DESCRIPTIONS: Record<Scope, string> = {
-  timeline: 'Every photo and video your devices have sent, newest first.',
-  favorites: 'The photos and videos you marked with a heart.',
-  archive: 'Hidden from the timeline, but still kept.',
+  timeline: msg('Every photo and video your devices have sent, newest first.'),
+  favorites: msg('The photos and videos you marked with a heart.'),
+  archive: msg('Hidden from the timeline, but still kept.'),
 }
 
 /** The assets of several loaded months, in order. */
@@ -74,6 +75,7 @@ function MonthSection({
 
 /** The photo library as a timeline: months of days of pictures, with a scrubber to jump through time. */
 export default function Timeline({ scope }: { scope: Scope }) {
+  const t = useT()
   const client = useQueryClient()
   const [params, setParams] = useSearchParams()
   const filters: TimelineFilters = { scope, device: params.get('device') ?? '', kind: params.get('kind') ?? '', tag: params.get('tag') ?? '' }
@@ -154,7 +156,7 @@ export default function Timeline({ scope }: { scope: Scope }) {
 
   return (
     <div className="md:pr-9">
-      <PageHeader title={TITLES[scope]} description={buckets.data ? `${count(total)} photo${total === 1 ? '' : 's'} and video${total === 1 ? '' : 's'}. ${DESCRIPTIONS[scope]}` : DESCRIPTIONS[scope]} />
+      <PageHeader title={t(TITLES[scope])} description={buckets.data ? `${t('{count} photos and videos.', { count: count(total) })} ${t(DESCRIPTIONS[scope])}` : t(DESCRIPTIONS[scope])} />
 
       <div className="sticky top-14 z-20 -mx-3 mb-2 bg-background/90 px-3 py-2 backdrop-blur md:-mx-6 md:px-6">
         {selected.size > 0 ? (
@@ -162,25 +164,25 @@ export default function Timeline({ scope }: { scope: Scope }) {
         ) : (
           <div className="flex h-11 flex-wrap items-center gap-2 overflow-hidden">
             <Select value={filters.device || 'all'} onValueChange={(v) => setFilter('device', v)}>
-              <SelectTrigger className="w-40" aria-label="Device"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-40" aria-label={t('Device')}><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All devices</SelectItem>
+                <SelectItem value="all">{t('All devices')}</SelectItem>
                 {devices.data?.filter((d) => d.files > 0).map((d) => <SelectItem key={d.name} value={d.name}>{d.name}</SelectItem>)}
               </SelectContent>
             </Select>
             <Select value={filters.kind || 'all'} onValueChange={(v) => setFilter('kind', v)}>
-              <SelectTrigger className="w-44" aria-label="Type"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-44" aria-label={t('Type')}><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">Photos and videos</SelectItem>
-                <SelectItem value="image">Photos</SelectItem>
-                <SelectItem value="video">Videos</SelectItem>
+                <SelectItem value="all">{t('Photos and videos')}</SelectItem>
+                <SelectItem value="image">{t('Photos')}</SelectItem>
+                <SelectItem value="video">{t('Videos')}</SelectItem>
               </SelectContent>
             </Select>
             {tags.data && tags.data.length > 0 && (
               <Select value={filters.tag || 'all'} onValueChange={(v) => setFilter('tag', v)}>
-                <SelectTrigger className="w-36" aria-label="Tag"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="w-36" aria-label={t('Tag')}><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">Any tag</SelectItem>
+                  <SelectItem value="all">{t('Any tag')}</SelectItem>
                   {tags.data.map((t) => <SelectItem key={t.id} value={String(t.id)}>{t.name} ({t.count})</SelectItem>)}
                 </SelectContent>
               </Select>
@@ -194,13 +196,13 @@ export default function Timeline({ scope }: { scope: Scope }) {
           <Skeleton className="h-96" />
         ) : months.length === 0 ? (
           filtering ? (
-            <Empty title="Nothing matches">Try another device, type or tag.</Empty>
+            <Empty title={t('Nothing matches')}>{t('Try another device, type or tag.')}</Empty>
           ) : scope === 'timeline' ? (
-            <Empty title="No photos or videos yet">Photos and videos appear here as devices send them. Back up a folder with the fafnirx client, or upload into a local folder on the Files page.</Empty>
+            <Empty title={t('No photos or videos yet')}>{t('Photos and videos appear here as devices send them. Back up a folder with the fafnirx client, or upload into a local folder on the Files page.')}</Empty>
           ) : scope === 'favorites' ? (
-            <Empty title="No favorites yet">Select photos and choose Favorite, or press the heart while viewing one.</Empty>
+            <Empty title={t('No favorites yet')}>{t('Select photos and choose Favorite, or press the heart while viewing one.')}</Empty>
           ) : (
-            <Empty title="The archive is empty">Archived photos leave the timeline but are kept. Select photos and choose Archive.</Empty>
+            <Empty title={t('The archive is empty')}>{t('Archived photos leave the timeline but are kept. Select photos and choose Archive.')}</Empty>
           )
         ) : (
           <div className="relative" style={{ height: virtual.getTotalSize() }}>

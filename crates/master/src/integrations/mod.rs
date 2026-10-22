@@ -1,6 +1,8 @@
 //! Scheduler for third-party sources (inbound) and mirrors (outbound).
 //!
-//! Both are configured in the web UI and stored in the database. A run starts when the interval has
+//! Both are configured in the web UI or in the configuration file (see `crate::config`) and kept in the database,
+//! which is what the scheduler reads; the file and the database are made to agree at start and as the web UI changes
+//! them. A run starts when the interval has
 //! passed, when it has never run, or when someone pressed "run now" (`run_requested`). Sources and
 //! mirrors each run one job at a time.
 
@@ -17,6 +19,29 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// The tables the scheduler runs jobs on. Their names are spliced into SQL, so they come from this
+/// enum and never from a string.
+#[derive(Clone, Copy)]
+pub enum Table {
+    Sources,
+    Mirrors,
+}
+
+impl Table {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Table::Sources => "sources",
+            Table::Mirrors => "mirrors",
+        }
+    }
+}
+
+impl std::fmt::Display for Table {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 pub struct SourceRow {
     pub id: i64,
     pub name: String,
@@ -31,6 +56,8 @@ pub struct MirrorRow {
     pub remote_type: String,
     pub options: String,
     pub remote_path: String,
+    /// A remote of the rclone config file ("name:path"); when set, the type, options and path are not used.
+    pub remote: String,
     pub keep_runs: i64,
 }
 
@@ -80,7 +107,7 @@ fn tick() -> Duration {
 pub async fn spawn(db: Db, store: Arc<Store>, data_dir: PathBuf) {
     // A restart interrupts whatever was running.
     let _ = db::with(&db, |c| {
-        for table in ["sources", "mirrors"] {
+        for table in [Table::Sources, Table::Mirrors] {
             c.execute(
                 &format!("UPDATE {table} SET last_status = 'failed', last_message = 'interrupted by a restart' WHERE last_status = 'running'"),
                 &[],
@@ -94,7 +121,13 @@ pub async fn spawn(db: Db, store: Arc<Store>, data_dir: PathBuf) {
         loop {
             tokio::time::sleep(tick()).await;
             while let Some(src) = blocking_claim(&d, claim_source).await {
-                run_source(&d, &s, src).await;
+                let (id, name) = (src.id, src.name.clone());
+                let (d2, s2) = (d.clone(), s.clone());
+                // On its own task, so that a panic fails this run instead of ending the scheduler.
+                if let Err(e) = tokio::spawn(async move { run_source(&d2, &s2, src).await }).await {
+                    finish_job(&d, Table::Sources, "source_failed", id, name, Err(anyhow!("the run panicked: {e}")))
+                        .await;
+                }
             }
         }
     });
@@ -102,7 +135,12 @@ pub async fn spawn(db: Db, store: Arc<Store>, data_dir: PathBuf) {
         loop {
             tokio::time::sleep(tick()).await;
             while let Some(m) = blocking_claim(&db, claim_mirror).await {
-                run_mirror(&db, &store, &data_dir, m).await;
+                let (id, name) = (m.id, m.name.clone());
+                let (d2, s2, dir) = (db.clone(), store.clone(), data_dir.clone());
+                if let Err(e) = tokio::spawn(async move { run_mirror(&d2, &s2, &dir, m).await }).await {
+                    finish_job(&db, Table::Mirrors, "mirror_failed", id, name, Err(anyhow!("the run panicked: {e}")))
+                        .await;
+                }
             }
         }
     });
@@ -118,7 +156,7 @@ async fn blocking_claim<T: Send + 'static>(db: &Db, claim: fn(&Db) -> Option<T>)
 
 /// Picks one due row of `table` (a source or a mirror), marks it running and builds it from `columns`,
 /// which follow `id` (column 0). One statement, so a row can only be claimed once.
-fn claim<T>(db: &Db, table: &str, columns: &str, build: fn(&Row) -> T) -> Option<T> {
+fn claim<T>(db: &Db, table: Table, columns: &str, build: fn(&Row) -> T) -> Option<T> {
     let mut conn = db.get().ok()?;
     let row = conn
         .query_opt(
@@ -132,30 +170,34 @@ fn claim<T>(db: &Db, table: &str, columns: &str, build: fn(&Row) -> T) -> Option
         )
         .map_err(|e| tracing::error!("claim from {table}: {e}"))
         .ok()??;
-    let _ = db::notify(&mut *conn, "jobs", table);
+    let _ = db::notify(&mut *conn, "jobs", table.as_str());
     Some(build(&row))
 }
 
 fn claim_source(db: &Db) -> Option<SourceRow> {
-    claim(db, "sources", "name, kind, config, device_id, (SELECT d.name FROM devices d WHERE d.id = device_id)", |r| {
-        SourceRow {
+    claim(
+        db,
+        Table::Sources,
+        "name, kind, config, device_id, (SELECT d.name FROM devices d WHERE d.id = device_id)",
+        |r| SourceRow {
             id: r.get(0),
             name: r.get(1),
             kind: r.get(2),
             config: r.get(3),
             device: Device { id: r.get(4), name: r.get(5) },
-        }
-    })
+        },
+    )
 }
 
 fn claim_mirror(db: &Db) -> Option<MirrorRow> {
-    claim(db, "mirrors", "name, remote_type, options, remote_path, keep_runs", |r| MirrorRow {
+    claim(db, Table::Mirrors, "name, remote_type, options, remote_path, keep_runs, remote", |r| MirrorRow {
         id: r.get(0),
         name: r.get(1),
         remote_type: r.get(2),
         options: r.get(3),
         remote_path: r.get(4),
         keep_runs: r.get(5),
+        remote: r.get(6),
     })
 }
 
@@ -167,7 +209,7 @@ fn sentence(s: &str) -> String {
 
 fn finish(
     conn: &mut impl GenericClient,
-    table: &str,
+    table: Table,
     alert_kind: &str,
     id: i64,
     name: &str,
@@ -181,7 +223,7 @@ fn finish(
         &format!("UPDATE {table} SET last_status = $1, last_message = $2, last_ok_at = COALESCE($3, last_ok_at) WHERE id = $4"),
         &[&status, message, &ok_at, &id],
     );
-    let _ = db::notify(conn, "jobs", table);
+    let _ = db::notify(conn, "jobs", table.as_str());
     if status == "ok" {
         let _ = resolve_alert(conn, alert_kind, name);
     } else {
@@ -196,25 +238,18 @@ async fn run_source(db: &Db, store: &Arc<Store>, src: SourceRow) {
         "gdrive" => crate::integrations::gdrive::run(db.clone(), store.clone(), src).await.map(|o| o.report()),
         other => Err(anyhow!("unknown source kind {other:?}")),
     };
-    finish_job(db, "sources", "source_failed", id, name, result).await;
+    finish_job(db, Table::Sources, "source_failed", id, name, result).await;
 }
 
 async fn run_mirror(db: &Db, store: &Arc<Store>, data_dir: &std::path::Path, m: MirrorRow) {
     let (id, name) = (m.id, m.name.clone());
     tracing::info!("mirror {name}: starting");
     let result = crate::integrations::mirror::run(db.clone(), store.clone(), data_dir.to_path_buf(), m).await;
-    finish_job(db, "mirrors", "mirror_failed", id, name, result.map(|o| o.report())).await;
+    finish_job(db, Table::Mirrors, "mirror_failed", id, name, result.map(|o| o.report())).await;
 }
 
 /// Logs how a job went and records it on its row.
-async fn finish_job(
-    db: &Db,
-    table: &'static str,
-    alert_kind: &'static str,
-    id: i64,
-    name: String,
-    result: Result<JobReport>,
-) {
+async fn finish_job(db: &Db, table: Table, alert_kind: &'static str, id: i64, name: String, result: Result<JobReport>) {
     let db = db.clone();
     let done = tokio::task::spawn_blocking(move || {
         let Ok(mut conn) = db.get() else { return };
@@ -282,9 +317,9 @@ mod tests {
         let mut c = db.get().unwrap();
         let c = &mut *c;
         let id: i64 = c.query_one("SELECT id FROM sources", &[]).unwrap().get(0);
-        finish(c, "sources", "source_failed", id, "d", "failed", "boom");
+        finish(c, Table::Sources, "source_failed", id, "d", "failed", "boom");
         assert_eq!(testing::open_alerts(c), 1);
-        finish(c, "sources", "source_failed", id, "d", "ok", "fine");
+        finish(c, Table::Sources, "source_failed", id, "d", "ok", "fine");
         assert_eq!(testing::open_alerts(c), 0);
         let row = c.query_one("SELECT last_status, last_ok_at FROM sources", &[]).unwrap();
         let (status, ok_at): (String, Option<i64>) = (row.get(0), row.get(1));

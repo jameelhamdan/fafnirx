@@ -4,8 +4,8 @@ package fafnirx.v1;
 
 // Data path between clients and the master. Every call is authenticated
 // with the device token in the `authorization: Bearer <token>` metadata.
-// A client can only add data; there is no call that reads, lists or deletes
-// anything stored on the master.
+// A client can only add data; there is no call that reads or lists what is stored on the master, or removes it
+// (MarkDeleted only marks a path; the data stays until retention). Update downloads are the one thing it reads.
 service Collector {
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
 

@@ -14,6 +14,7 @@ import { api, downloadUrl, thumbUrl } from '@/lib/api'
 import { ago, bytes, dateTime } from '@/lib/format'
 import type { FileInfo } from '@/lib/types'
 import { FileIcon } from './file-icon'
+import { useT } from '@/lib/i18n'
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -47,6 +48,7 @@ function Preview({ info }: { info: FileInfo }) {
 
 /** Everything about one file: a preview, its metadata, and its history with download and restore. */
 export function DetailsSheet({ device, path, onClose, onDeleted }: { device: string; path: string | null; onClose: () => void; onDeleted: () => void }) {
+  const t = useT()
   const client = useQueryClient()
   const now = useNow()
   const [confirm, setConfirm] = useState<'delete' | number | null>(null)
@@ -59,12 +61,12 @@ export function DetailsSheet({ device, path, onClose, onDeleted }: { device: str
 
   const remove = useMutation({
     mutationFn: () => api.post('/api/files/delete', { items: [{ device, path }] }),
-    onSuccess: () => { toast.success('Deleted. It stays recoverable until the retention period ends.'); onDeleted() },
+    onSuccess: () => { toast.success(t('Deleted. It stays recoverable until the retention period ends.')); onDeleted() },
     onError: (e) => toast.error(e.message),
   })
   const restore = useMutation({
     mutationFn: (version: number) => api.post('/api/files/restore', { device, path, version }),
-    onSuccess: () => { toast.success('Restored as the newest version'); void refresh() },
+    onSuccess: () => { toast.success(t('Restored as the newest version')); void refresh() },
     onError: (e) => toast.error(e.message),
   })
 
@@ -82,33 +84,33 @@ export function DetailsSheet({ device, path, onClose, onDeleted }: { device: str
           <div className="space-y-5 p-4 pt-0">
             <Preview info={info} />
             <div className="flex flex-wrap gap-2">
-              <Button asChild><a href={downloadUrl(device, info.path)}><Download className="size-4" />Download</a></Button>
+              <Button asChild><a href={downloadUrl(device, info.path)}><Download className="size-4" />{t('Download')}</a></Button>
               {(info.preview || info.mime.startsWith('video/') || info.mime === 'application/pdf') && (
-                <Button variant="outline" asChild><a href={downloadUrl(device, info.path, { inline: true })} target="_blank" rel="noreferrer"><ExternalLink className="size-4" />Open</a></Button>
+                <Button variant="outline" asChild><a href={downloadUrl(device, info.path, { inline: true })} target="_blank" rel="noreferrer"><ExternalLink className="size-4" />{t('Open')}</a></Button>
               )}
-              {!info.deleted_at && <Button variant="outline" onClick={() => setConfirm('delete')}><Trash2 className="size-4" />Delete</Button>}
+              {!info.deleted_at && <Button variant="outline" onClick={() => setConfirm('delete')}><Trash2 className="size-4" />{t('Delete')}</Button>}
             </div>
             {info.deleted_at && (
               <p className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
-                Deleted {ago(info.deleted_at, now)}. It is removed for good on {dateTime(info.purge_at)}. Restore a version below to bring it back.
+                {t('Deleted {when}. It is removed for good on {date}. Restore a version below to bring it back.', { when: ago(info.deleted_at, now), date: dateTime(info.purge_at) })}
               </p>
             )}
 
             <dl className="grid grid-cols-2 gap-4">
-              <Fact label="Size">{bytes(info.size)}</Fact>
-              <Fact label="Type">{info.mime}</Fact>
-              {info.width && info.height && <Fact label="Dimensions">{info.width} × {info.height}</Fact>}
-              {info.taken_at && <Fact label="Taken">{dateTime(info.taken_at)}</Fact>}
-              <Fact label="Modified on the device">{dateTime(info.mtime)}</Fact>
-              <Fact label="Recorded here">{dateTime(info.changed)}</Fact>
-              <div className="col-span-2"><Fact label="Content hash (BLAKE3 root)"><code className="text-xs break-all">{info.hash}</code></Fact></div>
+              <Fact label={t('Size')}>{bytes(info.size)}</Fact>
+              <Fact label={t('Type')}>{info.mime}</Fact>
+              {info.width && info.height && <Fact label={t('Dimensions')}>{info.width} × {info.height}</Fact>}
+              {info.taken_at && <Fact label={t('Taken')}>{dateTime(info.taken_at)}</Fact>}
+              <Fact label={t('Modified on the device')}>{dateTime(info.mtime)}</Fact>
+              <Fact label={t('Recorded here')}>{dateTime(info.changed)}</Fact>
+              <div className="col-span-2"><Fact label={t('Content hash (BLAKE3 root)')}><code className="text-xs break-all">{info.hash}</code></Fact></div>
             </dl>
 
             {exif.length > 0 && (
               <>
                 <Separator />
                 <section>
-                  <h3 className="mb-2 text-sm font-medium">Photo details</h3>
+                  <h3 className="mb-2 text-sm font-medium">{t('Photo details')}</h3>
                   <dl className="grid grid-cols-2 gap-x-4 gap-y-2">{exif.map(([k, v]) => <Fact key={k} label={k.replace(/([a-z])([A-Z])/g, '$1 $2')}>{v}</Fact>)}</dl>
                 </section>
               </>
@@ -116,22 +118,22 @@ export function DetailsSheet({ device, path, onClose, onDeleted }: { device: str
 
             <Separator />
             <section>
-              <h3 className="mb-2 flex items-center gap-2 text-sm font-medium"><History className="size-4" />History</h3>
+              <h3 className="mb-2 flex items-center gap-2 text-sm font-medium"><History className="size-4" />{t('History')}</h3>
               <ul className="divide-y rounded-lg border">
                 {info.versions.map((v) => (
                   <li key={v.id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
                     <div className="min-w-0 flex-1">
-                      <p className="flex items-center gap-2">{dateTime(v.created_at)}{v.current && !info.deleted_at && <Badge>Current</Badge>}{v.pruned_at && <Badge variant="secondary">Expiring</Badge>}</p>
+                      <p className="flex items-center gap-2">{dateTime(v.created_at)}{v.current && !info.deleted_at && <Badge>{t('Current')}</Badge>}{v.pruned_at && <Badge variant="secondary">{t('Expiring')}</Badge>}</p>
                       <p className="text-xs text-muted-foreground">{bytes(v.size)}</p>
                     </div>
                     {v.available ? (
                       <>
-                        <Button variant="ghost" size="icon" className="size-8" asChild aria-label="Download this version"><a href={downloadUrl(device, info.path, { version: v.id })}><Download className="size-4" /></a></Button>
+                        <Button variant="ghost" size="icon" className="size-8" asChild aria-label={t('Download this version')}><a href={downloadUrl(device, info.path, { version: v.id })}><Download className="size-4" /></a></Button>
                         {(!v.current || info.deleted_at) && (
-                          <Button variant="ghost" size="icon" className="size-8" aria-label="Restore this version" onClick={() => setConfirm(v.id)}><RotateCcw className="size-4" /></Button>
+                          <Button variant="ghost" size="icon" className="size-8" aria-label={t('Restore this version')} onClick={() => setConfirm(v.id)}><RotateCcw className="size-4" /></Button>
                         )}
                       </>
-                    ) : <span className="text-xs text-muted-foreground">No longer stored</span>}
+                    ) : <span className="text-xs text-muted-foreground">{t('No longer stored')}</span>}
                   </li>
                 ))}
               </ul>
@@ -139,7 +141,7 @@ export function DetailsSheet({ device, path, onClose, onDeleted }: { device: str
 
             {info.events.length > 0 && (
               <section>
-                <h3 className="mb-2 text-sm font-medium">Activity</h3>
+                <h3 className="mb-2 text-sm font-medium">{t('Activity')}</h3>
                 <ul className="space-y-1 text-sm">
                   {info.events.map((e) => (
                     <li key={e.id} className="flex justify-between gap-3">
@@ -154,18 +156,18 @@ export function DetailsSheet({ device, path, onClose, onDeleted }: { device: str
         )}
         <Confirm
           open={confirm === 'delete'}
-          title="Delete this file?"
-          description="It leaves the file list but stays recoverable until the retention period ends."
-          action="Delete"
+          title={t('Delete this file?')}
+          description={t('It leaves the file list but stays recoverable until the retention period ends.')}
+          action={t('Delete')}
           destructive
           onCancel={() => setConfirm(null)}
           onConfirm={() => { setConfirm(null); remove.mutate() }}
         />
         <Confirm
           open={typeof confirm === 'number'}
-          title="Restore this version?"
-          description="It becomes the newest version. The current content stays in the history."
-          action="Restore"
+          title={t('Restore this version?')}
+          description={t('It becomes the newest version. The current content stays in the history.')}
+          action={t('Restore')}
           onCancel={() => setConfirm(null)}
           onConfirm={() => { if (typeof confirm === 'number') restore.mutate(confirm); setConfirm(null) }}
         />

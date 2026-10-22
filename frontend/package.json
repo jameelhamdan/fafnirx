@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "i18n": "node scripts/extract-i18n.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

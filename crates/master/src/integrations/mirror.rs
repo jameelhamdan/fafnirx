@@ -8,7 +8,8 @@
 //!
 //! Each run uploads only files whose content changed since the last successful run. Changed files are
 //! linked (or copied) from the file store into a staging directory in batches, so extra disk use is bounded.
-//! Backend options reach rclone through environment variables, never through the command line.
+//! Backend options reach rclone through environment variables, never through the command line. A mirror can instead
+//! name a remote of an rclone config file ("name:path"), which is then the only thing rclone is told about.
 
 use crate::integrations::{JobReport, MirrorRow};
 use crate::platform::db::{self, Db};
@@ -70,8 +71,28 @@ pub fn run_stamp(unix: i64) -> String {
     format!("{:04}{:02}{:02}T{:02}{:02}{:02}Z", t.year(), t.month() as u8, t.day(), t.hour(), t.minute(), t.second())
 }
 
-/// rclone configuration for the mirror, as environment variables.
-pub fn rclone_env(m: &MirrorRow, empty_config: &Path) -> Result<Vec<(String, String)>> {
+/// Where a mirror's uploads go, as rclone writes it: the remote of the config file, or the one made from the options.
+fn base_of(m: &MirrorRow) -> String {
+    if m.remote.is_empty() {
+        format!("{REMOTE}:{}", m.remote_path.trim_end_matches('/'))
+    } else {
+        m.remote.trim_end_matches('/').to_string()
+    }
+}
+
+/// rclone configuration for the mirror, as environment variables. `config_file` is the rclone config file that a
+/// mirror with a `remote` reads; the others get `empty_config`.
+pub fn rclone_env(m: &MirrorRow, empty_config: &Path, config_file: &Path) -> Result<Vec<(String, String)>> {
+    if !m.remote.is_empty() {
+        if !config_file.is_file() {
+            bail!(
+                "mirror remote {:?} needs the rclone config file {}, which does not exist (set FAFNIRX_RCLONE_CONFIG)",
+                m.remote,
+                config_file.display()
+            );
+        }
+        return Ok(vec![("RCLONE_CONFIG".to_string(), config_file.to_string_lossy().into_owned())]);
+    }
     if m.remote_type.is_empty() || !m.remote_type.chars().all(|c| c.is_ascii_alphanumeric()) {
         bail!("invalid remote type {:?}", m.remote_type);
     }
@@ -95,6 +116,7 @@ pub fn rclone_env(m: &MirrorRow, empty_config: &Path) -> Result<Vec<(String, Str
 
 /// The places on the remote that a run writes to.
 struct Remotes {
+    base: String,
     root: String,
     files: String,
     versions: String,
@@ -106,6 +128,7 @@ struct Remotes {
 impl Remotes {
     fn new(base: &str, stamp: &str) -> Self {
         Self {
+            base: base.to_string(),
             root: join(base, ""),
             files: join(base, "files"),
             versions: join(base, "versions"),
@@ -115,12 +138,13 @@ impl Remotes {
     }
 }
 
+/// `sub` inside `base`, where `base` is an rclone path such as `FXMIRROR:bucket/prefix` or `name:`.
 fn join(base: &str, sub: &str) -> String {
     let base = base.trim_end_matches('/');
-    match (base.is_empty(), sub.is_empty()) {
-        (true, _) => format!("{REMOTE}:{sub}"),
-        (false, true) => format!("{REMOTE}:{base}"),
-        (false, false) => format!("{REMOTE}:{base}/{sub}"),
+    match (base.ends_with(':'), sub.is_empty()) {
+        (_, true) => base.to_string(),
+        (true, false) => format!("{base}{sub}"),
+        (false, false) => format!("{base}/{sub}"),
     }
 }
 
@@ -289,10 +313,10 @@ pub async fn run(db: Db, store: Arc<Store>, data_dir: PathBuf, m: MirrorRow) -> 
     std::fs::write(&empty_config, b"")?;
     let rc = Rclone {
         bin: std::env::var("FAFNIRX_RCLONE").unwrap_or_else(|_| "rclone".into()),
-        env: rclone_env(&m, &empty_config)?,
+        env: rclone_env(&m, &empty_config, &crate::config::rclone_config())?,
     };
     let stamp = run_stamp(unix_now());
-    let remotes = Remotes::new(&m.remote_path, &stamp);
+    let remotes = Remotes::new(&base_of(&m), &stamp);
     let job = Job { db, store, stage_root, rc, m, remotes, stamp };
     let result = job.run().await;
     let _ = std::fs::remove_dir_all(&job.stage_root);
@@ -469,7 +493,7 @@ impl Job {
         };
         let dirs = listing.lines().map(|l| l.trim().trim_end_matches('/').to_string()).collect();
         for old in expired_versions(dirs, self.m.keep_runs.max(1) as usize) {
-            let dir = join(&self.m.remote_path, &format!("versions/{old}"));
+            let dir = join(&self.remotes.base, &format!("versions/{old}"));
             if let Err(e) = self.rc.run(&["purge", &dir], &[3]).await {
                 out.warnings.push(format!("could not remove old versions {old}: {e:#}"));
             }
@@ -488,6 +512,7 @@ mod tests {
             remote_type: "s3".into(),
             options: options.into(),
             remote_path: "bucket/prefix/".into(),
+            remote: String::new(),
             keep_runs: 3,
         }
     }
@@ -505,25 +530,49 @@ mod tests {
 
     #[test]
     fn rclone_options_become_environment() {
-        let env = rclone_env(&row(r#"{"access_key_id":"k","secret_access_key":"s"}"#), Path::new("/tmp/c")).unwrap();
+        let env = rclone_env(&row(r#"{"access_key_id":"k","secret_access_key":"s"}"#), Path::new("/tmp/c"), Path::new("/none")).unwrap();
         assert!(env.contains(&("RCLONE_CONFIG_FXMIRROR_TYPE".into(), "s3".into())));
         assert!(env.contains(&("RCLONE_CONFIG_FXMIRROR_SECRET_ACCESS_KEY".into(), "s".into())));
         assert!(
-            rclone_env(&row(r#"{"Bad-Key":"x"}"#), Path::new("/tmp/c")).is_err(),
+            rclone_env(&row(r#"{"Bad-Key":"x"}"#), Path::new("/tmp/c"), Path::new("/none")).is_err(),
             "option names cannot smuggle other variables"
         );
         let mut bad = row("{}");
         bad.remote_type = "s3;rm".into();
-        assert!(rclone_env(&bad, Path::new("/tmp/c")).is_err());
+        assert!(rclone_env(&bad, Path::new("/tmp/c"), Path::new("/none")).is_err());
+    }
+
+    #[test]
+    fn a_remote_of_the_rclone_config_is_used_as_it_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf = dir.path().join("rclone.conf");
+        let mut m = row("{}");
+        m.remote = "crypt:backups/fafnirx/".into();
+        let missing = rclone_env(&m, Path::new("/tmp/c"), &conf).unwrap_err();
+        assert!(format!("{missing}").contains("rclone config file"), "{missing}");
+        std::fs::write(&conf, "[crypt]
+type = local
+").unwrap();
+        let env = rclone_env(&m, Path::new("/tmp/c"), &conf).unwrap();
+        assert_eq!(env, [("RCLONE_CONFIG".to_string(), conf.to_string_lossy().into_owned())], "nothing else reaches rclone");
+        let r = Remotes::new(&base_of(&m), "20240101T000000Z");
+        assert_eq!(
+            (r.root.as_str(), r.files.as_str(), r.run.as_str()),
+            ("crypt:backups/fafnirx", "crypt:backups/fafnirx/files", "crypt:backups/fafnirx/versions/20240101T000000Z")
+        );
+        m.remote = "crypt:".into();
+        assert_eq!(Remotes::new(&base_of(&m), "s").files, "crypt:files", "a remote without a path");
     }
 
     #[test]
     fn remote_paths_join_cleanly() {
-        assert_eq!(join("bucket/prefix/", "files"), "FXMIRROR:bucket/prefix/files");
-        assert_eq!(join("/abs/dir", "files"), "FXMIRROR:/abs/dir/files");
-        assert_eq!(join("", "files"), "FXMIRROR:files");
-        assert_eq!(join("b", ""), "FXMIRROR:b");
-        let r = Remotes::new("b/x", "20240101T000000Z");
+        assert_eq!(join("FXMIRROR:bucket/prefix/", "files"), "FXMIRROR:bucket/prefix/files");
+        assert_eq!(join("FXMIRROR:/abs/dir", "files"), "FXMIRROR:/abs/dir/files");
+        assert_eq!(join("FXMIRROR:", "files"), "FXMIRROR:files");
+        assert_eq!(join("FXMIRROR:b", ""), "FXMIRROR:b");
+        let mut m = row("{}");
+        m.remote_path = "b/x".into();
+        let r = Remotes::new(&base_of(&m), "20240101T000000Z");
         assert_eq!(
             (r.files.as_str(), r.run.as_str()),
             ("FXMIRROR:b/x/files", "FXMIRROR:b/x/versions/20240101T000000Z")

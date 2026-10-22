@@ -14,8 +14,10 @@ import { useNow } from '@/hooks/use-now'
 import { api } from '@/lib/api'
 import { ago, bytes, count } from '@/lib/format'
 import type { DeviceDetail, DeviceSummary } from '@/lib/types'
+import { useT } from '@/lib/i18n'
 
 export function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail) => void }) {
+  const t = useT()
   const client = useQueryClient()
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
@@ -35,24 +37,24 @@ export function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail)
   return (
     <Dialog open={open} onOpenChange={(o) => { setOpen(o); create.reset() }}>
       <DialogTrigger asChild>
-        <Button><Plus className="size-4" />Add device</Button>
+        <Button><Plus className="size-4" />{t('Add device')}</Button>
       </DialogTrigger>
       <DialogContent>
         <form onSubmit={submit} className="space-y-4">
           <DialogHeader>
-            <DialogTitle>Add a device</DialogTitle>
+            <DialogTitle>{t('Add a device')}</DialogTitle>
             <DialogDescription>
-              The name is the device's folder on the master (<code>files/&lt;name&gt;/</code>) and cannot change later.
+              {t("The name is the device's folder on the master (files/<name>/) and cannot change later.")}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            <Label htmlFor="device-name">Name</Label>
+            <Label htmlFor="device-name">{t('Name')}</Label>
             <Input id="device-name" autoFocus placeholder="laptop" value={name} onChange={(e) => setName(e.target.value)} />
-            <p className="text-xs text-muted-foreground">Lowercase letters, digits, dot, underscore and dash; up to 63 characters.</p>
+            <p className="text-xs text-muted-foreground">{t('Lowercase letters, digits, dot, underscore and dash; up to 63 characters.')}</p>
             {create.error && <p role="alert" className="text-sm text-destructive">{create.error.message}</p>}
           </div>
           <DialogFooter>
-            <Button type="submit" disabled={!name.trim() || create.isPending}>Create</Button>
+            <Button type="submit" disabled={!name.trim() || create.isPending}>{t('Create')}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -61,6 +63,7 @@ export function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail)
 }
 
 function Row({ d, now }: { d: DeviceSummary; now: number }) {
+  const t = useT()
   return (
     <TableRow>
       <TableCell>
@@ -72,7 +75,7 @@ function Row({ d, now }: { d: DeviceSummary; now: number }) {
       </TableCell>
       <TableCell>
         {d.kind === 'device' ? (
-          <StatusDot status={d.revoked ? 'revoked' : d.online ? 'online' : 'offline'} label={d.revoked ? 'Revoked' : d.online ? 'Online' : 'Offline'} />
+          <StatusDot status={d.revoked ? 'revoked' : d.online ? 'online' : 'offline'} label={d.revoked ? t('Revoked') : d.online ? t('Online') : t('Offline')} />
         ) : (
           <span className="text-muted-foreground">—</span>
         )}
@@ -86,6 +89,7 @@ function Row({ d, now }: { d: DeviceSummary; now: number }) {
 }
 
 export default function Devices() {
+  const t = useT()
   const now = useNow()
   const [made, setMade] = useState<DeviceDetail | null>(null)
   const { data, error } = useQuery({ queryKey: ['devices'], queryFn: () => api.get<DeviceSummary[]>('/api/devices') })
@@ -94,25 +98,25 @@ export default function Devices() {
   return (
     <div>
       <PageHeader
-        title="Devices"
-        description="Computers and phones that send their folders here, and local folders that live on the master itself."
+        title={t('Devices')}
+        description={t('Computers and phones that send their folders here, and local folders that live on the master itself.')}
         actions={<AddDeviceDialog onCreated={setMade} />}
       />
       {error ? <ErrorNote error={error} /> : !shown ? (
         <Skeleton className="h-48" />
       ) : shown.length === 0 ? (
-        <Empty title="No devices yet">Add a device to get a token and the command that connects it.</Empty>
+        <Empty title={t('No devices yet')}>{t('Add a device to get a token and the command that connects it.')}</Empty>
       ) : (
         <div className="rounded-lg border bg-card">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="hidden md:table-cell">System</TableHead>
-                <TableHead className="text-right">Files</TableHead>
-                <TableHead className="text-right">Size</TableHead>
-                <TableHead className="hidden sm:table-cell">Last seen</TableHead>
+                <TableHead>{t('Name')}</TableHead>
+                <TableHead>{t('Status')}</TableHead>
+                <TableHead className="hidden md:table-cell">{t('System')}</TableHead>
+                <TableHead className="text-right">{t('Files')}</TableHead>
+                <TableHead className="text-right">{t('Size')}</TableHead>
+                <TableHead className="hidden sm:table-cell">{t('Last seen')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>{shown.map((d) => <Row key={d.name} d={d} now={now} />)}</TableBody>

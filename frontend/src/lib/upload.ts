@@ -95,9 +95,10 @@ async function send(item: UploadItem) {
   })
   const base = `/api/uploads/${started.id}`
   let offset = 0
+  // Failures in a row: progress (or an answer from the server about where it is) starts the count again.
+  let attempt = 0
   while (offset < item.size) {
     const end = Math.min(offset + CHUNK, item.size)
-    let attempt = 0
     for (;;) {
       try {
         const res = await fetch(`${base}?offset=${offset}`, {
@@ -109,10 +110,12 @@ async function send(item: UploadItem) {
         if (res.status === 409) {
           // The server has a different amount than we think (an earlier try got through): continue from there.
           offset = ((await res.json()) as { received: number }).received
+          attempt = 0
           break
         }
         if (!res.ok) throw new ApiError(res.status, ((await res.json().catch(() => ({}))) as { error?: string }).error ?? res.statusText)
         offset = end
+        attempt = 0
         break
       } catch (e) {
         if ((e instanceof ApiError && e.status < 500) || ++attempt > RETRIES) throw e

@@ -36,11 +36,14 @@ Inside the data directory:
 files/<device>/<path>            the current tree; shareable as a network drive
 versions/<id>/<device>/<path>    what a newer version or a delete replaced
 tmp/                             uploads being assembled (removed after a day untouched)
-cache/thumbs/                    photo previews, made on demand (removed after 30 days unused)
+cache/thumbs/                    photo previews, made on demand (removed after 30 days without a request)
 cache/video/                     playable copies of videos (removed when no version has the video any more)
 updates/<platform>/              signed client builds
 web_secret                       key that signs login cookies
 ```
+
+The setup lives apart from the data, in the config folder (`./config`, `FAFNIRX_CONFIG_DIR`): `fafnirx.json` and, for
+mirrors that use your rclone remotes, `rclone.conf` ([Configuration file](configuration.md)).
 
 fafnirx checks hashes on upload and when staging files for a mirror. It does not scrub the stored files, so use a
 checksumming filesystem and scrub it regularly.
@@ -79,39 +82,6 @@ example with Samba:
 Every top-level folder is a device; a folder created there with a valid name becomes a local folder by itself. See
 [Usage](usage.md#local-folders-and-the-network-drive) for what is recorded and when. Do not share `versions/` or `tmp/`
 writable.
-
-## Splitting the roles
-
-One process runs everything by default (`FAFNIRX_ROLE=all`). The same binary can be split, for a busy server or to keep
-big transfers from slowing the web app:
-
-| Role | Does |
-|---|---|
-| `api` | Admin JSON API, login, live updates, the web app |
-| `transfer` | The device API on `7443`, plus downloads, thumbnails and pictures of the library, zip streams and uploads of the admin API |
-| `worker` | The file watcher, scheduled jobs, sources, mirrors, and the details, thumbnails and video copies of photos and videos |
-
-```yaml
-  master-api:
-    build: .
-    environment: { FAFNIRX_ROLE: api, FAFNIRX_HTTP: "0.0.0.0:8080", ...same database and password... }
-  master-transfer:
-    build: .
-    environment: { FAFNIRX_ROLE: transfer, FAFNIRX_HTTP: "0.0.0.0:8081", ...same database and password... }
-    ports: ["7443:7443"]
-  master-worker:
-    build: .
-    environment: { FAFNIRX_ROLE: worker, ...same database... }
-    healthcheck: { disable: true }       # the worker serves no HTTP; the image checks /healthz
-```
-
-All of them share the database and the data directory (same `FAFNIRX_DATA`). A reverse proxy sends `/api/files/download`,
-`/api/files/thumb`, `/api/files/zip`, `/api/uploads` and `/api/media/*` to the transfer process
-and the rest to the api process. The worker needs `ffmpeg` (and `ffprobe`) for videos, and the transfer process
-needs it for a poster picture that was not made yet: the Docker image has it.
-Coordination does not depend on the processes sharing memory: paths are locked with PostgreSQL advisory locks, live
-updates travel through `LISTEN/NOTIFY`, queued work is claimed with `FOR UPDATE SKIP LOCKED`, and exactly one worker holds
-the leader lock that runs the scheduled work. You can run more than one `worker` for metadata and previews.
 
 ## Remote access with a Cloudflare tunnel
 
@@ -152,12 +122,13 @@ Notes:
 
 ## Backups
 
-You need three things; the first two matter most.
+You need four things; the first three matter most.
 
 | Back up | Why | How |
 |---|---|---|
 | PostgreSQL | The map from paths to versions, tokens, settings, credentials | `docker compose exec db pg_dump -U fafnirx fafnirx > fafnirx.sql`, or ZFS snapshots of `pgdata` |
 | `data/files/` and `data/versions/` | The data itself | ZFS snapshots, or rely on the offsite mirror |
+| `config/` (`fafnirx.json`, `rclone.conf`) | The setup: settings, devices with their token hashes, mirrors, sources. With it a master can be set up again on an empty database | Copy it, or keep it in a private repository. It holds credentials |
 | The update signing key | Not on the master by design | Wherever you keep it (`update.key`) |
 
 Snapshot **the database first, then the data directory**. A file that a newer snapshot lacks was replaced or deleted
@@ -177,7 +148,7 @@ git pull
 docker compose up -d --build
 ```
 
-Every master process applies the database migrations it is missing on start (in order, in one transaction, serialized by an
+The master applies the database migrations it is missing on start (in order, in one transaction, serialized by an
 advisory lock), and refuses to start against a database made by a newer version. Back up the database before upgrading. Upgrading the PostgreSQL **major** version needs a dump and restore; do not just change the
 image tag. Client updates are separate: publish a signed build with `fafnirx-sign publish` and the devices pick it up
 within about six hours ([Usage](usage.md#signed-client-updates)).
@@ -188,7 +159,8 @@ within about six hours ([Usage](usage.md#signed-client-updates)).
 - Keep `8080` and `7443` off the internet unless they are behind a TLS proxy. Keep the PostgreSQL port unpublished (the
   compose file does not publish it).
 - Device tokens are shown once and stored only as SHA-256 hashes. Revoke a lost device in the web app.
-- Source and mirror credentials sit in the database in plain text. Treat database backups as secrets.
+- Source and mirror credentials sit in the database and in `config/fafnirx.json` (and `rclone.conf`) in plain text. Treat
+  database backups and the config folder as secrets; do not commit them to a public repository.
 - The update signing key stays off the master. A compromised master cannot ship a client update.
 - A device can add data but cannot read or delete it (the device API has no such call), so a compromised device cannot
   destroy history. The admin API can read and delete; its login is the thing to protect.

@@ -2,8 +2,8 @@
 //! API: devices can only add data, everything here (browsing, downloading, deleting, configuring)
 //! needs the admin login.
 //!
-//! The routes are split by cost so that the roles can run apart: `light` routes are quick JSON calls,
-//! `heavy` routes move file contents (downloads, uploads, zip) and need the stores' disks.
+//! The routes are split by cost: `light` routes are quick JSON calls, `heavy` routes move file contents
+//! (downloads, uploads, zip) and have no body size limit.
 
 mod assets;
 mod auth;
@@ -35,8 +35,10 @@ pub struct AppState {
     pub db: Db,
     pub store: Arc<Store>,
     pub data_dir: PathBuf,
+    /// The configuration file; changes made through the API tell it to write itself.
+    pub config: Arc<crate::config::ConfigFile>,
     pub password: String,
-    /// Key that signs the session cookie, shared by every process that serves the API.
+    /// Key that signs the session cookie: made from the stored secret and the password, so a new password ends every session.
     pub secret: Vec<u8>,
     /// Changes announced by `NOTIFY`, as JSON text, for the live event streams.
     pub events: broadcast::Sender<String>,
@@ -54,12 +56,19 @@ pub struct AppState {
 pub type Shared = Arc<AppState>;
 
 impl AppState {
-    pub fn new(db: Db, store: Arc<Store>, data_dir: PathBuf, password: String) -> Result<Self, anyhow::Error> {
-        let secret = auth::load_secret(&data_dir)?;
+    pub fn new(
+        db: Db,
+        store: Arc<Store>,
+        data_dir: PathBuf,
+        password: String,
+        config: Arc<crate::config::ConfigFile>,
+    ) -> Result<Self, anyhow::Error> {
+        let secret = auth::session_key(&auth::load_secret(&data_dir)?, &password);
         Ok(Self {
             db,
             store,
             data_dir,
+            config,
             password,
             secret,
             events: broadcast::channel(256).0,
@@ -206,20 +215,15 @@ fn heavy() -> Router<Shared> {
         .layer(DefaultBodyLimit::disable())
 }
 
-/// Every route a process with these roles serves, behind the admin login, plus the web app.
-pub fn router(state: Shared, api: bool, transfer: bool) -> Router {
-    let mut routes = Router::new();
-    if api {
-        routes = routes.merge(light());
-    }
-    if transfer {
-        routes = routes.merge(heavy());
-    }
-    routes
+/// Every route, behind the admin login, plus the web app.
+pub fn router(state: Shared) -> Router {
+    light()
+        .merge(heavy())
         .route("/healthz", get(healthz))
+        // The fallback comes first: a layer only wraps what the router holds when it is added.
+        .fallback(assets::serve)
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .layer(middleware::from_fn_with_state(state.clone(), security_headers))
-        .fallback(assets::serve)
         .with_state(state)
 }
 
@@ -244,7 +248,7 @@ async fn security_headers(State(state): State<Shared>, req: axum::extract::Reque
     let tiles = tile_origin(&state.map_tiles).unwrap_or("");
     let csp = if page {
         format!(
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: {tiles};              media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; object-src 'none';              base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: {tiles}; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
         )
     } else {
         "frame-ancestors 'none'".to_string()

@@ -1,21 +1,18 @@
 //! fafnirx-master: collects files from devices, stores them as plain files, and serves the admin web app.
 //!
-//! One binary with roles, so that a small install is a single process and a large one can be split:
-//!   api       the admin JSON API, live updates, the web app
-//!   transfer  the device gRPC API, and downloads, uploads and zip streams of the admin API
-//!   worker    the file watcher, scheduled jobs, sources, mirrors, metadata and previews
-//! Choose with `--role api,transfer` or FAFNIRX_ROLE; the default is `all`. Split processes share the
-//! database and the data directory, and need a reverse proxy that sends `/api/files/download`,
-//! `/api/files/thumb`, `/api/files/zip`, `/api/uploads` and `/api/media/*` to the
-//! `transfer` process.
+//! One process does everything: the device gRPC API, the admin JSON API with live updates and the web
+//! app, the file watcher, scheduled jobs, sources, mirrors, and the details and previews of photos and
+//! videos.
 //!
 //! Configuration (environment):
 //!   FAFNIRX_DATABASE_URL    PostgreSQL connection string, e.g. postgres://user:password@host/database (required)
 //!   FAFNIRX_DATA            data directory (default ./data)
 //!   FAFNIRX_LISTEN          gRPC listen address for devices (default 0.0.0.0:7443)
 //!   FAFNIRX_HTTP            admin web listen address (default 0.0.0.0:8080)
-//!   FAFNIRX_ADMIN_PASSWORD  password of the admin web app (required with the api or transfer role)
+//!   FAFNIRX_ADMIN_PASSWORD  password of the admin web app (required)
 //!   FAFNIRX_RCLONE          rclone binary used by mirrors (default: rclone from PATH)
+//!   FAFNIRX_CONFIG          the configuration file, see config/mod.rs (default <FAFNIRX_DATA>/fafnirx.json)
+//!   FAFNIRX_RCLONE_CONFIG   rclone config file for mirrors that name a remote (default rclone.conf next to the above)
 //!   FAFNIRX_TICK_SECS       how often sources and mirrors are checked for being due (default 15)
 //!   FAFNIRX_GDRIVE_API      Google Drive API base URL (default https://www.googleapis.com; for tests)
 //!   FAFNIRX_FFMPEG          ffmpeg binary for video posters and playable copies (default: ffmpeg from PATH)
@@ -27,6 +24,7 @@
 
 #![allow(clippy::result_large_err)] // tonic::Status is large and is the error type of every RPC helper
 
+mod config;
 mod devices;
 mod files;
 mod integrations;
@@ -42,45 +40,6 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-#[derive(Clone, Copy)]
-struct Roles {
-    api: bool,
-    transfer: bool,
-    worker: bool,
-}
-
-impl Roles {
-    fn parse(text: &str) -> Result<Self> {
-        let mut roles = Roles { api: false, transfer: false, worker: false };
-        for part in text.split(',').map(str::trim).filter(|p| !p.is_empty()) {
-            match part {
-                "all" => (roles.api, roles.transfer, roles.worker) = (true, true, true),
-                "api" => roles.api = true,
-                "transfer" => roles.transfer = true,
-                "worker" => roles.worker = true,
-                other => bail!("unknown role {other:?}: use all, api, transfer or worker"),
-            }
-        }
-        if !(roles.api || roles.transfer || roles.worker) {
-            bail!("no role chosen");
-        }
-        Ok(roles)
-    }
-
-    /// From `--role X` or FAFNIRX_ROLE.
-    fn from_environment() -> Result<Self> {
-        let mut args = std::env::args().skip(1);
-        let mut text = std::env::var("FAFNIRX_ROLE").unwrap_or_else(|_| "all".into());
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "--role" => text = args.next().context("--role needs a value")?,
-                other => bail!("unknown argument {other:?}; the only option is --role"),
-            }
-        }
-        Self::parse(&text)
-    }
-}
-
 fn address(var: &str, default: &str) -> Result<SocketAddr> {
     std::env::var(var).unwrap_or_else(|_| default.into()).parse().with_context(|| format!("invalid {var}"))
 }
@@ -91,7 +50,13 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
-    let roles = Roles::from_environment()?;
+    if let Some(arg) = std::env::args().nth(1) {
+        bail!("unknown argument {arg:?}: the master is configured through environment variables only");
+    }
+    let password = std::env::var("FAFNIRX_ADMIN_PASSWORD").unwrap_or_default();
+    if password.is_empty() {
+        bail!("FAFNIRX_ADMIN_PASSWORD must be set");
+    }
     let data_dir = PathBuf::from(std::env::var("FAFNIRX_DATA").unwrap_or_else(|_| "data".into()));
     std::fs::create_dir_all(&data_dir)?;
     let url = std::env::var("FAFNIRX_DATABASE_URL")
@@ -105,57 +70,43 @@ async fn main() -> Result<()> {
     std::mem::forget(db.clone());
     let store = Arc::new(platform::store::Store::open(&data_dir)?);
 
-    if roles.worker {
-        library::meta::run_queue(db.clone(), store.clone(), data_dir.join("cache"));
-        let (db, store, data_dir, url) = (db.clone(), store.clone(), data_dir.clone(), url.clone());
-        tokio::spawn(async move {
-            // Scheduled work must run in one process only.
-            if let Err(e) = platform::db::lead(&url).await {
-                return tracing::error!("cannot take the leader lock: {e:#}");
-            }
-            monitoring::jobs::spawn(db.clone(), store.clone(), data_dir.clone());
-            integrations::spawn(db, store, data_dir).await;
-        });
-    }
+    // The configuration file is applied before anything starts, so that jobs and devices begin from it.
+    let config = Arc::new(config::ConfigFile::new(config::path()));
+    config.start(&db, &store).await?;
+    tracing::info!("configuration file: {}", config.path().display());
+    config.clone().spawn(db.clone());
+
+    library::meta::run_queue(db.clone(), store.clone(), data_dir.join("cache"));
+    monitoring::jobs::spawn(db.clone(), store.clone(), data_dir.clone());
+    tokio::spawn(integrations::spawn(db.clone(), store.clone(), data_dir.clone()));
+
+    let state = Arc::new(web::AppState::new(db.clone(), store.clone(), data_dir.clone(), password, config)?);
+    web::listen(state.clone(), url);
 
     let mut servers = tokio::task::JoinSet::new();
-    if roles.api || roles.transfer {
-        let password = std::env::var("FAFNIRX_ADMIN_PASSWORD").unwrap_or_default();
-        if password.is_empty() {
-            bail!("FAFNIRX_ADMIN_PASSWORD must be set for the api and transfer roles");
-        }
-        let state = Arc::new(web::AppState::new(db.clone(), store.clone(), data_dir.clone(), password)?);
-        if roles.api {
-            web::listen(state.clone(), url.clone());
-        }
-        let addr = address("FAFNIRX_HTTP", "0.0.0.0:8080")?;
-        let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("listen on {addr}"))?;
-        tracing::info!("admin web app on http://{addr}");
-        let app = web::router(state, roles.api, roles.transfer).into_make_service_with_connect_info::<SocketAddr>();
-        servers.spawn(async move { axum::serve(listener, app).await.context("admin web server") });
-    }
-    if roles.transfer {
-        let svc =
-            devices::grpc::Service { db: db.clone(), store: store.clone(), updates_dir: data_dir.join("updates") };
-        let addr = address("FAFNIRX_LISTEN", "0.0.0.0:7443")?;
-        tracing::info!("fafnirx-master listening for devices on {addr}");
-        servers.spawn(async move {
-            tonic::transport::Server::builder()
-                .add_service(
-                    CollectorServer::new(svc)
-                        .max_decoding_message_size(MAX_MESSAGE)
-                        .max_encoding_message_size(MAX_MESSAGE),
-                )
-                .serve(addr)
-                .await
-                .context("device server")
-        });
-    }
+    let addr = address("FAFNIRX_HTTP", "0.0.0.0:8080")?;
+    let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("listen on {addr}"))?;
+    tracing::info!("admin web app on http://{addr}");
+    let app = web::router(state).into_make_service_with_connect_info::<SocketAddr>();
+    servers.spawn(async move { axum::serve(listener, app).await.context("admin web server") });
+
+    let svc = devices::grpc::Service { db, store, updates_dir: data_dir.join("updates") };
+    let addr = address("FAFNIRX_LISTEN", "0.0.0.0:7443")?;
+    tracing::info!("fafnirx-master listening for devices on {addr}");
+    servers.spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(
+                CollectorServer::new(svc).max_decoding_message_size(MAX_MESSAGE).max_encoding_message_size(MAX_MESSAGE),
+            )
+            .serve(addr)
+            .await
+            .context("device server")
+    });
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => tracing::info!("shutting down"),
         Some(done) = servers.join_next() => {
-            // A server that stops is a failure: the others cannot do their job without it.
+            // A server that stops is a failure: the other cannot do its job without it.
             done.context("server task")??;
         }
     }

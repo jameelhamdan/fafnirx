@@ -350,13 +350,17 @@ struct Removal {
 /// Remote id -> (path, version marker) of everything imported so far.
 type Known = HashMap<String, (String, String)>;
 
-/// Pure: compares the listing with the database. `live` holds the paths that are currently not deleted.
-fn plan<'a>(items: &'a [Item], known: &'a Known, live: &HashSet<String>) -> Plan<'a> {
+/// Pure: compares the listing with the database. `live` holds the paths that are currently not deleted, `removed` those
+/// deleted in the web app: they stay deleted until the file changes on Drive.
+fn plan<'a>(items: &'a [Item], known: &'a Known, live: &HashSet<String>, removed: &HashSet<String>) -> Plan<'a> {
     let now_paths: HashSet<&str> = items.iter().map(|i| i.path.as_str()).collect();
     let mut plan = Plan::default();
     for item in items {
         let previous = known.get(&item.id);
         match previous {
+            Some((path, marker)) if *marker == item.marker && *path == item.path && removed.contains(path) => {
+                plan.unchanged += 1;
+            }
             Some((path, marker)) if *marker == item.marker && live.contains(path) => {
                 if *path == item.path {
                     plan.unchanged += 1;
@@ -422,7 +426,7 @@ pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
     let (source_id, device) = (src.id, src.device.clone());
     let device_id = device.id;
 
-    let (known, live): (Known, HashSet<String>) = db::with(&db, move |c| {
+    let (known, live, removed): (Known, HashSet<String>, HashSet<String>) = db::with(&db, move |c| {
         let known = c
             .query("SELECT remote_id, path, remote_version FROM source_items WHERE source_id = $1", &[&source_id])?
             .iter()
@@ -433,10 +437,18 @@ pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
             .iter()
             .map(|r| r.get(0))
             .collect();
-        Ok((known, live))
+        let removed = c
+            .query(
+                "SELECT path FROM files WHERE device_id = $1 AND deleted_at IS NOT NULL AND deleted_by = 'admin'",
+                &[&device_id],
+            )?
+            .iter()
+            .map(|r| r.get(0))
+            .collect();
+        Ok((known, live, removed))
     })
     .await?;
-    let plan = plan(&items, &known, &live);
+    let plan = plan(&items, &known, &live, &removed);
     let mut out = Outcome { skipped, unchanged: plan.unchanged, ..Default::default() };
     let mut failed = |what: &str, e: anyhow::Error| {
         tracing::warn!("source {}: {what}: {e:#}", src.name);
@@ -564,7 +576,7 @@ mod tests {
             ("gone", "d/gone.txt", "m7"),
         ]);
         let live = live(&["d/same.txt", "d/edited.txt", "d/old-name.txt", "d/moved.txt", "d/gone.txt"]);
-        let p = plan(&items, &known, &live);
+        let p = plan(&items, &known, &live, &HashSet::new());
 
         assert_eq!(p.unchanged, 1);
         assert_eq!(
@@ -583,8 +595,20 @@ mod tests {
         // Same marker, but the file was purged (or never committed): download it again.
         let items = [item("a", "d/a.txt", "m1")];
         let known = known(&[("a", "d/a.txt", "m1")]);
-        let p = plan(&items, &known, &live(&[]));
+        let p = plan(&items, &known, &live(&[]), &live(&[]));
         assert_eq!((p.unchanged, p.fetch.len()), (0, 1));
+    }
+
+    #[test]
+    fn plan_leaves_what_the_admin_deleted_until_it_changes() {
+        let known = known(&[("a", "d/a.txt", "m1")]);
+        let gone = live(&["d/a.txt"]);
+        let same = [item("a", "d/a.txt", "m1")];
+        let p = plan(&same, &known, &live(&[]), &gone);
+        assert_eq!((p.unchanged, p.fetch.len()), (1, 0));
+        let edited = [item("a", "d/a.txt", "m2")];
+        let p = plan(&edited, &known, &live(&[]), &gone);
+        assert_eq!(p.fetch.len(), 1, "changed on Drive: fetched again");
     }
 
     #[test]
@@ -592,7 +616,7 @@ mod tests {
         // a and b swap names: renaming either would clobber the other.
         let items = [item("a", "d/b.txt", "m1"), item("b", "d/a.txt", "m2")];
         let known = known(&[("a", "d/a.txt", "m1"), ("b", "d/b.txt", "m2")]);
-        let p = plan(&items, &known, &live(&["d/a.txt", "d/b.txt"]));
+        let p = plan(&items, &known, &live(&["d/a.txt", "d/b.txt"]), &live(&[]));
         assert!(p.renames.is_empty());
         assert_eq!(p.fetch.len(), 2);
         assert!(p.removals.is_empty(), "both paths are still in use");

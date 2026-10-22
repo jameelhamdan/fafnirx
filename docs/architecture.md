@@ -8,20 +8,18 @@ flowchart TB
     subgraph BROWSER["Browser"]
         W["Web app<br/>React, shadcn/ui"]
     end
-    subgraph MASTER["fafnirx-master (one binary, roles api / transfer / worker)"]
+    subgraph MASTER["fafnirx-master (one process)"]
         GRPC["Device API<br/>gRPC :7443"]
-        API["Admin API<br/>JSON + SSE :8080"]
-        XFER["Transfers<br/>download, zip, upload"]
-        WORK["Worker<br/>watcher, jobs, sources,<br/>mirrors, metadata"]
+        API["Admin API<br/>JSON + SSE :8080<br/>downloads, zip, uploads"]
+        WORK["Background work<br/>watcher, jobs, sources,<br/>mirrors, metadata"]
     end
     PG[("PostgreSQL")]
     FS[("files/ and versions/")]
     C -- "upload only" --> GRPC
     W <--> API
-    W <--> XFER
     GRPC --> PG & FS
     API --> PG
-    XFER --> PG & FS
+    API --> FS
     WORK --> PG & FS
     API -. "LISTEN / NOTIFY" .- PG
 ```
@@ -48,9 +46,9 @@ flowchart TB
 - **The device name is the folder.** `devices.name` is a slug (`^[a-z0-9][a-z0-9._-]{0,62}$`, no reserved Windows names),
   unique and immutable, enforced by the database. Local folders and sources are devices too (kind `local` and `source`),
   so everything that works on files works on all three.
-- **One binary, three roles.** A small install is one process (`all`). The roles can run apart because nothing relies
-  on shared memory: locks, events and queues all go through PostgreSQL (see below). Only browser uploads and the
-  login limit are kept per process, so they need one `transfer` or `api` process each.
+- **One process.** The master is a single binary. Locks, live events and queued work still go through PostgreSQL (see
+  below), so state lives in the database rather than in memory. Only browser uploads in progress and the login limit are
+  kept in memory.
 - **A client remembers which master it sent to.** The client keeps a local record of what it has uploaded, so that an
   unchanged file is not even offered again. Each database has a random master id (`settings.master_id`, made when the
   schema is first applied), and the client asks for it at the start of every cycle (`Identify`). If the answer is not the
@@ -98,12 +96,11 @@ a PostgreSQL **advisory transaction lock** keyed by `(device id, path)`. A renam
 The lock is held until the transaction ends, and the file moves happen before that, so:
 
 - two processes never work on the same path at once, and different paths never wait for each other;
-- the file watcher can compare disk and database without ever seeing a half-done commit;
-- it all works across processes, which is what makes splitting the roles safe.
+- the file watcher can compare disk and database without ever seeing a half-done commit.
 
 ## The file watcher and network drive
 
-`files/livetree.rs` (worker role) watches `files/` with the operating system's file events. Touched paths queue up; once a
+`files/livetree.rs` watches `files/` with the operating system's file events. Touched paths queue up; once a
 path has been quiet for 5 seconds it is compared with the database: new or changed files become versions
 (`ingest::adopt_live`), vanished ones are marked deleted (`ingest::forget_absent`), a new top-level folder becomes a
 `local` device. Anything the master wrote itself matches its record (same size and modification time) and is skipped
@@ -113,7 +110,7 @@ device folder deletes nothing, so an unmounted volume cannot wipe records.
 ## Live updates
 
 Every change calls `db::notify(topic, key)`, which runs `pg_notify('fafnirx', {"topic", "key"})` inside the same
-transaction, so it is delivered exactly when the change commits. Each process with the `api` role keeps one connection
+transaction, so it is delivered exactly when the change commits. The master keeps one connection
 that `LISTEN`s and pushes the messages to browsers over server-sent events (`GET /api/events`). The web app maps a topic
 to the queries it makes stale (`files`, `activity`, `devices`, `alerts`, `jobs`) and refetches them, at most once per
 burst. A dropped stream or a slow browser gets a `resync` and refreshes everything.
@@ -122,15 +119,13 @@ burst. A dropped stream or a slow browser gets a `resync` and refreshes everythi
 
 | Work | Where | Notes |
 |---|---|---|
-| Offline and disk alerts, upload-error expiry | `monitoring/jobs.rs`, every minute | leader only |
-| Retention, version pruning, stale uploads | `monitoring/jobs.rs`, hourly | leader only; deletes files with their records |
-| Sources, mirrors | `integrations/` (`mod.rs`, `gdrive.rs`, `mirror.rs`) | leader only; claimed with `FOR UPDATE SKIP LOCKED` |
-| File watcher | `files/livetree.rs` | leader only |
-| Photo metadata | `library/meta.rs`, table `jobs` | any worker; a job is claimed with `FOR UPDATE SKIP LOCKED`, retried up to 3 times |
+| Offline and disk alerts, upload-error expiry | `monitoring/jobs.rs`, every minute | |
+| Retention, version pruning, stale uploads | `monitoring/jobs.rs`, hourly | deletes files with their records |
+| Sources, mirrors | `integrations/` (`mod.rs`, `gdrive.rs`, `mirror.rs`) | claimed with `FOR UPDATE SKIP LOCKED` |
+| File watcher | `files/livetree.rs` | |
+| Configuration file | `config/` (`mod.rs`, `database.rs`) | read at start (a bad file stops the master), written when the database differs from it; see [configuration](configuration.md) |
+| Photo metadata | `library/meta.rs`, table `jobs` | a job is claimed with `FOR UPDATE SKIP LOCKED`, retried up to 3 times |
 | Previews | `library/meta.rs`, on request | cached in `cache/thumbs/`, at most 4 decoded at once |
-
-The **leader** is the one process holding a session-level advisory lock; if its connection dies it exits and the
-supervisor restarts it, so there is always at most one.
 
 ## Database structure
 
@@ -203,6 +198,8 @@ erDiagram
 **file** (a path of a device: what people said). Both the library tables and the files they point at are removed together
 when retention removes a file for good (`ON DELETE CASCADE`), and nothing in them is ever written into the file itself.
 
+The decisions in `settings`, `devices` (of kind `device` or `local`), `mirrors` and `sources` are mirrored in the
+[configuration file](configuration.md) (`config/`): applied from it at start, written to it when the web app changes them.
 Other tables: `events` (change log, 90 days), `alerts`, `settings`, `jobs` (queued background work: `meta` reads a
 photo or video and makes its pictures, `proxy` converts a video), `sources`, `source_items`, `mirrors`, `mirror_items`,
 `tags` and `file_tags`, `album_files`. The numbered migrations in `crates/master/migrations/` are the source of truth and are applied on start.

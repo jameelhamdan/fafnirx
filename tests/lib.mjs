@@ -120,14 +120,9 @@ export class Master {
         ...this.env,
       },
     })
-    // A worker serves no HTTP: wait for it to take the leader lock instead.
-    if (this.env.FAFNIRX_ROLE === 'worker') {
-      await sleep(1500)
-      return
-    }
     const up = await until(async () => {
       try {
-        await fetch(`${this.base}/api/session`) // any answer will do: a process without the api role says 404
+        await fetch(`${this.base}/api/session`) // any answer will do
         return true
       } catch {
         return false
@@ -171,6 +166,7 @@ export class Master {
       return { status: r.status, json, text }
     }
     return {
+      cookie,
       get: (u) => call('GET', u),
       post: (u, b = {}) => call('POST', u, b),
       put: (u, b) => call('PUT', u, b),
@@ -193,4 +189,42 @@ export function clientIn(dir, server) {
   c.enroll = (token, server, { ok = true } = {}) =>
     run(CLIENT, ['--config', cfg, 'enroll', '--no-service', '--server', server], { ok, input: `${token}\n` })
   return { cfg, c, server }
+}
+
+/** What every script starts from: the binaries checked, a temp directory with a data directory, a schema and a master. */
+export async function harness(prefix = 'fafnirx-e2e-', { binaries = [MASTER, CLIENT], env = {} } = {}) {
+  for (const b of binaries) {
+    if (!fs.existsSync(b)) {
+      console.error(`missing ${b}; run cargo build --workspace first`)
+      process.exit(1)
+    }
+  }
+  const tmp = mkdtemp(prefix)
+  console.log('working in', tmp)
+  const data = path.join(tmp, 'data')
+  fs.mkdirSync(data)
+  const schema = await createSchema()
+  const master = new Master({ data, dbUrl: schema.url, http: await freePort(), grpc: await freePort(), env })
+  return {
+    tmp,
+    data,
+    schema,
+    master,
+    /** Stops the master, drops the schema and removes the temp directory (unless FAFNIRX_KEEP=1). */
+    async cleanup() {
+      await master.stop()
+      await schema.drop()
+      if (process.env.FAFNIRX_KEEP === '1') console.log('kept', tmp)
+      else fs.rmSync(tmp, { recursive: true, force: true })
+    },
+  }
+}
+
+/** Creates a device through the admin API and enrolls a client for it, keeping the client's state inside `tmp`. */
+export async function enrollDevice({ tmp, master }, admin, name = 'laptop', dir = 'client') {
+  const token = (await admin.post('/api/devices', { name })).json.token
+  const client = clientIn(path.join(tmp, dir))
+  client.c.enroll(token, `http://127.0.0.1:${master.grpc}`)
+  fs.writeFileSync(client.cfg, `state_dir = "${path.join(tmp, 'state').replaceAll('\\', '/')}"\n${fs.readFileSync(client.cfg, 'utf8')}`)
+  return { ...client, token }
 }

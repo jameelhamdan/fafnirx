@@ -94,11 +94,6 @@ fn prefix_of(path: &str) -> Result<String, ApiError> {
     clean_remote_path(path).map(|p| p + "/").map_err(|e| ApiError::bad(e.to_string()))
 }
 
-/// Escapes `\`, `%` and `_` for LIKE.
-fn like_escape(text: &str) -> String {
-    text.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
-}
-
 fn order_by(sort: &str) -> Result<&'static str, ApiError> {
     Ok(match sort {
         "name" => "lower(f.path)",
@@ -130,7 +125,7 @@ pub async fn list(State(state): State<Shared>, Query(q): Query<ListQuery>) -> Re
             extensions(k).ok_or_else(|| ApiError::bad(format!("unknown type {k}")))?.join("|")
         )),
     };
-    let search = q.q.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(|s| format!("%{}%", like_escape(s)));
+    let search = q.q.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(|s| format!("%{}%", db::like_escape(s)));
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = q.offset.max(0);
     let include_deleted = q.deleted == Some(1);
@@ -244,8 +239,8 @@ pub async fn list(State(state): State<Shared>, Query(q): Query<ListQuery>) -> Re
 
 #[derive(Deserialize)]
 pub struct FileRef {
-    device: String,
-    path: String,
+    pub device: String,
+    pub path: String,
 }
 
 #[derive(Serialize)]

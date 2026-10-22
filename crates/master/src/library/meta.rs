@@ -1,5 +1,5 @@
 //! What the master knows about the content of a file beyond its bytes: the kind, the size of an image or
-//! video, the EXIF data and GPS position of a photo, and previews. Read by the worker role, shown by the
+//! video, the EXIF data and GPS position of a photo, and previews. Read by the background queue, shown by the
 //! admin API.
 
 use crate::library::media;
@@ -215,7 +215,7 @@ fn decode_upright(src: &Path) -> Result<image::DynamicImage> {
     Ok(img)
 }
 
-/// Pictures nobody asked for this long are made again on demand.
+/// Pictures nobody asked for this long are made again on demand (asking again renews them, see `thumbnail`).
 const THUMB_KEEP: std::time::Duration = std::time::Duration::from_secs(30 * 86400);
 /// A copy that was being written when the master stopped.
 const PARTIAL_KEEP: std::time::Duration = std::time::Duration::from_secs(86400);
@@ -249,14 +249,20 @@ pub fn clean_cache(db: &Db, cache_root: &Path) -> Result<()> {
 /// A JPEG preview no larger than `max` on its longest side, cached by content and size. Videos get a frame.
 pub fn thumbnail(src: &Path, root_hex: &str, max: u32, cache: &Path) -> Result<PathBuf> {
     let dest = cache.join(format!("{root_hex}-{max}.jpg"));
-    if dest.is_file() {
+    if let Ok(modified) = std::fs::metadata(&dest).and_then(|m| m.modified()) {
+        // Asked for again: the picture is kept another `THUMB_KEEP` (once a day is often enough to note it).
+        if modified.elapsed().is_ok_and(|age| age > Duration::from_secs(86400)) {
+            let _ = std::fs::File::options()
+                .write(true)
+                .open(&dest)
+                .and_then(|f| f.set_modified(std::time::SystemTime::now()));
+        }
         return Ok(dest);
     }
     std::fs::create_dir_all(cache)?;
     // Unique per call: two requests for the same preview can run at once.
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tmp = cache.join(format!("{root_hex}-{max}.{}-{n}.tmp.jpg", std::process::id()));
+    let n = hex::encode(crate::platform::db::random_bytes::<8>());
+    let tmp = cache.join(format!("{root_hex}-{max}.{n}.tmp.jpg"));
     let result = make_thumbnail(src, max, &tmp);
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
@@ -294,7 +300,7 @@ pub fn proxy_path(cache_root: &Path, root_hex: &str) -> PathBuf {
     cache_root.join("video").join(format!("{root_hex}.mp4"))
 }
 
-/// Runs queued jobs until the process ends. Several workers (in one process or many) can run side by
+/// Runs queued jobs until the process ends. Several workers can run side by
 /// side: a job is claimed with `FOR UPDATE SKIP LOCKED`. One lane skips the slow video conversions, so that
 /// a long film never keeps the thumbnails of new photos waiting.
 pub fn run_queue(db: Db, store: std::sync::Arc<Store>, cache_root: PathBuf) {

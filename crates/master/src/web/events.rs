@@ -1,5 +1,5 @@
-//! Live updates: every master process announces changes with PostgreSQL `NOTIFY`; the processes that
-//! serve the admin API listen for them and pass them on to browsers as server-sent events.
+//! Live updates: changes are announced with PostgreSQL `NOTIFY`; the master listens for them on a connection of its
+//! own and passes them on to browsers as server-sent events.
 
 use super::Shared;
 use crate::platform::db::CHANNEL;

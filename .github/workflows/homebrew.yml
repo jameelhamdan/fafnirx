@@ -63,7 +63,7 @@ jobs:
             def caveats
               <<~EOS
                 Enroll this device (this also starts the client now and at every login):
-                  fafnirx enroll --server http://<master>:7443 --token <token>
+                  fafnirx enroll --server http://<master>:7443   # asks for the token
                   fafnirx add-folder ~/Documents
               EOS
             end

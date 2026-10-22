@@ -158,6 +158,7 @@ pub async fn create(State(state): State<Shared>, Json(body): Json<NewDevice>) ->
     .await?;
     // The folder exists from the start so that a network share shows it.
     let _ = std::fs::create_dir_all(state.store.live_dir(&out.device.name));
+    state.config.nudge();
     Ok(Json(out))
 }
 
@@ -175,19 +176,26 @@ pub async fn rotate_token(State(state): State<Shared>, Path(name): Path<String>)
         detail_of(c, &name, Some(token))
     })
     .await?;
+    state.config.nudge();
     Ok(Json(out))
 }
 
 pub async fn revoke(State(state): State<Shared>, Path(name): Path<String>) -> Res<Done> {
     run(&state, move |c| {
-        c.execute(
-            "UPDATE devices SET revoked_at = $2 WHERE name = $1 AND kind = 'device' AND revoked_at IS NULL",
+        let n = c.execute(
+            "UPDATE devices SET revoked_at = COALESCE(revoked_at, $2) WHERE name = $1 AND kind = 'device'",
             &[&name, &unix_now()],
         )?;
+        if n == 0 {
+            return Err(ApiError::not_found("No such device").into());
+        }
+        // A revoked device is no longer expected to report, so its offline alert would never clear.
+        db::resolve_alert(c, "device_offline", &name)?;
         db::notify(c, "devices", &name)?;
         Ok(())
     })
     .await?;
+    state.config.nudge();
     done()
 }
 
@@ -219,5 +227,6 @@ pub async fn save_settings(State(state): State<Shared>, Json(s): Json<Settings>)
         Ok(s)
     })
     .await?;
+    state.config.nudge();
     Ok(Json(saved))
 }

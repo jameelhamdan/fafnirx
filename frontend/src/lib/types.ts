@@ -1,4 +1,4 @@
-// Shapes of the master's admin API (crates/master/src/admin).
+// Shapes of the master's admin API (`web`, `devices`, `files`, ... in crates/master/src).
 
 export type DeviceKind = 'device' | 'local' | 'source'
 

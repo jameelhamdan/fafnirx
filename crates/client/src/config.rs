@@ -108,6 +108,7 @@ impl Config {
     }
 
     /// Where the master's web UI is, for the tray menu.
+    #[cfg(feature = "tray")]
     pub fn dashboard_url(&self) -> String {
         if let Some(u) = self.web_url.as_deref().filter(|u| u.starts_with("http://") || u.starts_with("https://")) {
             return u.to_string();
@@ -368,6 +369,7 @@ watch = false
         assert!(Config::load(&cfg_path).unwrap().folders.is_empty());
     }
 
+    #[cfg(feature = "tray")]
     #[test]
     fn dashboard_url_defaults_to_port_8080_on_the_server_host() {
         let mut cfg = Config::new("http://nas.lan:7443");

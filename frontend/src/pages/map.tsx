@@ -11,6 +11,7 @@ import { count } from '@/lib/format'
 import { DEFAULT_TILES } from '@/lib/leaflet-defaults'
 import { addTiles, L } from '@/lib/leaflet'
 import type { Asset, MapData, Session } from '@/lib/types'
+import { useT } from '@/lib/i18n'
 
 type Props = { id: number; when: number }
 const STRIP = 60
@@ -34,6 +35,7 @@ const bubble = (n: number) => {
 
 /** Every photo and video that has a place, on a map. Groups open as you zoom; the strip below lists what is in view. */
 export default function MapPage() {
+  const t = useT()
   const client = useQueryClient()
   const tiles = client.getQueryData<Session>(['session'])?.map_tiles ?? DEFAULT_TILES
   const { data, error } = useQuery({ queryKey: ['map'], queryFn: () => api.get<MapData>('/api/map') })
@@ -57,7 +59,7 @@ export default function MapPage() {
       const { assets } = await api.get<{ assets: Asset[] }>(`/api/library?ids=${ids.slice(0, 500).join(',')}`)
       if (assets.length > 0) setViewer({ assets, id: assets.some((a) => a.id === start) ? start : assets[0].id })
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Could not open it')
+      toast.error(e instanceof Error ? e.message : t('Could not open it'))
     }
   }
   const openRef = useRef(open)
@@ -135,20 +137,20 @@ export default function MapPage() {
 
   return (
     <div>
-      <PageHeader title="Map" description={points ? `${count(points.length)} photo${points.length === 1 ? '' : 's'} and videos with a place${data?.truncated ? ' (the newest are shown)' : ''}. Places come from the camera, or from ones you set.` : undefined} />
+      <PageHeader title={t('Map')} description={points ? t('{count} photos and videos with a place{note}. Places come from the camera, or from ones you set.', { count: count(points.length), note: data?.truncated ? t(' (the newest are shown)') : '' }) : undefined} />
       {error ? <ErrorNote error={error} /> : !data ? (
         <Skeleton className="h-96" />
       ) : !hasPlaces ? (
-        <Empty title="No photos with a place yet">Photos taken with location turned on show up here. You can also give any photo a place from its info panel.</Empty>
+        <Empty title={t('No photos with a place yet')}>{t('Photos taken with location turned on show up here. You can also give any photo a place from its info panel.')}</Empty>
       ) : (
         <>
-          <div ref={host} className="isolate h-[calc(100svh-17rem)] min-h-80 overflow-hidden rounded-lg border bg-muted" role="application" aria-label="Map of your photos" />
-          <section aria-label="In view" className="mt-3">
-            <p className="mb-1.5 text-sm text-muted-foreground">{inView.total === 0 ? 'Nothing in view. Move or zoom the map.' : `${count(inView.total)} in view${inView.total > STRIP ? `, the newest ${STRIP} below` : ''}`}</p>
+          <div ref={host} className="isolate h-[calc(100svh-17rem)] min-h-80 overflow-hidden rounded-lg border bg-muted" role="application" aria-label={t('Map of your photos')} />
+          <section aria-label={t('In view')} className="mt-3">
+            <p className="mb-1.5 text-sm text-muted-foreground">{inView.total === 0 ? t('Nothing in view. Move or zoom the map.') : inView.total > STRIP ? t('{count} in view, the newest {strip} below', { count: count(inView.total), strip: STRIP }) : t('{count} in view', { count: count(inView.total) })}</p>
             <ul className="flex gap-1.5 overflow-x-auto pb-2">
               {inView.ids.map((id) => (
                 <li key={id} className="shrink-0">
-                  <button type="button" onClick={() => void open(inView.ids, id)} className="block size-20 overflow-hidden rounded-md bg-muted" aria-label="Open photo">
+                  <button type="button" onClick={() => void open(inView.ids, id)} className="block size-20 overflow-hidden rounded-md bg-muted" aria-label={t('Open photo')}>
                     <Thumb src={mediaUrl(id, 'thumb')} className="size-full" fallback={null} />
                   </button>
                 </li>

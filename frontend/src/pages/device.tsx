@@ -14,6 +14,7 @@ import { api } from '@/lib/api'
 import { ago, bytes, count, dateTime } from '@/lib/format'
 import type { DeviceDetail } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { useT } from '@/lib/i18n'
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -25,6 +26,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 }
 
 export default function DeviceDetailPage() {
+  const t = useT()
   const { name = '' } = useParams()
   const client = useQueryClient()
   const now = useNow()
@@ -40,7 +42,7 @@ export default function DeviceDetailPage() {
   })
   const revoke = useMutation({
     mutationFn: () => api.post(`/api/devices/${name}/revoke`),
-    onSuccess: () => { toast.success(`${name} revoked. Its data is kept.`); void refresh() },
+    onSuccess: () => { toast.success(t('{name} revoked. Its data is kept.', { name })); void refresh() },
     onError: (e) => toast.error(e.message),
   })
 
@@ -52,14 +54,14 @@ export default function DeviceDetailPage() {
     <div>
       <PageHeader
         title={d.name}
-        description={<span className="flex items-center gap-3"><KindBadge kind={d.kind} />{d.kind === 'device' && <StatusDot status={d.revoked ? 'revoked' : d.online ? 'online' : 'offline'} label={d.revoked ? 'Revoked' : d.online ? 'Online' : `Offline, seen ${ago(d.last_seen, now)}`} />}</span>}
+        description={<span className="flex items-center gap-3"><KindBadge kind={d.kind} />{d.kind === 'device' && <StatusDot status={d.revoked ? 'revoked' : d.online ? 'online' : 'offline'} label={d.revoked ? t('Revoked') : d.online ? t('Online') : t('Offline, seen {when}', { when: ago(d.last_seen, now) })} />}</span>}
         actions={
           <>
-            <Button variant="outline" asChild><Link to={`/files?device=${d.name}`}><FolderOpen className="size-4" />Browse files</Link></Button>
+            <Button variant="outline" asChild><Link to={`/files?device=${d.name}`}><FolderOpen className="size-4" />{t('Browse files')}</Link></Button>
             {d.kind === 'device' && (
               <>
-                <Button variant="outline" onClick={() => setConfirm('rotate')}><KeyRound className="size-4" />{d.revoked ? 'New token (re-enables)' : 'Rotate token'}</Button>
-                {!d.revoked && <Button variant="outline" onClick={() => setConfirm('revoke')}><Ban className="size-4" />Revoke</Button>}
+                <Button variant="outline" onClick={() => setConfirm('rotate')}><KeyRound className="size-4" />{d.revoked ? t('New token (re-enables)') : t('Rotate token')}</Button>
+                {!d.revoked && <Button variant="outline" onClick={() => setConfirm('revoke')}><Ban className="size-4" />{t('Revoke')}</Button>}
               </>
             )}
           </>
@@ -68,32 +70,32 @@ export default function DeviceDetailPage() {
 
       {d.activity && (
         <Card className="mb-6">
-          <CardHeader><CardTitle>Working now</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{t('Working now')}</CardTitle></CardHeader>
           <CardContent><ActivityView activity={d.activity} /></CardContent>
         </Card>
       )}
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card>
-          <CardHeader><CardTitle>Details</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{t('Details')}</CardTitle></CardHeader>
           <CardContent>
             <dl className="grid grid-cols-2 gap-4">
-              <Fact label="Files">{count(d.files)}</Fact>
-              <Fact label="Stored">{bytes(d.bytes)}</Fact>
-              <Fact label="Host">{d.hostname}</Fact>
-              <Fact label="System">{d.os}</Fact>
-              <Fact label="Address">{d.ip}</Fact>
-              <Fact label="Client">{d.client_version}</Fact>
-              <Fact label="Disk free">{d.disk_total ? `${bytes(d.disk_free)} of ${bytes(d.disk_total)}` : null}</Fact>
-              <Fact label="Last collected">{d.last_collected ? ago(d.last_collected, now) : null}</Fact>
-              <Fact label="Added">{dateTime(d.created_at)}</Fact>
+              <Fact label={t('Files')}>{count(d.files)}</Fact>
+              <Fact label={t('Stored')}>{bytes(d.bytes)}</Fact>
+              <Fact label={t('Host')}>{d.hostname}</Fact>
+              <Fact label={t('System')}>{d.os}</Fact>
+              <Fact label={t('Address')}>{d.ip}</Fact>
+              <Fact label={t('Client')}>{d.client_version}</Fact>
+              <Fact label={t('Disk free')}>{d.disk_total ? t('{free} of {total}', { free: bytes(d.disk_free), total: bytes(d.disk_total) }) : null}</Fact>
+              <Fact label={t('Last collected')}>{d.last_collected ? ago(d.last_collected, now) : null}</Fact>
+              <Fact label={t('Added')}>{dateTime(d.created_at)}</Fact>
             </dl>
           </CardContent>
         </Card>
         <Card className="lg:col-span-2">
-          <CardHeader><CardTitle>Recent changes</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{t('Recent changes')}</CardTitle></CardHeader>
           <CardContent>
-            {data.events.length === 0 ? <p className="text-sm text-muted-foreground">Nothing collected yet.</p> : (
+            {data.events.length === 0 ? <p className="text-sm text-muted-foreground">{t('Nothing collected yet.')}</p> : (
               <ul className="divide-y">
                 {data.events.map((e) => (
                   <li key={e.id} className="flex items-center gap-3 py-2 text-sm">
@@ -110,17 +112,17 @@ export default function DeviceDetailPage() {
 
       <Confirm
         open={confirm === 'rotate'}
-        title="Rotate the token?"
-        description="The old token stops working at once. The device must be enrolled again with the new one."
-        action="Rotate"
+        title={t('Rotate the token?')}
+        description={t('The old token stops working at once. The device must be enrolled again with the new one.')}
+        action={t('Rotate')}
         onCancel={() => setConfirm(null)}
         onConfirm={() => { setConfirm(null); rotate.mutate() }}
       />
       <Confirm
         open={confirm === 'revoke'}
-        title={`Revoke ${d.name}?`}
-        description="It can no longer send data. What it already sent stays on the master."
-        action="Revoke"
+        title={t('Revoke {name}?', { name: d.name })}
+        description={t('It can no longer send data. What it already sent stays on the master.')}
+        action={t('Revoke')}
         destructive
         onCancel={() => setConfirm(null)}
         onConfirm={() => { setConfirm(null); revoke.mutate() }}
