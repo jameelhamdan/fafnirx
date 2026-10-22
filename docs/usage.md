@@ -11,7 +11,7 @@ pushed to you; pages refresh by themselves.
 | **Albums** | Group photos and videos |
 | **Map** | See where photos were taken |
 | **Trash** | Bring back what was deleted, until the retention period ends |
-| **Dashboard** | See alerts, what is stored, disk usage, who is online and uploading right now, changes of the last two weeks, recent activity, and the state of sources and mirrors |
+| **Dashboard** | See alerts, what is stored (totals are brought up to date when a device finishes syncing), disk usage, who is online and uploading right now, changes of the last two weeks, recent activity, and the state of sources and mirrors |
 | **Files** | Browse, search, preview, download, upload and delete (below) |
 | **Devices** | Add a device, see its status and progress; open one to rotate its token, revoke it, or see its recent changes |
 | **Sources** | Collect Google Drive folders on a schedule |

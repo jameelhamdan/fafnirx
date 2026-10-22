@@ -55,6 +55,10 @@ fn minute(db: &Db, data_dir: &std::path::Path) {
     {
         tracing::error!("alert job failed: {e}");
     }
+    // Devices that are not syncing (a local folder, a source, a change in the web app) get their totals here.
+    if let Err(e) = crate::devices::totals::refresh_stale(conn) {
+        tracing::error!("device totals failed: {e:#}");
+    }
 }
 
 /// Clients report an error again every time they retry, so one that went quiet has been fixed.
@@ -130,17 +134,19 @@ fn retention(conn: &mut Client) -> Result<Vec<i64>> {
     let mut tx = conn.transaction()?;
     // The rows are locked first: a file that came back in the meantime is no longer expired once its lock is
     // released, so it keeps its history.
-    let expired: Vec<i64> = tx
-        .query("SELECT id FROM files WHERE deleted_at IS NOT NULL AND deleted_at < $1 FOR UPDATE", &[&cutoff])?
-        .iter()
-        .map(|r| r.get(0))
-        .collect();
+    let expired_rows = tx.query(
+        "SELECT id, device_id FROM files WHERE deleted_at IS NOT NULL AND deleted_at < $1 FOR UPDATE",
+        &[&cutoff],
+    )?;
+    let expired: Vec<i64> = expired_rows.iter().map(|r| r.get(0)).collect();
+    let devices: Vec<i64> = expired_rows.iter().map(|r| r.get(1)).collect();
     let mut removed: Vec<i64> = tx
         .query("DELETE FROM versions WHERE file_id = ANY($1) RETURNING id", &[&expired])?
         .iter()
         .map(|r| r.get(0))
         .collect();
     let files = tx.execute("DELETE FROM files WHERE id = ANY($1)", &[&expired])?;
+    tx.execute("UPDATE devices SET totals_stale = TRUE WHERE id = ANY($1)", &[&devices])?;
     let pruned: Vec<i64> = tx
         .query("DELETE FROM versions WHERE pruned_at IS NOT NULL AND pruned_at < $1 RETURNING id", &[&cutoff])?
         .iter()

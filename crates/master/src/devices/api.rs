@@ -44,21 +44,17 @@ pub struct DeviceSummary {
     activity: Option<Activity>,
 }
 
-/// Every device (or just `name`) with its totals, online state and current activity.
+/// Every device (or just `name`) with its totals (as of its last sync, see `totals`), online state and current
+/// activity.
 pub fn device_summaries(c: &mut Client, name: Option<&str>) -> Result<Vec<DeviceSummary>, postgres::Error> {
     let offline_after = setting(c, "offline_after_secs", 60);
     let now = unix_now();
     let rows = c.query(
         "SELECT d.name, d.kind, d.created_at, d.revoked_at, d.hostname, d.os, d.ip, d.client_version, d.disk_total,
                 d.disk_free, d.last_seen, d.last_collected,
-                COALESCE(t.bytes, 0), COALESCE(t.files, 0),
+                d.total_bytes, d.file_count,
                 a.updated_at, a.phase, a.current_file, a.files_done, a.files_total, a.bytes_done, a.bytes_total, a.speed_bps
          FROM devices d
-         -- Totals are added up before they are joined: grouping the joined rows is several times slower.
-         LEFT JOIN (SELECT f.device_id, SUM(v.size)::BIGINT AS bytes, COUNT(*) AS files
-                    FROM files f JOIN versions v ON v.id = f.current_version_id
-                    WHERE f.deleted_at IS NULL AND ($1::text IS NULL OR f.device_id = (SELECT id FROM devices WHERE name = $1))
-                    GROUP BY f.device_id) t ON t.device_id = d.id
          LEFT JOIN device_activity a ON a.device_id = d.id
          WHERE ($1::text IS NULL OR d.name = $1)
          ORDER BY d.name",

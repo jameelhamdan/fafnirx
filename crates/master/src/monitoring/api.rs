@@ -76,13 +76,13 @@ pub struct Dashboard {
 }
 
 pub fn totals(c: &mut Client) -> Result<Totals, postgres::Error> {
-    let live = c.query_one(
-        "SELECT COUNT(f.id), COALESCE(SUM(v.size), 0)::BIGINT FROM files f
-         JOIN versions v ON v.id = f.current_version_id WHERE f.deleted_at IS NULL",
+    // Kept on the device rows, as of each device's last sync.
+    let sums = c.query_one(
+        "SELECT COALESCE(SUM(file_count), 0)::BIGINT, COALESCE(SUM(total_bytes), 0)::BIGINT,
+                COALESCE(SUM(deleted_files), 0)::BIGINT FROM devices",
         &[],
     )?;
-    let marked: i64 = c.query_one("SELECT COUNT(*) FROM files WHERE deleted_at IS NOT NULL", &[])?.get(0);
-    Ok(Totals { files: live.get(0), bytes: live.get(1), marked_deleted: marked })
+    Ok(Totals { files: sums.get(0), bytes: sums.get(1), marked_deleted: sums.get(2) })
 }
 
 /// Changes per day for the last two weeks, oldest first, with the days that had none.

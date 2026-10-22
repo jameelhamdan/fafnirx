@@ -237,8 +237,15 @@ The search index needs the `pg_trgm` extension, which is part of PostgreSQL's st
 Docker image has it). The first migration run installs it into the `public` schema.
 
 On 300,000 files, the lookups behind an upload, a folder listing, a search and the Trash page take 1-3 ms (100-200 ms
-without the indexes). Totals that add up every file (the dashboard) and the photo timeline are proportional to the
-number of files and take 0.2-0.3 s.
+without the indexes). The photo timeline adds up every photo and takes about 0.3 s.
+
+### Device totals
+
+The number of files, their size and the files in the trash are not added up when a page is shown. Each device row keeps
+them (`file_count`, `total_bytes`, `deleted_files`). Every write that touches a device marks them stale
+(`totals_stale`), and they are added up again for that one device when it has finished syncing: when its client reports
+it is idle, or within a minute for a device that does not report (a local folder, a source, a change made in the web
+app, retention). The dashboard and the device list therefore show the totals as of the last finished sync.
 
 ## Admin API
 

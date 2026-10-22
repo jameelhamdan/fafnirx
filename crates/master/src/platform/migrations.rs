@@ -21,6 +21,7 @@ pub struct Migration {
 pub const ALL: &[Migration] = &[
     Migration { version: 1, name: "initial", sql: include_str!("../../migrations/0001_initial.sql") },
     Migration { version: 2, name: "indexes", sql: include_str!("../../migrations/0002_indexes.sql") },
+    Migration { version: 3, name: "device_totals", sql: include_str!("../../migrations/0003_device_totals.sql") },
 ];
 
 const TRACKING: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (
