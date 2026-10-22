@@ -3,7 +3,7 @@
 
 use crate::config::Folder;
 use anyhow::{bail, Result};
-use fafnirx_common::clean_remote_path;
+use fafnirx_common::{clean_remote_path, mode_of, mtime_ns};
 use std::path::{Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
 
@@ -24,30 +24,10 @@ pub struct Scan {
     pub skipped: Vec<String>,
 }
 
-pub fn mtime_ns(meta: &std::fs::Metadata) -> i64 {
-    meta.modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos() as i64)
-        .unwrap_or(0)
-}
-
-pub fn mode_of(meta: &std::fs::Metadata) -> u32 {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o7777
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = meta;
-        0
-    }
-}
-
 /// Fails when the folder itself cannot be read; callers must then not treat
 /// its files as deleted.
-pub fn scan_folder(folder: &Folder) -> Result<Scan> {
+/// `exclude` is the client's own state folder: if a collected folder contains it, it is not collected.
+pub fn scan_folder(folder: &Folder, exclude: Option<&Path>) -> Result<Scan> {
     let root = &folder.path;
     match std::fs::metadata(root) {
         Ok(m) if m.is_dir() => {}
@@ -58,10 +38,12 @@ pub fn scan_folder(folder: &Folder) -> Result<Scan> {
     let mut skipped = Vec::new();
     let mut entries = Vec::new();
 
+    let skip = exclude.map(Path::to_path_buf);
     let walker = ignore::WalkBuilder::new(root)
         .standard_filters(false)
         .follow_links(false)
         .add_custom_ignore_filename(IGNORE_FILE)
+        .filter_entry(move |e| skip.as_deref().is_none_or(|s| !e.path().starts_with(s)))
         .build();
     for item in walker {
         let dirent = match item {
@@ -153,7 +135,7 @@ mod tests {
         fs::write(d.path().join("keep.txt"), "x").unwrap();
         fs::write(d.path().join("skip.tmp"), "x").unwrap();
         fs::write(d.path().join(IGNORE_FILE), "*.tmp\n").unwrap();
-        let scan = scan_folder(&folder(d.path())).unwrap();
+        let scan = scan_folder(&folder(d.path()), None).unwrap();
         let remotes: Vec<_> = scan.entries.iter().map(|e| e.remote.as_str()).collect();
         assert_eq!(remotes, [format!("docs/{IGNORE_FILE}").as_str(), "docs/a/b/c.txt", "docs/keep.txt"]);
         assert_eq!(scan.entries[1].size, 2);
@@ -173,14 +155,14 @@ mod tests {
     #[test]
     fn missing_folder_is_an_error() {
         let d = tempfile::tempdir().unwrap();
-        assert!(scan_folder(&folder(&d.path().join("gone"))).is_err());
+        assert!(scan_folder(&folder(&d.path().join("gone")), None).is_err());
     }
 
     #[test]
     fn names_are_nfc() {
         let d = tempfile::tempdir().unwrap();
         fs::write(d.path().join("e\u{301}.txt"), "x").unwrap();
-        let scan = scan_folder(&folder(d.path())).unwrap();
+        let scan = scan_folder(&folder(d.path()), None).unwrap();
         assert_eq!(scan.entries[0].remote, "docs/\u{e9}.txt");
     }
 }

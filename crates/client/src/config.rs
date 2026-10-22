@@ -15,9 +15,8 @@ pub struct Folder {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    /// `http://host:7443` on a trusted network, `https://...` through a TLS proxy such as a Cloudflare tunnel.
     pub server: String,
-    /// Pinned CA certificate (PEM) of the orchestrator.
-    pub ca_cert: PathBuf,
     /// Device token. Normally absent: `enroll` keeps it in the OS keychain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
@@ -35,7 +34,7 @@ pub struct Config {
     pub scan_interval_secs: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_dir: Option<PathBuf>,
-    /// Web UI of the orchestrator, opened from the tray menu. Default: port 8080 on the server's host.
+    /// Web UI of the master, opened from the tray menu. Default: port 8080 on the server's host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_url: Option<String>,
     #[serde(default, rename = "folders")]
@@ -51,10 +50,9 @@ fn default_scan() -> u64 {
 
 impl Config {
     /// A config with the defaults and no folders yet.
-    pub fn new(server: impl Into<String>, ca_cert: PathBuf) -> Self {
+    pub fn new(server: impl Into<String>) -> Self {
         Self {
             server: server.into(),
-            ca_cert,
             token: None,
             update_public_key: None,
             bandwidth_limit_kbps: 0,
@@ -68,13 +66,7 @@ impl Config {
 
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
-        let mut cfg: Config = toml::from_str(&text).with_context(|| format!("parse config {}", path.display()))?;
-        // A relative CA path is relative to the config file.
-        if cfg.ca_cert.is_relative() {
-            if let Some(dir) = path.parent() {
-                cfg.ca_cert = dir.join(&cfg.ca_cert);
-            }
-        }
+        let cfg: Config = toml::from_str(&text).with_context(|| format!("parse config {}", path.display()))?;
         cfg.validate()?;
         Ok(cfg)
     }
@@ -87,8 +79,8 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if !self.server.starts_with("https://") {
-            bail!("server must be an https:// URL (TLS is required)");
+        if self.host().is_none() {
+            bail!("server must be an http:// or https:// URL");
         }
         let mut names = std::collections::HashSet::new();
         for f in &self.folders {
@@ -102,19 +94,40 @@ impl Config {
         Ok(())
     }
 
-    /// Where the orchestrator's web UI is, for the tray menu.
+    /// The host of the server URL, if it is an http(s) URL.
+    pub fn host(&self) -> Option<&str> {
+        let rest = self.server.strip_prefix("https://").or_else(|| self.server.strip_prefix("http://"))?;
+        let host = rest.split(['/', ':']).next().filter(|h| !h.is_empty())?;
+        Some(host)
+    }
+
+    /// Plain http to a host that is not on a private network: the token and the data cross the internet
+    /// unencrypted. Use https (a tunnel or reverse proxy) there.
+    pub fn is_plain_over_internet(&self) -> bool {
+        self.server.starts_with("http://") && self.host().is_some_and(|h| !is_private_host(h))
+    }
+
+    /// Where the master's web UI is, for the tray menu.
     pub fn dashboard_url(&self) -> String {
         if let Some(u) = self.web_url.as_deref().filter(|u| u.starts_with("http://") || u.starts_with("https://")) {
             return u.to_string();
         }
-        let rest = self.server.trim_start_matches("https://");
-        let host = rest.split(['/', ':']).next().unwrap_or(rest);
+        let host = self.host().unwrap_or("localhost");
         format!("http://{host}:8080")
     }
 
     pub fn state_dir(&self, config_path: &Path) -> PathBuf {
         self.state_dir.clone().unwrap_or_else(|| default_state_dir(config_path))
     }
+}
+
+/// Hosts that are not reachable from the internet: names without a dot, `.local`/`.lan`/`.internal`
+/// names, loopback, link-local and private IPv4 ranges.
+fn is_private_host(host: &str) -> bool {
+    if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
+        return ip.is_private() || ip.is_loopback() || ip.is_link_local();
+    }
+    !host.contains('.') || [".local", ".lan", ".internal", ".home.arpa"].iter().any(|s| host.ends_with(s))
 }
 
 /// Writes through a temporary file so a reader (the daemon) never sees half a config.
@@ -197,7 +210,7 @@ pub fn add_folder_to_file(config_path: &Path, dir: &Path, name: Option<&str>) ->
     Ok(folder)
 }
 
-/// Removes a folder from the config file. Data already uploaded stays on the orchestrator.
+/// Removes a folder from the config file. Data already uploaded stays on the master.
 pub fn remove_folder_from_file(config_path: &Path, name: &str) -> Result<()> {
     Config::load(config_path)?;
     let text = std::fs::read_to_string(config_path)?;
@@ -264,8 +277,7 @@ mod tests {
         std::fs::write(
             &path,
             r#"
-server = "https://orchestrator:7443"
-ca_cert = "ca.pem"
+server = "http://master:7443"
 [[folders]]
 path = "/data/docs"
 name = "docs"
@@ -273,7 +285,6 @@ name = "docs"
         )
         .unwrap();
         let cfg = Config::load(&path).unwrap();
-        assert_eq!(cfg.ca_cert, dir.path().join("ca.pem"));
         assert!(cfg.watch && cfg.scan_interval_secs == 3600 && cfg.bandwidth_limit_kbps == 0);
         assert!(cfg.token.is_none());
         cfg.save(&path).unwrap();
@@ -288,7 +299,6 @@ name = "docs"
         std::fs::write(
             &path,
             "server = \"https://x\"
-ca_cert = \"ca.pem\"
 [[folders]]
 path = \"a\"
 name = \"a\"
@@ -303,7 +313,11 @@ watch = false
     fn folders_are_added_and_removed_in_place() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path().join("config.toml");
-        std::fs::write(&cfg, "# my own notes\nserver = \"https://x:7443\"\nca_cert = \"ca.pem\"\nbandwidth_limit_kbps = 500 # keep it polite\n").unwrap();
+        std::fs::write(
+            &cfg,
+            "# my own notes\nserver = \"http://x:7443\"\nbandwidth_limit_kbps = 500 # keep it polite\n",
+        )
+        .unwrap();
         for d in ["a/photos", "b/photos", "c", "a/photos/raw"] {
             std::fs::create_dir_all(dir.path().join(d)).unwrap();
         }
@@ -345,7 +359,7 @@ watch = false
     fn folders_can_be_added_to_a_config_written_by_enroll() {
         let dir = tempfile::tempdir().unwrap();
         let cfg_path = dir.path().join("config.toml");
-        let cfg = Config::new("https://x:7443", "ca.pem".into());
+        let cfg = Config::new("http://x:7443");
         cfg.save(&cfg_path).unwrap();
         std::fs::create_dir_all(dir.path().join("one")).unwrap();
         add_folder_to_file(&cfg_path, &dir.path().join("one"), None).unwrap();
@@ -356,9 +370,9 @@ watch = false
 
     #[test]
     fn dashboard_url_defaults_to_port_8080_on_the_server_host() {
-        let mut cfg = Config::new("https://nas.lan:7443", "ca.pem".into());
+        let mut cfg = Config::new("http://nas.lan:7443");
         assert_eq!(cfg.dashboard_url(), "http://nas.lan:8080");
-        cfg.server = "https://10.0.0.5".into();
+        cfg.server = "http://10.0.0.5".into();
         assert_eq!(cfg.dashboard_url(), "http://10.0.0.5:8080");
         cfg.web_url = Some("https://fafnirx.example.com".into());
         assert_eq!(cfg.dashboard_url(), "https://fafnirx.example.com");
@@ -367,8 +381,8 @@ watch = false
     }
 
     #[test]
-    fn rejects_plain_http_and_bad_names() {
-        let mut cfg = Config::new("http://x", "ca.pem".into());
+    fn rejects_other_schemes_and_bad_names() {
+        let mut cfg = Config::new("ftp://x");
         assert!(cfg.validate().is_err());
         cfg.server = "https://x".into();
         cfg.folders.push(Folder { path: "a".into(), name: "a/b".into() });

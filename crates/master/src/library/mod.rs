@@ -1,0 +1,8 @@
+//! The photo and video library: a view over the stored files plus what people say about them. `meta` reads
+//! metadata and makes pictures (and runs the job queue), `media` wraps ffmpeg, `photos` is the timeline, map,
+//! trash and edits API, `albums` the album API.
+
+pub mod albums;
+pub mod media;
+pub mod meta;
+pub mod photos;

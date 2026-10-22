@@ -1,27 +1,35 @@
-# One image for both orchestrator processes: the Rust engine (fafnirx-server)
-# and the Python web UI (python -m fafnirx_web). See docker-compose.yml.
+# One image for the master: the Rust binary with the web app built into it. See docker-compose.yml.
+
+FROM node:22-bookworm-slim AS web
+WORKDIR /src/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend ./
+RUN npm run build
 
 FROM rust:1-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 COPY proto proto
-COPY schema.sql schema.sql
-RUN cargo build --release -p fafnirx-server -p fafnirx-sign
+COPY --from=web /src/frontend/dist frontend/dist
+RUN cargo build --release -p fafnirx-master -p fafnirx-sign
 
-FROM python:3.12-slim
-# rclone performs the offsite mirror uploads; ca-certificates lets it (and the engine) verify remote TLS.
-RUN apt-get update     && apt-get install -y --no-install-recommends rclone ca-certificates     && rm -rf /var/lib/apt/lists/*
-WORKDIR /app
-COPY web/requirements.txt /app/web/requirements.txt
-RUN pip install --no-cache-dir -r /app/web/requirements.txt
-COPY web /app/web
-COPY schema.sql /app/schema.sql
-COPY --from=build /src/target/release/fafnirx-server /usr/local/bin/fafnirx-server
+FROM debian:bookworm-slim
+# rclone performs the offsite mirror uploads; ca-certificates lets it (and the master) verify remote TLS; ffmpeg
+# (with ffprobe) reads videos and makes their poster pictures and playable copies; curl is for the health check.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends rclone ca-certificates ffmpeg curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --uid 1000 --create-home fafnirx \
+    && mkdir /data && chown fafnirx /data
+COPY --from=build /src/target/release/fafnirx-master /usr/local/bin/fafnirx-master
 COPY --from=build /src/target/release/fafnirx-sign /usr/local/bin/fafnirx-sign
-WORKDIR /app/web
-ENV FAFNIRX_DATA=/data \
-    PYTHONUNBUFFERED=1
+ENV FAFNIRX_DATA=/data FAFNIRX_HTTP=0.0.0.0:8080
 VOLUME /data
 EXPOSE 7443 8080
-CMD ["fafnirx-server"]
+USER fafnirx
+# A process with the worker role alone serves no HTTP; turn the check off for it (healthcheck: disable: true).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${FAFNIRX_HTTP##*:}/healthz" || exit 1
+CMD ["fafnirx-master"]

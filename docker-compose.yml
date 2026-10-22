@@ -15,41 +15,23 @@ services:
       # Keep this on local storage (for example the ZFS pool), not on a network share.
       - "${FAFNIRX_DB_DIR:-./pgdata}:/var/lib/postgresql/data"
 
-  engine:
+  master:
     build: .
     restart: unless-stopped
-    command: ["fafnirx-server"]
     user: "${FAFNIRX_UID:-1000}:${FAFNIRX_GID:-1000}"
     depends_on:
       db:
         condition: service_healthy
-    environment:
-      FAFNIRX_DATABASE_URL: "postgresql://fafnirx:${FAFNIRX_DB_PASSWORD}@db/fafnirx"
-      FAFNIRX_LISTEN: "0.0.0.0:7443"
-      # DNS names / IPs clients use to reach this server. They go into the server certificate.
-      FAFNIRX_TLS_HOSTS: "${FAFNIRX_TLS_HOSTS:-localhost,127.0.0.1}"
-      HOME: /tmp   # rclone wants a writable home for its cache
-    ports:
-      - "7443:7443"
-    volumes:
-      - "${FAFNIRX_DATA_DIR:-./data}:/data"
-
-  web:
-    build: .
-    restart: unless-stopped
-    command: ["python", "-m", "fafnirx_web"]
-    user: "${FAFNIRX_UID:-1000}:${FAFNIRX_GID:-1000}"
-    depends_on:
-      db:
-        condition: service_healthy
-      engine:
-        condition: service_started
     environment:
       FAFNIRX_DATABASE_URL: "postgresql://fafnirx:${FAFNIRX_DB_PASSWORD}@db/fafnirx"
       FAFNIRX_ADMIN_PASSWORD: "${FAFNIRX_ADMIN_PASSWORD:?set FAFNIRX_ADMIN_PASSWORD}"
-      # Address shown to users in the client setup instructions.
-      FAFNIRX_PUBLIC_ADDR: "${FAFNIRX_PUBLIC_ADDR:-}"
+      # All roles in one process. To split the load, run more services from this image with
+      # FAFNIRX_ROLE=api, transfer or worker (see docs/deployment.md).
+      FAFNIRX_ROLE: all
+      HOME: /tmp # rclone wants a writable home for its cache
     ports:
-      - "8080:8080"
+      - "7443:7443" # devices (gRPC)
+      - "8080:8080" # web app and admin API
     volumes:
+      # files/<device>/ is the live tree; it can be shared over SMB or NFS as a network drive.
       - "${FAFNIRX_DATA_DIR:-./data}:/data"

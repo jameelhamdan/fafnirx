@@ -1,8 +1,9 @@
 /target
-__pycache__/
-*.pyc
-.venv/
 /data/
 /pgdata/
 /docker-data/
 .env
+/dist
+frontend/node_modules
+frontend/dist
+.venv/

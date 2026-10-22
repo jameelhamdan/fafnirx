@@ -5,7 +5,7 @@ use fafnirx_common::MAX_MESSAGE;
 use std::time::Duration;
 use tonic::metadata::MetadataValue;
 use tonic::service::interceptor::InterceptedService;
-use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tonic::{Request, Status};
 
 #[derive(Clone)]
@@ -23,10 +23,12 @@ pub type Client = CollectorClient<InterceptedService<Channel, Auth>>;
 /// Builds a client. The connection is established lazily, so this works while
 /// the server is unreachable.
 pub fn client(cfg: &Config, token: &str) -> Result<Client> {
-    let ca = std::fs::read(&cfg.ca_cert).with_context(|| format!("read CA certificate {}", cfg.ca_cert.display()))?;
-    let channel = Endpoint::from_shared(cfg.server.clone())
-        .context("invalid server URL")?
-        .tls_config(ClientTlsConfig::new().ca_certificate(Certificate::from_pem(ca)))?
+    let mut endpoint = Endpoint::from_shared(cfg.server.clone()).context("invalid server URL")?;
+    if cfg.server.starts_with("https://") {
+        // Behind a TLS proxy (a Cloudflare tunnel, a reverse proxy) the certificate is a public one.
+        endpoint = endpoint.tls_config(ClientTlsConfig::new().with_enabled_roots())?;
+    }
+    let channel = endpoint
         .connect_timeout(Duration::from_secs(10))
         .tcp_keepalive(Some(Duration::from_secs(30)))
         .http2_keep_alive_interval(Duration::from_secs(30))

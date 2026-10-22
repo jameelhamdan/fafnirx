@@ -15,6 +15,41 @@ pub fn unix_now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
+/// Whether `name` can name a device (and so its folder): 1-63 characters, lowercase letters, digits,
+/// `.`, `_` or `-`, starting with a letter or digit, and not a name Windows reserves. The database
+/// enforces the same rule.
+pub fn valid_device_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let shape = name.len() <= 63
+        && chars.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'));
+    let stem = name.split('.').next().unwrap_or(name);
+    let reserved = matches!(stem, "con" | "prn" | "aux" | "nul")
+        || (stem.len() == 4
+            && (stem.starts_with("com") || stem.starts_with("lpt"))
+            && stem.ends_with(|c: char| c.is_ascii_digit()));
+    shape && !reserved
+}
+
+/// Modification time of a file in unix nanoseconds (0 when unknown).
+pub fn mtime_ns(meta: &std::fs::Metadata) -> i64 {
+    meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos() as i64)
+}
+
+/// Permission bits of a file (0 where the platform has none).
+pub fn mode_of(meta: &std::fs::Metadata) -> u32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o7777
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        0
+    }
+}
+
 /// Fixed chunk size.
 pub const CHUNK_SIZE: usize = 4 * 1024 * 1024;
 
@@ -37,9 +72,43 @@ pub fn chunk_hash(data: &[u8]) -> [u8; HASH_LEN] {
     *blake3::hash(data).as_bytes()
 }
 
-/// The chunk hashes stored back to back in a version's `manifest` blob.
-pub fn chunks_of(manifest: &[u8]) -> Vec<[u8; HASH_LEN]> {
-    manifest.as_chunks::<HASH_LEN>().0.to_vec()
+/// Hashes a stream of bytes the way a file is hashed: per chunk, then the root.
+pub struct ChunkHasher {
+    hasher: blake3::Hasher,
+    filled: usize,
+    size: u64,
+    chunks: Vec<[u8; HASH_LEN]>,
+}
+
+impl Default for ChunkHasher {
+    fn default() -> Self {
+        Self { hasher: blake3::Hasher::new(), filled: 0, size: 0, chunks: Vec::new() }
+    }
+}
+
+impl ChunkHasher {
+    pub fn update(&mut self, mut data: &[u8]) {
+        while !data.is_empty() {
+            let n = (CHUNK_SIZE - self.filled).min(data.len());
+            self.hasher.update(&data[..n]);
+            self.filled += n;
+            self.size += n as u64;
+            data = &data[n..];
+            if self.filled == CHUNK_SIZE {
+                self.chunks.push(*self.hasher.finalize().as_bytes());
+                self.hasher = blake3::Hasher::new();
+                self.filled = 0;
+            }
+        }
+    }
+
+    /// (root hash, size) of everything fed so far.
+    pub fn finish(mut self) -> ([u8; HASH_LEN], u64) {
+        if self.filled > 0 {
+            self.chunks.push(*self.hasher.finalize().as_bytes());
+        }
+        (root_hash(&self.chunks, self.size), self.size)
+    }
 }
 
 pub fn to_hash(bytes: &[u8]) -> Result<[u8; HASH_LEN]> {
@@ -51,17 +120,13 @@ pub fn to_hash(bytes: &[u8]) -> Result<[u8; HASH_LEN]> {
 
 /// The message an update signature covers: binds the platform, version and exact bytes of a release.
 pub fn update_message(platform: &str, version: &str, sha256_hex: &str) -> String {
-    format!(
-        "fafnirx-update
-{platform}
-{version}
-{sha256_hex}"
-    )
+    format!("fafnirx-update\n{platform}\n{version}\n{sha256_hex}")
 }
 
-/// The path without the `\?\` prefix that Windows puts on canonicalized paths.
+/// The path without the `\\?\` prefix that Windows puts on canonicalized paths.
 pub fn plain_path(path: &Path) -> PathBuf {
-    PathBuf::from(path.to_string_lossy().trim_start_matches(r"\?\"))
+    let s = path.to_string_lossy();
+    PathBuf::from(s.strip_prefix(r"\\?\").unwrap_or(&s))
 }
 
 /// (total, available) bytes of the disk that holds `path`.
@@ -88,8 +153,13 @@ pub fn chunk_count(size: u64) -> u64 {
 /// relative, '/' separated, and never contain '.', '..', empty or control
 /// components. They are only ever stored as database values, never used as
 /// server-side filesystem paths.
+/// The composed (NFC) form of a name, which is how every path is stored.
+pub fn nfc(name: &str) -> String {
+    name.nfc().collect()
+}
+
 pub fn clean_remote_path(path: &str) -> Result<String> {
-    let path: String = path.nfc().collect();
+    let path = nfc(path);
     if path.is_empty() || path.len() > 4096 {
         bail!("invalid path length");
     }
@@ -99,6 +169,10 @@ pub fn clean_remote_path(path: &str) -> Result<String> {
     for part in path.split('/') {
         if part.is_empty() || part == "." || part == ".." || part.chars().any(|c| c.is_control()) {
             bail!("invalid path component {part:?}");
+        }
+        // Longer than a file name can be on the filesystems the master runs on.
+        if part.len() > 255 {
+            bail!("a name in the path is longer than 255 bytes");
         }
     }
     Ok(path)
@@ -114,6 +188,34 @@ mod tests {
         let b = chunk_hash(b"b");
         assert_ne!(root_hash(&[a, b], 2), root_hash(&[b, a], 2));
         assert_ne!(root_hash(&[a], 1), root_hash(&[a], 2));
+    }
+
+    #[test]
+    fn chunk_hasher_matches_chunk_by_chunk_hashing() {
+        let data: Vec<u8> = (0..CHUNK_SIZE * 2 + 10).map(|i| (i % 251) as u8).collect();
+        let chunks: Vec<_> = data.chunks(CHUNK_SIZE).map(chunk_hash).collect();
+        let mut h = ChunkHasher::default();
+        for piece in data.chunks(1_000_003) {
+            h.update(piece);
+        }
+        assert_eq!(h.finish(), (root_hash(&chunks, data.len() as u64), data.len() as u64));
+        assert_eq!(ChunkHasher::default().finish(), (root_hash(&[], 0), 0));
+    }
+
+    #[test]
+    fn a_name_longer_than_a_filesystem_allows_is_refused() {
+        assert!(clean_remote_path(&format!("a/{}", "x".repeat(255))).is_ok());
+        assert!(clean_remote_path(&format!("a/{}", "x".repeat(256))).is_err());
+    }
+
+    #[test]
+    fn device_names_are_slugs() {
+        for ok in ["laptop", "pc-2", "a", "my.phone_1", "9lives", "console"] {
+            assert!(valid_device_name(ok), "{ok}");
+        }
+        for bad in ["", "-a", ".a", "A", "a b", "a/b", "a:b", "con", "nul.txt", "com1", "lpt9", &"a".repeat(64), "é"] {
+            assert!(!valid_device_name(bad), "{bad}");
+        }
     }
 
     #[test]

@@ -1,9 +1,9 @@
-use crate::scan::mtime_ns;
 use anyhow::{bail, Result};
-use fafnirx_common::{chunk_hash, root_hash, CHUNK_SIZE, HASH_LEN};
+use fafnirx_common::{chunk_hash, mtime_ns, root_hash, CHUNK_SIZE, HASH_LEN};
 use std::io::Read;
 use std::path::Path;
 
+#[derive(Clone)]
 pub struct Hashed {
     pub size: u64,
     pub mtime_ns: i64,

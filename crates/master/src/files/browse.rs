@@ -1,0 +1,472 @@
+//! The file browser: folders and files of every device, search, details, history, delete and restore.
+
+use crate::devices::api::device_summaries;
+use crate::files::ingest;
+use crate::library::meta;
+use crate::platform::db::{self, setting, Device};
+use crate::web::{done, run, ApiError, Done, Res, Shared};
+use axum::extract::{Query, State};
+use axum::Json;
+use fafnirx_common::clean_remote_path;
+use postgres::Client;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+const DAY: i64 = 86400;
+const DEFAULT_LIMIT: i64 = 1000;
+const MAX_LIMIT: i64 = 5000;
+
+/// File types the browser can filter by, as the extensions they cover.
+fn extensions(kind: &str) -> Option<&'static [&'static str]> {
+    Some(match kind {
+        "image" => &["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "heic", "avif", "svg", "raw", "dng"],
+        "video" => &["mp4", "mov", "mkv", "avi", "webm", "m4v", "wmv", "mts"],
+        "audio" => &["mp3", "flac", "wav", "m4a", "ogg", "opus", "aac"],
+        "document" => &["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "txt", "md", "rtf", "csv"],
+        "archive" => &["zip", "7z", "rar", "tar", "gz", "bz2", "xz", "tgz"],
+        _ => return None,
+    })
+}
+
+#[derive(Deserialize)]
+pub struct ListQuery {
+    device: Option<String>,
+    #[serde(default)]
+    path: String,
+    deleted: Option<u8>,
+    q: Option<String>,
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    sort: Option<String>,
+    order: Option<String>,
+    #[serde(default)]
+    offset: i64,
+    limit: Option<i64>,
+}
+
+#[derive(Serialize, Default)]
+pub struct Entry {
+    /// device, dir or file
+    kind: &'static str,
+    name: String,
+    device: String,
+    path: String,
+    size: Option<i64>,
+    /// Modification time on the source device, unix seconds.
+    mtime: Option<i64>,
+    /// When the master recorded the current version.
+    changed: Option<i64>,
+    /// Number of files, for folders and devices.
+    files: Option<i64>,
+    versions: Option<i64>,
+    deleted_at: Option<i64>,
+    purge_at: Option<i64>,
+    mime: Option<String>,
+    preview: bool,
+    width: Option<i64>,
+    height: Option<i64>,
+    taken_at: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct Listing {
+    device: Option<String>,
+    path: String,
+    entries: Vec<Entry>,
+    /// Files matching, before `offset` and `limit`.
+    total: i64,
+    searching: bool,
+    retention_days: i64,
+}
+
+pub fn find_device(c: &mut Client, name: &str) -> anyhow::Result<Device> {
+    c.query_opt("SELECT id, name FROM devices WHERE name = $1", &[&name])?
+        .map(|r| Device { id: r.get(0), name: r.get(1) })
+        .ok_or_else(|| ApiError::not_found("No such device").into())
+}
+
+/// `a/b/` for `a/b`, and `""` for the root.
+fn prefix_of(path: &str) -> Result<String, ApiError> {
+    let path = path.trim_matches('/');
+    if path.is_empty() {
+        return Ok(String::new());
+    }
+    clean_remote_path(path).map(|p| p + "/").map_err(|e| ApiError::bad(e.to_string()))
+}
+
+/// Escapes `\`, `%` and `_` for LIKE.
+fn like_escape(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+}
+
+fn order_by(sort: &str) -> Result<&'static str, ApiError> {
+    Ok(match sort {
+        "name" => "lower(f.path)",
+        "size" => "v.size",
+        "modified" => "v.mtime",
+        "added" => "v.created_at",
+        "taken" => "m.taken_at",
+        "type" => "lower(substring(f.path from '\\.([^./]*)$'))",
+        other => return Err(ApiError::bad(format!("cannot sort by {other}"))),
+    })
+}
+
+const FILE_COLUMNS: &str = "f.path, v.size, v.mtime, v.created_at, f.deleted_at, m.mime, m.width, m.height, m.taken_at,
+    (SELECT COUNT(*) FROM versions x WHERE x.file_id = f.id), COUNT(*) OVER ()";
+
+pub async fn list(State(state): State<Shared>, Query(q): Query<ListQuery>) -> Res<Listing> {
+    let prefix = prefix_of(&q.path)?;
+    let sort = q.sort.as_deref().unwrap_or("name");
+    let desc = match q.order.as_deref() {
+        None | Some("asc") => false,
+        Some("desc") => true,
+        Some(other) => return Err(ApiError::bad(format!("order must be asc or desc, not {other}"))),
+    };
+    let order = order_by(sort)?;
+    let type_regex = match q.kind.as_deref().filter(|k| !k.is_empty() && *k != "all") {
+        None => None,
+        Some(k) => Some(format!(
+            "\\.({})$",
+            extensions(k).ok_or_else(|| ApiError::bad(format!("unknown type {k}")))?.join("|")
+        )),
+    };
+    let search = q.q.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(|s| format!("%{}%", like_escape(s)));
+    let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let offset = q.offset.max(0);
+    let include_deleted = q.deleted == Some(1);
+    let device_name = q.device.clone();
+    let path = q.path.trim_matches('/').to_string();
+
+    let listing = run(&state, move |c| {
+        let retention_days = setting(c, "retention_days", 30);
+        let searching = search.is_some() || type_regex.is_some();
+        let Some(device_name) = device_name else {
+            // The top level: one folder per device.
+            let entries = device_summaries(c, None)?
+                .into_iter()
+                .filter(|d| d.kind != "source" || d.files > 0)
+                .map(|d| Entry {
+                    kind: "device",
+                    name: d.name.clone(),
+                    device: d.name,
+                    files: Some(d.files),
+                    size: Some(d.bytes),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>();
+            let total = entries.len() as i64;
+            return Ok(Listing { device: None, path, entries, total, searching: false, retention_days });
+        };
+        let dev = find_device(c, &device_name)?;
+        let n = prefix.len() as i32;
+        let mut entries = Vec::new();
+        let total: i64;
+        let direction = if desc { "DESC" } else { "ASC" };
+        let scope = "f.device_id = $1 AND starts_with(f.path, $2) AND ($3 OR f.deleted_at IS NULL)";
+        let file_entry = |r: &postgres::Row, strip: usize| {
+            let full: String = r.get(0);
+            let deleted_at: Option<i64> = r.get(4);
+            let mime: Option<String> = r.get(5);
+            Entry {
+                kind: "file",
+                name: full[strip..].to_string(),
+                device: device_name.clone(),
+                mtime: r.get::<_, Option<i64>>(2).map(|ns| ns / 1_000_000_000),
+                size: r.get(1),
+                changed: r.get(3),
+                deleted_at,
+                purge_at: deleted_at.map(|t| t + retention_days * DAY),
+                preview: meta::can_preview(&full),
+                mime: Some(mime.unwrap_or_else(|| meta::mime(&full))),
+                width: r.get(6),
+                height: r.get(7),
+                taken_at: r.get(8),
+                versions: r.get(9),
+                path: full,
+                ..Default::default()
+            }
+        };
+        if searching {
+            let rows = c.query(
+                &format!(
+                    "SELECT {FILE_COLUMNS} FROM files f JOIN versions v ON v.id = f.current_version_id
+                     LEFT JOIN file_meta m ON m.root_hash = v.root_hash
+                     WHERE {scope} AND ($4::text IS NULL OR f.path ILIKE $4) AND ($5::text IS NULL OR lower(f.path) ~ $5)
+                     ORDER BY {order} {direction} NULLS LAST, f.path LIMIT $6 OFFSET $7"
+                ),
+                &[&dev.id, &prefix, &include_deleted, &search, &type_regex, &limit, &offset],
+            )?;
+            total = rows.first().map_or(0, |r| r.get(10));
+            entries.extend(rows.iter().map(|r| file_entry(r, prefix.len())));
+        } else {
+            // Folders come with the first page only.
+            let folders = c.query(
+                "SELECT split_part(substr(f.path, $4), '/', 1) AS name, COUNT(f.id), COALESCE(SUM(v.size), 0)::BIGINT,
+                        MAX(v.created_at), CASE WHEN bool_and(f.deleted_at IS NOT NULL) THEN MAX(f.deleted_at) END
+                 FROM files f LEFT JOIN versions v ON v.id = f.current_version_id
+                 WHERE f.device_id = $1 AND starts_with(f.path, $2) AND ($3 OR f.deleted_at IS NULL)
+                       AND strpos(substr(f.path, $4), '/') > 0
+                 GROUP BY 1 ORDER BY lower(split_part(substr(f.path, $4), '/', 1))",
+                &[&dev.id, &prefix, &include_deleted, &(n + 1)],
+            )?;
+            entries.extend(folders.iter().filter(|_| offset == 0).map(|r| {
+                let name: String = r.get(0);
+                Entry {
+                    kind: "dir",
+                    path: format!("{prefix}{name}"),
+                    device: device_name.clone(),
+                    files: Some(r.get(1)),
+                    size: Some(r.get(2)),
+                    changed: r.get(3),
+                    deleted_at: r.get(4),
+                    name,
+                    ..Default::default()
+                }
+            }));
+            let rows = c.query(
+                &format!(
+                    "SELECT {FILE_COLUMNS} FROM files f JOIN versions v ON v.id = f.current_version_id
+                     LEFT JOIN file_meta m ON m.root_hash = v.root_hash
+                     WHERE {scope} AND strpos(substr(f.path, $4), '/') = 0
+                     ORDER BY {order} {direction} NULLS LAST, f.path LIMIT $5 OFFSET $6"
+                ),
+                &[&dev.id, &prefix, &include_deleted, &(n + 1), &limit, &offset],
+            )?;
+            total = rows.first().map_or(0, |r| r.get(10));
+            entries.extend(rows.iter().map(|r| file_entry(r, prefix.len())));
+        }
+        Ok(Listing { device: Some(device_name.clone()), path, entries, total, searching, retention_days })
+    })
+    .await?;
+    Ok(Json(listing))
+}
+
+#[derive(Deserialize)]
+pub struct FileRef {
+    device: String,
+    path: String,
+}
+
+#[derive(Serialize)]
+pub struct VersionInfo {
+    id: i64,
+    created_at: i64,
+    size: i64,
+    mtime: i64,
+    hash: String,
+    current: bool,
+    pruned_at: Option<i64>,
+    /// Whether the content of this version is still on disk.
+    available: bool,
+}
+
+#[derive(Serialize)]
+pub struct Info {
+    device: String,
+    path: String,
+    name: String,
+    deleted_at: Option<i64>,
+    purge_at: Option<i64>,
+    size: i64,
+    mtime: i64,
+    changed: i64,
+    hash: String,
+    mime: String,
+    preview: bool,
+    width: Option<i64>,
+    height: Option<i64>,
+    taken_at: Option<i64>,
+    exif: serde_json::Value,
+    versions: Vec<VersionInfo>,
+    events: Vec<crate::monitoring::api::Recent>,
+}
+
+/// Where the content of a version is on disk: the live file for the current version of a live file,
+/// otherwise the folder of the version.
+pub fn version_file(
+    store: &crate::platform::store::Store,
+    dev: &str,
+    path: &str,
+    version: i64,
+    current: Option<i64>,
+    deleted: bool,
+) -> anyhow::Result<PathBuf> {
+    if Some(version) == current && !deleted {
+        store.live_path(dev, path)
+    } else {
+        store.version_path(version, dev, path)
+    }
+}
+
+pub async fn info(State(state): State<Shared>, Query(r): Query<FileRef>) -> Res<Info> {
+    let store = state.store.clone();
+    let out = run(&state, move |c| {
+        let dev = find_device(c, &r.device)?;
+        let path = clean_remote_path(&r.path).map_err(|e| ApiError::bad(e.to_string()))?;
+        let retention = setting(c, "retention_days", 30);
+        let row = c
+            .query_opt(
+                "SELECT f.id, f.current_version_id, f.deleted_at, v.size, v.mtime, v.created_at, v.root_hash,
+                        m.mime, m.width, m.height, m.taken_at, m.exif
+                 FROM files f JOIN versions v ON v.id = f.current_version_id
+                 LEFT JOIN file_meta m ON m.root_hash = v.root_hash
+                 WHERE f.device_id = $1 AND f.path = $2",
+                &[&dev.id, &path],
+            )?
+            .ok_or_else(|| ApiError::not_found("No such file"))?;
+        let (file_id, current, deleted_at): (i64, Option<i64>, Option<i64>) = (row.get(0), row.get(1), row.get(2));
+        let versions = c
+            .query(
+                "SELECT id, created_at, size, mtime, root_hash, pruned_at FROM versions WHERE file_id = $1 ORDER BY id DESC",
+                &[&file_id],
+            )?
+            .iter()
+            .map(|v| {
+                let id: i64 = v.get(0);
+                let available = version_file(&store, &dev.name, &path, id, current, deleted_at.is_some())
+                    .is_ok_and(|p| p.is_file());
+                VersionInfo {
+                    id,
+                    created_at: v.get(1),
+                    size: v.get(2),
+                    mtime: v.get::<_, i64>(3) / 1_000_000_000,
+                    hash: hex::encode(v.get::<_, Vec<u8>>(4)),
+                    current: Some(id) == current,
+                    pruned_at: v.get(5),
+                    available,
+                }
+            })
+            .collect();
+        let events = c
+            .query(
+                "SELECT e.id, e.ts, e.action, e.path, e.detail, d.name FROM events e JOIN devices d ON d.id = e.device_id
+                 WHERE e.device_id = $1 AND e.path = $2 ORDER BY e.id DESC LIMIT 30",
+                &[&dev.id, &path],
+            )?
+            .iter()
+            .map(crate::monitoring::api::Recent::from_row)
+            .collect();
+        let exif: Option<String> = row.get(11);
+        Ok(Info {
+            device: dev.name,
+            name: path.rsplit('/').next().unwrap_or(&path).to_string(),
+            deleted_at,
+            purge_at: deleted_at.map(|t| t + retention * DAY),
+            size: row.get(3),
+            mtime: row.get::<_, i64>(4) / 1_000_000_000,
+            changed: row.get(5),
+            hash: hex::encode(row.get::<_, Vec<u8>>(6)),
+            mime: row.get::<_, Option<String>>(7).unwrap_or_else(|| meta::mime(&path)),
+            preview: meta::can_preview(&path),
+            width: row.get(8),
+            height: row.get(9),
+            taken_at: row.get(10),
+            exif: exif.and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(serde_json::Value::Null),
+            versions,
+            events,
+            path,
+        })
+    })
+    .await?;
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+pub struct Items {
+    items: Vec<FileRef>,
+}
+
+#[derive(Serialize)]
+pub struct Removed {
+    deleted: usize,
+}
+
+/// The live paths a selection stands for: a file, or every file under a folder.
+pub fn expand(c: &mut Client, dev: &Device, path: &str, include_deleted: bool) -> anyhow::Result<Vec<String>> {
+    let path = path.trim_matches('/');
+    Ok(c.query(
+        "SELECT path FROM files WHERE device_id = $1 AND ($2 = '' OR path = $2 OR starts_with(path, $2 || '/'))
+         AND current_version_id IS NOT NULL AND ($3 OR deleted_at IS NULL) ORDER BY path",
+        &[&dev.id, &path, &include_deleted],
+    )?
+    .iter()
+    .map(|r| r.get(0))
+    .collect())
+}
+
+pub async fn remove(State(state): State<Shared>, Json(body): Json<Items>) -> Res<Removed> {
+    let store = state.store.clone();
+    let deleted = run(&state, move |c| {
+        let mut deleted = 0;
+        for item in &body.items {
+            let dev = find_device(c, &item.device)?;
+            for path in expand(c, &dev, &item.path, false)? {
+                if ingest::mark_deleted(c, &store, &dev, &path, true)? {
+                    deleted += 1;
+                }
+            }
+        }
+        db::notify(c, "files", "")?;
+        Ok(deleted)
+    })
+    .await?;
+    Ok(Json(Removed { deleted }))
+}
+
+#[derive(Deserialize)]
+pub struct Restore {
+    device: String,
+    path: String,
+    version: i64,
+}
+
+pub async fn restore(State(state): State<Shared>, Json(r): Json<Restore>) -> Res<Done> {
+    let store = state.store.clone();
+    run(&state, move |c| {
+        let dev = find_device(c, &r.device)?;
+        let path = clean_remote_path(&r.path).map_err(|e| ApiError::bad(e.to_string()))?;
+        let row = c
+            .query_opt(
+                "SELECT f.current_version_id, f.deleted_at, v.root_hash, v.size, v.mtime, v.mode
+                 FROM files f JOIN versions v ON v.file_id = f.id WHERE f.device_id = $1 AND f.path = $2 AND v.id = $3",
+                &[&dev.id, &path, &r.version],
+            )?
+            .ok_or_else(|| ApiError::not_found("No such version"))?;
+        let (current, deleted_at): (Option<i64>, Option<i64>) = (row.get(0), row.get(1));
+        if current == Some(r.version) && deleted_at.is_none() {
+            return Err(ApiError::conflict("That is already the current version").into());
+        }
+        // What a device or a source sends is theirs to change: here it can be brought back from the trash, not edited.
+        let kind: String = c.query_one("SELECT kind FROM devices WHERE id = $1", &[&dev.id])?.get(0);
+        if kind != "local" && deleted_at.is_none() {
+            return Err(ApiError::conflict(
+                "Files sent by a device cannot be changed here. Download the version instead.",
+            )
+            .into());
+        }
+        let from = version_file(&store, &dev.name, &path, r.version, current, deleted_at.is_some())?;
+        if !from.is_file() {
+            return Err(ApiError::not_found("The content of that version is no longer stored").into());
+        }
+        let staged = store.temp_path();
+        std::fs::copy(&from, &staged)?;
+        let root: Vec<u8> = row.get(2);
+        ingest::commit_version(
+            c,
+            &store,
+            &staged,
+            &ingest::NewVersion {
+                device: &dev,
+                path: &path,
+                root: root.try_into().map_err(|_| anyhow::anyhow!("stored hash has the wrong length"))?,
+                size: row.get::<_, i64>(3) as u64,
+                mtime: row.get(4),
+                mode: row.get::<_, i64>(5) as u32,
+                renamed_from: None,
+            },
+        )?;
+        Ok(())
+    })
+    .await?;
+    done()
+}

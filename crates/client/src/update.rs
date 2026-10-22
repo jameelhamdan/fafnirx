@@ -1,4 +1,4 @@
-//! Signed self-update. The orchestrator hosts the binaries but the signing key
+//! Signed self-update. The master hosts the binaries but the signing key
 //! never lives there: an update is only installed if its ed25519 signature
 //! verifies against `update_public_key` from the config.
 
@@ -72,6 +72,10 @@ pub async fn check_and_apply(client: &mut Client, cfg: &Config, work_dir: &Path)
     while let Some(chunk) = stream.message().await? {
         hasher.update(&chunk.data);
         size += chunk.data.len() as u64;
+        if size > info.size {
+            let _ = std::fs::remove_file(&tmp);
+            bail!("the update is larger than announced");
+        }
         file.write_all(&chunk.data)?;
     }
     file.sync_all()?;

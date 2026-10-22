@@ -22,6 +22,9 @@ pub fn view(s: Option<&daemon::Status>, paused: bool, now: i64) -> View {
     let Some(s) = s else {
         return mk(Light::Stopped, "Not running".into(), false);
     };
+    if !s.fatal.is_empty() {
+        return mk(Light::Error, format!("Stopped: {}", s.fatal), false);
+    }
     if now - s.updated > 120 {
         return mk(Light::Stopped, "Not running".into(), false);
     }
@@ -32,7 +35,28 @@ pub fn view(s: Option<&daemon::Status>, paused: bool, now: i64) -> View {
     if !s.last_error.is_empty() && s.last.failed > 0 {
         return mk(Light::Error, format!("Error: {}", s.last_error), s.syncing);
     }
-    mk(Light::Ok, if s.syncing { "Syncing".into() } else { "Online".into() }, s.syncing)
+    let text = match progress(&s.activity) {
+        Some(p) if s.syncing => format!("Syncing {p}"),
+        _ if s.syncing => "Syncing".into(),
+        _ => "Online".into(),
+    };
+    mk(Light::Ok, text, s.syncing)
+}
+
+/// "62%, 12.3 MB/s, 40 s left" while uploading, once the sizes are known.
+pub fn progress(a: &daemon::Activity) -> Option<String> {
+    if a.phase != "uploading" || a.total_bytes == 0 {
+        return None;
+    }
+    let mut t = format!("{}%", 100 * a.done_bytes / a.total_bytes);
+    if a.speed_bps > 0 {
+        t.push_str(&format!(", {}/s", human_bytes(a.speed_bps)));
+        let left = a.total_bytes.saturating_sub(a.done_bytes) / a.speed_bps;
+        if left > 0 {
+            t.push_str(&format!(", {} left", span(left as i64)));
+        }
+    }
+    Some(t)
 }
 
 pub fn human_bytes(n: u64) -> String {
@@ -97,32 +121,51 @@ pub fn describe(s: Option<&daemon::Status>, v: &View, now: i64) -> Info {
             error: String::new(),
         };
     };
+    if !s.fatal.is_empty() {
+        return Info {
+            title: format!("fafnirx: {}", v.text),
+            server: format!("Server: {}", if s.server.is_empty() { "-" } else { &s.server }),
+            device: "Device: -".into(),
+            now: clip(&format!("The client stopped: {}", s.fatal)),
+            last_sync: String::new(),
+            on_server: String::new(),
+            session: String::new(),
+            error: "Fix the cause, then choose Start in this menu".into(),
+        };
+    }
     let connection = if s.online { "connected" } else { "unreachable" };
     let a = &s.activity;
     let now_line = if v.light == Light::Paused {
         "Paused: nothing is uploaded".to_string()
     } else if !s.online {
-        "Waiting for the orchestrator".to_string()
+        "Waiting for the master".to_string()
     } else if s.syncing && !a.phase.is_empty() && a.phase != "idle" {
-        let mut t = cap(&a.phase);
+        let mut t = if s.initial_sync { format!("First sync of all files: {}", a.phase) } else { cap(&a.phase) };
         if a.total > 0 {
             let position = (a.done + usize::from(a.phase == "uploading")).min(a.total);
             t.push_str(&format!(" {position}/{}", a.total));
         }
+        // Progress goes before the file name: a long name is what gets clipped.
+        if let Some(p) = progress(a) {
+            t.push_str(&format!(", {p}"));
+        }
         if !a.current.is_empty() {
             t.push_str(&format!(": {}", a.current));
         }
-        if a.phase == "uploading" {
-            t.push_str(&format!(" ({} sent)", human_bytes(a.bytes)));
-        }
         t
+    } else if s.initial_sync {
+        "First sync of all files has not finished".to_string()
     } else if s.next_scan > now {
         format!("Idle, next scan in {}", span(s.next_scan - now))
     } else {
         "Idle".to_string()
     };
     let last_sync = if s.last_cycle == 0 {
-        "Last sync: not yet".to_string()
+        if s.initial_sync {
+            "Last sync: the first sync is not finished".to_string()
+        } else {
+            "Last sync: not yet".to_string()
+        }
     } else {
         format!("Last sync {} ago: {} ({})", span(now - s.last_cycle), s.last, human_bytes(s.last.bytes))
     };
@@ -143,12 +186,13 @@ pub fn describe(s: Option<&daemon::Status>, v: &View, now: i64) -> Info {
         now: clip(&now_line),
         last_sync: clip(&last_sync),
         on_server: format!(
-            "On the server: {} file{}, {} from {} folder{}",
+            "On the server: {} file{}, {} from {} folder{}{}",
             s.synced_files,
             plural(s.synced_files),
             human_bytes(s.synced_bytes),
             s.folders,
-            plural(s.folders)
+            plural(s.folders),
+            if s.initial_sync { " (the first sync sends all of them)" } else { "" }
         ),
         session: format!(
             "Since start: {} file{} sent ({}), running {}",
@@ -167,6 +211,21 @@ mod tests {
 
     fn status(online: bool, updated: i64) -> daemon::Status {
         daemon::Status { online, updated, ..Default::default() }
+    }
+
+    #[test]
+    fn a_client_that_could_not_start_says_why_for_as_long_as_it_is_down() {
+        let stopped = daemon::Status {
+            fatal: "no device token found; run `fafnirx enroll`".into(),
+            updated: 1,
+            ..Default::default()
+        };
+        // Long after it exited: still the reason, not a bare "not running".
+        let v = view(Some(&stopped), false, 1_000_000);
+        assert_eq!((v.light, v.text.as_str()), (Light::Error, "Stopped: no device token found; run `fafnirx enroll`"));
+        let info = describe(Some(&stopped), &v, 1_000_000);
+        assert!(info.now.starts_with("The client stopped: no device token"), "{}", info.now);
+        assert!(!info.error.is_empty());
     }
 
     #[test]
@@ -223,6 +282,10 @@ mod tests {
                 done: 1,
                 total: 4,
                 bytes: 5 << 20,
+                total_bytes: 20 << 20,
+                done_bytes: 5 << 20,
+                speed_bps: 2 << 20,
+                ..Default::default()
             },
             ..Default::default()
         }
@@ -232,14 +295,29 @@ mod tests {
     fn menu_text_describes_a_running_sync() {
         let s = syncing_status();
         let i = describe(Some(&s), &view(Some(&s), false, 1_000), 1_000);
-        assert_eq!(i.title, "fafnirx 0.1.0: Syncing");
+        assert_eq!(i.title, "fafnirx 0.1.0: Syncing 25%, 2.0 MB/s, 7 s left");
         assert_eq!(i.server, "Server: https://nas:7443 (connected)");
         assert_eq!(i.device, "Device: laptop");
-        assert_eq!(i.now, "Uploading 2/4: docs/big.bin (5.0 MB sent)");
+        assert_eq!(i.now, "Uploading 2/4, 25%, 2.0 MB/s, 7 s left: docs/big.bin");
         assert_eq!(i.last_sync, "Last sync 1 min ago: 3 uploaded, 0 renamed, 0 deleted, 0 failed (2.0 KB)");
         assert_eq!(i.on_server, "On the server: 1 file, 6.0 MB from 2 folders");
         assert_eq!(i.session, "Since start: 5 files sent (3.0 GB), running 1 h");
         assert_eq!(i.error, "No errors");
+    }
+
+    #[test]
+    fn a_new_install_says_that_the_first_sync_sends_all_files() {
+        let mut s = syncing_status();
+        s.initial_sync = true;
+        let i = describe(Some(&s), &view(Some(&s), false, 1_000), 1_000);
+        assert!(i.now.starts_with("First sync of all files: uploading 2/4"), "{}", i.now);
+        assert!(i.on_server.ends_with("(the first sync sends all of them)"), "{}", i.on_server);
+        s.syncing = false;
+        s.activity = daemon::Activity::default();
+        assert_eq!(
+            describe(Some(&s), &view(Some(&s), false, 1_000), 1_000).now,
+            "First sync of all files has not finished"
+        );
     }
 
     #[test]
@@ -252,10 +330,10 @@ mod tests {
         assert_eq!(describe(Some(&s), &view(Some(&s), true, 1_000), 1_000).now, "Paused: nothing is uploaded");
 
         s.online = false;
-        s.message = "cannot reach the orchestrator: tcp open error".into();
+        s.message = "cannot reach the master: tcp open error".into();
         let i = describe(Some(&s), &view(Some(&s), false, 1_000), 1_000);
         assert!(i.server.ends_with("(unreachable)") && i.error.starts_with("Problem: cannot reach"), "{i:?}");
-        assert_eq!(i.now, "Waiting for the orchestrator");
+        assert_eq!(i.now, "Waiting for the master");
 
         let i = describe(None, &view(None, false, 1_000), 1_000);
         assert_eq!((i.title.as_str(), i.now.as_str()), ("fafnirx: Not running", "The client is not running"));

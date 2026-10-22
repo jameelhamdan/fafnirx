@@ -1,14 +1,13 @@
 # fafnirx documentation
 
-| Read this | If you want to |
+| Document | Read it to |
 |---|---|
-| [Overview](overview.md) | Understand what fafnirx is and how it works |
-| [Installation](installation.md) | Install the orchestrator on a server and enroll your devices |
-| [Usage](usage.md) | Operate it day to day: devices, sources, mirrors, alerts, restores |
-| [Architecture](architecture.md) | See the components, the data flow and the [database structure](architecture.md#database-structure) |
-| [Tech stack](tech-stack.md) | Know which languages, libraries and services it is built on |
-| [Development](development.md) | Build, test and change the code |
-| [Deployment](deployment.md) | Run it for real: storage layout, TLS, backups, upgrades, hardening |
-| [Specification](spec.md) | Read the full design, including the reasoning behind each rule |
-
-New to the project? Read the overview, then installation. Want to contribute? Read the architecture, then development.
+| [Overview](overview.md) | Understand what fafnirx does and how a file travels |
+| [Installation](installation.md) | Install the master and enroll devices (Windows, macOS, Linux) |
+| [Usage](usage.md) | Use the web app and the client; sources, mirrors, restoring, updates |
+| [Deployment](deployment.md) | Plan storage and backups, split the roles, publish with a Cloudflare tunnel |
+| [Architecture](architecture.md) | See the components, the data model, locking and live updates |
+| [Development](development.md) | Build, run and test; change the schema or the API |
+| [Specification](spec.md) | Check requirements, decisions and non-goals |
+| [Tech stack](tech-stack.md) | Find the libraries behind each part |
+| [Plans](plans/features.md) | Features that are not built |

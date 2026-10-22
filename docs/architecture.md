@@ -1,275 +1,244 @@
 # Architecture
 
-## Components
-
 ```mermaid
-flowchart LR
-    subgraph Devices
-        C1["fafnirx client<br/>Windows"]
-        C2["fafnirx client<br/>macOS"]
-        C3["fafnirx client<br/>Linux"]
+flowchart TB
+    subgraph DEVICES["Devices"]
+        C["fafnirx client<br/>Rust"]
     end
-
-    subgraph Orchestrator["Orchestrator (Docker Compose, Linux)"]
-        ENG["engine: fafnirx-server<br/>gRPC :7443 (TLS)<br/>Rust"]
-        WEB["web: FastAPI :8080<br/>Python"]
-        PG[("db: PostgreSQL<br/>metadata")]
-        FS[("data dir<br/>chunk store, certs, updates")]
-        ENG --> PG
-        ENG --> FS
-        WEB --> PG
-        WEB -. "reads certs" .-> FS
+    subgraph BROWSER["Browser"]
+        W["Web app<br/>React, shadcn/ui"]
     end
-
-    GD["Google Drive"]
-    subgraph Mirrors
-        RC["rclone targets<br/>S3, SFTP, WebDAV, ..."]
+    subgraph MASTER["fafnirx-master (one binary, roles api / transfer / worker)"]
+        GRPC["Device API<br/>gRPC :7443"]
+        API["Admin API<br/>JSON + SSE :8080"]
+        XFER["Transfers<br/>download, zip, upload"]
+        WORK["Worker<br/>watcher, jobs, sources,<br/>mirrors, metadata"]
     end
-
-    C1 & C2 & C3 -- "upload only" --> ENG
-    GD -- "scheduled import" --> ENG
-    ENG -- "scheduled mirror (rclone)" --> RC
-    ADMIN(["Admin browser"]) --> WEB
+    PG[("PostgreSQL")]
+    FS[("files/ and versions/")]
+    C -- "upload only" --> GRPC
+    W <--> API
+    W <--> XFER
+    GRPC --> PG & FS
+    API --> PG
+    XFER --> PG & FS
+    WORK --> PG & FS
+    API -. "LISTEN / NOTIFY" .- PG
 ```
 
-| Component | Language | Job |
+## Components
+
+| Component | Language | Role |
 |---|---|---|
-| Client `fafnirx` (`crates/client`) | Rust | Watch folders, chunk and hash, upload, queue offline, tray icon, self-update |
-| Engine `fafnirx-server` (`crates/server`) | Rust | gRPC data path, chunk store, ingest, retention and garbage collection, alerts, Drive import, mirror runs |
-| Web UI (`web/fafnirx_web`) | Python | Admin UI: devices and tokens, sources, mirrors, settings, alerts |
+| Client `fafnirx` (`crates/client`) | Rust | Watch folders, hash in chunks, upload, queue offline, tray icon, self-update, run as a service |
+| Master `fafnirx-master` (`crates/master`) | Rust | Device API, admin API, file store, ingest, retention, alerts, sources, mirrors, metadata |
+| Web app (`frontend`) | TypeScript, React | The admin interface, built into the master binary |
 | `fafnirx-sign` (`crates/sign`) | Rust | Create the update key, publish signed client builds |
-| Common (`crates/common`) | Rust | Generated gRPC types, chunking, hashing and path rules shared by client and engine |
-| PostgreSQL | - | All metadata. The only database; both processes share it |
+| Common (`crates/common`) | Rust | Generated gRPC types, chunking, hashing and path rules shared by client and master |
+| PostgreSQL | | All metadata |
 
-The engine and the web UI never call each other. They coordinate **only through the database**: the web UI sets
-`run_requested = 1` on a source or mirror and the engine's scheduler picks it up on its next tick; the engine writes
-`last_status`, alerts and heartbeats that the web UI displays.
+## Design decisions worth knowing
 
-Design decisions worth knowing:
+- **Two APIs, two trust levels.** The device gRPC API (`proto/fafnirx.proto`) has no call that reads, lists or deletes
+  stored data: `Negotiate` only tells a client which chunks of its *own* file are missing. Everything that reads or
+  deletes lives in the admin API, behind the admin login. They listen on different ports and share no authentication.
+- **Plain files.** The current version of every path is stored whole, under its own name, in `files/<device>/<path>`. A
+  version that is replaced or deleted moves to `versions/<version id>/<device>/<path>`. Chunks exist only on the wire and
+  while an upload is assembled in `tmp/`; they are never stored separately, so there is no cross-file deduplication.
+- **The device name is the folder.** `devices.name` is a slug (`^[a-z0-9][a-z0-9._-]{0,62}$`, no reserved Windows names),
+  unique and immutable, enforced by the database. Local folders and sources are devices too (kind `local` and `source`),
+  so everything that works on files works on all three.
+- **One binary, three roles.** A small install is one process (`all`). The roles can run apart because nothing relies
+  on shared memory: locks, events and queues all go through PostgreSQL (see below). Only browser uploads and the
+  login limit are kept per process, so they need one `transfer` or `api` process each.
+- **A client remembers which master it sent to.** The client keeps a local record of what it has uploaded, so that an
+  unchanged file is not even offered again. Each database has a random master id (`settings.master_id`, made when the
+  schema is first applied), and the client asks for it at the start of every cycle (`Identify`). If the answer is not the
+  id its record was made against (a wiped database, a new master at the same address) the record is dropped and
+  everything is collected again. Without this a client would report files as sent that the master never had.
+- **Metadata is separate from data.** Losing PostgreSQL loses versions and history, not the files (they keep their
+  names); losing the data directory loses the data. Back up both ([Deployment](deployment.md#backups)).
+- **No TLS in the master.** Trust comes from the network (LAN, VPN) or from a TLS proxy in front (a Cloudflare tunnel).
+  Device tokens and the admin password are hashed or signed, but the transport is plain. Client updates are signed
+  independently, so they are safe on any transport.
 
-- **One-way by construction.** The gRPC service has no call that reads, lists or deletes stored data. `Negotiate` only
-  tells a client which of its own chunk hashes are missing.
-- **Content-addressed storage.** A chunk is a file named by its BLAKE3 hash, so duplicates collapse and uploads are
-  idempotent.
-- **Metadata is separate from data.** Losing PostgreSQL loses the map from paths to chunks, not the chunks; losing a
-  chunk loses data. Back up both (see [Deployment](deployment.md#backups)).
-- **Single orchestrator** on purpose; offsite mirrors are the backup.
-
-## Upload path
+## Upload and commit
 
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant S as Engine (gRPC)
-    participant FS as Chunk store
+    participant M as Master
     participant DB as PostgreSQL
-
-    C->>S: Heartbeat (hostname, OS, disk, recent errors)
-    S->>DB: update device, open or resolve alerts
-
-    C->>S: Negotiate(manifest)
-    S->>DB: current version of this path has this root hash?
-    S->>FS: which chunks exist?
-    S-->>C: missing chunk indexes (or already_current)
-
-    C->>S: UploadChunks (stream of chunks)
-    S->>S: hash each chunk, reject mismatches
-    S->>FS: write to tmp/, fsync, atomic rename into chunks/ab/cd/hash
-
-    C->>S: Commit(manifest, mtime, mode, renamed_from?)
-    S->>FS: every chunk present?
-    S->>DB: one transaction: file row, new version, prune old versions, event, device.last_seen
-    S-->>C: version id
+    participant FS as Files
+    C->>M: Heartbeat (host, disk, progress)
+    M->>DB: update device and activity, NOTIFY devices
+    C->>M: Identify (start of every cycle)
+    M-->>C: master id (random, made once per database)
+    Note over C: a different id than the one the client's<br/>record was made against: forget the record,<br/>everything is pending again
+    C->>M: Negotiate(path, size, chunk hashes, root)
+    M->>DB: same content live under another path?
+    M->>FS: which chunks of tmp/up-device-root are present and correct?
+    M-->>C: missing chunk indexes
+    C->>M: UploadChunks (parallel streams)
+    M->>FS: verify chunk hash, write at index * 4 MiB in tmp/up-device-root
+    C->>M: Commit(manifest, mtime, mode, renamed_from?)
+    M->>DB: BEGIN, advisory lock on (device, path)
+    M->>FS: re-hash assembled file, archive current file to versions/id/, move new file into files/
+    M->>DB: insert version, event, queue metadata job, NOTIFY files, COMMIT
+    M-->>C: version id
 ```
 
-Every RPC carries the device token (`authorization: Bearer ...`), is checked against the SHA-256 hash stored in
-`devices.token_hash`, and only travels over TLS. The server certificate is signed by a CA the engine creates on first
-start; clients pin that CA.
+If anything fails after the files moved, the moves are undone before the error is returned. The file store and the
+database therefore only disagree while the transaction is open, under that path's lock.
 
-The commit is a single database transaction. If the file already has a version with the same root hash, the commit is
-a no-op that returns the existing version.
+## Locking
 
-## Background work in the engine
+Every change to one path (a commit, a delete, an upload from the web app, something the file watcher found) first takes
+a PostgreSQL **advisory transaction lock** keyed by `(device id, path)`. A rename takes both of its paths in a fixed order.
+The lock is held until the transaction ends, and the file moves happen before that, so:
 
-```mermaid
-flowchart TB
-    subgraph Every_minute["Every minute"]
-        A1["Offline devices:<br/>open or resolve alerts"]
-        A2["Disk over 80%: alert"]
-        A3["Upload-error alerts quiet for 48 h: resolve"]
-    end
-    subgraph Every_hour["Every hour (first run 30 s after start)"]
-        B1["Retention: remove files deleted<br/>and versions pruned > N days ago;<br/>events older than 90 days"]
-        B2["Garbage collection: delete chunks no<br/>version references, older than 24 h"]
-        B1 --> B2
-    end
-    subgraph Tick["Every 15 s (FAFNIRX_TICK_SECS)"]
-        C1["Claim one due source,<br/>run it"]
-        C2["Claim one due mirror,<br/>run it"]
-    end
-```
+- two processes never work on the same path at once, and different paths never wait for each other;
+- the file watcher can compare disk and database without ever seeing a half-done commit;
+- it all works across processes, which is what makes splitting the roles safe.
 
-- **Claiming** a source or mirror is one `UPDATE ... WHERE id = (SELECT ... FOR UPDATE SKIP LOCKED) RETURNING ...`, so a
-  job can only be started once. A job left `running` by a crash is marked failed on the next start.
-- **Garbage collection** takes an exclusive in-process lock for its final "is it still unreferenced" check and the
-  delete; commits hold the same lock shared while they check chunks and record the version. That closes the window in
-  which a client re-sends content whose chunk is about to be deleted.
-- **Mirror runs** rebuild changed files from chunks into a staging directory (at most 512 MiB or 2000 files at a time),
-  re-hash every chunk, then call `rclone`. Backend options are passed as environment variables so credentials never
-  show up on a command line.
+## The file watcher and network drive
 
-## Data on disk
+`files/livetree.rs` (worker role) watches `files/` with the operating system's file events. Touched paths queue up; once a
+path has been quiet for 5 seconds it is compared with the database: new or changed files become versions
+(`ingest::adopt_live`), vanished ones are marked deleted (`ingest::forget_absent`), a new top-level folder becomes a
+`local` device. Anything the master wrote itself matches its record (same size and modification time) and is skipped
+without being read. Watchers miss things on some mounts, so the whole tree is also compared every 5 minutes. A missing
+device folder deletes nothing, so an unmounted volume cannot wipe records.
 
-```text
-data/                            FAFNIRX_DATA
-├── chunks/ab/cd/<64 hex>        content-addressed chunks (immutable)
-├── tmp/                         in-flight writes; cleared on engine start
-├── certs/                       ca.pem, ca.key, server.pem, server.key, hosts.txt
-├── updates/<platform>/          bin, version, signature (written by fafnirx-sign publish)
-├── mirror-stage/                temporary, during mirror runs
-└── web_secret                   web UI session key
-```
+## Live updates
 
-PostgreSQL's own files live separately (`FAFNIRX_DB_DIR`).
+Every change calls `db::notify(topic, key)`, which runs `pg_notify('fafnirx', {"topic", "key"})` inside the same
+transaction, so it is delivered exactly when the change commits. Each process with the `api` role keeps one connection
+that `LISTEN`s and pushes the messages to browsers over server-sent events (`GET /api/events`). The web app maps a topic
+to the queries it makes stale (`files`, `activity`, `devices`, `alerts`, `jobs`) and refetches them, at most once per
+burst. A dropped stream or a slow browser gets a `resync` and refreshes everything.
+
+## Background work
+
+| Work | Where | Notes |
+|---|---|---|
+| Offline and disk alerts, upload-error expiry | `monitoring/jobs.rs`, every minute | leader only |
+| Retention, version pruning, stale uploads | `monitoring/jobs.rs`, hourly | leader only; deletes files with their records |
+| Sources, mirrors | `integrations/` (`mod.rs`, `gdrive.rs`, `mirror.rs`) | leader only; claimed with `FOR UPDATE SKIP LOCKED` |
+| File watcher | `files/livetree.rs` | leader only |
+| Photo metadata | `library/meta.rs`, table `jobs` | any worker; a job is claimed with `FOR UPDATE SKIP LOCKED`, retried up to 3 times |
+| Previews | `library/meta.rs`, on request | cached in `cache/thumbs/`, at most 4 decoded at once |
+
+The **leader** is the one process holding a session-level advisory lock; if its connection dies it exits and the
+supervisor restarts it, so there is always at most one.
 
 ## Database structure
 
-PostgreSQL, one schema, defined in [`schema.sql`](../schema.sql). Both processes apply it on start, serialized with an
-advisory lock; every statement is idempotent. All integers are `BIGINT` (timestamps are unix seconds; `versions.mtime`
-is unix nanoseconds).
-
 ```mermaid
 erDiagram
-    devices ||--o{ files : "owns"
-    devices ||--o{ events : "has"
-    files ||--o{ versions : "has"
-    files }o..o| versions : "current_version_id"
-    devices ||--o| sources : "hidden device (kind = source)"
-    sources ||--o{ source_items : "imported items"
-    mirrors ||--o{ mirror_items : "uploaded files"
-
+    devices ||--o{ files : owns
+    files ||--o{ versions : has
+    devices ||--o{ events : logs
+    devices ||--o| device_activity : "is doing"
+    sources ||--o{ source_items : imported
+    sources }o--|| devices : "files of"
+    mirrors ||--o{ mirror_items : uploaded
+    versions }o--o| file_meta : "same root hash"
     devices {
         bigint id PK
-        text name UK "namespace"
-        text kind "device or source"
-        text token_hash "sha256 hex; '!' for sources"
-        bigint created_at
+        text name "slug, unique, immutable"
+        text kind "device, local, source"
+        text token_hash
         bigint revoked_at
-        text hostname
-        text os
-        text ip
-        text client_version
-        bigint disk_total
-        bigint disk_free
         bigint last_seen
-        bigint last_collected
     }
     files {
         bigint id PK
         bigint device_id FK
-        text path "UK with device_id"
+        text path
         bigint current_version_id
-        bigint deleted_at "set = marked deleted"
+        bigint deleted_at
     }
     versions {
         bigint id PK
         bigint file_id FK
         bytea root_hash
         bigint size
-        bigint mtime "unix ns"
-        bigint mode
-        bytea manifest "chunk hashes, 32 bytes each"
-        bigint created_at
-        bigint pruned_at "beyond version count"
+        bigint mtime
+        bigint pruned_at
     }
-    events {
-        bigint id PK
-        bigint device_id FK
-        text path
-        text action "add update delete rename"
-        bigint ts
-        text hash
-        text detail
-    }
-    alerts {
-        bigint id PK
+    file_meta {
+        bytea root_hash PK
+        text mime
         text kind
-        text key
-        text message
-        bigint created_at
-        bigint updated_at
-        bigint resolved_at
+        bigint width
+        bigint height
+        bigint taken_at
+        double lat
+        double lon
+        bigint duration_ms
+        text exif
     }
-    sources {
+    file_state {
+        bigint file_id PK
+        boolean favorite
+        boolean archived
+        smallint rating
+        text description
+        bigint taken_at
+        double lat
+        double lon
+    }
+    albums {
         bigint id PK
-        text name UK
-        text kind "gdrive"
-        text config "JSON incl. credentials"
-        bigint interval_secs
-        bigint enabled
-        bigint device_id FK
-        bigint run_requested
-        bigint last_run_at
-        bigint last_ok_at
-        text last_status "running ok partial failed"
-        text last_message
-        bigint created_at
+        text name
+        bigint cover_file_id FK
     }
-    source_items {
-        bigint source_id PK
-        text remote_id PK
-        text path
-        text remote_version
-    }
-    mirrors {
-        bigint id PK
-        text name UK
-        text remote_type "rclone backend"
-        text options "JSON incl. credentials"
-        text remote_path
-        bigint interval_secs
-        bigint keep_runs
-        bigint enabled
-        bigint run_requested
-        bigint last_run_at
-        bigint last_ok_at
-        text last_status
-        text last_message
-        bigint last_files
-        bigint last_bytes
-        bigint created_at
-    }
-    mirror_items {
-        bigint mirror_id PK
-        bigint device_id PK
-        text path PK
-        bytea root_hash
-    }
-    settings {
-        text key PK
-        text value
-    }
+    files ||--o| file_state : "what people say"
+    files }o--o{ albums : "album_files"
+    files }o--o{ tags : "file_tags"
 ```
 
-### Tables
+`file_meta` is about a **content** (by root hash: what the camera said, the same for every copy); `file_state` is about a
+**file** (a path of a device: what people said). Both the library tables and the files they point at are removed together
+when retention removes a file for good (`ON DELETE CASCADE`), and nothing in them is ever written into the file itself.
 
-| Table | Purpose |
+Other tables: `events` (change log, 90 days), `alerts`, `settings`, `jobs` (queued background work: `meta` reads a
+photo or video and makes its pictures, `proxy` converts a video), `sources`, `source_items`, `mirrors`, `mirror_items`,
+`tags` and `file_tags`, `album_files`. `crates/master/schema.sql` is the source of truth and is applied on start.
+
+## Admin API
+
+JSON under `/api`, all behind the login cookie (an HMAC-signed value, `SameSite=Strict`, `HttpOnly`). Calls that change
+something must carry an `x-requested-with` header, which a form on another site cannot set.
+
+| Area | Endpoints |
 |---|---|
-| `devices` | One row per client, and one hidden row per source (`kind = 'source'`, name `source:<name>`, token hash `!` which no token can match). The `name` is the namespace. |
-| `files` | A path on a device, unique per `(device_id, path)`. `deleted_at` is the delete mark. `current_version_id` points at the live version (no foreign key, to avoid a cycle). |
-| `versions` | One row per stored version of a file: root hash, size, mtime, and the `manifest`, the concatenated 32-byte chunk hashes in order. `pruned_at` marks versions beyond the version count; retention removes them later. |
-| `events` | Change log shown on the device page (add, update, delete, rename). Kept 90 days. |
-| `alerts` | `kind` is one of `device_offline`, `upload_error`, `disk_usage`, `source_failed`, `mirror_failed`. A partial unique index `(kind, key) WHERE resolved_at IS NULL` allows one open alert per cause. |
-| `sources` | Configured third-party sources. `config` is JSON and holds credentials. The web UI sets `run_requested`; the engine writes the `last_*` fields. |
-| `source_items` | What was already imported from a source: remote id to path and version marker, so unchanged and renamed items are not downloaded again. |
-| `mirrors` | Configured offsite mirrors. Same pattern as sources. `options` is JSON and holds credentials. |
-| `mirror_items` | The root hash of each file as last uploaded to a mirror. Deletes cascade with the mirror. |
-| `settings` | Key/value: `version_count` (5), `retention_days` (30), `offline_after_secs` (60). |
+| Session | `POST /api/login`, `POST /api/logout`, `GET /api/session` |
+| Overview | `GET /api/dashboard`, `POST /api/alerts/:id/dismiss`, `GET /api/events` (SSE) |
+| Devices | `GET/POST /api/devices`, `GET /api/devices/:name`, `POST .../token`, `POST .../revoke` |
+| Files | `GET /api/files` (browse, search, filter, sort, page), `GET /api/files/info`, `POST /api/files/delete`, `POST /api/files/restore` |
+| Transfers | `GET /api/files/download` (ranges, versions), `GET /api/files/thumb`, `POST /api/files/zip`, `POST /api/uploads`, `PUT/GET/DELETE /api/uploads/:id`, `POST /api/uploads/:id/finish` |
+| Library | `GET /api/timeline/buckets` (months with the file count of each day), `GET /api/timeline?month=YYYY-MM` (scope, device, kind and tag filters), `GET /api/library?ids=`, `GET/PATCH /api/library/:id`, `POST /api/library/bulk`, `GET /api/tags`, `DELETE /api/tags/:id`, `GET /api/map`, `GET /api/trash` (restore with `POST /api/files/restore`) |
+| Pictures by id | `GET /api/media/:id/{thumb,preview,video,original,download}` (`?v=<hash>` makes the picture cacheable for good; videos answer `404` until a playable copy exists) |
+| Albums | `GET/POST /api/albums`, `GET/PATCH/DELETE /api/albums/:id`, `POST /api/albums/:id/files` and `/files/remove` |
+| Integrations | `GET/POST /api/sources`, `GET/POST /api/mirrors`, and `/:name`, `/run`, `/toggle`, `/resync` |
+| Settings | `GET/PUT /api/settings` |
 
-Notes:
+Uploads are chunked and resumable: a session is created, pieces are `PUT` at an offset (the server answers `409` with the
+offset it expects when they do not line up), and `finish` verifies the hash and commits through the same path as the
+device API.
 
-- Credentials in `sources.config` and `mirrors.options` are stored in plain text. Protect the database like the
-  secrets it holds.
-- To find the chunks of a version: `SELECT encode(manifest, 'hex') FROM versions WHERE id = ...`, split into 64-character
-  hashes; the chunk file is `chunks/<h[0:2]>/<h[2:4]>/<h>`.
-- The schema has no versioned migrations; see [Development](development.md#changing-the-schema).
+## Security model
+
+| Threat | Mitigation |
+|---|---|
+| Stolen device token | It can only add data. Revoke it in the web app; the old token stops working at once |
+| Compromised device | Cannot read, list or delete anything (the API has no such call) |
+| Stolen admin password | Rate-limited guesses per connecting address; put Cloudflare Access or a VPN in front. This is the key to protect |
+| Compromised master | Cannot ship a client update: updates need a signature from a key that is not on the master |
+| Path tricks (`..`, absolute, reserved names) | Paths are validated on arrival and again when mapped to disk |
+| A browser opening a stored HTML or SVG file | Those are always served as downloads, with `nosniff` |
+| A corrected date or place | Stored beside the file, never in it; reversible |
+| Tampered chunk | Verified against its hash on arrival, and the whole file again before it is installed |
+| Bit rot on the master | Re-hashed before mirroring; a mismatch fails that file, not the run |

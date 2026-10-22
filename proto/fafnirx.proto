@@ -2,26 +2,33 @@ syntax = "proto3";
 
 package fafnirx.v1;
 
-// Data path between clients and the orchestrator. Every call is authenticated
+// Data path between clients and the master. Every call is authenticated
 // with the device token in the `authorization: Bearer <token>` metadata.
 // A client can only add data; there is no call that reads, lists or deletes
-// anything stored on the orchestrator.
+// anything stored on the master.
 service Collector {
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
 
-  // have/need: the orchestrator answers with the chunks it does not yet store.
+  // Which master this is. A client remembers what it sent to a master; when the answer changes (a new
+  // database, another master at the same address) that memory no longer applies and it starts over.
+  rpc Identify(IdentifyRequest) returns (IdentifyResponse);
+
+  // Answers with the chunks the master still needs: those an interrupted upload has not
+  // delivered, or none when it already has the content (the current version of the path, or
+  // another file of the device).
   rpc Negotiate(Manifest) returns (NegotiateResponse);
 
-  // Client-streaming upload of chunks. Every chunk is verified against its hash.
+  // Client-streaming upload of chunks. Every chunk is verified against its hash and written at its
+  // place in the file being assembled; the whole file is verified again by Commit.
   rpc UploadChunks(stream Chunk) returns (UploadSummary);
 
-  // Records a new version of a path. All chunks must already be stored.
+  // Records a new version of a path and stores the file under its own name. The upload must be complete.
   rpc Commit(CommitRequest) returns (CommitResponse);
 
-  // Marks a path deleted on the device. Nothing is removed from the orchestrator.
+  // Marks a path deleted on the device. Nothing is removed from the master.
   rpc MarkDeleted(DeleteRequest) returns (DeleteResponse);
 
-  // Client binary updates, hosted by the orchestrator and signed off-box.
+  // Client binary updates, hosted by the master and signed off-box.
   rpc GetUpdateInfo(UpdateInfoRequest) returns (UpdateInfo);
   rpc DownloadUpdate(UpdateInfoRequest) returns (stream UpdateChunk);
 }
@@ -33,6 +40,20 @@ message HeartbeatRequest {
   uint64 disk_total = 4;    // bytes, volume holding the collected folders
   uint64 disk_free = 5;
   repeated string errors = 6;  // recent upload errors, drained on every beat
+  // What the client is doing right now. phase is empty or "idle" when nothing is going on.
+  string phase = 7;            // scanning | hashing | uploading
+  string current_file = 8;     // remote path of the file being worked on
+  uint32 files_done = 9;
+  uint32 files_total = 10;
+  uint64 bytes_done = 11;      // of bytes_total, this cycle
+  uint64 bytes_total = 12;
+  uint64 speed_bps = 13;       // upload speed, bytes per second
+}
+
+message IdentifyRequest {}
+
+message IdentifyResponse {
+  string master_id = 1;     // random, made once per database
 }
 
 message HeartbeatResponse {
@@ -57,6 +78,8 @@ message NegotiateResponse {
 message Chunk {
   bytes hash = 1;
   bytes data = 2;
+  bytes root_hash = 3;          // of the file this chunk belongs to
+  uint32 index = 4;             // position in Manifest.chunk_hashes
 }
 
 message UploadSummary {

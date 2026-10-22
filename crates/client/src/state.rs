@@ -42,9 +42,43 @@ impl State {
                  path TEXT PRIMARY KEY, size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL, root_hash BLOB NOT NULL);
              CREATE TABLE IF NOT EXISTS retry (
                  path TEXT PRIMARY KEY, fail_count INTEGER NOT NULL, next_retry INTEGER NOT NULL,
-                 size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL, last_error TEXT);",
+                 size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL, last_error TEXT);
+             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )?;
         Ok(Self { conn })
+    }
+
+    /// Ties this record to one master. When `master_id` is not the one the record was made against, what it
+    /// says was sent no longer holds, so it is cleared and everything is collected again. Returns how many
+    /// files that made pending.
+    pub fn adopt_master(&mut self, master_id: &str) -> Result<usize> {
+        let stored: Option<String> =
+            self.conn.query_row("SELECT value FROM meta WHERE key = 'master_id'", [], |r| r.get(0)).optional()?;
+        if stored.as_deref() == Some(master_id) {
+            return Ok(0);
+        }
+        let tx = self.conn.transaction()?;
+        let cleared = tx.execute("DELETE FROM synced", [])?;
+        tx.execute("DELETE FROM retry", [])?;
+        tx.execute("DELETE FROM meta WHERE key = 'initial_sync_done'", [])?;
+        tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('master_id', ?1)", [master_id])?;
+        tx.commit()?;
+        Ok(cleared)
+    }
+
+    /// Whether every file of the collected folders has been sent once to this master.
+    pub fn initial_sync_done(&self) -> bool {
+        self.conn
+            .query_row("SELECT 1 FROM meta WHERE key = 'initial_sync_done'", [], |_| Ok(()))
+            .optional()
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
+    pub fn mark_initial_sync_done(&self) -> Result<()> {
+        self.conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('initial_sync_done', '1')", [])?;
+        Ok(())
     }
 
     pub fn synced(&self, path: &str) -> Result<Option<Synced>> {
@@ -101,7 +135,7 @@ impl State {
         Ok(count)
     }
 
-    /// (number of files, their total size) the orchestrator has from this device.
+    /// (number of files, their total size) the master has from this device.
     pub fn totals(&self) -> Result<(usize, u64)> {
         let (n, bytes): (i64, i64) =
             self.conn
@@ -144,5 +178,23 @@ mod tests {
         assert!(may_attempt(&r, 1, 2, 0)); // changed again
         st.set_synced(&Synced { path: "a".into(), size: 1, mtime_ns: 2, root_hash: vec![0; 32] }).unwrap();
         assert!(st.retry("a").unwrap().is_none());
+    }
+
+    #[test]
+    fn what_was_sent_only_counts_for_the_master_it_was_sent_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut st = State::open(&dir.path().join("s.db")).unwrap();
+        assert_eq!(st.adopt_master("one").unwrap(), 0, "a new record has nothing to clear");
+        assert!(!st.initial_sync_done());
+        st.mark_initial_sync_done().unwrap();
+        assert!(st.initial_sync_done());
+        st.set_synced(&Synced { path: "a".into(), size: 1, mtime_ns: 2, root_hash: vec![0; 32] }).unwrap();
+        st.record_failure("b", 1, 1, 1000, "x").unwrap();
+        assert_eq!(st.adopt_master("one").unwrap(), 0, "the same master: kept");
+        assert!(st.synced("a").unwrap().is_some());
+        assert_eq!(st.adopt_master("two").unwrap(), 1, "another master: everything is pending again");
+        assert!(!st.initial_sync_done(), "and the first sync is to be done again");
+        assert!(st.synced("a").unwrap().is_none() && st.retry("b").unwrap().is_none());
+        assert_eq!(st.adopt_master("two").unwrap(), 0);
     }
 }

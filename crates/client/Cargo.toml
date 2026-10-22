@@ -2,6 +2,18 @@
 name = "fafnirx"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Debian package, built by .github/workflows/release.yml with `cargo deb -p fafnirx --no-build`.
+[package.metadata.deb]
+maintainer = "Jameel Hamdan <jameelhamdan@users.noreply.github.com>"
+extended-description = "Backs up folders to your own fafnirx master. After installing, run `fafnirx enroll --server <url> --token <token>`, which also starts the client in the background and at login."
+section = "utils"
+priority = "optional"
+depends = "$auto"
+recommends = "libayatana-appindicator3-1"
+assets = [["../../target/release/fafnirx", "usr/bin/", "755"]]
 
 [features]
 default = ["tray"]
@@ -18,6 +30,7 @@ hex.workspace = true
 ignore = "0.4"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 notify = "6"
+rpassword = "7"
 rusqlite.workspace = true
 self-replace = "1"
 serde.workspace = true
