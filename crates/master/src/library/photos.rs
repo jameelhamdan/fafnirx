@@ -136,7 +136,7 @@ pub struct Filter {
 impl Filter {
     fn clause(&self) -> Result<Where, ApiError> {
         let mut w = Where::new("f.deleted_at IS NULL");
-        w.and("lower(f.path) ~ ?", meta::media_regex());
+        w.and_plain("f.media IS NOT NULL");
         match self.scope.as_deref().unwrap_or("timeline") {
             "timeline" => w.and_plain("COALESCE(s.archived, false) = false"),
             "favorites" => w.and_plain("COALESCE(s.favorite, false)"),
@@ -148,8 +148,8 @@ impl Filter {
         }
         match self.kind.as_deref().filter(|k| !k.is_empty()) {
             None => {}
-            Some("image") => w.and("lower(f.path) ~ ?", meta::image_regex()),
-            Some("video") => w.and("lower(f.path) ~ ?", meta::video_regex()),
+            Some("image") => w.and_plain("f.media = 'image'"),
+            Some("video") => w.and_plain("f.media = 'video'"),
             Some(other) => return Err(ApiError::bad(format!("unknown kind {other}"))),
         }
         if let Some(tag) = self.tag {

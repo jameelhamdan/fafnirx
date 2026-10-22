@@ -180,8 +180,8 @@ fn sync_subtree(conn: &mut Client, store: &Store, dev: &Device, rel: &str, settl
     let known: HashMap<String, (i64, i64)> = conn
         .query(
             "SELECT f.path, v.size, v.mtime FROM files f JOIN versions v ON v.id = f.current_version_id
-             WHERE f.device_id = $1 AND f.deleted_at IS NULL AND ($2 = '' OR f.path = $2 OR starts_with(f.path, $2 || '/'))",
-            &[&dev.id, &rel],
+             WHERE f.device_id = $1 AND f.deleted_at IS NULL AND ($2 = '' OR f.path = $2 OR f.path LIKE $3)",
+            &[&dev.id, &rel, &db::like_prefix(&format!("{rel}/"))],
         )?
         .iter()
         .map(|r| (r.get(0), (r.get(1), r.get(2))))

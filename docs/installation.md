@@ -7,7 +7,7 @@ token; the master's web app makes both.
 
 ### Requirements
 
-- Docker with the Compose plugin (the easy way), or Linux with PostgreSQL 14 or newer and the `fafnirx-master` binary.
+- Docker with the Compose plugin (the easy way), or Linux with PostgreSQL 14 or newer (with its standard `contrib` extensions: the file search needs `pg_trgm`) and the `fafnirx-master` binary.
 - Local disk for PostgreSQL (see [Deployment](deployment.md#storage-layout)). Never put the database on SMB or NFS.
 - Disk for the files, at least as large as the data you collect (ZFS recommended).
 - Ports `7443/tcp` (devices) and `8080/tcp` (web app). Both are plain HTTP: keep them on your LAN or VPN, or publish

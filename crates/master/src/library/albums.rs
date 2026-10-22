@@ -1,6 +1,5 @@
 //! Albums.
 
-use crate::library::meta;
 use crate::library::photos::{asset_columns, Asset, FROM, WHEN};
 use crate::platform::db;
 use crate::web::{done, run, ApiError, Done, Res, Shared};
@@ -42,7 +41,7 @@ const ALBUM_COLUMNS: &str = "a.id, a.name, a.description, a.created_at, a.update
     COALESCE((SELECT f.id FROM files f WHERE f.id = a.cover_file_id AND f.deleted_at IS NULL),
              (SELECT f.id FROM album_files af JOIN files f ON f.id = af.file_id JOIN versions v ON v.id = f.current_version_id
                   LEFT JOIN file_meta m ON m.root_hash = v.root_hash LEFT JOIN file_state s ON s.file_id = f.id
-              WHERE af.album_id = a.id AND f.deleted_at IS NULL AND lower(f.path) ~ $1
+              WHERE af.album_id = a.id AND f.deleted_at IS NULL AND f.media IS NOT NULL
               ORDER BY COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000) DESC, f.id DESC LIMIT 1))";
 
 fn album_from_row(r: &postgres::Row) -> AlbumInfo {
@@ -59,20 +58,17 @@ fn album_from_row(r: &postgres::Row) -> AlbumInfo {
 }
 
 fn load_album(c: &mut impl GenericClient, id: i64) -> anyhow::Result<AlbumInfo> {
-    c.query_opt(&format!("SELECT {ALBUM_COLUMNS} FROM albums a WHERE a.id = $2"), &[&meta::media_regex(), &id])?
+    c.query_opt(&format!("SELECT {ALBUM_COLUMNS} FROM albums a WHERE a.id = $1"), &[&id])?
         .map(|r| album_from_row(&r))
         .ok_or_else(|| ApiError::not_found("No such album").into())
 }
 
 pub async fn list(State(state): State<Shared>) -> Res<Vec<AlbumInfo>> {
     let out = run(&state, |c| {
-        Ok(c.query(
-            &format!("SELECT {ALBUM_COLUMNS} FROM albums a ORDER BY a.updated_at DESC, a.id DESC"),
-            &[&meta::media_regex()],
-        )?
-        .iter()
-        .map(album_from_row)
-        .collect())
+        Ok(c.query(&format!("SELECT {ALBUM_COLUMNS} FROM albums a ORDER BY a.updated_at DESC, a.id DESC"), &[])?
+            .iter()
+            .map(album_from_row)
+            .collect())
     })
     .await?;
     Ok(Json(out))
@@ -147,11 +143,11 @@ pub async fn detail(State(state): State<Shared>, Path(id): Path<i64>) -> Res<Alb
             .query(
                 &format!(
                     "SELECT {} FROM album_files af JOIN {FROM} ON f.id = af.file_id
-                     WHERE af.album_id = $1 AND f.deleted_at IS NULL AND lower(f.path) ~ $2
+                     WHERE af.album_id = $1 AND f.deleted_at IS NULL AND f.media IS NOT NULL
                      ORDER BY {WHEN} DESC, f.id DESC LIMIT {MAX_ASSETS}",
                     asset_columns()
                 ),
-                &[&id, &meta::media_regex()],
+                &[&id],
             )?
             .iter()
             .map(Asset::from_row)

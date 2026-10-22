@@ -205,7 +205,40 @@ when retention removes a file for good (`ON DELETE CASCADE`), and nothing in the
 
 Other tables: `events` (change log, 90 days), `alerts`, `settings`, `jobs` (queued background work: `meta` reads a
 photo or video and makes its pictures, `proxy` converts a video), `sources`, `source_items`, `mirrors`, `mirror_items`,
-`tags` and `file_tags`, `album_files`. `crates/master/schema.sql` is the source of truth and is applied on start.
+`tags` and `file_tags`, `album_files`. The numbered migrations in `crates/master/migrations/` are the source of truth and are applied on start.
+
+## Indexes
+
+Every lookup, listing and search of the APIs has an index. They are created by the migrations (`0001_initial` for keys and
+relations, `0002_indexes` for the rest).
+
+| Table | Index | Answers |
+|---|---|---|
+| `devices` | `name` (unique), `token_hash` (unique, devices only) | Finding a device by folder name; every call a device makes finds it by token |
+| `files` | `(device_id, path)` (unique) | One file by path: the commit, the delete, the file info |
+| | `(device_id, path text_pattern_ops)` | A folder: `path LIKE dir/%`, in the file browser, downloads, the watcher |
+| | `path` trigram (GIN) | The file browser search (`ILIKE %text%`) |
+| | `current_version_id` | Which files hold a version: finding content by hash on every upload |
+| | `(deleted_at DESC, id DESC)` where deleted | The Trash page and retention |
+| | `id` where live and `media` is set | The photo library: timeline, map, albums, type filters |
+| `versions` | `(file_id, id)`, `root_hash`, `pruned_at` where pruned | History of a file, content by hash, retention |
+| `events` | `(device_id, id)`, `(device_id, path, id DESC)`, `ts` | Recent activity of a device, the history of one file, the activity chart and its retention |
+| `file_meta` | `root_hash` (primary), `root_hash` where placed | Details of a content, the map |
+| `file_state` | `file_id` (primary), `file_id` where favorite, archived or placed | Favorites, Archive, the map |
+| `tags`, `file_tags`, `albums`, `album_files` | name (case-insensitive, unique), both directions of each link | Tags and albums from a file and from the tag or album |
+| `jobs` | `(kind = 'proxy', id)` where queued, `run_after` where queued | The next job a worker claims |
+| `alerts` | `(kind, key)` unique where open, `resolved_at` where resolved | One open alert per cause; clearing old ones |
+| `mirror_items`, `source_items` | their primary keys | What a mirror or a source already has |
+
+`files.media` is a column the database computes from the file name (`image`, `video` or empty), so the library never runs a
+pattern over every path. A test keeps it equal to the extension lists in `library/meta.rs`.
+
+The search index needs the `pg_trgm` extension, which is part of PostgreSQL's standard contrib packages (the `postgres`
+Docker image has it). The first migration run installs it into the `public` schema.
+
+On 300,000 files, the lookups behind an upload, a folder listing, a search and the Trash page take 1-3 ms (100-200 ms
+without the indexes). Totals that add up every file (the dashboard) and the photo timeline are proportional to the
+number of files and take 0.2-0.3 s.
 
 ## Admin API
 

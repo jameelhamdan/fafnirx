@@ -51,9 +51,13 @@ fn state_of(r: &postgres::Row, detail: Value) -> JobState {
 fn source_states(c: &mut Client) -> Result<Vec<JobState>, postgres::Error> {
     let rows = c.query(
         "SELECT s.name, s.config, s.interval_secs, s.enabled, s.last_run_at, s.last_ok_at, s.last_status, s.last_message,
-                COALESCE(SUM(v.size), 0)::BIGINT AS bytes, COUNT(v.id) AS files, s.device_id
-         FROM sources s LEFT JOIN files f ON f.device_id = s.device_id AND f.deleted_at IS NULL
-         LEFT JOIN versions v ON v.id = f.current_version_id GROUP BY s.id ORDER BY s.name",
+                COALESCE(t.bytes, 0) AS bytes, COALESCE(t.files, 0) AS files, s.device_id
+         FROM sources s
+         LEFT JOIN (SELECT f.device_id, SUM(v.size)::BIGINT AS bytes, COUNT(*) AS files
+                    FROM files f JOIN versions v ON v.id = f.current_version_id
+                    WHERE f.deleted_at IS NULL AND f.device_id IN (SELECT device_id FROM sources)
+                    GROUP BY f.device_id) t ON t.device_id = s.device_id
+         ORDER BY s.name",
         &[],
     )?;
     Ok(rows

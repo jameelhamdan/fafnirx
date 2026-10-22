@@ -159,10 +159,11 @@ pub async fn list(State(state): State<Shared>, Query(q): Query<ListQuery>) -> Re
         };
         let dev = find_device(c, &device_name)?;
         let n = prefix.len() as i32;
+        let below = db::like_prefix(&prefix);
         let mut entries = Vec::new();
         let total: i64;
         let direction = if desc { "DESC" } else { "ASC" };
-        let scope = "f.device_id = $1 AND starts_with(f.path, $2) AND ($3 OR f.deleted_at IS NULL)";
+        let scope = "f.device_id = $1 AND f.path LIKE $2 AND ($3 OR f.deleted_at IS NULL)";
         let file_entry = |r: &postgres::Row, strip: usize| {
             let full: String = r.get(0);
             let deleted_at: Option<i64> = r.get(4);
@@ -194,7 +195,7 @@ pub async fn list(State(state): State<Shared>, Query(q): Query<ListQuery>) -> Re
                      WHERE {scope} AND ($4::text IS NULL OR f.path ILIKE $4) AND ($5::text IS NULL OR lower(f.path) ~ $5)
                      ORDER BY {order} {direction} NULLS LAST, f.path LIMIT $6 OFFSET $7"
                 ),
-                &[&dev.id, &prefix, &include_deleted, &search, &type_regex, &limit, &offset],
+                &[&dev.id, &below, &include_deleted, &search, &type_regex, &limit, &offset],
             )?;
             total = rows.first().map_or(0, |r| r.get(10));
             entries.extend(rows.iter().map(|r| file_entry(r, prefix.len())));
@@ -204,10 +205,10 @@ pub async fn list(State(state): State<Shared>, Query(q): Query<ListQuery>) -> Re
                 "SELECT split_part(substr(f.path, $4), '/', 1) AS name, COUNT(f.id), COALESCE(SUM(v.size), 0)::BIGINT,
                         MAX(v.created_at), CASE WHEN bool_and(f.deleted_at IS NOT NULL) THEN MAX(f.deleted_at) END
                  FROM files f LEFT JOIN versions v ON v.id = f.current_version_id
-                 WHERE f.device_id = $1 AND starts_with(f.path, $2) AND ($3 OR f.deleted_at IS NULL)
+                 WHERE f.device_id = $1 AND f.path LIKE $2 AND ($3 OR f.deleted_at IS NULL)
                        AND strpos(substr(f.path, $4), '/') > 0
                  GROUP BY 1 ORDER BY lower(split_part(substr(f.path, $4), '/', 1))",
-                &[&dev.id, &prefix, &include_deleted, &(n + 1)],
+                &[&dev.id, &below, &include_deleted, &(n + 1)],
             )?;
             entries.extend(folders.iter().filter(|_| offset == 0).map(|r| {
                 let name: String = r.get(0);
@@ -230,7 +231,7 @@ pub async fn list(State(state): State<Shared>, Query(q): Query<ListQuery>) -> Re
                      WHERE {scope} AND strpos(substr(f.path, $4), '/') = 0
                      ORDER BY {order} {direction} NULLS LAST, f.path LIMIT $5 OFFSET $6"
                 ),
-                &[&dev.id, &prefix, &include_deleted, &(n + 1), &limit, &offset],
+                &[&dev.id, &below, &include_deleted, &(n + 1), &limit, &offset],
             )?;
             total = rows.first().map_or(0, |r| r.get(10));
             entries.extend(rows.iter().map(|r| file_entry(r, prefix.len())));
@@ -385,9 +386,9 @@ pub struct Removed {
 pub fn expand(c: &mut Client, dev: &Device, path: &str, include_deleted: bool) -> anyhow::Result<Vec<String>> {
     let path = path.trim_matches('/');
     Ok(c.query(
-        "SELECT path FROM files WHERE device_id = $1 AND ($2 = '' OR path = $2 OR starts_with(path, $2 || '/'))
-         AND current_version_id IS NOT NULL AND ($3 OR deleted_at IS NULL) ORDER BY path",
-        &[&dev.id, &path, &include_deleted],
+        "SELECT path FROM files WHERE device_id = $1 AND ($2 = '' OR path = $2 OR path LIKE $3)
+         AND current_version_id IS NOT NULL AND ($4 OR deleted_at IS NULL) ORDER BY path",
+        &[&dev.id, &path, &db::like_prefix(&format!("{path}/")), &include_deleted],
     )?
     .iter()
     .map(|r| r.get(0))
