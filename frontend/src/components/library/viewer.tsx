@@ -9,6 +9,7 @@ import { whenText } from '@/lib/format'
 import { useLibraryActions } from '@/lib/library'
 import type { Asset } from '@/lib/types'
 import { AlbumPicker } from './album-picker'
+import { useT } from '@/lib/i18n'
 
 const InfoPanel = lazy(() => import('./info-panel'))
 
@@ -19,17 +20,18 @@ function busyElsewhere(e: KeyboardEvent) {
 }
 
 function Unavailable({ asset, video, retry }: { asset: Asset; video?: boolean; retry?: () => void }) {
+  const t = useT()
   return (
     <div className="flex max-w-sm flex-col items-center gap-3 p-6 text-center text-white/90">
       <FileImage className="size-10 text-white/60" />
       <p className="text-sm">
         {video
-          ? 'This video cannot be played in the browser yet. A playable copy is made in the background for formats browsers do not support.'
-          : 'No picture could be made of this file.'}
+          ? t('This video cannot be played in the browser yet. A playable copy is made in the background for formats browsers do not support.')
+          : t('No picture could be made of this file.')}
       </p>
       <div className="flex gap-2">
-        {retry && <Button variant="secondary" size="sm" onClick={retry}>Try again</Button>}
-        <Button variant="secondary" size="sm" asChild><a href={mediaUrl(asset.id, 'download', asset.hash)}><Download className="size-4" />Download the original</a></Button>
+        {retry && <Button variant="secondary" size="sm" onClick={retry}>{t('Try again')}</Button>}
+        <Button variant="secondary" size="sm" asChild><a href={mediaUrl(asset.id, 'download', asset.hash)}><Download className="size-4" />{t('Download the original')}</a></Button>
       </div>
     </div>
   )
@@ -63,6 +65,7 @@ export function Viewer({
   /** Called when the viewer gets near the end of what it was given, so that the page can load more. */
   onEdge?: (direction: 'prev' | 'next') => void
 }) {
+  const t = useT()
   const { edit, remove } = useLibraryActions()
   const [info, setInfo] = useState(() => window.matchMedia('(min-width: 1024px)').matches)
   const [dialog, setDialog] = useState<'album' | 'delete' | null>(null)
@@ -148,25 +151,25 @@ export function Viewer({
       className="fixed inset-0 z-50 flex flex-col bg-black text-white outline-none"
     >
       <header className="z-10 flex items-center gap-1 bg-gradient-to-b from-black/70 to-transparent p-2">
-        <Button variant="ghost" size="icon" className="text-white hover:bg-white/15 hover:text-white" aria-label="Close" onClick={onClose}><X className="size-5" /></Button>
+        <Button variant="ghost" size="icon" className="text-white hover:bg-white/15 hover:text-white" aria-label={t('Close')} onClick={onClose}><X className="size-5" /></Button>
         <div className="mr-auto min-w-0 px-2">
           <p className="truncate text-sm font-medium">{asset.name}</p>
           <p className="text-xs text-white/70">{whenText(asset.when)}</p>
         </div>
-        <Button variant="ghost" size="icon" className="text-white hover:bg-white/15 hover:text-white" aria-label={asset.favorite ? 'Remove from favorites' : 'Add to favorites'} aria-pressed={asset.favorite} onClick={() => edit.mutate({ id: asset.id, favorite: !asset.favorite })}>
+        <Button variant="ghost" size="icon" className="text-white hover:bg-white/15 hover:text-white" aria-label={asset.favorite ? t('Remove from favorites') : t('Add to favorites')} aria-pressed={asset.favorite} onClick={() => edit.mutate({ id: asset.id, favorite: !asset.favorite })}>
           <Heart className={asset.favorite ? 'size-5 fill-current' : 'size-5'} />
         </Button>
-        <Button variant="ghost" size="icon" className="text-white hover:bg-white/15 hover:text-white" aria-label="Info" aria-pressed={info} onClick={() => setInfo((v) => !v)}><Info className="size-5" /></Button>
+        <Button variant="ghost" size="icon" className="text-white hover:bg-white/15 hover:text-white" aria-label={t('Info')} aria-pressed={info} onClick={() => setInfo((v) => !v)}><Info className="size-5" /></Button>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="text-white hover:bg-white/15 hover:text-white" aria-label="More actions"><MoreVertical className="size-5" /></Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="text-white hover:bg-white/15 hover:text-white" aria-label={t('More actions')}><MoreVertical className="size-5" /></Button></DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={() => setDialog('album')}><FolderPlus className="size-4" />Add to album</DropdownMenuItem>
-            <DropdownMenuItem asChild><a href={mediaUrl(asset.id, 'download', asset.hash)}><Download className="size-4" />Download</a></DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setDialog('album')}><FolderPlus className="size-4" />{t('Add to album')}</DropdownMenuItem>
+            <DropdownMenuItem asChild><a href={mediaUrl(asset.id, 'download', asset.hash)}><Download className="size-4" />{t('Download')}</a></DropdownMenuItem>
             <DropdownMenuItem onSelect={() => edit.mutate({ id: asset.id, archived: !asset.archived }, { onSuccess: moveOn })}>
               {asset.archived ? <ArchiveRestore className="size-4" /> : <Archive className="size-4" />}{asset.archived ? 'Unarchive' : 'Archive'}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onSelect={() => setDialog('delete')}><Trash2 className="size-4" />Delete</DropdownMenuItem>
+            <DropdownMenuItem variant="destructive" onSelect={() => setDialog('delete')}><Trash2 className="size-4" />{t('Delete')}</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </header>
@@ -185,14 +188,14 @@ export function Viewer({
         >
           <Media key={asset.id} asset={asset} />
           {before && (
-            <Button variant="ghost" size="icon" className="absolute top-1/2 left-2 size-11 -translate-y-1/2 rounded-full bg-black/40 text-white hover:bg-black/60 hover:text-white max-sm:hidden" aria-label="Previous" onClick={() => go(-1)}><ChevronLeft className="size-6" /></Button>
+            <Button variant="ghost" size="icon" className="absolute top-1/2 left-2 size-11 -translate-y-1/2 rounded-full bg-black/40 text-white hover:bg-black/60 hover:text-white max-sm:hidden" aria-label={t('Previous')} onClick={() => go(-1)}><ChevronLeft className="size-6" /></Button>
           )}
           {after && (
-            <Button variant="ghost" size="icon" className="absolute top-1/2 right-2 size-11 -translate-y-1/2 rounded-full bg-black/40 text-white hover:bg-black/60 hover:text-white max-sm:hidden" aria-label="Next" onClick={() => go(1)}><ChevronRight className="size-6" /></Button>
+            <Button variant="ghost" size="icon" className="absolute top-1/2 right-2 size-11 -translate-y-1/2 rounded-full bg-black/40 text-white hover:bg-black/60 hover:text-white max-sm:hidden" aria-label={t('Next')} onClick={() => go(1)}><ChevronRight className="size-6" /></Button>
           )}
         </div>
         {info && (
-          <aside aria-label="Details" className="shrink-0 overflow-y-auto bg-background text-foreground max-lg:absolute max-lg:inset-x-0 max-lg:bottom-0 max-lg:max-h-[75%] max-lg:rounded-t-2xl max-lg:shadow-2xl lg:w-96 lg:border-l">
+          <aside aria-label={t('Details')} className="shrink-0 overflow-y-auto bg-background text-foreground max-lg:absolute max-lg:inset-x-0 max-lg:bottom-0 max-lg:max-h-[75%] max-lg:rounded-t-2xl max-lg:shadow-2xl lg:w-96 lg:border-l">
             <Suspense fallback={<div className="p-4"><Skeleton className="h-64" /></div>}><InfoPanel id={asset.id} onClose={() => setInfo(false)} /></Suspense>
           </aside>
         )}
@@ -201,9 +204,9 @@ export function Viewer({
       <AlbumPicker open={dialog === 'album'} ids={[asset.id]} onClose={() => setDialog(null)} />
       <Confirm
         open={dialog === 'delete'}
-        title="Delete this file?"
-        description="It moves to the trash and stays recoverable until the retention period ends. The original on your device is not touched."
-        action="Delete"
+        title={t('Delete this file?')}
+        description={t('It moves to the trash and stays recoverable until the retention period ends. The original on your device is not touched.')}
+        action={t('Delete')}
         destructive
         onCancel={() => setDialog(null)}
         onConfirm={() => {

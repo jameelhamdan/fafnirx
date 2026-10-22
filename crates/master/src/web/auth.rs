@@ -18,42 +18,32 @@ const SESSION_SECS: i64 = 7 * 86400;
 const LOGIN_WINDOW: Duration = Duration::from_secs(60);
 const LOGIN_MAX: usize = 5;
 
-/// The key that signs cookies: made once, kept in the data directory so that every process shares it.
+/// The key that signs cookies: made once and kept in the data directory, so that logins survive a restart.
 pub fn load_secret(data_dir: &Path) -> anyhow::Result<Vec<u8>> {
     let path = data_dir.join("web_secret");
-    if let Ok(text) = std::fs::read_to_string(&path) {
-        if let Ok(key) = hex::decode(text.trim()) {
-            if key.len() >= 32 {
-                return Ok(key);
-            }
+    if let Some(key) = std::fs::read_to_string(&path).ok().and_then(|t| hex::decode(t.trim()).ok()) {
+        if key.len() >= 32 {
+            return Ok(key);
         }
     }
     let key: [u8; 32] = crate::platform::db::random_bytes();
     std::fs::create_dir_all(data_dir)?;
-    // Processes that start together must end up with one key: the first to create the file wins.
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
+    options.write(true).create(true).truncate(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    match options.open(&path) {
-        Ok(mut file) => {
-            std::io::Write::write_all(&mut file, hex::encode(key).as_bytes())?;
-            Ok(key.to_vec())
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            // The other process may still be writing it.
-            for _ in 0..20 {
-                if let Some(key) = std::fs::read_to_string(&path).ok().and_then(|t| hex::decode(t.trim()).ok()) {
-                    if key.len() >= 32 {
-                        return Ok(key);
-                    }
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            anyhow::bail!("{} exists but does not hold a valid key; delete it", path.display())
-        }
-        Err(e) => Err(e.into()),
-    }
+    std::io::Write::write_all(&mut options.open(&path)?, hex::encode(key).as_bytes())?;
+    // `mode` only applies to a file that is created: a key file made earlier may be more open.
+    #[cfg(unix)]
+    std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    Ok(key.to_vec())
+}
+
+/// The key cookies are signed with. It changes with the password.
+pub fn session_key(secret: &[u8], password: &str) -> Vec<u8> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("any key length works");
+    mac.update(password.as_bytes());
+    mac.finalize().into_bytes().to_vec()
 }
 
 fn sign(secret: &[u8], expires: i64) -> String {
@@ -162,5 +152,13 @@ mod tests {
         assert!(!valid(key, &sign(key, unix_now() - 1)), "expired");
         assert!(!valid(key, "9999999999.00"), "forged");
         assert!(!valid(key, "garbage"));
+    }
+
+    #[test]
+    fn a_new_password_ends_every_session() {
+        let secret = b"0123456789abcdef0123456789abcdef";
+        let (old, new) = (session_key(secret, "one"), session_key(secret, "two"));
+        assert!(!valid(&new, &sign(&old, unix_now() + 100)));
+        assert!(valid(&old, &sign(&old, unix_now() + 100)));
     }
 }

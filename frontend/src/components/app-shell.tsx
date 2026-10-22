@@ -1,9 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Archive, FolderOpen, GalleryVerticalEnd, HardDrive, Heart, Images, LayoutDashboard, LogOut, MapPin, Menu, Monitor, Moon, Server, Settings, Sun, Trash2, UploadCloud } from 'lucide-react'
+import { Archive, FolderOpen, GalleryVerticalEnd, HardDrive, Heart, Images, LayoutDashboard, LogOut, MapPin, Languages, Menu, Monitor, Moon, Settings, Sun, Trash2, UploadCloud } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import { api } from '@/lib/api'
+import { LANGUAGES, msg, useI18n, type Lang } from '@/lib/i18n'
 import { useLive } from '@/lib/live-state'
 import type { Session } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -14,35 +15,36 @@ import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 
 const NAV = [
   {
-    title: 'Photos',
+    title: msg('Photos'),
     items: [
-      { to: '/timeline', label: 'Timeline', icon: Images },
-      { to: '/favorites', label: 'Favorites', icon: Heart },
-      { to: '/albums', label: 'Albums', icon: GalleryVerticalEnd },
-      { to: '/map', label: 'Map', icon: MapPin },
-      { to: '/archive', label: 'Archive', icon: Archive },
-      { to: '/trash', label: 'Trash', icon: Trash2 },
+      { to: '/timeline', label: msg('Timeline'), icon: Images },
+      { to: '/favorites', label: msg('Favorites'), icon: Heart },
+      { to: '/albums', label: msg('Albums'), icon: GalleryVerticalEnd },
+      { to: '/map', label: msg('Map'), icon: MapPin },
+      { to: '/archive', label: msg('Archive'), icon: Archive },
+      { to: '/trash', label: msg('Trash'), icon: Trash2 },
     ],
   },
   {
-    title: 'Backup',
+    title: msg('Backup'),
     items: [
-      { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
-      { to: '/files', label: 'Files', icon: FolderOpen },
-      { to: '/devices', label: 'Devices', icon: Monitor },
-      { to: '/sources', label: 'Sources', icon: UploadCloud },
-      { to: '/mirrors', label: 'Mirrors', icon: HardDrive },
-      { to: '/settings', label: 'Settings', icon: Settings },
+      { to: '/', label: msg('Dashboard'), icon: LayoutDashboard, end: true },
+      { to: '/files', label: msg('Files'), icon: FolderOpen },
+      { to: '/devices', label: msg('Devices'), icon: Monitor },
+      { to: '/sources', label: msg('Sources'), icon: UploadCloud },
+      { to: '/mirrors', label: msg('Mirrors'), icon: HardDrive },
+      { to: '/settings', label: msg('Settings'), icon: Settings },
     ],
   },
 ]
 
 function Nav({ onNavigate }: { onNavigate?: () => void }) {
+  const { t } = useI18n()
   return (
-    <nav className="flex flex-col gap-4 p-3" aria-label="Main">
+    <nav className="flex flex-col gap-4 p-3" aria-label={t('Main')}>
       {NAV.map(({ title, items }) => (
         <div key={title} className="flex flex-col gap-1">
-          <p className="px-3 pb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">{title}</p>
+          <p className="px-3 pb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">{t(title)}</p>
           {items.map(({ to, label, icon: Icon, ...rest }) => (
             <NavLink
               key={to}
@@ -57,7 +59,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
               }
             >
               <Icon className="size-4" />
-              {label}
+              {t(label)}
             </NavLink>
           ))}
         </div>
@@ -69,31 +71,49 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
 function Brand() {
   return (
     <div className="flex h-14 items-center gap-2 border-b px-4">
-      <div className="grid size-7 place-items-center rounded-md bg-primary text-primary-foreground">
-        <Server className="size-4" />
-      </div>
+      <img src="/favicon.svg" alt="" className="size-7" />
       <span className="font-semibold tracking-tight">fafnirx</span>
     </div>
   )
 }
 
+function LanguageButton() {
+  const { lang, setLang, t } = useI18n()
+  const codes = Object.keys(LANGUAGES) as Lang[]
+  const next = codes[(codes.indexOf(lang) + 1) % codes.length]
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant="ghost" size="icon" onClick={() => setLang(next)} aria-label={t('Language: {language}', { language: LANGUAGES[lang].label })}>
+          <Languages className="size-4" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{t('Language: {language}', { language: LANGUAGES[lang].label })}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+const THEME: Record<string, string> = { light: msg('light'), dark: msg('dark'), system: msg('system') }
+
 function ThemeButton() {
+  const { t } = useI18n()
   const { theme, setTheme } = useTheme()
   const next = theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light'
   const Icon = theme === 'light' ? Sun : theme === 'dark' ? Moon : Monitor
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button variant="ghost" size="icon" onClick={() => setTheme(next)} aria-label={`Theme: ${theme ?? 'system'}`}>
+        <Button variant="ghost" size="icon" onClick={() => setTheme(next)} aria-label={t('Theme: {theme}', { theme: t(THEME[theme ?? 'system']) })}>
           <Icon className="size-4" />
         </Button>
       </TooltipTrigger>
-      <TooltipContent>Theme: {theme ?? 'system'}</TooltipContent>
+      <TooltipContent>{t('Theme: {theme}', { theme: t(THEME[theme ?? 'system']) })}</TooltipContent>
     </Tooltip>
   )
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
+  const { t } = useI18n()
   const client = useQueryClient()
   const live = useLive()
   const [open, setOpen] = useState(false)
@@ -113,12 +133,12 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-20 flex h-14 items-center gap-2 border-b bg-background/80 px-3 backdrop-blur md:px-6">
-          <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setOpen(true)} aria-label="Menu">
+          <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setOpen(true)} aria-label={t('Menu')}>
             <Menu className="size-5" />
           </Button>
           <div className="flex-1" />
           {version && (
-            <span className="text-xs text-muted-foreground tabular-nums" title="Master version">
+            <span className="text-xs text-muted-foreground tabular-nums" title={t('Master version')}>
               v{version}
             </span>
           )}
@@ -126,13 +146,14 @@ export function AppShell({ children }: { children: ReactNode }) {
             <TooltipTrigger asChild>
               <span className="flex items-center gap-2 px-2 text-xs text-muted-foreground">
                 <span className={cn('size-2 rounded-full', live ? 'bg-success' : 'bg-warning')} />
-                {live ? 'Live' : 'Reconnecting'}
+                {live ? t('Live') : t('Reconnecting')}
               </span>
             </TooltipTrigger>
-            <TooltipContent>{live ? 'Changes appear as they happen' : 'Updates paused; reconnecting'}</TooltipContent>
+            <TooltipContent>{live ? t('Changes appear as they happen') : t('Updates paused; reconnecting')}</TooltipContent>
           </Tooltip>
+          <LanguageButton />
           <ThemeButton />
-          <Button variant="ghost" size="icon" onClick={logout} aria-label="Log out">
+          <Button variant="ghost" size="icon" onClick={logout} aria-label={t('Log out')}>
             <LogOut className="size-4" />
           </Button>
         </header>
@@ -141,7 +162,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="left" className="w-64 p-0">
           <SheetHeader className="sr-only">
-            <SheetTitle>Menu</SheetTitle>
+            <SheetTitle>{t('Menu')}</SheetTitle>
           </SheetHeader>
           <Brand />
           <Nav onNavigate={() => setOpen(false)} />

@@ -149,15 +149,14 @@ pub fn chunk_count(size: u64) -> u64 {
     size.div_ceil(CHUNK_SIZE as u64)
 }
 
-/// Validates a remote path and returns it NFC normalized. Remote paths are
-/// relative, '/' separated, and never contain '.', '..', empty or control
-/// components. They are only ever stored as database values, never used as
-/// server-side filesystem paths.
 /// The composed (NFC) form of a name, which is how every path is stored.
 pub fn nfc(name: &str) -> String {
     name.nfc().collect()
 }
 
+/// Validates a remote path and returns it NFC normalized. Remote paths are
+/// relative, '/' separated, and never contain '.', '..', empty or control
+/// components. The master checks them again when it maps them to a place on disk.
 pub fn clean_remote_path(path: &str) -> Result<String> {
     let path = nfc(path);
     if path.is_empty() || path.len() > 4096 {

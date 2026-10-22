@@ -8,7 +8,6 @@ use fafnirx_common::{ChunkHasher, CHUNK_SIZE, HASH_LEN};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub struct Store {
@@ -16,8 +15,6 @@ pub struct Store {
     versions: PathBuf,
     tmp: PathBuf,
 }
-
-static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// A file that is never going to be a chunk index anyone sends: bounds the size of a staging file.
 const MAX_CHUNK_INDEX: u32 = 1 << 20;
@@ -27,7 +24,7 @@ impl Store {
         let store = Self { files: root.join("files"), versions: root.join("versions"), tmp: root.join("tmp") };
         fs::create_dir_all(&store.files)?;
         fs::create_dir_all(&store.versions)?;
-        // Other master processes may be using tmp right now; interrupted transfers are removed by
+        // Interrupted transfers are removed by
         // `clean_tmp` once nobody has touched them for a day.
         fs::create_dir_all(&store.tmp)?;
         Ok(store)
@@ -72,9 +69,9 @@ impl Store {
         Self::resolve(&self.versions.join(version_id.to_string()), device, path)
     }
 
-    /// A new unique path in `tmp`.
+    /// A new path in `tmp`, unique by its random name.
     pub fn temp_path(&self) -> PathBuf {
-        self.tmp.join(format!("{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed)))
+        self.tmp.join(hex::encode(crate::platform::db::random_bytes::<16>()))
     }
 
     /// Where the chunks of an upload accumulate until the commit. Keyed by device and content so that

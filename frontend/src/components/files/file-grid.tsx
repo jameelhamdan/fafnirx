@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { Thumb } from '../library/thumb'
 import { Checkbox } from '../ui/checkbox'
 import { FileIcon } from './file-icon'
+import { useT } from '@/lib/i18n'
 
 /** Thumbnails for photos, icons for everything else. */
 export function FileGrid({
@@ -19,6 +20,7 @@ export function FileGrid({
   onToggle: (key: string) => void
   onOpen: (e: Entry) => void
 }) {
+  const t = useT()
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
       {entries.map((e) => {
@@ -42,7 +44,7 @@ export function FileGrid({
             <Checkbox
               checked={on}
               onCheckedChange={() => onToggle(key)}
-              aria-label={`Select ${e.name}`}
+              aria-label={t('Select {name}', { name: e.name })}
               className={cn('absolute top-2 left-2 bg-background/90', !on && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-sm:opacity-100')}
             />
           </div>

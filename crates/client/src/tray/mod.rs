@@ -317,7 +317,7 @@ pub fn run(config_path: PathBuf) -> Result<()> {
     let event_loop = EventLoopBuilder::new().build();
     let mut tray: Option<TrayIcon> = None;
     let mut shown: Option<(Light, bool)> = None;
-    let mut current = View { light: Light::Stopped, text: String::new(), syncing: false };
+    let mut current = View { light: Light::Stopped, text: String::new(), syncing: false, stopped: true };
     let mut led = false;
     let (mut next_read, mut next_blink) = (Instant::now(), Instant::now());
 
@@ -345,7 +345,7 @@ pub fn run(config_path: PathBuf) -> Result<()> {
 
         while let Ok(ev) = MenuEvent::receiver().try_recv() {
             if let Some(action) = menus.action(&ev.id) {
-                if !env.perform(action, current.light == Light::Stopped) {
+                if !env.perform(action, current.stopped) {
                     *flow = ControlFlow::Exit;
                 }
                 next_read = Instant::now();
@@ -365,7 +365,7 @@ pub fn run(config_path: PathBuf) -> Result<()> {
                 menus.sync_folders(&c.folders);
             }
             let updates = env.update_result.lock().map(|u| u.clone()).unwrap_or_default();
-            menus.show(&info, paused, current.light == Light::Stopped, &updates);
+            menus.show(&info, paused, current.stopped, &updates);
             if let Some(t) = &tray {
                 let tip = if current.syncing { &info.now } else { &current.text };
                 let _ = t.set_tooltip(Some(format!("fafnirx: {tip}").chars().take(120).collect::<String>()));

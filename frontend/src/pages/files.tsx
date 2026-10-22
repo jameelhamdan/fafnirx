@@ -20,30 +20,32 @@ import { ToggleGroup } from '@/components/files/toggle-group'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useNow } from '@/hooks/use-now'
 import { api, downloadZip, query } from '@/lib/api'
-import { count, joinPath } from '@/lib/format'
+import { count, joinPath, plural } from '@/lib/format'
+import { msg, useT } from '@/lib/i18n'
 import type { DeviceSummary, Entry, Listing } from '@/lib/types'
 import { collectDropped, enqueueUploads, fromInput } from '@/lib/upload'
 import { cn } from '@/lib/utils'
 
 const TYPES = [
-  ['all', 'All files'],
-  ['image', 'Images'],
-  ['video', 'Videos'],
-  ['audio', 'Audio'],
-  ['document', 'Documents'],
-  ['archive', 'Archives'],
+  ['all', msg('All files')],
+  ['image', msg('Images')],
+  ['video', msg('Videos')],
+  ['audio', msg('Audio')],
+  ['document', msg('Documents')],
+  ['archive', msg('Archives')],
 ] as const
 
 const SORTS = [
-  ['name', 'Name'],
-  ['modified', 'Modified'],
-  ['added', 'Recorded'],
-  ['taken', 'Date taken'],
-  ['size', 'Size'],
-  ['type', 'Type'],
+  ['name', msg('Name')],
+  ['modified', msg('Modified')],
+  ['added', msg('Recorded')],
+  ['taken', msg('Date taken')],
+  ['size', msg('Size')],
+  ['type', msg('Type')],
 ] as const
 
 function NewFolder({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (name: string) => void }) {
+  const t = useT()
   const client = useQueryClient()
   const [name, setName] = useState('')
   const create = useMutation({
@@ -61,18 +63,18 @@ function NewFolder({ open, onClose, onCreated }: { open: boolean; onClose: () =>
       <DialogContent>
         <form onSubmit={submit} className="space-y-4">
           <DialogHeader>
-            <DialogTitle>New local folder</DialogTitle>
+            <DialogTitle>{t('New local folder')}</DialogTitle>
             <DialogDescription>
-              A top-level folder that lives on the master. Upload into it from this page, or copy files straight into <code>files/&lt;name&gt;/</code> on the server or its network share.
+              {t('A top-level folder that lives on the master. Upload into it from this page, or copy files straight into files/<name>/ on the server or its network share.')}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            <Label htmlFor="folder-name">Name</Label>
+            <Label htmlFor="folder-name">{t('Name')}</Label>
             <Input id="folder-name" autoFocus placeholder="photos" value={name} onChange={(e) => setName(e.target.value)} />
-            <p className="text-xs text-muted-foreground">Lowercase letters, digits, dot, underscore and dash.</p>
+            <p className="text-xs text-muted-foreground">{t('Lowercase letters, digits, dot, underscore and dash.')}</p>
             {create.error && <p role="alert" className="text-sm text-destructive">{create.error.message}</p>}
           </div>
-          <DialogFooter><Button type="submit" disabled={!name.trim() || create.isPending}>Create</Button></DialogFooter>
+          <DialogFooter><Button type="submit" disabled={!name.trim() || create.isPending}>{t('Create')}</Button></DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
@@ -80,6 +82,7 @@ function NewFolder({ open, onClose, onCreated }: { open: boolean; onClose: () =>
 }
 
 export default function Files() {
+  const t = useT()
   const [params, setParams] = useSearchParams()
   const client = useQueryClient()
   const now = useNow()
@@ -107,8 +110,8 @@ export default function Files() {
   useEffect(() => setSearch(q), [q])
   useEffect(() => {
     if (search === q) return
-    const t = window.setTimeout(() => go({ q: search }, true), 300)
-    return () => window.clearTimeout(t)
+    const timer = window.setTimeout(() => go({ q: search }, true), 300)
+    return () => window.clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search])
 
@@ -156,7 +159,7 @@ export default function Files() {
   const remove = useMutation({
     mutationFn: () => api.post<{ deleted: number }>('/api/files/delete', { items: chosen.map((e) => ({ device: e.device, path: e.path })) }),
     onSuccess: (r) => {
-      toast.success(`${count(r.deleted)} file${r.deleted === 1 ? '' : 's'} deleted. Recoverable until the retention period ends.`)
+      toast.success(t('{files} deleted. Recoverable until the retention period ends.', { files: plural(r.deleted, 'file') }))
       setSelected(new Set())
       void client.invalidateQueries({ queryKey: ['files'] })
     },
@@ -174,7 +177,7 @@ export default function Files() {
   }
 
   const crumbs = [
-    { name: 'Files', to: { device: null, path: null } },
+    { name: t('Files'), to: { device: null, path: null } },
     ...(device ? [{ name: device, to: { device, path: null } }] : []),
     ...path.split('/').filter(Boolean).map((part, i, all) => ({ name: part, to: { device, path: all.slice(0, i + 1).join('/') } })),
   ]
@@ -189,23 +192,23 @@ export default function Files() {
     >
       {dragging && (
         <div className="pointer-events-none fixed inset-3 z-30 grid place-items-center rounded-xl border-2 border-dashed border-primary bg-primary/10 backdrop-blur-sm">
-          <p className="text-lg font-medium">Drop to upload to {device}{path && `/${path}`}</p>
+          <p className="text-lg font-medium">{t('Drop to upload to {target}', { target: device + (path ? `/${path}` : '') })}</p>
         </div>
       )}
       <PageHeader
-        title="Files"
+        title={t('Files')}
         actions={
           <>
-            {!device && <Button variant="outline" onClick={() => setNewFolder(true)}><FolderPlus className="size-4" />New local folder</Button>}
+            {!device && <Button variant="outline" onClick={() => setNewFolder(true)}><FolderPlus className="size-4" />{t('New local folder')}</Button>}
             {device && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span className="flex gap-2">
-                    <Button disabled={!canUpload} onClick={() => fileInput.current?.click()}><Upload className="size-4" />Upload</Button>
-                    <Button variant="outline" disabled={!canUpload} onClick={() => folderInput.current?.click()}>Upload folder</Button>
+                    <Button disabled={!canUpload} onClick={() => fileInput.current?.click()}><Upload className="size-4" />{t('Upload')}</Button>
+                    <Button variant="outline" disabled={!canUpload} onClick={() => folderInput.current?.click()}>{t('Upload folder')}</Button>
                   </span>
                 </TooltipTrigger>
-                {!canUpload && <TooltipContent>Uploads go to local folders. Devices and sources are filled by their own sending.</TooltipContent>}
+                {!canUpload && <TooltipContent>{t('Uploads go to local folders. Devices and sources are filled by their own sending.')}</TooltipContent>}
               </Tooltip>
             )}
           </>
@@ -214,7 +217,7 @@ export default function Files() {
       <input ref={fileInput} type="file" multiple hidden onChange={(e) => { if (e.target.files) upload(fromInput(e.target.files)); e.target.value = '' }} />
       <input ref={folderInput} type="file" hidden {...{ webkitdirectory: '' }} onChange={(e) => { if (e.target.files) upload(fromInput(e.target.files)); e.target.value = '' }} />
 
-      <nav aria-label="Location" className="mb-3 flex flex-wrap items-center gap-1 text-sm">
+      <nav aria-label={t('Location')} className="mb-3 flex flex-wrap items-center gap-1 text-sm">
         {crumbs.map((c, i) => (
           <span key={i} className="flex items-center gap-1">
             {i > 0 && <ChevronRight className="size-3.5 text-muted-foreground" />}
@@ -228,41 +231,41 @@ export default function Files() {
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="relative min-w-48 flex-1 sm:max-w-xs">
           <Search className="absolute top-2.5 left-2.5 size-4 text-muted-foreground" />
-          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={device ? `Search in ${device}${path ? `/${path}` : ''}` : 'Search a device first'} disabled={!device} className="pl-8" aria-label="Search" />
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={device ? t('Search in {where}', { where: device + (path ? `/${path}` : '') }) : t('Search a device first')} disabled={!device} className="pl-8" aria-label={t('Search')} />
         </div>
         <Select value={type} onValueChange={(v) => go({ type: v === 'all' ? null : v }, true)} disabled={!device}>
-          <SelectTrigger className="w-36" aria-label="File type"><SelectValue /></SelectTrigger>
-          <SelectContent>{TYPES.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
+          <SelectTrigger className="w-36" aria-label={t('File type')}><SelectValue /></SelectTrigger>
+          <SelectContent>{TYPES.map(([v, l]) => <SelectItem key={v} value={v}>{t(l)}</SelectItem>)}</SelectContent>
         </Select>
         <Select value={sort} onValueChange={(v) => go({ sort: v === 'name' ? null : v }, true)} disabled={!device}>
-          <SelectTrigger className="w-36" aria-label="Sort by"><SelectValue /></SelectTrigger>
-          <SelectContent>{SORTS.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
+          <SelectTrigger className="w-36" aria-label={t('Sort by')}><SelectValue /></SelectTrigger>
+          <SelectContent>{SORTS.map(([v, l]) => <SelectItem key={v} value={v}>{t(l)}</SelectItem>)}</SelectContent>
         </Select>
-        <Button variant="outline" size="icon" disabled={!device} aria-label={order === 'asc' ? 'Ascending' : 'Descending'} onClick={() => go({ order: order === 'asc' ? 'desc' : null }, true)}>
+        <Button variant="outline" size="icon" disabled={!device} aria-label={order === 'asc' ? t('Ascending') : t('Descending')} onClick={() => go({ order: order === 'asc' ? 'desc' : null }, true)}>
           <ArrowDownUp className={cn('size-4', order === 'desc' && 'rotate-180')} />
         </Button>
         <label className="flex items-center gap-2 px-1 text-sm text-muted-foreground">
           <Switch checked={showDeleted} onCheckedChange={(v) => go({ deleted: v ? '1' : null }, true)} disabled={!device} />
-          Deleted
+          {t('Deleted')}
         </label>
         <div className="ml-auto">
           <ToggleGroup
             value={view}
             onChange={(v) => go({ view: v === 'grid' ? 'grid' : null }, true)}
-            options={[{ value: 'list', label: 'List', icon: List }, { value: 'grid', label: 'Grid', icon: Grid2x2 }]}
+            options={[{ value: 'list', label: t('List'), icon: List }, { value: 'grid', label: t('Grid'), icon: Grid2x2 }]}
           />
         </div>
       </div>
 
       {chosen.length > 0 && (
         <div className="sticky top-16 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-lg border bg-popover p-2 shadow-sm">
-          <Button variant="ghost" size="icon" className="size-8" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X className="size-4" /></Button>
-          <span className="text-sm font-medium">{chosen.length} selected</span>
+          <Button variant="ghost" size="icon" className="size-8" aria-label={t('Clear selection')} onClick={() => setSelected(new Set())}><X className="size-4" /></Button>
+          <span className="text-sm font-medium">{t('{count} selected', { count: chosen.length })}</span>
           <div className="ml-auto flex gap-2">
             <Button size="sm" variant="outline" onClick={() => downloadZip(chosen.map((e) => ({ device: e.device, path: e.kind === 'device' ? '' : e.path })), chosen.length === 1 ? chosen[0].name : device || 'fafnirx')}>
-              <Download className="size-4" />Download{chosen.length === 1 && chosen[0].kind === 'file' ? '' : ' as zip'}
+              <Download className="size-4" />{chosen.length === 1 && chosen[0].kind === 'file' ? t('Download') : t('Download as zip')}
             </Button>
-            <Button size="sm" variant="outline" disabled={chosen.some((e) => e.kind === 'device')} onClick={() => setConfirmDelete(true)}><Trash2 className="size-4" />Delete</Button>
+            <Button size="sm" variant="outline" disabled={chosen.some((e) => e.kind === 'device')} onClick={() => setConfirmDelete(true)}><Trash2 className="size-4" />{t('Delete')}</Button>
           </div>
         </div>
       )}
@@ -271,11 +274,11 @@ export default function Files() {
         <Skeleton className="h-96" />
       ) : entries.length === 0 ? (
         !device ? (
-          <Empty title="No folders yet">Add a device on the Devices page, or create a local folder to upload into.</Empty>
+          <Empty title={t('No folders yet')}>{t('Add a device on the Devices page, or create a local folder to upload into.')}</Empty>
         ) : filtering ? (
-          <Empty title="Nothing matches">Try a different search or file type.</Empty>
+          <Empty title={t('Nothing matches')}>{t('Try a different search or file type.')}</Empty>
         ) : (
-          <Empty title="This folder is empty">{canUpload ? 'Drop files here or use Upload.' : showDeleted ? '' : 'Nothing has been collected here yet.'}</Empty>
+          <Empty title={t('This folder is empty')}>{canUpload ? t('Drop files here or use Upload.') : showDeleted ? '' : t('Nothing has been collected here yet.')}</Empty>
         )
       ) : (
         <>
@@ -287,11 +290,11 @@ export default function Files() {
           )}
           <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
             <span>
-              {searching ? `${count(total)} match${total === 1 ? '' : 'es'}` : device ? `${count(entries.length)} item${entries.length === 1 ? '' : 's'}${total > entries.filter((e) => e.kind === 'file').length ? ` of ${count(total)} files` : ''}` : ''}
+              {searching ? t('{count} matches', { count: count(total) }) : device ? plural(entries.length, 'item') + (total > entries.filter((e) => e.kind === 'file').length ? ' ' + t('of {total} files', { total: count(total) }) : '') : ''}
             </span>
             {listing.hasNextPage && (
               <Button variant="outline" size="sm" disabled={listing.isFetchingNextPage} onClick={() => void listing.fetchNextPage()}>
-                {listing.isFetchingNextPage ? 'Loading…' : 'Load more'}
+                {listing.isFetchingNextPage ? t('Loading…') : t('Load more')}
               </Button>
             )}
           </div>
@@ -302,9 +305,9 @@ export default function Files() {
       <NewFolder open={newFolder} onClose={() => setNewFolder(false)} onCreated={(name) => { setNewFolder(false); go({ device: name, path: null }) }} />
       <Confirm
         open={confirmDelete}
-        title={`Delete ${chosen.length} item${chosen.length === 1 ? '' : 's'}?`}
-        description="Folders delete everything inside. Deleted files stay recoverable until the retention period ends."
-        action="Delete"
+        title={t('Delete {items}?', { items: plural(chosen.length, 'item') })}
+        description={t('Folders delete everything inside. Deleted files stay recoverable until the retention period ends.')}
+        action={t('Delete')}
         destructive
         onCancel={() => setConfirmDelete(false)}
         onConfirm={() => { setConfirmDelete(false); remove.mutate() }}

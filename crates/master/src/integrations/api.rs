@@ -1,10 +1,13 @@
-//! Third-party sources (inbound) and mirrors (outbound): their configuration. The worker role runs them;
-//! this only stores their settings and asks for runs (`run_requested`). Credentials are write-only:
-//! they are never sent back to the browser.
+//! Third-party sources (inbound) and mirrors (outbound): their configuration. The background scheduler runs them;
+//! this only stores their settings and asks for runs (`run_requested`), and tells the configuration file to follow
+//! (`state.config.nudge()`). Credentials are write-only: they are never sent back to the browser.
 
+use crate::config::MirrorEntry;
 use crate::devices::api::NAME_RULE;
 use crate::files::browse::expand;
 use crate::files::ingest;
+use crate::integrations::Table;
+use crate::platform::store::Store;
 use crate::platform::db;
 use crate::web::{done, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, State};
@@ -16,7 +19,7 @@ use serde_json::{json, Value};
 
 const INTERVAL_HOURS: (f64, f64) = (0.25, 24.0 * 365.0);
 /// Source devices are named after their source.
-const SOURCE_PREFIX: &str = "source-";
+pub(crate) const SOURCE_PREFIX: &str = "source-";
 
 #[derive(Serialize)]
 pub struct JobState {
@@ -73,7 +76,7 @@ fn source_states(c: &mut Client) -> Result<Vec<JobState>, postgres::Error> {
 
 fn mirror_states(c: &mut Client) -> Result<Vec<JobState>, postgres::Error> {
     let rows = c.query(
-        "SELECT name, remote_type, options, remote_path, interval_secs, keep_runs, enabled, last_run_at, last_ok_at,
+        "SELECT name, remote, remote_type, options, remote_path, interval_secs, keep_runs, enabled, last_run_at, last_ok_at,
                 last_status, last_message, last_files, last_bytes FROM mirrors ORDER BY name",
         &[],
     )?;
@@ -84,6 +87,7 @@ fn mirror_states(c: &mut Client) -> Result<Vec<JobState>, postgres::Error> {
             let mut keys: Vec<&String> = options.as_object().map_or_else(Vec::new, |o| o.keys().collect());
             keys.sort();
             let detail = json!({
+                "remote": r.get::<_, String>("remote"),
                 "remote_type": r.get::<_, String>("remote_type"),
                 "remote_path": r.get::<_, String>("remote_path"),
                 "keep_runs": r.get::<_, i64>("keep_runs"),
@@ -108,7 +112,7 @@ pub async fn mirrors(State(state): State<Shared>) -> Res<Vec<JobState>> {
     Ok(Json(run(&state, |c| Ok(mirror_states(c)?)).await?))
 }
 
-fn valid_folder_id(id: &str) -> bool {
+pub(crate) fn valid_folder_id(id: &str) -> bool {
     (10..=100).contains(&id.len()) && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
@@ -120,7 +124,7 @@ fn id_after<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
 }
 
 /// Drive folder ids, one per line. Pasted folder URLs are reduced to their id.
-fn parse_folder_ids(text: &str) -> Result<Vec<String>, ApiError> {
+pub(crate) fn parse_folder_ids(text: &str) -> Result<Vec<String>, ApiError> {
     let mut ids: Vec<String> = Vec::new();
     for token in text.split(|c: char| c.is_whitespace() || c == ',').filter(|t| !t.is_empty()) {
         let folder = id_after(token, "/folders/")
@@ -140,7 +144,7 @@ fn parse_folder_ids(text: &str) -> Result<Vec<String>, ApiError> {
     Ok(ids)
 }
 
-fn parse_service_account(text: &str) -> Result<Value, ApiError> {
+pub(crate) fn parse_service_account(text: &str) -> Result<Value, ApiError> {
     let sa: Value =
         serde_json::from_str(text).map_err(|_| ApiError::bad("The service account key is not valid JSON"))?;
     let has = |k: &str| sa[k].as_str().is_some_and(|s| !s.is_empty());
@@ -176,11 +180,11 @@ fn parse_options(text: &str) -> Result<serde_json::Map<String, Value>, ApiError>
     Ok(opts)
 }
 
-fn hours_to_secs(hours: f64) -> Result<i64, ApiError> {
+pub(crate) fn hours_to_secs(hours: f64) -> Result<i64, ApiError> {
     if !(INTERVAL_HOURS.0..=INTERVAL_HOURS.1).contains(&hours) {
         return Err(ApiError::bad("Interval: between 0.25 hours and one year"));
     }
-    Ok((hours * 3600.0) as i64)
+    Ok((hours * 3600.0).round() as i64)
 }
 
 fn slug(name: &str) -> Result<String, ApiError> {
@@ -238,63 +242,88 @@ pub async fn create_source(State(state): State<Shared>, Json(b): Json<NewSource>
         Ok(())
     })
     .await?;
+    state.config.nudge();
     done()
+}
+
+/// Removes a source. Its collected files follow the normal delete rule: kept for the retention period, then removed.
+pub fn remove_source(c: &mut Client, store: &Store, name: &str) -> anyhow::Result<()> {
+    let row = c
+        .query_opt("SELECT s.id, s.device_id, d.name FROM sources s JOIN devices d ON d.id = s.device_id WHERE s.name = $1", &[&name])?
+        .ok_or_else(|| ApiError::not_found("No such source"))?;
+    let (id, device) = (row.get::<_, i64>(0), db::Device { id: row.get(1), name: row.get(2) });
+    for path in expand(c, &device, "", false)? {
+        ingest::mark_deleted(c, store, &device, &path, true)?;
+    }
+    c.execute("DELETE FROM source_items WHERE source_id = $1", &[&id])?;
+    c.execute("DELETE FROM sources WHERE id = $1", &[&id])?;
+    db::resolve_alert(c, "source_failed", name)?;
+    db::notify(c, "jobs", "sources")?;
+    Ok(())
 }
 
 pub async fn delete_source(State(state): State<Shared>, Path(name): Path<String>) -> Res<Done> {
     let store = state.store.clone();
-    run(&state, move |c| {
-        let row = c
-            .query_opt("SELECT s.id, s.device_id, d.name FROM sources s JOIN devices d ON d.id = s.device_id WHERE s.name = $1", &[&name])?
-            .ok_or_else(|| ApiError::not_found("No such source"))?;
-        let (id, device) = (row.get::<_, i64>(0), db::Device { id: row.get(1), name: row.get(2) });
-        // Collected files follow the normal delete rule: kept for the retention period, then removed.
-        for path in expand(c, &device, "", false)? {
-            ingest::mark_deleted(c, &store, &device, &path, true)?;
-        }
-        c.execute("DELETE FROM source_items WHERE source_id = $1", &[&id])?;
-        c.execute("DELETE FROM sources WHERE id = $1", &[&id])?;
-        db::resolve_alert(c, "source_failed", &name)?;
-        db::notify(c, "jobs", "sources")?;
-        Ok(())
-    })
-    .await?;
+    run(&state, move |c| remove_source(c, &store, &name)).await?;
+    state.config.nudge();
     done()
 }
 
-/// Flips or requests something on a row of `table` ("sources" or "mirrors", never user input).
-fn touch(c: &mut Client, table: &str, name: &str, set: &str) -> anyhow::Result<()> {
-    let n = c.execute(&format!("UPDATE {table} SET {set} WHERE name = $1"), &[&name])?;
-    if n == 0 {
-        return Err(ApiError::not_found(format!("No such {}", table.trim_end_matches('s'))).into());
+/// What `touch` does to a row.
+#[derive(Clone, Copy)]
+enum Touch {
+    RunNow,
+    ToggleEnabled,
+}
+
+impl Touch {
+    fn set(self) -> &'static str {
+        match self {
+            Touch::RunNow => "run_requested = 1",
+            Touch::ToggleEnabled => "enabled = 1 - enabled",
+        }
     }
-    db::notify(c, "jobs", table)?;
+}
+
+/// Flips or requests something on a row of a source or a mirror.
+fn touch(c: &mut Client, table: Table, name: &str, what: Touch) -> anyhow::Result<()> {
+    let n = c.execute(&format!("UPDATE {table} SET {} WHERE name = $1", what.set()), &[&name])?;
+    if n == 0 {
+        return Err(ApiError::not_found(format!("No such {}", table.as_str().trim_end_matches('s'))).into());
+    }
+    db::notify(c, "jobs", table.as_str())?;
     Ok(())
 }
 
 pub async fn run_source(State(state): State<Shared>, Path(name): Path<String>) -> Res<Done> {
-    run(&state, move |c| touch(c, "sources", &name, "run_requested = 1")).await?;
+    run(&state, move |c| touch(c, Table::Sources, &name, Touch::RunNow)).await?;
     done()
 }
 
 pub async fn toggle_source(State(state): State<Shared>, Path(name): Path<String>) -> Res<Done> {
-    run(&state, move |c| touch(c, "sources", &name, "enabled = 1 - enabled")).await?;
+    run(&state, move |c| touch(c, Table::Sources, &name, Touch::ToggleEnabled)).await?;
+    state.config.nudge();
     done()
 }
 
 pub async fn run_mirror(State(state): State<Shared>, Path(name): Path<String>) -> Res<Done> {
-    run(&state, move |c| touch(c, "mirrors", &name, "run_requested = 1")).await?;
+    run(&state, move |c| touch(c, Table::Mirrors, &name, Touch::RunNow)).await?;
     done()
 }
 
 pub async fn toggle_mirror(State(state): State<Shared>, Path(name): Path<String>) -> Res<Done> {
-    run(&state, move |c| touch(c, "mirrors", &name, "enabled = 1 - enabled")).await?;
+    run(&state, move |c| touch(c, Table::Mirrors, &name, Touch::ToggleEnabled)).await?;
+    state.config.nudge();
     done()
 }
 
 #[derive(Deserialize)]
 pub struct NewMirror {
     name: String,
+    /// A remote of the rclone config file (`name:path`); when set, the backend, options and path are not used.
+    #[serde(default)]
+    remote: String,
+    #[serde(default)]
     remote_type: String,
     #[serde(default)]
     options: String,
@@ -314,40 +343,34 @@ fn three() -> i64 {
 }
 
 pub async fn create_mirror(State(state): State<Shared>, Json(b): Json<NewMirror>) -> Res<Done> {
-    let name = slug(&b.name)?;
-    let remote_type = b.remote_type.trim().to_lowercase();
-    if remote_type.is_empty()
-        || remote_type.len() > 32
-        || !remote_type.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-    {
-        return Err(ApiError::bad("Type: an rclone backend name such as s3, sftp, webdav, b2"));
-    }
-    let options = parse_options(&b.options)?;
-    let secs = hours_to_secs(b.interval_hours)?;
-    if !(1..=100).contains(&b.keep_runs) {
-        return Err(ApiError::bad("Versions kept: between 1 and 100 runs"));
-    }
+    // The same checks as for a mirror written in the configuration file.
+    let mut mirror = MirrorEntry {
+        name: slug(&b.name)?,
+        remote: b.remote,
+        remote_type: b.remote_type,
+        remote_path: b.remote_path,
+        options: parse_options(&b.options)?.into_iter().collect(),
+        interval_hours: b.interval_hours,
+        keep_runs: b.keep_runs,
+        enabled: true,
+    };
+    mirror.normalize().map_err(|e| ApiError::bad(format!("{e:#}")))?;
+    let secs = hours_to_secs(mirror.interval_hours)?;
+    let options = Value::Object(mirror.options.into_iter().collect()).to_string();
     run(&state, move |c| {
         let inserted = c.execute(
-            "INSERT INTO mirrors (name, remote_type, options, remote_path, interval_secs, keep_runs, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (name) DO NOTHING",
-            &[
-                &name,
-                &remote_type,
-                &Value::Object(options).to_string(),
-                &b.remote_path.trim(),
-                &secs,
-                &b.keep_runs,
-                &unix_now(),
-            ],
+            "INSERT INTO mirrors (name, remote, remote_type, options, remote_path, interval_secs, keep_runs, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (name) DO NOTHING",
+            &[&mirror.name, &mirror.remote, &mirror.remote_type, &options, &mirror.remote_path, &secs, &mirror.keep_runs, &unix_now()],
         )?;
         if inserted == 0 {
-            return Err(ApiError::conflict(format!("A mirror named {name} already exists")).into());
+            return Err(ApiError::conflict(format!("A mirror named {} already exists", mirror.name)).into());
         }
         db::notify(c, "jobs", "mirrors")?;
         Ok(())
     })
     .await?;
+    state.config.nudge();
     done()
 }
 
@@ -355,7 +378,7 @@ pub async fn create_mirror(State(state): State<Shared>, Json(b): Json<NewMirror>
 pub async fn resync_mirror(State(state): State<Shared>, Path(name): Path<String>) -> Res<Done> {
     run(&state, move |c| {
         c.execute("DELETE FROM mirror_items WHERE mirror_id = (SELECT id FROM mirrors WHERE name = $1)", &[&name])?;
-        touch(c, "mirrors", &name, "run_requested = 1")
+        touch(c, Table::Mirrors, &name, Touch::RunNow)
     })
     .await?;
     done()
@@ -374,6 +397,7 @@ pub async fn delete_mirror(State(state): State<Shared>, Path(name): Path<String>
         Ok(())
     })
     .await?;
+    state.config.nudge();
     done()
 }
 

@@ -33,10 +33,10 @@ pub fn hash_token(token: &str) -> String {
     hex::encode(sha2::Sha256::digest(token.as_bytes()))
 }
 
-/// The channel every master process listens on for changes to show live.
+/// The channel the master listens on for changes to show live.
 pub const CHANNEL: &str = "fafnirx";
 
-/// Tells the processes that serve the admin API that something changed. `topic` is one of `files`
+/// Tells the live update stream (and so the browsers) that something changed. `topic` is one of `files`
 /// (then `key` is the device), `activity`, `devices`, `alerts`, `jobs`. Delivered when the transaction commits.
 pub fn notify(conn: &mut impl GenericClient, topic: &str, key: &str) -> Result<(), postgres::Error> {
     let payload = serde_json::json!({ "topic": topic, "key": key }).to_string();
@@ -51,7 +51,7 @@ pub fn lock_path(conn: &mut impl GenericClient, device_id: i64, path: &str) -> R
     Ok(())
 }
 
-/// Queues background work for the worker role.
+/// Queues background work for the job queue (`library::meta`).
 pub fn enqueue(conn: &mut impl GenericClient, kind: &str, payload: &serde_json::Value) -> Result<(), postgres::Error> {
     conn.execute(
         "INSERT INTO jobs (kind, payload, created_at) VALUES ($1, $2, $3)",
@@ -60,7 +60,7 @@ pub fn enqueue(conn: &mut impl GenericClient, kind: &str, payload: &serde_json::
     Ok(())
 }
 
-/// Serializes migrations between master processes, which all apply them on start.
+/// Serializes migrations, in case two masters start on one database.
 pub(crate) const SCHEMA_LOCK: i64 = 0x6661_666e_6972_7801;
 const POOL_SIZE: u32 = 8;
 const CONNECT_ATTEMPTS: u32 = 30;
@@ -101,42 +101,19 @@ fn apply_schema(conn: &mut Client) -> Result<()> {
 /// A `LIKE` pattern for the paths that start with `prefix` (`path LIKE $1`), which a `text_pattern_ops` index answers.
 /// Characters that mean something to `LIKE` are taken literally.
 pub fn like_prefix(prefix: &str) -> String {
-    let mut pattern = String::with_capacity(prefix.len() + 1);
-    for c in prefix.chars() {
-        if matches!(c, '\\' | '%' | '_') {
-            pattern.push('\\');
-        }
-        pattern.push(c);
-    }
-    pattern.push('%');
-    pattern
+    like_escape(prefix) + "%"
 }
 
-/// Held by the one process that runs the singleton background work (scheduled jobs, sources, mirrors,
-/// the file watcher).
-const LEADER_LOCK: i64 = 0x6661_666e_6972_7802;
-
-/// Waits until this process is the leader, then keeps the lock for as long as it lives. If the
-/// connection that holds the lock is lost the process exits, so that a supervisor restarts it and a
-/// single leader remains.
-pub async fn lead(url: &str) -> Result<()> {
-    let config: Config = url.parse().context("FAFNIRX_DATABASE_URL is not a valid PostgreSQL connection string")?;
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        let mut conn = config.connect(NoTls)?;
-        while !conn.query_one("SELECT pg_try_advisory_lock($1)", &[&LEADER_LOCK])?.get::<_, bool>(0) {
-            std::thread::sleep(Duration::from_secs(5));
+/// `text` with the characters that mean something to `LIKE` taken literally.
+pub fn like_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            out.push('\\');
         }
-        tracing::info!("this process runs the scheduled work");
-        std::thread::spawn(move || loop {
-            std::thread::sleep(Duration::from_secs(30));
-            if let Err(e) = conn.simple_query("SELECT 1") {
-                tracing::error!("lost the connection that holds the leader lock: {e}");
-                std::process::exit(1);
-            }
-        });
-        Ok(())
-    })
-    .await?
+        out.push(c);
+    }
+    out
 }
 
 /// Runs `f` on a blocking thread with a pooled database connection.

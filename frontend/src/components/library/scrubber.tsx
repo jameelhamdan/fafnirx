@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { monthTitle } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { useT } from '@/lib/i18n'
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n))
 
@@ -23,6 +24,7 @@ export function Scrubber({
   /** Where the list begins on the page. */
   scrollMargin: number
 }) {
+  const t = useT()
   const track = useRef<HTMLDivElement>(null)
   const [height, setHeight] = useState(0)
   const [scrollY, setScrollY] = useState(0)
@@ -92,7 +94,7 @@ export function Scrubber({
       ref={track}
       role="slider"
       tabIndex={ready ? 0 : -1}
-      aria-label="Scroll through time"
+      aria-label={t('Scroll through time')}
       aria-orientation="vertical"
       aria-valuemin={0}
       aria-valuemax={Math.max(0, months.length - 1)}

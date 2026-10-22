@@ -1,5 +1,6 @@
 import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
+import { useT } from '@/lib/i18n'
 
 /** A yes/no question before something that cannot be undone. */
 export function Confirm({
@@ -19,6 +20,7 @@ export function Confirm({
   onConfirm: () => void
   onCancel: () => void
 }) {
+  const t = useT()
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
       <DialogContent>
@@ -27,7 +29,7 @@ export function Confirm({
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="outline" onClick={onCancel}>Cancel</Button>
+          <Button variant="outline" onClick={onCancel}>{t('Cancel')}</Button>
           <Button variant={destructive ? 'destructive' : 'default'} onClick={onConfirm}>{action}</Button>
         </DialogFooter>
       </DialogContent>

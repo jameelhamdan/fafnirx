@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import { api, query } from './api'
 import { count } from './format'
 import type { AlbumInfo, Asset, Scope, TagInfo } from './types'
+import { useT } from '@/lib/i18n'
 
 /** Everything that shows library data: refreshed after any change. */
 const LIBRARY_KEYS = ['timeline', 'asset', 'map', 'albums', 'album', 'tags', 'trash', 'files', 'info']
@@ -25,6 +26,7 @@ export interface Edit {
 
 /** The changes people make to photos and videos, each with a toast on failure and a refresh on success. */
 export function useLibraryActions() {
+  const t = useT()
   const refresh = useRefreshLibrary()
   const failed = (e: Error) => toast.error(e.message)
 
@@ -42,7 +44,7 @@ export function useLibraryActions() {
   const remove = useMutation({
     mutationFn: (items: { device: string; path: string }[]) => api.post<{ deleted: number }>('/api/files/delete', { items }),
     onSuccess: (r) => {
-      toast.success(`${count(r.deleted)} deleted. They stay in the trash until the retention period ends.`)
+      toast.success(t('{count} deleted. They stay in the trash until the retention period ends.', { count: count(r.deleted) }))
       void refresh()
     },
     onError: failed,

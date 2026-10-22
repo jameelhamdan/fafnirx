@@ -22,14 +22,15 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends rclone ca-certificates ffmpeg curl \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 1000 --create-home fafnirx \
-    && mkdir /data && chown fafnirx /data
+    && mkdir /data /config && chown fafnirx /data /config
 COPY --from=build /src/target/release/fafnirx-master /usr/local/bin/fafnirx-master
 COPY --from=build /src/target/release/fafnirx-sign /usr/local/bin/fafnirx-sign
-ENV FAFNIRX_DATA=/data FAFNIRX_HTTP=0.0.0.0:8080
-VOLUME /data
+# /config holds fafnirx.json (devices, mirrors, sources, settings) and, if you use one, rclone.conf. Map a host folder
+# onto it to keep the setup outside the container and to edit it by hand.
+ENV FAFNIRX_DATA=/data FAFNIRX_CONFIG=/config/fafnirx.json FAFNIRX_HTTP=0.0.0.0:8080
+VOLUME /data /config
 EXPOSE 7443 8080
 USER fafnirx
-# A process with the worker role alone serves no HTTP; turn the check off for it (healthcheck: disable: true).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${FAFNIRX_HTTP##*:}/healthz" || exit 1
 CMD ["fafnirx-master"]

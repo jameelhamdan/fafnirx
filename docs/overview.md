@@ -1,5 +1,9 @@
 # Overview
 
+The scale it is built for: 3-5 devices, up to hundreds of thousands of files, files up to 5 GB. Preserving the original data matters above all else: nothing a device does can delete or overwrite data the master already holds.
+
+Named after Fafnir, the Norse dragon who hoards treasure: data goes in and nothing leaves a device’s reach.
+
 fafnirx collects the data of your devices (Windows, macOS, Linux) into one
 server you own, the **master**, and lets you browse it, copy it offsite and get any version of any file back.
 
@@ -81,6 +85,7 @@ and use it as a **network drive**. Files you add or change there are noticed and
 | `fafnirx-master` | The master: device API, admin API and web app, file store, background work |
 | `fafnirx-sign` | Creates the update signing key and publishes signed client builds |
 | PostgreSQL | All metadata: devices, files, versions, events, settings, jobs |
+| `fafnirx.json` | The setup (settings, devices, mirrors, sources), read at start and written by the web app; see [Configuration file](configuration.md) |
 | rclone | Performs mirror uploads (installed in the Docker image) |
 
 Read next: [Installation](installation.md), then [Usage](usage.md).

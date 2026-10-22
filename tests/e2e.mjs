@@ -4,21 +4,10 @@ import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { CHUNK, CLIENT, ENV, EXE, MASTER, Master, SIGN, check, clientIn, createSchema, freePort, mkdtemp, passedChecks, run, sleep, until } from './lib.mjs'
+import { CHUNK, CLIENT, ENV, EXE, MASTER, SIGN, check, clientIn, harness, passedChecks, run, sleep, until } from './lib.mjs'
 
-for (const b of [MASTER, CLIENT, SIGN]) {
-  if (!fs.existsSync(b)) {
-    console.error(`missing ${b}; run cargo build --workspace first`)
-    process.exit(1)
-  }
-}
-
-const tmp = mkdtemp()
-console.log('working in', tmp)
-const data = path.join(tmp, 'data')
-fs.mkdirSync(data)
-const schema = await createSchema()
-const master = new Master({ data, dbUrl: schema.url, http: await freePort(), grpc: await freePort() })
+const h = await harness('fafnirx-e2e-', { binaries: [MASTER, CLIENT, SIGN] })
+const { tmp, data, schema, master } = h
 const server = `http://127.0.0.1:${master.grpc}`
 let daemon = null
 
@@ -251,7 +240,7 @@ try {
   const photo = randomBytes(300_000)
   const upload = (await admin2.post('/api/uploads', { device: 'photos', path: '2024/p.jpg', size: photo.length })).json
   for (let at = 0; at < photo.length; at += 100_000) {
-    const r = await fetch(`${master.base}/api/uploads/${upload.id}?offset=${at}`, { method: 'PUT', headers: { cookie: (await loginCookie(master)), 'x-requested-with': 'e2e' }, body: photo.subarray(at, at + 100_000) })
+    const r = await fetch(`${master.base}/api/uploads/${upload.id}?offset=${at}`, { method: 'PUT', headers: { cookie: admin2.cookie, 'x-requested-with': 'e2e' }, body: photo.subarray(at, at + 100_000) })
     if (!r.ok) check(false, `an upload chunk is accepted (${r.status})`)
   }
   check((await admin2.post(`/api/uploads/${upload.id}/finish`)).status === 200, 'a chunked upload finishes')
@@ -291,13 +280,5 @@ try {
   console.log(`\nall ${passedChecks()} checks passed`)
 } finally {
   daemon?.kill()
-  await master.stop()
-  await schema.drop()
-  if (process.env.FAFNIRX_KEEP === '1') console.log('kept', tmp)
-  else fs.rmSync(tmp, { recursive: true, force: true })
-}
-
-async function loginCookie(m) {
-  const res = await fetch(`${m.base}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-requested-with': 'e2e' }, body: JSON.stringify({ password: 'pw' }) })
-  return res.headers.get('set-cookie').split(';')[0]
+  await h.cleanup()
 }

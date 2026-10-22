@@ -25,9 +25,6 @@ services:
     environment:
       FAFNIRX_DATABASE_URL: "postgresql://fafnirx:${FAFNIRX_DB_PASSWORD}@db/fafnirx"
       FAFNIRX_ADMIN_PASSWORD: "${FAFNIRX_ADMIN_PASSWORD:?set FAFNIRX_ADMIN_PASSWORD}"
-      # All roles in one process. To split the load, run more services from this image with
-      # FAFNIRX_ROLE=api, transfer or worker (see docs/deployment.md).
-      FAFNIRX_ROLE: all
       HOME: /tmp # rclone wants a writable home for its cache
     ports:
       - "7443:7443" # devices (gRPC)
@@ -35,3 +32,8 @@ services:
     volumes:
       # files/<device>/ is the live tree; it can be shared over SMB or NFS as a network drive.
       - "${FAFNIRX_DATA_DIR:-./data}:/data"
+      # fafnirx.json (settings, devices, mirrors, sources) and, if you use rclone remotes, rclone.conf. The master reads
+      # fafnirx.json at start (restart it after editing; a bad file stops it) and writes it when you change things in the
+      # web app. The folder must exist and be writable by FAFNIRX_UID, or Docker creates it for root and the master cannot
+      # write to it. See docs/configuration.md.
+      - "${FAFNIRX_CONFIG_DIR:-./config}:/config"

@@ -14,6 +14,7 @@ import { useLibraryActions, useTags } from '@/lib/library'
 import type { AssetDetail, Session } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import type { Place } from './location-picker'
+import { useT } from '@/lib/i18n'
 
 const LocationPicker = lazy(() => import('./location-picker'))
 
@@ -31,15 +32,16 @@ function Row({ icon: Icon, label, children, action }: { icon: typeof Calendar; l
 }
 
 function Stars({ value, onChange }: { value: number | null; onChange: (v: number | null) => void }) {
+  const t = useT()
   return (
-    <div role="radiogroup" aria-label="Rating" className="flex gap-0.5">
+    <div role="radiogroup" aria-label={t('Rating')} className="flex gap-0.5">
       {[1, 2, 3, 4, 5].map((n) => (
         <button
           key={n}
           type="button"
           role="radio"
           aria-checked={value === n}
-          aria-label={`${n} star${n === 1 ? '' : 's'}`}
+          aria-label={n === 1 ? t('1 star') : t('{n} stars', { n })}
           // Choosing the rating that is already set takes it away.
           onClick={() => onChange(value === n ? null : n)}
           className="rounded p-0.5 hover:bg-accent"
@@ -53,6 +55,7 @@ function Stars({ value, onChange }: { value: number | null; onChange: (v: number
 
 /** Keyed by the saved text by its parent, so a change made elsewhere replaces the draft. */
 function Description({ id, text }: { id: number; text: string }) {
+  const t = useT()
   const { edit } = useLibraryActions()
   const [draft, setDraft] = useState(text)
   return (
@@ -60,8 +63,8 @@ function Description({ id, text }: { id: number; text: string }) {
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => draft.trim() !== text && edit.mutate({ id, description: draft })}
-      placeholder="Add a description"
-      aria-label="Description"
+      placeholder={t('Add a description')}
+      aria-label={t('Description')}
       rows={2}
       maxLength={5000}
       className="min-h-0 resize-none"
@@ -70,13 +73,14 @@ function Description({ id, text }: { id: number; text: string }) {
 }
 
 function Tags({ id, tags }: { id: number; tags: { id: number; name: string }[] }) {
+  const t = useT()
   const { edit } = useLibraryActions()
   const known = useTags()
   const [text, setText] = useState('')
-  const names = tags.map((t) => t.name)
+  const names = tags.map((tag) => tag.name)
   const add = (e: FormEvent) => {
     e.preventDefault()
-    const added = text.split(',').map((t) => t.trim()).filter(Boolean)
+    const added = text.split(',').map((s) => s.trim()).filter(Boolean)
     if (added.length === 0) return
     edit.mutate({ id, tags: [...names, ...added] })
     setText('')
@@ -85,10 +89,10 @@ function Tags({ id, tags }: { id: number; tags: { id: number; name: string }[] }
     <div className="space-y-2">
       {names.length > 0 && (
         <ul className="flex flex-wrap gap-1.5">
-          {tags.map((t) => (
-            <li key={t.id} className="flex items-center gap-1 rounded-full border bg-secondary py-0.5 pr-1 pl-2.5 text-xs">
-              {t.name}
-              <button type="button" aria-label={`Remove tag ${t.name}`} onClick={() => edit.mutate({ id, tags: names.filter((n) => n !== t.name) })} className="grid size-4 place-items-center rounded-full hover:bg-accent">
+          {tags.map((tag) => (
+            <li key={tag.id} className="flex items-center gap-1 rounded-full border bg-secondary py-0.5 pr-1 pl-2.5 text-xs">
+              {tag.name}
+              <button type="button" aria-label={t('Remove tag {name}', { name: tag.name })} onClick={() => edit.mutate({ id, tags: names.filter((n) => n !== tag.name) })} className="grid size-4 place-items-center rounded-full hover:bg-accent">
                 <X className="size-3" />
               </button>
             </li>
@@ -96,14 +100,15 @@ function Tags({ id, tags }: { id: number; tags: { id: number; name: string }[] }
         </ul>
       )}
       <form onSubmit={add}>
-        <Input value={text} onChange={(e) => setText(e.target.value)} list={`tags-${id}`} placeholder="Add a tag and press Enter" aria-label="Add a tag" maxLength={64} className="h-8 text-sm" />
-        <datalist id={`tags-${id}`}>{known.data?.filter((t) => !names.includes(t.name)).map((t) => <option key={t.id} value={t.name} />)}</datalist>
+        <Input value={text} onChange={(e) => setText(e.target.value)} list={`tags-${id}`} placeholder={t('Add a tag and press Enter')} aria-label={t('Add a tag')} maxLength={64} className="h-8 text-sm" />
+        <datalist id={`tags-${id}`}>{known.data?.filter((tag) => !names.includes(tag.name)).map((tag) => <option key={tag.id} value={tag.name} />)}</datalist>
       </form>
     </div>
   )
 }
 
 function DateDialog({ detail, onClose }: { detail: AssetDetail; onClose: () => void }) {
+  const t = useT()
   const { edit } = useLibraryActions()
   const [value, setValue] = useState(toInputValue(detail.when))
   const parsed = fromInputValue(value)
@@ -116,18 +121,18 @@ function DateDialog({ detail, onClose }: { detail: AssetDetail; onClose: () => v
       <DialogContent>
         <form onSubmit={save} className="space-y-4">
           <DialogHeader>
-            <DialogTitle>Change the date</DialogTitle>
+            <DialogTitle>{t('Change the date')}</DialogTitle>
             <DialogDescription>
-              The timeline uses this date. The file itself is not changed.
-              {detail.camera_when ? ` The camera said ${whenText(detail.camera_when)}.` : ' The file has no date from the camera; its own modification date is used.'}
+              {t('The timeline uses this date. The file itself is not changed.')}{' '}
+              {detail.camera_when ? t('The camera said {when}.', { when: whenText(detail.camera_when) }) : t('The file has no date from the camera; its own modification date is used.')}
             </DialogDescription>
           </DialogHeader>
-          <Input type="datetime-local" step={1} value={value} onChange={(e) => setValue(e.target.value)} aria-label="Date and time" required />
+          <Input type="datetime-local" step={1} value={value} onChange={(e) => setValue(e.target.value)} aria-label={t('Date and time')} required />
           <DialogFooter className="sm:justify-between">
             {detail.when_edited ? (
-              <Button type="button" variant="ghost" onClick={() => edit.mutate({ id: detail.id, taken_at: null }, { onSuccess: onClose })}><RotateCcw className="size-4" />Use the original date</Button>
+              <Button type="button" variant="ghost" onClick={() => edit.mutate({ id: detail.id, taken_at: null }, { onSuccess: onClose })}><RotateCcw className="size-4" />{t('Use the original date')}</Button>
             ) : <span />}
-            <Button type="submit" disabled={parsed === null || edit.isPending}>Save</Button>
+            <Button type="submit" disabled={parsed === null || edit.isPending}>{t('Save')}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -136,6 +141,7 @@ function DateDialog({ detail, onClose }: { detail: AssetDetail; onClose: () => v
 }
 
 function PlaceDialog({ detail, onClose }: { detail: AssetDetail; onClose: () => void }) {
+  const t = useT()
   const { edit } = useLibraryActions()
   const client = useQueryClient()
   const tiles = client.getQueryData<Session>(['session'])?.map_tiles ?? DEFAULT_TILES
@@ -162,19 +168,19 @@ function PlaceDialog({ detail, onClose }: { detail: AssetDetail; onClose: () => 
       <DialogContent className="sm:max-w-xl">
         <form onSubmit={save} className="space-y-4">
           <DialogHeader>
-            <DialogTitle>Change the place</DialogTitle>
-            <DialogDescription>Click the map or drag the pin. The file itself is not changed.</DialogDescription>
+            <DialogTitle>{t('Change the place')}</DialogTitle>
+            <DialogDescription>{t('Click the map or drag the pin. The file itself is not changed.')}</DialogDescription>
           </DialogHeader>
           <Suspense fallback={<Skeleton className="h-64" />}><LocationPicker value={place} onChange={choose} tiles={tiles} /></Suspense>
           <div className="grid grid-cols-2 gap-2">
-            <Input value={lat} onChange={(e) => typed(e.target.value, lon)} inputMode="decimal" placeholder="Latitude" aria-label="Latitude" />
-            <Input value={lon} onChange={(e) => typed(lat, e.target.value)} inputMode="decimal" placeholder="Longitude" aria-label="Longitude" />
+            <Input value={lat} onChange={(e) => typed(e.target.value, lon)} inputMode="decimal" placeholder={t('Latitude')} aria-label={t('Latitude')} />
+            <Input value={lon} onChange={(e) => typed(lat, e.target.value)} inputMode="decimal" placeholder={t('Longitude')} aria-label={t('Longitude')} />
           </div>
           <DialogFooter className="sm:justify-between">
             {detail.place_edited ? (
-              <Button type="button" variant="ghost" onClick={() => edit.mutate({ id: detail.id, location: null }, { onSuccess: onClose })}><RotateCcw className="size-4" />Use the original place</Button>
+              <Button type="button" variant="ghost" onClick={() => edit.mutate({ id: detail.id, location: null }, { onSuccess: onClose })}><RotateCcw className="size-4" />{t('Use the original place')}</Button>
             ) : <span />}
-            <Button type="submit" disabled={!place || edit.isPending}>Save</Button>
+            <Button type="submit" disabled={!place || edit.isPending}>{t('Save')}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -186,6 +192,7 @@ const parent = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf('/')
 
 /** Everything about one photo or video, with the parts people can change: rating, description, tags, date, place. */
 export default function InfoPanel({ id, onClose }: { id: number; onClose: () => void }) {
+  const t = useT()
   const { edit } = useLibraryActions()
   const [dialog, setDialog] = useState<'date' | 'place' | null>(null)
   const { data: d, error } = useQuery({ queryKey: ['asset', id], queryFn: () => api.get<AssetDetail>(`/api/library/${id}`) })
@@ -194,8 +201,8 @@ export default function InfoPanel({ id, onClose }: { id: number; onClose: () => 
   return (
     <div className="space-y-5 p-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold">Info</h2>
-        <Button variant="ghost" size="icon" className="size-8" aria-label="Close info" onClick={onClose}><X className="size-4" /></Button>
+        <h2 className="text-base font-semibold">{t('Info')}</h2>
+        <Button variant="ghost" size="icon" className="size-8" aria-label={t('Close info')} onClick={onClose}><X className="size-4" /></Button>
       </div>
       {error ? <p className="text-sm text-destructive">{error.message}</p> : !d ? <Skeleton className="h-64" /> : (
         <>
@@ -203,14 +210,14 @@ export default function InfoPanel({ id, onClose }: { id: number; onClose: () => 
           <Stars value={d.rating} onChange={(rating) => edit.mutate({ id: d.id, rating })} />
           <Tags id={d.id} tags={d.tags} />
 
-          <Row icon={Calendar} label="Date" action={<Button variant="ghost" size="sm" onClick={() => setDialog('date')}>Edit</Button>}>
+          <Row icon={Calendar} label={t('Date')} action={<Button variant="ghost" size="sm" onClick={() => setDialog('date')}>{t('Edit')}</Button>}>
             {whenText(d.when)}
-            {d.when_edited && <span className="ml-1.5 text-xs text-muted-foreground">(changed)</span>}
+            {d.when_edited && <span className="ml-1.5 text-xs text-muted-foreground">{t('(changed)')}</span>}
           </Row>
-          <Row icon={MapPin} label="Place" action={<Button variant="ghost" size="sm" onClick={() => setDialog('place')}>{d.lat === null ? 'Add' : 'Edit'}</Button>}>
-            {d.lat !== null && d.lon !== null ? <span className="tabular-nums">{d.lat.toFixed(5)}, {d.lon.toFixed(5)}{d.place_edited && <span className="ml-1.5 text-xs text-muted-foreground">(changed)</span>}</span> : <span className="text-muted-foreground">No place</span>}
+          <Row icon={MapPin} label={t('Place')} action={<Button variant="ghost" size="sm" onClick={() => setDialog('place')}>{d.lat === null ? t('Add') : t('Edit')}</Button>}>
+            {d.lat !== null && d.lon !== null ? <span className="tabular-nums">{d.lat.toFixed(5)}, {d.lon.toFixed(5)}{d.place_edited && <span className="ml-1.5 text-xs text-muted-foreground">{t('(changed)')}</span>}</span> : <span className="text-muted-foreground">{t('No place')}</span>}
           </Row>
-          <Row icon={FolderOpen} label="File">
+          <Row icon={FolderOpen} label={t('File')}>
             <Link to={`/files${query({ device: d.device, path: parent(d.path), file: d.path })}`} className="hover:underline">{d.device}/{d.path}</Link>
             <p className="mt-1 text-xs text-muted-foreground">
               {bytes(d.size)}{d.width && d.height ? ` · ${d.width} × ${d.height}` : ''}{d.duration_ms ? ` · ${clock(d.duration_ms)}` : ''} · {d.mime}{d.codec ? ` · ${d.codec}` : ''}
@@ -219,7 +226,7 @@ export default function InfoPanel({ id, onClose }: { id: number; onClose: () => 
 
           {d.albums.length > 0 && (
             <section>
-              <h3 className="mb-1.5 text-xs text-muted-foreground">In albums</h3>
+              <h3 className="mb-1.5 text-xs text-muted-foreground">{t('In albums')}</h3>
               <ul className="flex flex-wrap gap-1.5">
                 {d.albums.map((a) => <li key={a.id}><Link to={`/albums/${a.id}`} className="rounded-full border px-2.5 py-0.5 text-xs hover:bg-accent">{a.name}</Link></li>)}
               </ul>
@@ -228,7 +235,7 @@ export default function InfoPanel({ id, onClose }: { id: number; onClose: () => 
 
           {exif.length > 0 && (
             <section>
-              <h3 className="mb-1.5 text-xs text-muted-foreground">Camera</h3>
+              <h3 className="mb-1.5 text-xs text-muted-foreground">{t('Camera')}</h3>
               <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
                 {exif.map(([k, v]) => (
                   <div key={k} className="min-w-0"><dt className="text-muted-foreground">{k.replace(/([a-z])([A-Z])/g, '$1 $2')}</dt><dd className="break-words">{v}</dd></div>

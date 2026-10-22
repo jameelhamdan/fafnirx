@@ -1,5 +1,5 @@
 //! The schema of the database as a list of numbered migrations (`crates/master/migrations/NNNN_name.sql`).
-//! Every master process applies the ones it has not applied yet when it starts, in order and in one transaction
+//! The master applies the ones it has not applied yet when it starts, in order and in one transaction
 //! behind an advisory lock, and records each in `schema_migrations` with a checksum.
 //!
 //! To change the schema, add a migration at the end of [`ALL`]. A migration that has been released is never edited:
@@ -22,6 +22,7 @@ pub const ALL: &[Migration] = &[
     Migration { version: 1, name: "initial", sql: include_str!("../../migrations/0001_initial.sql") },
     Migration { version: 2, name: "indexes", sql: include_str!("../../migrations/0002_indexes.sql") },
     Migration { version: 3, name: "device_totals", sql: include_str!("../../migrations/0003_device_totals.sql") },
+    Migration { version: 4, name: "mirror_remote", sql: include_str!("../../migrations/0004_mirror_remote.sql") },
 ];
 
 const TRACKING: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (

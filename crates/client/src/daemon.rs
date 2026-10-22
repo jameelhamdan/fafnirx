@@ -180,10 +180,11 @@ pub async fn send_heartbeat(
     }
 }
 
-fn spawn_watcher(folders: &[PathBuf], wake: Arc<Notify>) -> Option<notify::RecommendedWatcher> {
+/// `state_dir` is the client's own folder: its status file changes all the time and must not wake a cycle.
+fn spawn_watcher(folders: &[PathBuf], state_dir: PathBuf, wake: Arc<Notify>) -> Option<notify::RecommendedWatcher> {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
     let mut watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if res.is_ok() {
+        if res.is_ok_and(|e| !e.paths.iter().all(|p| p.starts_with(&state_dir))) {
             let _ = tx.send(());
         }
     }) {
@@ -428,7 +429,7 @@ async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Res
     shared.status.edit(|s| s.initial_sync = !engine.state.initial_sync_done());
     spawn_control(shared.clone(), engine.activity.clone(), engine.sent.clone(), state_dir.clone());
     spawn_heartbeat(shared.clone(), client.clone(), config_path.clone(), identity);
-    spawn_updater(client, config_path.clone(), state_dir);
+    spawn_updater(client, config_path.clone(), state_dir.clone());
 
     let mut watched: Vec<PathBuf> = Vec::new();
     let mut _watcher: Option<notify::RecommendedWatcher> = None;
@@ -454,7 +455,7 @@ async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Res
         }
         let folders: Vec<PathBuf> = cfg.folders.iter().map(|f| f.path.clone()).collect();
         if cfg.watch && folders != watched {
-            _watcher = spawn_watcher(&folders, shared.wake.clone());
+            _watcher = spawn_watcher(&folders, state_dir.clone(), shared.wake.clone());
             watched = folders;
         } else if !cfg.watch {
             _watcher = None;

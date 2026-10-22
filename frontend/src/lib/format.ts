@@ -1,4 +1,6 @@
-const UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+import { locale, msg, tr } from './i18n'
+
+const UNITS = [msg('B'), msg('KB'), msg('MB'), msg('GB'), msg('TB'), msg('PB')]
 
 export function bytes(n: number | null | undefined): string {
   if (n === null || n === undefined) return '—'
@@ -8,36 +10,33 @@ export function bytes(n: number | null | undefined): string {
     value /= 1000
     unit++
   }
-  return `${unit === 0 || value >= 100 ? Math.round(value) : value.toFixed(1)} ${UNITS[unit]}`
+  return `${unit === 0 || value >= 100 ? Math.round(value) : value.toFixed(1)} ${tr(UNITS[unit])}`
 }
 
 export function duration(seconds: number): string {
-  if (seconds < 90) return `${Math.round(seconds)} s`
-  if (seconds < 5400) return `${Math.round(seconds / 60)} min`
-  if (seconds < 172800) return `${Math.round(seconds / 3600)} h`
-  return `${Math.round(seconds / 86400)} days`
+  if (seconds < 90) return tr('{n} s', { n: Math.round(seconds) })
+  if (seconds < 5400) return tr('{n} min', { n: Math.round(seconds / 60) })
+  if (seconds < 172800) return tr('{n} h', { n: Math.round(seconds / 3600) })
+  return tr('{n} days', { n: Math.round(seconds / 86400) })
 }
 
 /** "3 min ago", "just now"; `now` is passed in so that a clock tick can refresh it. */
 export function ago(ts: number | null | undefined, now = Date.now() / 1000): string {
-  if (!ts) return 'never'
+  if (!ts) return tr('never')
   const d = now - ts
-  if (d < 10) return 'just now'
-  return `${duration(d)} ago`
+  if (d < 10) return tr('just now')
+  return tr('{time} ago', { time: duration(d) })
 }
 
 export function dateTime(ts: number | null | undefined): string {
   if (!ts) return '—'
-  return new Date(ts * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  return new Date(ts * 1000).toLocaleString(locale(), { dateStyle: 'medium', timeStyle: 'short' })
 }
 
 export function date(ts: number | null | undefined): string {
   if (!ts) return '—'
-  return new Date(ts * 1000).toLocaleDateString(undefined, { dateStyle: 'medium' })
+  return new Date(ts * 1000).toLocaleDateString(locale(), { dateStyle: 'medium' })
 }
-
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
-const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
 // Photos carry no time zone, so the library reads and shows every date as UTC: the same on every screen.
 
@@ -54,22 +53,19 @@ export function dayKey(ts: number): string {
 
 /** "May 2024" from "2024-05". */
 export function monthTitle(month: string): string {
-  const [y, m] = month.split('-')
-  return `${MONTHS[Number(m) - 1] ?? m} ${Number(y)}`
+  const [y, m] = month.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString(locale(), { month: 'long', year: 'numeric', timeZone: 'UTC' })
 }
 
 /** "Friday, 17 May 2024" from a day key. */
 export function dayTitle(day: string): string {
   const [y, m, d] = day.split('-').map(Number)
-  const weekday = WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]
-  return `${weekday}, ${d} ${MONTHS[m - 1]} ${y}`
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(locale(), { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })
 }
 
 /** "17 May 2024, 14:03" as recorded. */
 export function whenText(ts: number): string {
-  const d = new Date(ts * 1000)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`
+  return new Date(ts * 1000).toLocaleString(locale(), { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' })
 }
 
 /** The value of a `datetime-local` input for unix seconds (and back). */
@@ -92,12 +88,18 @@ export function clock(ms: number): string {
 }
 
 export function count(n: number): string {
-  return n.toLocaleString()
+  return n.toLocaleString(locale())
+}
+
+const PLURALS: Record<string, [string, string]> = {
+  file: [msg('{count} file'), msg('{count} files')],
+  item: [msg('{count} item'), msg('{count} items')],
+  'photo or video': [msg('{count} photo or video'), msg('{count} photos or videos')],
 }
 
 /** "1 file", "2 files". */
-export function plural(n: number, word: string): string {
-  return `${count(n)} ${word}${n === 1 ? '' : 's'}`
+export function plural(n: number, word: keyof typeof PLURALS): string {
+  return tr(PLURALS[word][n === 1 ? 0 : 1], { count: count(n) })
 }
 
 export function percent(done: number, total: number): number | null {

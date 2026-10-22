@@ -22,6 +22,8 @@ fn block<F: std::future::Future>(f: F) -> F::Output {
 struct Api {
     app: Router,
     db: crate::platform::db::Db,
+    store: Arc<Store>,
+    config: Arc<crate::config::ConfigFile>,
     cookie: String,
     _dir: tempfile::TempDir,
 }
@@ -31,10 +33,12 @@ impl Api {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(Store::open(dir.path()).unwrap());
         let db = testing::db();
-        let state = Arc::new(AppState::new(db.clone(), store, dir.path().to_path_buf(), "secret".into()).unwrap());
-        let app =
-            router(state.clone(), true, true).layer(MockConnectInfo("127.0.0.1:1".parse::<SocketAddr>().unwrap()));
-        Self { app, db, cookie: String::new(), _dir: dir }
+        let config = Arc::new(crate::config::ConfigFile::new(dir.path().join("fafnirx.json")));
+        let state = Arc::new(
+            AppState::new(db.clone(), store.clone(), dir.path().to_path_buf(), "secret".into(), config.clone()).unwrap(),
+        );
+        let app = router(state.clone()).layer(MockConnectInfo("127.0.0.1:1".parse::<SocketAddr>().unwrap()));
+        Self { app, db, store, config, cookie: String::new(), _dir: dir }
     }
     /// What the minute job does: the totals shown for devices catch up with their files.
     async fn catch_up_totals(&self) {
@@ -141,6 +145,12 @@ fn every_response_carries_the_security_headers() {
         assert!(csp.contains("https://tile.openstreetmap.org"), "the map tiles may be loaded: {csp}");
         assert_eq!(page[header::X_FRAME_OPTIONS], "DENY");
         assert_eq!(page[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+
+        let (_, app_page, _) = api.send(Method::GET, "/timeline", Body::empty(), None, &[]).await;
+        assert!(
+            app_page[header::CONTENT_SECURITY_POLICY].to_str().unwrap().contains("script-src 'self'"),
+            "also on the web app pages"
+        );
         assert!(page.get(header::STRICT_TRANSPORT_SECURITY).is_none(), "plain http: no HSTS");
 
         let (status, refused, _) = api.send(Method::GET, "/api/dashboard", Body::empty(), None, &[]).await;
@@ -172,6 +182,47 @@ fn devices_are_slugs_and_tokens_are_shown_once() {
         assert_ne!(rotated["token"], made["token"]);
         assert_eq!(api.json(Method::POST, "/api/devices/laptop/revoke", json!({})).await.0, StatusCode::OK);
         assert_eq!(api.get("/api/devices/laptop").await.1["device"]["revoked"], true);
+    });
+}
+
+#[test]
+fn what_the_admin_changes_is_written_to_the_config_file() {
+    let mut api = Api::new();
+    block(async {
+        api.cookie = login(&api).await;
+        // A mirror needs a remote of the rclone config or a backend.
+        assert_eq!(api.json(Method::POST, "/api/mirrors", json!({"name": "m"})).await.0, StatusCode::BAD_REQUEST);
+        let mirror = json!({"name": "vault", "remote": "crypt:backups/fafnirx", "keep_runs": 5});
+        assert_eq!(api.json(Method::POST, "/api/mirrors", mirror).await.0, StatusCode::OK);
+        let direct = json!({"name": "offsite", "remote_type": "S3", "options": "region=eu
+provider=AWS", "remote_path": "b/x"});
+        assert_eq!(api.json(Method::POST, "/api/mirrors", direct).await.0, StatusCode::OK);
+        let (_, made) = api.json(Method::POST, "/api/devices", json!({"name": "laptop"})).await;
+        api.json(Method::PUT, "/api/settings", json!({"version_count": 9, "retention_days": 45})).await;
+        api.config.sync(&api.db).await.unwrap();
+
+        let path = api.config.path().to_path_buf();
+        let file = crate::config::Config::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let mirrors = file.mirrors.clone().unwrap();
+        assert_eq!((mirrors[0].name.as_str(), mirrors[0].remote.as_str(), mirrors[0].keep_runs), ("offsite", "", 3));
+        assert_eq!((mirrors[0].remote_type.as_str(), mirrors[0].options["region"].clone()), ("s3", json!("eu")));
+        assert_eq!((mirrors[1].name.as_str(), mirrors[1].remote.as_str(), mirrors[1].keep_runs), ("vault", "crypt:backups/fafnirx", 5));
+        let settings = file.settings.clone().unwrap();
+        assert_eq!((settings.version_count, settings.retention_days), (Some(9), Some(45)));
+        let device = &file.devices.as_ref().unwrap()[0];
+        let token = made["token"].as_str().unwrap();
+        assert_eq!(device.token_hash.as_deref(), Some(crate::platform::db::hash_token(token).as_str()), "the file keeps the hash, never the token");
+
+        // The other way, after a restart: a mirror edited in the file shows in the web app, with the credentials hidden.
+        let mut edited = file.clone();
+        edited.mirrors.as_mut().unwrap().retain(|m| m.name != "vault");
+        edited.mirrors.as_mut().unwrap()[0].enabled = false;
+        std::fs::write(&path, serde_json::to_string(&edited).unwrap()).unwrap();
+        crate::config::ConfigFile::new(path.clone()).start(&api.db, &api.store).await.unwrap();
+        let (_, mirrors) = api.get("/api/mirrors").await;
+        assert_eq!(mirrors.as_array().unwrap().len(), 1);
+        assert_eq!((mirrors[0]["name"].clone(), mirrors[0]["enabled"].clone()), (json!("offsite"), json!(false)));
+        assert_eq!(mirrors[0]["detail"]["option_keys"], json!(["provider", "region"]));
     });
 }
 

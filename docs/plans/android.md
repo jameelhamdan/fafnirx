@@ -45,7 +45,7 @@ and a map; the app can show them later. None of this is needed to be safe or use
 - ~~**Timeline endpoint**~~ Built for the web app: `GET /api/timeline/buckets` (months with the file count of each day)
   and `GET /api/timeline?month=YYYY-MM` (with `device`, `kind`, `tag` and `scope` filters), returning each file with the
   fields the grid needs. The phone can use them as they are once it has a token; it will want `device=<its name>`.
-- ~~**Metadata for videos** and a poster frame~~ Built (`ffprobe`/`ffmpeg`, see the [spec](../spec.md#photo-library)).
+- ~~**Metadata for videos** and a poster frame~~ Built (`ffprobe`/`ffmpeg`, see the [usage guide](../usage.md#photos)).
 - **HEIC and AVIF previews.** Phones increasingly write HEIC. Decoding needs `libheif`; until then the app can ask the
   phone to convert on upload, or the master can serve the original and let the phone's own decoder show it.
 - **Motion photos and Live Photos**: they are two files (or one file with an appended video). Store both unchanged and
@@ -108,7 +108,7 @@ Either way, `proto/fafnirx.proto` is the contract and the end-to-end suite in `t
 | 2. Backup only | Enrollment, folder choice, background upload with resume, status screen. A phone can back up and the web app shows its files |
 | 3. Timeline | The grid, the viewer, download |
 | 4. Polish | Battery and network rules, notifications, error reporting through the existing upload-error alert, localization |
-| 5. Later | Albums, a map from EXIF GPS, search by date and place, sharing, face and object recognition as an optional worker role |
+| 5. Later | Albums, a map from EXIF GPS, search by date and place, sharing, face and object recognition as an optional background job |
 
 ## Risks and open questions
 

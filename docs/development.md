@@ -37,8 +37,8 @@ Set `FAFNIRX_TOKEN_STORE=file` to avoid the OS keychain while developing.
 | Rust unit and API tests | `cargo test --workspace` | `FAFNIRX_TEST_DATABASE_URL` |
 | Web app types and lint | `cd frontend && npx tsc -b && npx oxlint` | |
 | End to end: devices, uploads, watcher, resume, updates | `cd tests && npm i && node e2e.mjs` | Built binaries, test database |
-| End to end: the roles running apart | `node e2e-roles.mjs` | Same |
 | End to end: Drive (fake API) and mirrors | `node e2e-io.mjs` | Also `rclone` (`FAFNIRX_RCLONE`) |
+| End to end: the configuration file, rclone remotes, setting up again on an empty database | `node e2e-config.mjs` | Also `rclone` |
 | End to end: delete and retention | `node e2e-retention.mjs` | About 2 minutes |
 
 - Database-backed tests create a schema of their own on the test server and drop it afterwards, so they run in parallel.
@@ -110,12 +110,12 @@ Unit tests get a fresh schema from `db::testing::db()`.
 ## Changing the schema
 
 The schema is a list of numbered migrations in `crates/master/migrations/` (`0001_initial.sql`, `0002_....sql`), listed in
-`crates/master/src/platform/migrations.rs`. Every master process applies the ones it has not applied yet when it starts,
+`crates/master/src/platform/migrations.rs`. The master applies the ones it has not applied yet when it starts,
 in order, in one transaction behind an advisory lock, and records each one in `schema_migrations` with a checksum. A new
 database gets all of them; an existing one only the new ones. To change the schema:
 
 1. Add the next numbered `.sql` file and an entry at the end of `ALL`. A migration runs once, so it can be plain
-   `ALTER TABLE ...`; it must work while older processes are still running, because masters restart one by one.
+   `ALTER TABLE ...`; it should not take long locks on big tables, because the master waits for it before it starts.
 2. Never edit a migration that has been released: the checksum no longer matches and the master refuses to start.
 3. A database that is newer than the master (a downgrade) is refused with a message.
 4. Update [the database diagram](architecture.md#database-structure) and the admin API types in `frontend/src/lib/types.ts`.
@@ -151,6 +151,14 @@ Sources are modules in `crates/master/src/integrations`: `gdrive.rs` is the mode
   (`['files', ...]`, `['device', name]`) so a topic can invalidate a whole family.
 - `src/lib/upload.ts` is the upload queue (chunks, resume, three at a time).
 - Pages are loaded lazily; the file list is virtualized.
+- **Translations.** Every visible string is written in English inside `t('…')` (`const t = useT()` in a component;
+  `msg('…')` marks a string in data that is shown with `t(text)` later; `tr('…')` is `t` for code outside components,
+  as in `lib/format.ts`). `{name}` placeholders are filled from the second argument. `npm run i18n` collects the calls
+  into `translations/en.json` and lists what the other languages lack; `npm run i18n -- --check` fails when `en.json` is
+  out of date or a language is incomplete. A language is a file `translations/<code>.json` plus a line in `LANGUAGES`
+  (`src/lib/i18n.ts`); the language is the saved choice, else the browser's, else English, and the page direction follows
+  it (`dir="rtl"` for Arabic, so use `start`/`end` utilities, not `left`/`right`). A string without a translation shows
+  in English.
 
 ## Troubleshooting a dev setup
 

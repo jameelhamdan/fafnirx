@@ -4,6 +4,7 @@ import { GAP, groupByDay, useGrid } from '@/lib/grid'
 import type { Asset } from '@/lib/types'
 import { AssetCell } from './asset-cell'
 import { Checkbox } from '../ui/checkbox'
+import { useT } from '@/lib/i18n'
 
 /** Photos grouped by day, each day with its own heading, in square cells that fill the width. */
 export function DayGrid({
@@ -21,6 +22,7 @@ export function DayGrid({
   onToggle: (id: number) => void
   onToggleMany: (ids: number[], on: boolean) => void
 }) {
+  const t = useT()
   const ref = useRef<HTMLDivElement>(null)
   const { cols } = useGrid(ref)
   const selecting = selected.size > 0
@@ -37,7 +39,7 @@ export function DayGrid({
               <Checkbox
                 checked={all}
                 onCheckedChange={() => onToggleMany(ids, !all)}
-                aria-label={`Select all of ${dayTitle(day)}`}
+                aria-label={t('Select all of {day}', { day: dayTitle(day) })}
                 className={selecting ? '' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-sm:opacity-60'}
               />
             </h3>

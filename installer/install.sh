@@ -19,7 +19,7 @@ while [ $# -gt 0 ]; do
     --folder) folders="$folders
 $2"; shift 2 ;;
     --binary) binary=$2; shift 2 ;;
-    -h | --help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -44,6 +44,6 @@ case ":$PATH:" in *":$dest:"*) ;; *) echo "note: add $dest to your PATH to run f
 "$dest/fafnirx" enroll --server "$server"
 # Folders are added after enrolling; the running client picks them up at once.
 printf '%s\n' "$folders" | while IFS= read -r folder; do
-  [ -n "$folder" ] && "$dest/fafnirx" add-folder "$folder"
+  if [ -n "$folder" ]; then "$dest/fafnirx" add-folder "$folder"; fi
 done
 echo "done: fafnirx runs in the background now. Check it with: fafnirx status"

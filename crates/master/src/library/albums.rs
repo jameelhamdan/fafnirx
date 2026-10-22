@@ -1,24 +1,15 @@
 //! Albums.
 
-use crate::library::photos::{asset_columns, Asset, FROM, WHEN};
+use crate::library::photos::{asset_columns, nullable, Asset, FROM, MAX_ASSETS, WHEN};
 use crate::platform::db;
 use crate::web::{done, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, State};
 use axum::Json;
 use fafnirx_common::unix_now;
 use postgres::GenericClient;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 const MAX_FILES: usize = 10_000;
-const MAX_ASSETS: i64 = 20_000;
-
-fn nullable<'de, T, D>(d: D) -> Result<Option<Option<T>>, D::Error>
-where
-    T: Deserialize<'de>,
-    D: Deserializer<'de>,
-{
-    Option::<T>::deserialize(d).map(Some)
-}
 
 #[derive(Serialize)]
 pub struct AlbumInfo {

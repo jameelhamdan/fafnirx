@@ -1180,7 +1180,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx"
-version = "0.1.4"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1215,7 +1215,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx-common"
-version = "0.1.4"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1229,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx-master"
-version = "0.1.4"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1269,7 +1269,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx-sign"
-version = "0.1.4"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

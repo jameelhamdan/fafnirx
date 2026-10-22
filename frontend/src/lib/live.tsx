@@ -12,9 +12,9 @@ interface Change {
 function staleKeys(change: Change): string[][] {
   switch (change.topic) {
     case 'files':
-      return [['files'], ['info'], ['dashboard'], ['devices'], ['timeline'], ['asset'], ['map'], ['trash'], ['albums']]
+      return [['files'], ['info'], ['dashboard'], ['devices'], ['timeline'], ['asset'], ['map'], ['trash'], ['albums'], ['album']]
     case 'library':
-      return [['timeline'], ['asset'], ['map'], ['albums'], ['tags']]
+      return [['timeline'], ['asset'], ['map'], ['albums'], ['album'], ['tags']]
     case 'activity':
       return [['dashboard'], ['device']]
     case 'devices':

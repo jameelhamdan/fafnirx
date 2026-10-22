@@ -16,7 +16,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 const DAY: i64 = 86400;
 /// More than a library of one household holds in one month, and few enough to answer in one go.
-const MAX_ASSETS: i64 = 20_000;
+pub const MAX_ASSETS: i64 = 20_000;
 const MAX_POINTS: i64 = 200_000;
 const MAX_BULK: usize = 10_000;
 const MAX_TAGS_PER_FILE: usize = 50;
@@ -357,7 +357,7 @@ pub async fn detail(State(state): State<Shared>, Path(id): Path<i64>) -> Res<Det
 }
 
 /// `null` in the request means "clear it", an absent field means "leave it": this tells them apart.
-fn nullable<'de, T, D>(d: D) -> Result<Option<Option<T>>, D::Error>
+pub fn nullable<'de, T, D>(d: D) -> Result<Option<Option<T>>, D::Error>
 where
     T: Deserialize<'de>,
     D: Deserializer<'de>,
@@ -532,30 +532,31 @@ pub async fn bulk(State(state): State<Shared>, Json(b): Json<Bulk>) -> Res<Chang
     let changed = run(&state, move |c| {
         let mut tx = c.transaction()?;
         let now = unix_now();
+        // Files touched by any of the changes asked for.
         let mut changed = 0;
         if let Some(v) = b.favorite {
-            changed = tx.execute(
+            changed = changed.max(tx.execute(
                 "INSERT INTO file_state (file_id, updated_at, favorite) SELECT id, $2, $3 FROM files
                  WHERE id = ANY($1) AND deleted_at IS NULL
                  ON CONFLICT (file_id) DO UPDATE SET favorite = excluded.favorite, updated_at = excluded.updated_at",
                 &[&b.ids, &now, &v],
-            )?;
+            )?);
         }
         if let Some(v) = b.archived {
-            changed = tx.execute(
+            changed = changed.max(tx.execute(
                 "INSERT INTO file_state (file_id, updated_at, archived) SELECT id, $2, $3 FROM files
                  WHERE id = ANY($1) AND deleted_at IS NULL
                  ON CONFLICT (file_id) DO UPDATE SET archived = excluded.archived, updated_at = excluded.updated_at",
                 &[&b.ids, &now, &v],
-            )?;
+            )?);
         }
         if let Some(names) = tags.filter(|t| !t.is_empty()) {
             let ids = tag_ids(&mut tx, &names)?;
-            changed = tx.execute(
+            changed = changed.max(tx.execute(
                 "INSERT INTO file_tags (file_id, tag_id) SELECT f.id, t FROM files f CROSS JOIN unnest($2::bigint[]) t
                  WHERE f.id = ANY($1) AND f.deleted_at IS NULL ON CONFLICT DO NOTHING",
                 &[&b.ids, &ids],
-            )?;
+            )?);
         }
         db::notify(&mut tx, "library", "")?;
         tx.commit()?;

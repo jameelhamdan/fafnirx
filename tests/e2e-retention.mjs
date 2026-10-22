@@ -7,20 +7,11 @@
 import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { CLIENT, Master, MASTER, check, clientIn, createSchema, freePort, mkdtemp, passedChecks, sleep } from './lib.mjs'
+import { check, enrollDevice, harness, passedChecks, sleep } from './lib.mjs'
 
 const DAY = 86400
-if (!fs.existsSync(MASTER) || !fs.existsSync(CLIENT)) {
-  console.error('missing binaries; run cargo build --workspace first')
-  process.exit(1)
-}
-
-const tmp = mkdtemp('fafnirx-e2e-ret-')
-console.log('working in', tmp)
-const data = path.join(tmp, 'data')
-fs.mkdirSync(data)
-const schema = await createSchema()
-const master = new Master({ data, dbUrl: schema.url, http: await freePort(), grpc: await freePort() })
+const h = await harness('fafnirx-e2e-ret-')
+const { tmp, data, schema, master } = h
 
 /** Where the stored copy of every version of a path is. A deleted file keeps all of them under versions/. */
 const versionFiles = async (p) =>
@@ -35,10 +26,7 @@ const deletedAt = async (p) => {
 try {
   await master.start()
   const admin = await master.admin()
-  const token = (await admin.post('/api/devices', { name: 'laptop' })).json.token
-  const { cfg, c } = clientIn(path.join(tmp, 'client'))
-  c.enroll(token, `http://127.0.0.1:${master.grpc}`)
-  fs.writeFileSync(cfg, `state_dir = "${path.join(tmp, 'state').replaceAll('\\', '/')}"\n${fs.readFileSync(cfg, 'utf8')}`)
+  const { c } = await enrollDevice(h, admin)
   const src = path.join(tmp, 'docs')
   fs.mkdirSync(src)
   c('add-folder', src)
@@ -96,8 +84,5 @@ try {
 
   console.log(`\nall ${passedChecks()} checks passed`)
 } finally {
-  await master.stop()
-  await schema.drop()
-  if (process.env.FAFNIRX_KEEP === '1') console.log('kept', tmp)
-  else fs.rmSync(tmp, { recursive: true, force: true })
+  await h.cleanup()
 }

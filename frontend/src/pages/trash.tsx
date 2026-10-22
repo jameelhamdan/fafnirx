@@ -13,9 +13,11 @@ import { ago, bytes, count, date, plural } from '@/lib/format'
 import { useRefreshLibrary } from '@/lib/library'
 import type { Trash, TrashEntry } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { useT } from '@/lib/i18n'
 
 /** Deleted files of every device. They are removed for good when the retention period ends; until then they come back with one click. */
 export default function TrashPage() {
+  const t = useT()
   const now = useNow()
   const refresh = useRefreshLibrary()
   const [selected, setSelected] = useState<Set<number>>(new Set())
@@ -43,7 +45,7 @@ export default function TrashPage() {
       return done
     },
     onSuccess: (done) => {
-      toast.success(`Restored ${plural(done, 'file')}`)
+      toast.success(t('Restored {files}', { files: plural(done, 'file') }))
       setSelected(new Set())
       void refresh()
     },
@@ -56,18 +58,18 @@ export default function TrashPage() {
 
   return (
     <div>
-      <PageHeader title="Trash" description={`Deleted files stay here for ${retention} days, then they are removed for good. Restoring puts a file back where it was, with its albums, tags and favorite.`} />
+      <PageHeader title={t('Trash')} description={t('Deleted files stay here for {days} days, then they are removed for good. Restoring puts a file back where it was, with its albums, tags and favorite.', { days: retention })} />
       {chosen.length > 0 && (
         <div className="mb-3 flex items-center gap-2 rounded-lg border bg-popover p-2 shadow-sm">
-          <span className="px-1 text-sm font-medium">{chosen.length} selected</span>
-          <Button size="sm" className="ml-auto" disabled={restore.isPending} onClick={() => restore.mutate(chosen)}><RotateCcw className="size-4" />Restore</Button>
-          <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button>
+          <span className="px-1 text-sm font-medium">{t('{count} selected', { count: chosen.length })}</span>
+          <Button size="sm" className="ml-auto" disabled={restore.isPending} onClick={() => restore.mutate(chosen)}><RotateCcw className="size-4" />{t('Restore')}</Button>
+          <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>{t('Clear')}</Button>
         </div>
       )}
       {trash.error ? <ErrorNote error={trash.error} /> : !trash.data ? (
         <Skeleton className="h-64" />
       ) : entries.length === 0 ? (
-        <Empty title="The trash is empty">Files you delete from the web app, or that disappear from a device, wait here before they are removed for good.</Empty>
+        <Empty title={t('The trash is empty')}>{t('Files you delete from the web app, or that disappear from a device, wait here before they are removed for good.')}</Empty>
       ) : (
         <>
           <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
@@ -77,21 +79,21 @@ export default function TrashPage() {
                 <li key={e.id} className={cn('overflow-hidden rounded-lg border bg-card', on && 'border-primary ring-2 ring-primary/40')}>
                   <div className="group relative aspect-square bg-muted/50">
                     {e.kind ? <Thumb src={mediaUrl(e.id, 'thumb', e.hash)} className="size-full opacity-70" fallback={<File className="size-8 text-muted-foreground" />} /> : <div className="grid size-full place-items-center"><File className="size-8 text-muted-foreground" /></div>}
-                    <Checkbox checked={on} onCheckedChange={() => toggle(e.id)} aria-label={`Select ${e.name}`} className={cn('absolute top-2 left-2 bg-background/90', !on && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-sm:opacity-100')} />
+                    <Checkbox checked={on} onCheckedChange={() => toggle(e.id)} aria-label={t('Select {name}', { name: e.name })} className={cn('absolute top-2 left-2 bg-background/90', !on && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-sm:opacity-100')} />
                   </div>
                   <div className="space-y-1 p-2.5">
                     <p className="truncate text-sm font-medium" title={`${e.device}/${e.path}`}>{e.name}</p>
                     <p className="truncate text-xs text-muted-foreground">{e.device} · {bytes(e.size)}</p>
-                    <p className="text-xs text-muted-foreground" title={`Removed for good on ${date(e.purge_at)}`}>Deleted {ago(e.deleted_at, now)} · gone {date(e.purge_at)}</p>
-                    <Button size="sm" variant="outline" className="mt-1 w-full" disabled={restore.isPending} onClick={() => restore.mutate([e])}><RotateCcw className="size-3.5" />Restore</Button>
+                    <p className="text-xs text-muted-foreground" title={t('Removed for good on {date}', { date: date(e.purge_at) })}>{t('Deleted {when} · gone {date}', { when: ago(e.deleted_at, now), date: date(e.purge_at) })}</p>
+                    <Button size="sm" variant="outline" className="mt-1 w-full" disabled={restore.isPending} onClick={() => restore.mutate([e])}><RotateCcw className="size-3.5" />{t('Restore')}</Button>
                   </div>
                 </li>
               )
             })}
           </ul>
           <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
-            <span>{count(entries.length)} of {count(total)}</span>
-            {trash.hasNextPage && <Button variant="outline" size="sm" disabled={trash.isFetchingNextPage} onClick={() => void trash.fetchNextPage()}>{trash.isFetchingNextPage ? 'Loading…' : 'Load more'}</Button>}
+            <span>{t('{shown} of {total}', { shown: count(entries.length), total: count(total) })}</span>
+            {trash.hasNextPage && <Button variant="outline" size="sm" disabled={trash.isFetchingNextPage} onClick={() => void trash.fetchNextPage()}>{trash.isFetchingNextPage ? t('Loading…') : t('Load more')}</Button>}
           </div>
         </>
       )}
