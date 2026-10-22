@@ -60,13 +60,12 @@ pub fn enqueue(conn: &mut impl GenericClient, kind: &str, payload: &serde_json::
     Ok(())
 }
 
-const SCHEMA: &str = include_str!("../../schema.sql");
-/// Serializes schema creation between master processes, which all apply it on start.
-const SCHEMA_LOCK: i64 = 0x6661_666e_6972_7801;
+/// Serializes migrations between master processes, which all apply them on start.
+pub(crate) const SCHEMA_LOCK: i64 = 0x6661_666e_6972_7801;
 const POOL_SIZE: u32 = 8;
 const CONNECT_ATTEMPTS: u32 = 30;
 
-/// Connects to PostgreSQL (waiting for it to come up) and applies the schema.
+/// Connects to PostgreSQL (waiting for it to come up) and applies the migrations that are missing.
 pub fn open(url: &str) -> Result<Db> {
     let config: Config = url.parse().context("FAFNIRX_DATABASE_URL is not a valid PostgreSQL connection string")?;
     open_with(config)
@@ -96,11 +95,21 @@ fn open_with(config: Config) -> Result<Db> {
 }
 
 fn apply_schema(conn: &mut Client) -> Result<()> {
-    let mut tx = conn.transaction()?;
-    tx.execute("SELECT pg_advisory_xact_lock($1)", &[&SCHEMA_LOCK])?;
-    tx.batch_execute(SCHEMA)?;
-    tx.commit()?;
-    Ok(())
+    super::migrations::apply(conn, SCHEMA_LOCK, super::migrations::ALL)
+}
+
+/// A `LIKE` pattern for the paths that start with `prefix` (`path LIKE $1`), which a `text_pattern_ops` index answers.
+/// Characters that mean something to `LIKE` are taken literally.
+pub fn like_prefix(prefix: &str) -> String {
+    let mut pattern = String::with_capacity(prefix.len() + 1);
+    for c in prefix.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    pattern.push('%');
+    pattern
 }
 
 /// Held by the one process that runs the singleton background work (scheduled jobs, sources, mirrors,
@@ -220,5 +229,51 @@ pub mod testing {
             .execute("INSERT INTO devices (name, token_hash, created_at) VALUES ('d', 'x', 0)", &[])
             .unwrap();
         db
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_folder_pattern_takes_wildcards_literally() {
+        assert_eq!(like_prefix("photos/2024/"), "photos/2024/%");
+        assert_eq!(like_prefix("100%_sure\\"), r"100\%\_sure\\%");
+        assert_eq!(like_prefix(""), "%");
+
+        let db = testing::db_with_device();
+        let mut c = db.get().unwrap();
+        for path in ["a_b/x", "aXb/x", "a%/y", "abc/z", "a_b2/w"] {
+            c.execute("INSERT INTO files (device_id, path) VALUES (1, $1)", &[&path]).unwrap();
+        }
+        let mut below = |folder: &str| -> Vec<String> {
+            let rows = c.query("SELECT path FROM files WHERE path LIKE $1 ORDER BY path", &[&like_prefix(folder)]);
+            rows.unwrap().iter().map(|r| r.get(0)).collect()
+        };
+        assert_eq!(below("a_b/"), ["a_b/x"], "_ is not a wildcard");
+        assert_eq!(below("a%/"), ["a%/y"], "% is not a wildcard");
+    }
+
+    #[test]
+    fn the_indexes_behind_the_lookups_exist() {
+        let db = testing::db();
+        let mut c = db.get().unwrap();
+        for index in [
+            "files_path_search",
+            "files_path_prefix",
+            "files_current_version",
+            "files_deleted",
+            "files_library",
+            "versions_root",
+            "versions_pruned",
+            "events_path",
+            "events_ts",
+            "devices_token",
+            "jobs_queue",
+        ] {
+            let found: bool = c.query_one("SELECT to_regclass($1) IS NOT NULL", &[&index]).unwrap().get(0);
+            assert!(found, "missing index {index}");
+        }
     }
 }

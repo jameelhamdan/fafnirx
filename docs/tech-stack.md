@@ -11,7 +11,7 @@
 | Login | HMAC-SHA256 signed cookie (`hmac`, `sha2`) | `crates/master/src/web/auth.rs` |
 | Update signatures | Ed25519 (`ed25519-dalek`) | `crates/sign`, verified in `crates/client/src/update.rs` |
 | Async runtime | `tokio` | Master and client |
-| Database | PostgreSQL 17 | Only supported database. `crates/master/schema.sql` |
+| Database | PostgreSQL 17 | Only supported database. Numbered migrations in `crates/master/migrations/` |
 | Master database access | `postgres` 0.19 (synchronous) + `r2d2` pool | Called from blocking threads; see [Development](development.md#database-access-in-the-master) |
 | Cross-process coordination | PostgreSQL advisory locks, `LISTEN/NOTIFY`, `FOR UPDATE SKIP LOCKED` | Path locks, live updates, the job queue, leader election |
 | Photo metadata | `kamadak-exif`, `image` | `crates/master/src/library/meta.rs`: size, EXIF, GPS, upright JPEG thumbnails and previews |
@@ -33,7 +33,7 @@
 ```text
 crates/
   common/    gRPC types (generated from proto/), chunking, hashing, path and device-name rules
-  master/    fafnirx-master, organized in apps (see Development: "How the master is organized"); schema.sql
+  master/    fafnirx-master, organized in apps (see Development: "How the master is organized"); migrations/
   client/    fafnirx: config, scan, hash, sync, daemon, net, update, service, credentials, tray
   sign/      fafnirx-sign: keygen, publish
 proto/       fafnirx.proto

@@ -15,7 +15,7 @@ const DISK_ALERT_PERCENT: f64 = 80.0;
 const STALE_UPLOAD: Duration = Duration::from_secs(24 * 3600);
 /// An upload error that the client has not reported again for this long is considered gone.
 const UPLOAD_ERROR_TTL_SECS: i64 = 48 * 3600;
-/// The change log is only for looking at recent activity.
+/// The change log and the alerts that were resolved are only for looking at recent activity.
 const EVENT_KEEP_DAYS: i64 = 90;
 
 pub fn spawn(db: Db, store: Arc<Store>, data_dir: PathBuf) {
@@ -147,6 +147,10 @@ fn retention(conn: &mut Client) -> Result<Vec<i64>> {
         .map(|r| r.get(0))
         .collect();
     tx.execute("DELETE FROM events WHERE ts < $1", &[&(unix_now() - EVENT_KEEP_DAYS * 86400)])?;
+    tx.execute(
+        "DELETE FROM alerts WHERE resolved_at IS NOT NULL AND resolved_at < $1",
+        &[&(unix_now() - EVENT_KEEP_DAYS * 86400)],
+    )?;
     tx.commit()?;
     if files > 0 || !pruned.is_empty() {
         tracing::info!("retention removed {files} files and {} old versions", pruned.len());

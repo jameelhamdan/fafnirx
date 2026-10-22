@@ -177,8 +177,8 @@ git pull
 docker compose up -d --build
 ```
 
-Every master process applies `crates/master/schema.sql` on start (idempotent, serialized by an advisory lock). Read the release notes
-first if the schema changed. Upgrading the PostgreSQL **major** version needs a dump and restore; do not just change the
+Every master process applies the database migrations it is missing on start (in order, in one transaction, serialized by an
+advisory lock), and refuses to start against a database made by a newer version. Back up the database before upgrading. Upgrading the PostgreSQL **major** version needs a dump and restore; do not just change the
 image tag. Client updates are separate: publish a signed build with `fafnirx-sign publish` and the devices pick it up
 within about six hours ([Usage](usage.md#signed-client-updates)).
 

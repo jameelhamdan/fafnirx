@@ -107,12 +107,15 @@ Unit tests get a fresh schema from `db::testing::db()`.
 
 ## Changing the schema
 
-`crates/master/schema.sql` is applied by every master process on every start under an advisory lock, so every statement must be
-idempotent. There is no migration framework. To change the schema:
+The schema is a list of numbered migrations in `crates/master/migrations/` (`0001_initial.sql`, `0002_....sql`), listed in
+`crates/master/src/platform/migrations.rs`. Every master process applies the ones it has not applied yet when it starts,
+in order, in one transaction behind an advisory lock, and records each one in `schema_migrations` with a checksum. A new
+database gets all of them; an existing one only the new ones. To change the schema:
 
-1. Edit the `CREATE TABLE` for fresh installs.
-2. Append idempotent statements for existing installs, for example `ALTER TABLE files ADD COLUMN IF NOT EXISTS ...`.
-3. Keep old and new masters working against the same schema until every process has restarted once.
+1. Add the next numbered `.sql` file and an entry at the end of `ALL`. A migration runs once, so it can be plain
+   `ALTER TABLE ...`; it must work while older processes are still running, because masters restart one by one.
+2. Never edit a migration that has been released: the checksum no longer matches and the master refuses to start.
+3. A database that is newer than the master (a downgrade) is refused with a message.
 4. Update [the database diagram](architecture.md#database-structure) and the admin API types in `frontend/src/lib/types.ts`.
 
 ## Changing the admin API

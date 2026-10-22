@@ -66,7 +66,7 @@ fafnirx add-folder ~/Documents
 
 | Path | What |
 |---|---|
-| `crates/master` | `fafnirx-master`, organized in apps (`devices`, `files`, `library`, `integrations`, `monitoring`, `web`, `platform`), with `schema.sql` |
+| `crates/master` | `fafnirx-master`, organized in apps (`devices`, `files`, `library`, `integrations`, `monitoring`, `web`, `platform`), with its database `migrations` |
 | `crates/client` | `fafnirx`: the client, tray and self-update |
 | `crates/common` | Shared hashing, chunking, path rules and the generated gRPC types |
 | `crates/sign` | `fafnirx-sign`: creates the update key and publishes signed client builds |

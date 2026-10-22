@@ -1,5 +1,6 @@
--- PostgreSQL schema of the master. Every master process applies this file on start (serialized by an
--- advisory lock); every statement is idempotent.
+-- 0001: the schema of the master as first released. Migrations are applied in order, once each, by every master
+-- process on start (see src/platform/migrations.rs). Never edit a migration that has been released: add a new one.
+-- This one is idempotent so that a database made before migrations were recorded is adopted as it is.
 -- All integers are BIGINT: unix timestamps, sizes and nanosecond mtimes do not fit in 32 bits.
 
 CREATE TABLE IF NOT EXISTS devices (

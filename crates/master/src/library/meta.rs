@@ -25,23 +25,6 @@ const MAX_ATTEMPTS: i64 = 3;
 pub const THUMB: u32 = 320;
 pub const PREVIEW: u32 = 1600;
 
-fn regex_of(extensions: &[&str]) -> String {
-    format!("\\.({})$", extensions.join("|"))
-}
-
-/// SQL regular expressions (on a lower-cased path) that match photos, videos, or either.
-pub fn image_regex() -> String {
-    regex_of(&IMAGE_EXTENSIONS)
-}
-
-pub fn video_regex() -> String {
-    regex_of(&VIDEO_EXTENSIONS)
-}
-
-pub fn media_regex() -> String {
-    regex_of(&IMAGE_EXTENSIONS.iter().chain(&VIDEO_EXTENSIONS).copied().collect::<Vec<_>>())
-}
-
 pub fn extension(path: &str) -> String {
     path.rsplit('.').next().filter(|e| *e != path).unwrap_or("").to_ascii_lowercase()
 }
@@ -599,6 +582,21 @@ mod tests {
         let root_hex = hex::encode(root);
         for size in [THUMB, PREVIEW] {
             assert!(cache.join("thumbs").join(format!("{root_hex}-{size}.jpg")).is_file(), "{size}px picture");
+        }
+    }
+
+    #[test]
+    fn the_library_column_of_files_agrees_with_the_extension_lists() {
+        use crate::platform::db::testing;
+        let db = testing::db_with_device();
+        let mut c = db.get().unwrap();
+        let mut paths: Vec<String> =
+            IMAGE_EXTENSIONS.iter().chain(&VIDEO_EXTENSIONS).map(|e| format!("a/x.{e}")).collect();
+        paths.extend(["a/X.JPG", "a/video.MP4", "a/x.jpg.txt", "a/jpg", "a/x.docx", "a/.mp4x"].map(String::from));
+        for path in &paths {
+            c.execute("INSERT INTO files (device_id, path) VALUES (1, $1)", &[path]).unwrap();
+            let media: Option<String> = c.query_one("SELECT media FROM files WHERE path = $1", &[path]).unwrap().get(0);
+            assert_eq!(media.as_deref(), kind(path), "{path}");
         }
     }
 
