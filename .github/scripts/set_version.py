@@ -35,6 +35,17 @@ def set_lock_versions(text: str, version: str) -> tuple[str, int]:
     return "\n\n".join(blocks), changed
 
 
+def read(path: Path) -> str:
+    """The file as it is on disk, line endings and all (`Path.read_text(newline=)` needs Python 3.13)."""
+    with open(path, encoding="utf-8", newline="") as f:
+        return f.read()
+
+
+def write(path: Path, text: str) -> None:
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+
+
 def main() -> None:
     if len(sys.argv) not in (2, 3) or not re.fullmatch(r"\d+\.\d+\.\d+", sys.argv[1]):
         raise SystemExit("usage: set_version.py X.Y.Z [root]")
@@ -42,15 +53,15 @@ def main() -> None:
     root = Path(sys.argv[2] if len(sys.argv) == 3 else Path(__file__).resolve().parents[2])
     manifest, lockfile = root / "Cargo.toml", root / "Cargo.lock"
 
-    toml = manifest.read_text(encoding="utf-8", newline="")
+    toml = read(manifest)
     members = re.search(r"^members\s*=\s*\[(.*?)\]", toml, re.S | re.M)
     wanted = len(re.findall(r'"[^"]+"', members.group(1))) if members else 0
     new_toml = set_workspace_version(toml, version)
-    new_lock, found = set_lock_versions(lockfile.read_text(encoding="utf-8", newline=""), version)
+    new_lock, found = set_lock_versions(read(lockfile), version)
     if wanted == 0 or found != wanted:
         raise SystemExit(f"Cargo.lock has {found} entries for the {wanted} crates of the workspace: refusing to guess")
-    manifest.write_text(new_toml, encoding="utf-8", newline="")
-    lockfile.write_text(new_lock, encoding="utf-8", newline="")
+    write(manifest, new_toml)
+    write(lockfile, new_lock)
     print(f"version {version} in Cargo.toml and for {found} crates in Cargo.lock")
 
 
