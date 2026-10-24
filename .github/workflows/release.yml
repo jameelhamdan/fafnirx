@@ -1,26 +1,35 @@
-# The one way to release. Actions -> Release -> Run workflow, on master, with the new version (X.Y.Z, no "v").
+# The one way to release, and nothing has to be done by hand before it: Actions -> Release -> Run workflow, on master, with
+# the new version (X.Y.Z, no "v"). The workflow makes the commit that sets that version in Cargo.toml and Cargo.lock.
 #
-#   1. validate   the version is X.Y.Z, newer than every release so far, not used before, and is the version Cargo.toml
-#                 already has (bump it in a commit on master first: Cargo.toml and Cargo.lock)
-#   2. checks     CI (fmt, clippy, tests, web app) on this commit; the client built for every platform; the Docker image
-#                 built and started on amd64 and arm64
-#   3. approve    the "release" environment (add required reviewers to it in the repository settings to ask for a
-#                 click here). Reached only when EVERYTHING in step 2 passed. Nothing has been published up to this point.
-#   4. publish    the image to Docker Hub (<version>, <major>.<minor>, latest), then the tag and the GitHub Release with
-#                 the client files attached, then (if ticked) the Homebrew formula
+#   1. validate   the version is X.Y.Z, newer than every release so far, not used before, and not below Cargo.toml's
+#   2. prepare    the commit "Release X.Y.Z" (made from the commit the run started on) is pushed to the temporary branch
+#                 release/X.Y.Z, and from here on EVERY job builds and tests that exact commit. If Cargo.toml already
+#                 says X.Y.Z (the first release of a version, a rerun) there is nothing to commit and the run's own
+#                 commit is used.
+#   3. checks     CI (fmt, clippy, tests, web app); the client built for every platform; the Docker image built and
+#                 started on amd64 and arm64
+#   4. approve    the "release" environment (add required reviewers to it in the repository settings to ask for a
+#                 click here). Reached only when EVERYTHING in step 3 passed. Nothing has been published up to this point,
+#                 and master has not been touched.
+#   5. publish    the release commit becomes the new head of master (a fast-forward: it is refused if master has moved on
+#                 meanwhile, and then nothing else is published: run it again), the image goes to Docker Hub (<version>,
+#                 <major>.<minor>, latest), then the tag and the GitHub Release with the client files, then (if ticked)
+#                 the Homebrew formula
+#   6. cleanup    the temporary branch is deleted, whatever happened
 #
-# A run that fails before step 4 leaves nothing behind. If step 4 fails halfway, run it again with the same version: the
-# tag is only created by its last step, and pushing the same image again changes nothing.
-# "dry_run" stops after step 2: use it to try the pipeline without publishing anything.
+# A run that fails before step 5 leaves nothing behind. If step 5 fails halfway, run it again with the same version:
+# the version commit is on master by then, so the rerun has nothing to commit and releases master as it is.
+# "dry_run" stops after step 3: use it to try the pipeline without publishing anything.
 #
 # Needs: secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (see docker.yml), HOMEBREW_TAP_TOKEN for Homebrew (see homebrew.yml).
+# If master is protected, the github-actions bot must be allowed to push to it, or the commit of step 5 is refused.
 name: Release
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: New version, X.Y.Z (already set in Cargo.toml on master)
+        description: New version, X.Y.Z (the workflow commits it to Cargo.toml and Cargo.lock)
         type: string
         required: true
       dry_run:
@@ -65,26 +74,50 @@ jobs:
           if [ -n "$latest" ] && [ "$(printf '%s\n%s\n' "$latest" "$VERSION" | sort -V | tail -n1)" != "$VERSION" ]; then
             fail "$VERSION is not newer than the latest release, $latest"
           fi
-          # Every crate of the workspace must already say this version: the binaries, the installers and the image are
-          # built from the commit as it is (the builds use --locked, so Cargo.lock has to agree too).
-          found=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version' | sort -u | paste -sd' ')
-          [ "$found" = "$VERSION" ] || fail "Cargo.toml says '$found': set it to $VERSION in a commit on master first"
-          echo "releasing $VERSION after ${latest:-nothing}"
+          # The workflow sets the version itself, but never lowers it: a Cargo.toml that is ahead of the version asked for
+          # is a mistake in one of the two.
+          current=$(sed -n '/^\[workspace\.package\]/,/^\[/{s/^version *= *"\(.*\)"/\1/p}' Cargo.toml | head -n1)
+          [[ $current =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "cannot read the version in Cargo.toml (got '$current')"
+          if [ "$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -n1)" != "$VERSION" ]; then
+            fail "Cargo.toml says $current, which is newer than $VERSION"
+          fi
+          echo "releasing $VERSION (Cargo.toml says $current, the last release is ${latest:-nothing})"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-  ci:
+  prepare:
     needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.p.outputs.sha }}
+      bumped: ${{ steps.p.outputs.bumped }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the whole history, so that the push of the version commit can be checked against what is there
+      - name: Make the version commit
+        id: p
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: bash .github/scripts/prepare-release.sh "$VERSION"
+
+  ci:
+    needs: [validate, prepare]
     uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.prepare.outputs.sha }}
 
   image:
-    needs: validate
+    needs: [validate, prepare]
     uses: ./.github/workflows/docker.yml
     with:
       version: ${{ needs.validate.outputs.version }}
       push: false
+      ref: ${{ needs.prepare.outputs.sha }}
 
   client:
-    needs: validate
+    needs: [validate, prepare]
     strategy:
       fail-fast: false
       matrix:
@@ -102,6 +135,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -149,7 +184,7 @@ jobs:
           path: out/*
           if-no-files-found: error
 
-  # Everything above has passed. Nothing has been published yet.
+  # Everything above has passed. Nothing has been published yet, and master has not been touched.
   approve:
     if: ${{ !inputs.dry_run }}
     needs: [ci, image, client]
@@ -158,21 +193,47 @@ jobs:
     steps:
       - run: echo "CI, the client for every platform and the image for both platforms all passed; publishing."
 
+  # The version commit becomes the head of master. First of the publishing steps because it is the one that can be refused
+  # (master moved on while the checks ran), and then nothing else has been published.
+  land:
+    needs: [prepare, approve]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          # Not a shallow checkout: git can only push a fast-forward when it has the commit master is at now, which is
+          # the version commit's parent.
+          fetch-depth: 0
+      - name: Fast-forward master to the release commit
+        if: needs.prepare.outputs.bumped == 'true'
+        env:
+          SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          git push origin "$SHA:refs/heads/master" || {
+            echo "::error::master has moved on since this release started, so the version commit cannot be added to it. Nothing was published: run the Release workflow again."
+            exit 1
+          }
+
   publish-image:
-    needs: [validate, approve]
+    needs: [validate, prepare, land]
     uses: ./.github/workflows/docker.yml
     with:
       version: ${{ needs.validate.outputs.version }}
       push: true
+      ref: ${{ needs.prepare.outputs.sha }}
     secrets: inherit
 
   release:
-    needs: [validate, publish-image]
+    needs: [validate, prepare, publish-image]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
       VERSION: ${{ needs.validate.outputs.version }}
+      SHA: ${{ needs.prepare.outputs.sha }}
       IMAGE: ${{ vars.DOCKERHUB_IMAGE || format('{0}/fafnirx-master', secrets.DOCKERHUB_USERNAME) }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -186,7 +247,7 @@ jobs:
           # shellcheck disable=SC2016 # the backticks are Markdown, not command substitution
           printf 'Server: `docker pull %s:%s`\n\nClient: the installer for your system is attached below, each with a `.sha256`.\n\n' \
             "$IMAGE" "$VERSION" > notes.md
-          gh release create "v$VERSION" out/* --target "$GITHUB_SHA" --title "v$VERSION" \
+          gh release create "v$VERSION" out/* --target "$SHA" --title "v$VERSION" \
             --notes-file notes.md --generate-notes
 
   homebrew:
@@ -196,3 +257,17 @@ jobs:
     with:
       version: ${{ needs.validate.outputs.version }}
     secrets: inherit
+
+  # The temporary branch is not needed any more, or never will be (a failed run, a dry run).
+  cleanup:
+    if: ${{ always() && needs.prepare.outputs.bumped == 'true' }}
+    needs: [validate, prepare, ci, image, client, approve, land, publish-image, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete the temporary branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: release/${{ needs.validate.outputs.version }}
+        run: gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/$BRANCH" || true

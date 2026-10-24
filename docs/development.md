@@ -168,24 +168,37 @@ Sources are modules in `crates/master/src/integrations`: `gdrive.rs` is the mode
 
 ## Releasing
 
-`master` is the development branch: every branch is merged there, and CI runs on it. A release is one run of one workflow.
+`master` is the development branch: every branch is merged there, and CI runs on it. A release is one run of one workflow,
+and nothing has to be done by hand before it, not even changing the version number.
 
-1. In a commit on `master`, set the new version in `Cargo.toml` (`[workspace.package]`) and let `Cargo.lock` follow. Versions
-   are `X.Y.Z` only, no suffix.
-2. Actions -> **Release** -> Run workflow, on `master`, with that version. Tick *dry_run* to try it without publishing, and
-   *homebrew* to also update the Homebrew formula (off by default).
+Actions -> **Release** -> Run workflow, on `master`, with the new version as `X.Y.Z` (no suffix). Tick *dry_run* to try it
+without publishing, and *homebrew* to also update the Homebrew formula (off by default).
 
-The workflow refuses a version that is not `X.Y.Z`, is not newer than every earlier release, was released before, or
-differs from `Cargo.toml`. It then runs CI, builds the client for Windows, macOS and Linux (`.exe`, tarballs, `.deb`, each
-with a `.sha256`), and builds and starts the Docker image on amd64 and arm64. Only when **all** of that has passed does it
-publish, in this order: the image to Docker Hub (`<version>`, `<major>.<minor>`, `latest`), then the tag and the GitHub
-Release with the client files, then Homebrew. Nothing is published before that point, so a failed run leaves nothing behind;
-if publishing itself fails halfway, run it again with the same version.
+What it does, in order:
+
+1. **Checks the version:** it must be `X.Y.Z`, newer than every earlier release, not used before, and not below the one in
+   `Cargo.toml`.
+2. **Makes the version commit.** `.github/scripts/prepare-release.sh` sets the version in `Cargo.toml` (`[workspace.package]`)
+   and for the workspace's crates in `Cargo.lock`, commits it as "Release X.Y.Z" by the `github-actions[bot]`, and pushes it
+   to the temporary branch `release/X.Y.Z`. From here on every job builds and tests *that exact commit*, so what is tested is
+   what is released. If `Cargo.toml` already says that version, there is nothing to commit.
+3. **Checks everything:** CI, the client for Windows, macOS and Linux (`.exe`, tarballs, `.deb`, each with a `.sha256`), and
+   the Docker image built and started on amd64 and arm64.
+4. **Publishes, only when all of that has passed:** the version commit becomes the head of `master` (a fast-forward), the image
+   goes to Docker Hub (`<version>`, `<major>.<minor>`, `latest`), then the tag and the GitHub Release with the client files,
+   then Homebrew. The temporary branch is deleted at the end, whatever happened.
+
+A run that fails before step 4 leaves nothing behind and `master` is untouched. If `master` has moved on while the checks
+ran, the version commit cannot be added to it: nothing is published, run the workflow again. If publishing fails halfway,
+run it again with the same version: the version commit is on `master` by then, so the rerun has nothing to commit and
+releases `master` as it is.
 
 One-time setup: the secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (an access token with write rights), optionally the
-variable `DOCKERHUB_IMAGE`, and `HOMEBREW_TAP_TOKEN` for Homebrew. To ask for a click before publishing, add required
-reviewers to the `release` environment (Settings -> Environments). The server is installed from the Docker image only, so
-there is no server package. `.github/scripts/smoke-image.sh <image>` runs the image check by hand.
+variable `DOCKERHUB_IMAGE`, and `HOMEBREW_TAP_TOKEN` for Homebrew. The workflow pushes to `master` as the
+`github-actions[bot]`, so if `master` is protected, that bot must be allowed to push there. To ask for a click before
+publishing, add required reviewers to the `release` environment (Settings -> Environments). The server is installed from the
+Docker image only, so there is no server package. `.github/scripts/smoke-image.sh <image>` runs the image check by hand, and
+CI runs the version bump on every push, so that it cannot break unnoticed.
 
 ## The player and the streaming service
 
