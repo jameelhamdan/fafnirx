@@ -44,6 +44,9 @@ jobs:
           ref: ${{ inputs.ref }}
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
+        env:
+          # Not needed, and the file it would upload as an artifact is not worth a place in the run's list.
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
           context: .
           platforms: linux/${{ matrix.arch }}
@@ -86,6 +89,9 @@ jobs:
       # Every layer comes from the cache the check filled (one scope per platform), so nothing is compiled twice. If the
       # cache was evicted in between, the build is just slower (the other platform runs under emulation).
       - uses: docker/build-push-action@v6
+        env:
+          # Not needed, and the file it would upload as an artifact is not worth a place in the run's list.
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
           context: .
           platforms: linux/amd64,linux/arm64
