@@ -15,7 +15,7 @@ pub fn refresh(conn: &mut Client, device_id: i64) -> Result<()> {
     let mut tx = conn.transaction()?;
     // The row is locked first: a writer that is still committing marks it stale when it finishes, and the sums are
     // taken after that, so a change is never lost between the two.
-    let Some(row) = tx.query_opt("SELECT name FROM devices WHERE id = $1 FOR UPDATE", &[&device_id])? else {
+    let Some(row) = tx.query_opt("SELECT folder FROM devices WHERE id = $1 FOR UPDATE", &[&device_id])? else {
         return Ok(());
     };
     tx.execute(
@@ -61,9 +61,12 @@ mod tests {
     fn totals_follow_the_files_once_they_are_refreshed() {
         let db = testing::db_with_device();
         let mut c = db.get().unwrap();
+        // The master files are another device with totals of their own; this test is about the one device.
+        c.execute("UPDATE devices SET totals_stale = FALSE WHERE id = 0", &[]).unwrap();
         let totals = |c: &mut Client| -> (i64, i64, i64, bool) {
-            let r =
-                c.query_one("SELECT file_count, total_bytes, deleted_files, totals_stale FROM devices", &[]).unwrap();
+            let r = c
+                .query_one("SELECT file_count, total_bytes, deleted_files, totals_stale FROM devices WHERE id = 1", &[])
+                .unwrap();
             (r.get(0), r.get(1), r.get(2), r.get(3))
         };
         assert_eq!(totals(&mut c), (0, 0, 0, true), "a new device has nothing to show yet");
@@ -90,7 +93,7 @@ mod tests {
         assert_eq!(totals(&mut c), (2, 15, 1, false));
         assert_eq!(refresh_stale(&mut c).unwrap(), 0, "nothing is stale any more");
 
-        c.execute("UPDATE devices SET totals_stale = TRUE", &[]).unwrap();
+        c.execute("UPDATE devices SET totals_stale = TRUE WHERE id = 1", &[]).unwrap();
         c.execute(
             "INSERT INTO device_activity (device_id, updated_at, phase) VALUES (1, $1, 'uploading')",
             &[&unix_now()],

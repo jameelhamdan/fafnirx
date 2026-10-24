@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { FolderOpen, KeyRound, Ban } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { FolderOpen, KeyRound, Ban, Unplug } from 'lucide-react'
+import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { ActivityView, ErrorNote, KindBadge, PageHeader, StatusDot } from '@/components/common'
+import { ActivityView, ErrorNote, Fact, KindBadge, PageHeader, StatusDot } from '@/components/common'
 import { EnrollDialog } from '@/components/enroll-dialog'
 import { Confirm } from '@/components/confirm'
 import { Button } from '@/components/ui/button'
@@ -15,15 +15,7 @@ import { ago, bytes, count, dateTime } from '@/lib/format'
 import type { DeviceDetail } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useT } from '@/lib/i18n'
-
-function Fact({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div>
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-0.5 text-sm">{children || '—'}</dd>
-    </div>
-  )
-}
+import { deviceAddress } from '@/lib/session'
 
 export default function DeviceDetailPage() {
   const t = useT()
@@ -31,17 +23,22 @@ export default function DeviceDetailPage() {
   const client = useQueryClient()
   const now = useNow()
   const [token, setToken] = useState<string | null>(null)
-  const [confirm, setConfirm] = useState<'revoke' | 'rotate' | null>(null)
-  const { data, error } = useQuery({ queryKey: ['device', name], queryFn: () => api.get<DeviceDetail>(`/api/devices/${name}`) })
+  const [confirm, setConfirm] = useState<'revoke' | 'rotate' | 'release' | null>(null)
+  const { data, error } = useQuery({ queryKey: ['device', name], queryFn: () => api.get<DeviceDetail>(`/api/devices/${deviceAddress(name)}`) })
   const refresh = () => client.invalidateQueries({ queryKey: ['device', name] })
 
   const rotate = useMutation({
-    mutationFn: () => api.post<DeviceDetail>(`/api/devices/${name}/token`),
+    mutationFn: () => api.post<DeviceDetail>(`/api/devices/${deviceAddress(name)}/token`),
     onSuccess: (made) => { setToken(made.token); void refresh() },
     onError: (e) => toast.error(e.message),
   })
+  const release = useMutation({
+    mutationFn: () => api.post(`/api/devices/${deviceAddress(name)}/release`),
+    onSuccess: () => { toast.success(t('{name} released. The next computer that connects with its token takes it over.', { name })); void refresh() },
+    onError: (e) => toast.error(e.message),
+  })
   const revoke = useMutation({
-    mutationFn: () => api.post(`/api/devices/${name}/revoke`),
+    mutationFn: () => api.post(`/api/devices/${deviceAddress(name)}/revoke`),
     onSuccess: () => { toast.success(t('{name} revoked. Its data is kept.', { name })); void refresh() },
     onError: (e) => toast.error(e.message),
   })
@@ -53,14 +50,15 @@ export default function DeviceDetailPage() {
   return (
     <div>
       <PageHeader
-        title={d.name}
+        title={d.folder}
         description={<span className="flex items-center gap-3"><KindBadge kind={d.kind} />{d.kind === 'device' && <StatusDot status={d.revoked ? 'revoked' : d.online ? 'online' : 'offline'} label={d.revoked ? t('Revoked') : d.online ? t('Online') : t('Offline, seen {when}', { when: ago(d.last_seen, now) })} />}</span>}
         actions={
           <>
-            <Button variant="outline" asChild><Link to={`/files?device=${d.name}`}><FolderOpen className="size-4" />{t('Browse files')}</Link></Button>
+            <Button variant="outline" asChild><Link to={`/files?device=${encodeURIComponent(d.folder)}`}><FolderOpen className="size-4" />{t('Browse files')}</Link></Button>
             {d.kind === 'device' && (
               <>
                 <Button variant="outline" onClick={() => setConfirm('rotate')}><KeyRound className="size-4" />{d.revoked ? t('New token (re-enables)') : t('Rotate token')}</Button>
+                {!d.revoked && <Button variant="outline" onClick={() => setConfirm('release')}><Unplug className="size-4" />{t('Release')}</Button>}
                 {!d.revoked && <Button variant="outline" onClick={() => setConfirm('revoke')}><Ban className="size-4" />{t('Revoke')}</Button>}
               </>
             )}
@@ -100,7 +98,7 @@ export default function DeviceDetailPage() {
                 {data.events.map((e) => (
                   <li key={e.id} className="flex items-center gap-3 py-2 text-sm">
                     <span className={cn('w-16 shrink-0 text-xs font-medium uppercase', e.action === 'delete' ? 'text-destructive' : e.action === 'update' ? 'text-warning' : 'text-success')}>{e.action}</span>
-                    <Link to={`/files?device=${d.name}&file=${encodeURIComponent(e.path)}`} className="min-w-0 flex-1 truncate hover:underline" title={e.path}>{e.path}</Link>
+                    <Link to={`/files?device=${encodeURIComponent(d.folder)}&file=${encodeURIComponent(e.path)}`} className="min-w-0 flex-1 truncate hover:underline" title={e.path}>{e.path}</Link>
                     <span className="shrink-0 text-xs text-muted-foreground">{ago(e.ts, now)}</span>
                   </li>
                 ))}
@@ -117,6 +115,14 @@ export default function DeviceDetailPage() {
         action={t('Rotate')}
         onCancel={() => setConfirm(null)}
         onConfirm={() => { setConfirm(null); rotate.mutate() }}
+      />
+      <Confirm
+        open={confirm === 'release'}
+        title={t('Release {name}?', { name: d.name })}
+        description={t('A device is used by one computer at a time, and a second one using its token is refused. Release it to let the next computer that connects take it over, for example after replacing the computer. The computer that has it now is refused from then on.')}
+        action={t('Release')}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => { setConfirm(null); release.mutate() }}
       />
       <Confirm
         open={confirm === 'revoke'}

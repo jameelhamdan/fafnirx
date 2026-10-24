@@ -1,31 +1,90 @@
-# Builds the client for every platform and attaches the files to the GitHub release: a Windows setup .exe, macOS and
-# Linux tarballs (with installer/install.sh) and Linux .deb packages, each with a .sha256.
+# The one way to release. Actions -> Release -> Run workflow, on master, with the new version (X.Y.Z, no "v").
 #
-# It runs when a release is published on GitHub, and by hand (Actions -> Release -> Run workflow, with the tag of an
-# existing release). The release tag is the version: v1.2.3 builds version 1.2.3, whatever Cargo.toml says, and the
-# binaries report it in `fafnirx --version`. Re-running replaces the files already attached.
+#   1. validate   the version is X.Y.Z, newer than every release so far, not used before, and is the version Cargo.toml
+#                 already has (bump it in a commit on master first: Cargo.toml and Cargo.lock)
+#   2. checks     CI (fmt, clippy, tests, web app) on this commit; the client built for every platform; the Docker image
+#                 built and started on amd64 and arm64
+#   3. approve    the "release" environment (add required reviewers to it in the repository settings to ask for a
+#                 click here). Reached only when EVERYTHING in step 2 passed. Nothing has been published up to this point.
+#   4. publish    the image to Docker Hub (<version>, <major>.<minor>, latest), then the tag and the GitHub Release with
+#                 the client files attached, then (if ticked) the Homebrew formula
 #
-# docker.yml and homebrew.yml stay off for now.
+# A run that fails before step 4 leaves nothing behind. If step 4 fails halfway, run it again with the same version: the
+# tag is only created by its last step, and pushing the same image again changes nothing.
+# "dry_run" stops after step 2: use it to try the pipeline without publishing anything.
+#
+# Needs: secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (see docker.yml), HOMEBREW_TAP_TOKEN for Homebrew (see homebrew.yml).
 name: Release
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
-      tag:
-        description: Existing release tag to build and attach to (for example v0.2.0)
+      version:
+        description: New version, X.Y.Z (already set in Cargo.toml on master)
         type: string
         required: true
+      dry_run:
+        description: Only validate and build, publish nothing
+        type: boolean
+        default: false
+      homebrew:
+        description: Also update the Homebrew formula
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
+  contents: read
 
-env:
-  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  build:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the tags
+      - name: Check the version
+        id: v
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          fail() { echo "::error::$*"; exit 1; }
+          [ "$GITHUB_REF" = refs/heads/master ] || fail "run this on master, not on $GITHUB_REF"
+          [[ $VERSION =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
+            || fail "'$VERSION' is not a version of the form X.Y.Z (no leading v, no suffix)"
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null || gh release view "v$VERSION" >/dev/null 2>&1; then
+            fail "v$VERSION is already released"
+          fi
+          latest=$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -V | tail -n1 || true)
+          if [ -n "$latest" ] && [ "$(printf '%s\n%s\n' "$latest" "$VERSION" | sort -V | tail -n1)" != "$VERSION" ]; then
+            fail "$VERSION is not newer than the latest release, $latest"
+          fi
+          # Every crate of the workspace must already say this version: the binaries, the installers and the image are
+          # built from the commit as it is (the builds use --locked, so Cargo.lock has to agree too).
+          found=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version' | sort -u | paste -sd' ')
+          [ "$found" = "$VERSION" ] || fail "Cargo.toml says '$found': set it to $VERSION in a commit on master first"
+          echo "releasing $VERSION after ${latest:-nothing}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  ci:
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+
+  image:
+    needs: validate
+    uses: ./.github/workflows/docker.yml
+    with:
+      version: ${{ needs.validate.outputs.version }}
+      push: false
+
+  client:
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
@@ -36,32 +95,17 @@ jobs:
           - { os: macos-latest, name: macos-aarch64 }
           - { os: windows-latest, name: windows-x86_64 }
     runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.TAG }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.name }}
-
-      # The tag decides the version; the workspace version in Cargo.toml is rewritten to match before building, so the
-      # binary, the installer, the .deb and the file names all carry the same number.
-      - name: Set the version from the tag
-        id: v
-        run: |
-          case "$TAG" in
-            v[0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "tag '$TAG' is not of the form v1.2.3" >&2; exit 1 ;;
-          esac
-          version=${TAG#v}
-          sed -i.bak "s/^version = \".*\"/version = \"$version\"/" Cargo.toml
-          rm Cargo.toml.bak
-          git diff --stat Cargo.toml
-          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Linux build packages (tray icon)
         if: startsWith(matrix.name, 'linux')
@@ -72,10 +116,10 @@ jobs:
       - name: Build (Linux, macOS)
         if: ${{ !startsWith(matrix.name, 'windows') }}
         run: |
-          cargo build --release -p fafnirx
-          test "$(target/release/fafnirx --version)" = "fafnirx ${{ steps.v.outputs.version }}"
+          cargo build --release --locked -p fafnirx
+          test "$(target/release/fafnirx --version)" = "fafnirx $VERSION"
           mkdir out
-          stage=fafnirx-${{ steps.v.outputs.version }}-${{ matrix.name }}
+          stage=fafnirx-$VERSION-${{ matrix.name }}
           mkdir "$stage"
           cp target/release/fafnirx installer/install.sh "$stage/"
           tar czf "out/$stage.tar.gz" "$stage"
@@ -105,16 +149,50 @@ jobs:
           path: out/*
           if-no-files-found: error
 
-  attach:
-    needs: build
+  # Everything above has passed. Nothing has been published yet.
+  approve:
+    if: ${{ !inputs.dry_run }}
+    needs: [ci, image, client]
     runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - run: echo "CI, the client for every platform and the image for both platforms all passed; publishing."
+
+  publish-image:
+    needs: [validate, approve]
+    uses: ./.github/workflows/docker.yml
+    with:
+      version: ${{ needs.validate.outputs.version }}
+      push: true
+    secrets: inherit
+
+  release:
+    needs: [validate, publish-image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      IMAGE: ${{ vars.DOCKERHUB_IMAGE || format('{0}/fafnirx-master', secrets.DOCKERHUB_USERNAME) }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: out
           merge-multiple: true
-      - name: Attach to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: gh release upload "$TAG" out/* --clobber
+      - name: Create the tag and the release
+        run: |
+          # shellcheck disable=SC2016 # the backticks are Markdown, not command substitution
+          printf 'Server: `docker pull %s:%s`\n\nClient: the installer for your system is attached below, each with a `.sha256`.\n\n' \
+            "$IMAGE" "$VERSION" > notes.md
+          gh release create "v$VERSION" out/* --target "$GITHUB_SHA" --title "v$VERSION" \
+            --notes-file notes.md --generate-notes
+
+  homebrew:
+    if: ${{ inputs.homebrew }}
+    needs: [validate, release]
+    uses: ./.github/workflows/homebrew.yml
+    with:
+      version: ${{ needs.validate.outputs.version }}
+    secrets: inherit

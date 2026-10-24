@@ -105,3 +105,12 @@
     cursor: pointer;
   }
 }
+
+/* Subtitles of the video player: a dark box behind the text, readable on any picture. */
+video::cue {
+  background-color: rgb(0 0 0 / 0.72);
+  color: #fff;
+  font-family: inherit;
+  font-size: clamp(14px, 2.2vw, 28px);
+  line-height: 1.35;
+}

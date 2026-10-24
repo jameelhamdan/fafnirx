@@ -10,7 +10,7 @@ flowchart TB
     end
     subgraph MASTER["fafnirx-master (one process)"]
         GRPC["Device API<br/>gRPC :7443"]
-        API["Admin API<br/>JSON + SSE :8080<br/>downloads, zip, uploads"]
+        API["Web API<br/>JSON + SSE :8080<br/>downloads, zip, uploads"]
         WORK["Background work<br/>watcher, jobs, sources,<br/>mirrors, metadata"]
     end
     PG[("PostgreSQL")]
@@ -29,22 +29,29 @@ flowchart TB
 | Component | Language | Role |
 |---|---|---|
 | Client `fafnirx` (`crates/client`) | Rust | Watch folders, hash in chunks, upload, queue offline, tray icon, self-update, run as a service |
-| Master `fafnirx-master` (`crates/master`) | Rust | Device API, admin API, file store, ingest, retention, alerts, sources, mirrors, metadata |
-| Web app (`frontend`) | TypeScript, React | The admin interface, built into the master binary |
+| Master `fafnirx-master` (`crates/master`) | Rust | Device API, web API, file store, ingest, retention, alerts, sources, mirrors, metadata |
+| Web app (`frontend`) | TypeScript, React | The web interface, built into the master binary. Its video player (`frontend/src/player`) is a module of its own that imports nothing from the app |
 | `fafnirx-sign` (`crates/sign`) | Rust | Create the update key, publish signed client builds |
-| Common (`crates/common`) | Rust | Generated gRPC types, chunking, hashing and path rules shared by client and master |
+| `fafnirx-stream` (`crates/stream`) | Rust | Optional HLS streaming service: playlists, and segments made with ffmpeg as they are asked for. Only the master talks to it ([streaming](streaming.md)) |
+| Common (`crates/common`) | Rust | Generated gRPC types, chunking, hashing and path rules shared by client and master, and the reading of `ffprobe`'s answer (`probe`) shared by the master and the streaming service |
 | PostgreSQL | | All metadata |
 
 ## Design decisions worth knowing
 
 - **Two APIs, two trust levels.** The device gRPC API (`proto/fafnirx.proto`) has no call that reads, lists or deletes
   stored data: `Negotiate` only tells a client which chunks of its *own* file are missing. Everything that reads or
-  deletes lives in the admin API, behind the admin login. They listen on different ports and share no authentication.
-- **Plain files.** The current version of every path is stored whole, under its own name, in `files/<device>/<path>`. A
-  version that is replaced or deleted moves to `versions/<version id>/<device>/<path>`. Chunks exist only on the wire and
+  deletes lives in the web API, behind a user login, and what a user reaches there depends on their role. They listen on
+  different ports and share no authentication.
+- **Plain files.** The current version of every path is stored whole, under its own name, in
+  `files/<user>/<device>/<path>`, or in `files/<path>` for the master files. A version that is replaced or deleted moves to
+  `versions/<version id>/<user>/<device>/<path>` (`versions/<version id>/<path>` for a master file). Chunks exist only on the wire and
   while an upload is assembled in `tmp/`; they are never stored separately, so there is no cross-file deduplication.
-- **The device name is the folder.** `devices.name` is a slug (`^[a-z0-9][a-z0-9._-]{0,62}$`, no reserved Windows names),
-  unique and immutable, enforced by the database. Local folders and sources are devices too (kind `local` and `source`),
+, no reserved Windows names), immutable, enforced by the database; a device name is unique
+  per user. `devices.folder` (`<user>/<name>`, set by a trigger) is what the file store, the mirrors and the API call a
+  device. The master files are held by one internal device (kind `master`, id 0, folder `_master`, no owner), so that they
+  use the same tables as everything else. A top-level name of `files/` is a user if a user has that name; anything else is
+  a master file, so a user's name and a master path cannot clash (the master files refuse such a path, and a user cannot be
+  added under a name the master files use). Local folders and sources are devices too (kind `local` and `source`),
   so everything that works on files works on all three.
 - **One process.** The master is a single binary. Locks, live events and queued work still go through PostgreSQL (see
   below), so state lives in the database rather than in memory. Only browser uploads in progress and the login limit are
@@ -56,9 +63,15 @@ flowchart TB
   everything is collected again. Without this a client would report files as sent that the master never had.
 - **Metadata is separate from data.** Losing PostgreSQL loses versions and history, not the files (they keep their
   names); losing the data directory loses the data. Back up both ([Deployment](deployment.md#backups)).
-- **No TLS in the master.** Trust comes from the network (LAN, VPN) or from a TLS proxy in front (a Cloudflare tunnel).
-  Device tokens and the admin password are hashed or signed, but the transport is plain. Client updates are signed
-  independently, so they are safe on any transport.
+- **No TLS in the master.** Trust comes from the network (LAN, VPN) or from a TLS proxy in front (a Cloudflare tunnel, or
+  the Caddy of `docker-compose.proxy.yml`, which also closes the master's own ports). Device tokens and passwords are hashed
+  (passwords with argon2) or signed, but the transport is plain. Client updates are signed independently, so they are safe
+  on any transport. Behind a proxy, `FAFNIRX_TRUSTED_PROXY` names the addresses whose `X-Forwarded-For` is believed, so that
+  failed logins are counted per person; from anyone else the header is ignored.
+- **An album is files picked, a folder, or both.** `album_files` holds the picked files. An album with `folder_device_id` and
+  `folder_prefix` also contains every live photo and video whose path starts with the prefix, so a show's new episodes are
+  in its album without anyone adding them; such an album lists its files in natural name order (`Episode 2` before
+  `Episode 10`) and has one per user and folder.
 
 ## Upload and commit
 
@@ -69,6 +82,7 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant FS as Files
     C->>M: Heartbeat (host, disk, progress)
+    Note over C,M: every call carries the token and an instance id (x-fafnirx-instance)
     M->>DB: update device and activity, NOTIFY devices
     C->>M: Identify (start of every cycle)
     M-->>C: master id (random, made once per database)
@@ -102,9 +116,11 @@ The lock is held until the transaction ends, and the file moves happen before th
 
 `files/livetree.rs` watches `files/` with the operating system's file events. Touched paths queue up; once a
 path has been quiet for 5 seconds it is compared with the database: new or changed files become versions
-(`ingest::adopt_live`), vanished ones are marked deleted (`ingest::forget_absent`), a new top-level folder becomes a
-`local` device. Anything the master wrote itself matches its record (same size and modification time) and is skipped
-without being read. Watchers miss things on some mounts, so the whole tree is also compared every 5 minutes. A missing
+(`ingest::adopt_live`), vanished ones are marked deleted (`ingest::forget_absent`), a new folder `files/<user>/<name>` becomes a
+`local` device of the user whose folder it is in. Whatever is in `files/` and is not a user's folder is the master files, and
+is compared the same way. Anything the master wrote itself matches its record (same size and modification time) and is skipped
+without being read. Watchers miss things on some mounts, so the whole tree is also compared every 5 minutes, or when an
+administrator asks (`POST /api/files/rescan`; one comparison runs at a time). A missing
 device folder deletes nothing, so an unmounted volume cannot wipe records.
 
 ## Live updates
@@ -123,7 +139,6 @@ burst. A dropped stream or a slow browser gets a `resync` and refreshes everythi
 | Retention, version pruning, stale uploads | `monitoring/jobs.rs`, hourly | deletes files with their records |
 | Sources, mirrors | `integrations/` (`mod.rs`, `gdrive.rs`, `mirror.rs`) | claimed with `FOR UPDATE SKIP LOCKED` |
 | File watcher | `files/livetree.rs` | |
-| Configuration file | `config/` (`mod.rs`, `database.rs`) | read at start (a bad file stops the master), written when the database differs from it; see [configuration](configuration.md) |
 | Photo metadata | `library/meta.rs`, table `jobs` | a job is claimed with `FOR UPDATE SKIP LOCKED`, retried up to 3 times |
 | Previews | `library/meta.rs`, on request | cached in `cache/thumbs/`, at most 4 decoded at once |
 
@@ -131,6 +146,11 @@ burst. A dropped stream or a slow browser gets a `resync` and refreshes everythi
 
 ```mermaid
 erDiagram
+    users ||--o{ devices : owns
+    users ||--o{ sessions : "logged in"
+    users ||--o{ albums : makes
+    users ||--o{ tags : makes
+    users ||--o{ file_state : says
     devices ||--o{ files : owns
     files ||--o{ versions : has
     devices ||--o{ events : logs
@@ -139,13 +159,28 @@ erDiagram
     sources }o--|| devices : "files of"
     mirrors ||--o{ mirror_items : uploaded
     versions }o--o| file_meta : "same root hash"
+    users {
+        bigint id PK
+        text name "slug, unique, immutable: the folder"
+        text role "admin, normal, readonly"
+        text password_hash "argon2"
+        bigint disabled_at
+    }
+    sessions {
+        text token_hash PK
+        bigint user_id FK
+        bigint expires_at
+    }
     devices {
         bigint id PK
-        text name "slug, unique, immutable"
-        text kind "device, local, source"
+        bigint user_id FK "null only for the master files"
+        text name "slug, unique per user, immutable"
+        text folder "user/name, or _master"
+        text kind "device, local, source, master"
         text token_hash
         bigint revoked_at
         bigint last_seen
+        text instance_id "the computer using the device"
     }
     files {
         bigint id PK
@@ -176,6 +211,7 @@ erDiagram
     }
     file_state {
         bigint file_id PK
+        bigint user_id PK
         boolean favorite
         boolean archived
         smallint rating
@@ -188,6 +224,8 @@ erDiagram
         bigint id PK
         text name
         bigint cover_file_id FK
+        bigint folder_device_id FK "set: the album shows a folder"
+        text folder_prefix "the folder's path, with a slash at the end"
     }
     files ||--o| file_state : "what people say"
     files }o--o{ albums : "album_files"
@@ -198,9 +236,8 @@ erDiagram
 **file** (a path of a device: what people said). Both the library tables and the files they point at are removed together
 when retention removes a file for good (`ON DELETE CASCADE`), and nothing in them is ever written into the file itself.
 
-The decisions in `settings`, `devices` (of kind `device` or `local`), `mirrors` and `sources` are mirrored in the
-[configuration file](configuration.md) (`config/`): applied from it at start, written to it when the web app changes them.
-Other tables: `events` (change log, 90 days), `alerts`, `settings`, `jobs` (queued background work: `meta` reads a
+The database is the only source of truth for the setup (`settings`, `users`, `devices`, `mirrors`, `sources`). Albums, tags and `file_state` belong to a user (`file_state` is per user and file, so a master file can be a
+favorite of one user and not of another). Other tables: `events` (change log, 90 days), `alerts`, `settings`, `jobs` (queued background work: `meta` reads a
 photo or video and makes its pictures, `proxy` converts a video), `sources`, `source_items`, `mirrors`, `mirror_items`,
 `tags` and `file_tags`, `album_files`. The numbered migrations in `crates/master/migrations/` are the source of truth and are applied on start.
 
@@ -244,22 +281,25 @@ them (`file_count`, `total_bytes`, `deleted_files`). Every write that touches a 
 it is idle, or within a minute for a device that does not report (a local folder, a source, a change made in the web
 app, retention). The dashboard and the device list therefore show the totals as of the last finished sync.
 
-## Admin API
+## Web API
 
-JSON under `/api`, all behind the login cookie (an HMAC-signed value, `SameSite=Strict`, `HttpOnly`). Calls that change
+JSON under `/api`, all behind the login cookie (a random token whose hash is kept in the database, `SameSite=Strict`, `HttpOnly`). Calls that change
 something must carry an `x-requested-with` header, which a form on another site cannot set.
 
 | Area | Endpoints |
 |---|---|
-| Session | `POST /api/login`, `POST /api/logout`, `GET /api/session` |
+| Session | `POST /api/login` (user name and password), `POST /api/logout`, `GET /api/session`, `POST /api/me/password` |
+| Users (administrators) | `GET/POST /api/users`, `PATCH /api/users/:name` (role, disabled, new password) |
 | Overview | `GET /api/dashboard`, `POST /api/alerts/:id/dismiss`, `GET /api/events` (SSE) |
-| Devices | `GET/POST /api/devices`, `GET /api/devices/:name`, `POST .../token`, `POST .../revoke` |
+| Devices | `GET/POST /api/devices`, `GET /api/devices/:folder` (`<user>/<name>`, the slash encoded as `%2F`), `POST .../token`, `POST .../release`, `POST .../revoke` |
 | Files | `GET /api/files` (browse, search, filter, sort, page), `GET /api/files/info`, `POST /api/files/delete`, `POST /api/files/restore` |
+| Streaming | `GET /api/stream/:id/master.m3u8`, `:quality/index.m3u8`, `:quality/seg<n>.ts`, `subtitles.json` and `subtitles/<n>.vtt`, for a file by its id (`/api/files/info` has it). The master checks the login and passes them to the streaming service, if there is one |
 | Transfers | `GET /api/files/download` (ranges, versions), `GET /api/files/thumb`, `POST /api/files/zip`, `POST /api/uploads`, `PUT/GET/DELETE /api/uploads/:id`, `POST /api/uploads/:id/finish` |
 | Library | `GET /api/timeline/buckets` (months with the file count of each day), `GET /api/timeline?month=YYYY-MM` (scope, device, kind and tag filters), `GET /api/library?ids=`, `GET/PATCH /api/library/:id`, `POST /api/library/bulk`, `GET /api/tags`, `DELETE /api/tags/:id`, `GET /api/map`, `GET /api/trash` (restore with `POST /api/files/restore`) |
 | Pictures by id | `GET /api/media/:id/{thumb,preview,video,original,download}` (`?v=<hash>` makes the picture cacheable for good; videos answer `404` until a playable copy exists) |
-| Albums | `GET/POST /api/albums`, `GET/PATCH/DELETE /api/albums/:id`, `POST /api/albums/:id/files` and `/files/remove` |
-| Integrations | `GET/POST /api/sources`, `GET/POST /api/mirrors`, and `/:name`, `/run`, `/toggle`, `/resync` |
+| Albums | `GET/POST /api/albums` (a body with `folder` makes an album of a folder, and returns the existing one if there is), `GET/PATCH/DELETE /api/albums/:id`, `POST /api/albums/:id/files` and `/files/remove` (files by `ids`, or by `items` of `{device, path}`: a file or a folder in the file browser) |
+| File store | `POST /api/files/rescan` (administrators): compare `files/` with the database now |
+| Integrations | `GET/POST /api/sources` (each user's own) with `/:user/:name`, `/run` and `/toggle`; `GET/POST /api/mirrors` (administrators) with `/:name`, `/run`, `/toggle` and `/resync` |
 | Settings | `GET/PUT /api/settings` |
 
 Uploads are chunked and resumable: a session is created, pieces are `PUT` at an offset (the server answers `409` with the
@@ -270,9 +310,10 @@ device API.
 
 | Threat | Mitigation |
 |---|---|
-| Stolen device token | It can only add data. Revoke it in the web app; the old token stops working at once |
+| Stolen device token | It can only add data. Revoke it in the web app; the old token stops working at once. A second computer using it is refused while the first is connected, and the owner is alerted |
 | Compromised device | Cannot read, list or delete anything (the API has no such call) |
-| Stolen admin password | Rate-limited guesses per connecting address; put Cloudflare Access or a VPN in front. This is the key to protect |
+| Stolen password | Guesses are rate-limited per connecting address and per user name; sessions are kept in the database and end when the user is disabled, gets a new password or logs out. An administrator's password is the key to protect; put Cloudflare Access or a VPN in front |
+| A user reading or changing another user's files | Every query and every download is limited to the devices the user's role reaches (`web/access.rs`); a device of someone else does not exist for them (404) |
 | Compromised master | Cannot ship a client update: updates need a signature from a key that is not on the master |
 | Path tricks (`..`, absolute, reserved names) | Paths are validated on arrival and again when mapped to disk |
 | A browser opening a stored HTML or SVG file | Those are always served as downloads, with `nosniff` |

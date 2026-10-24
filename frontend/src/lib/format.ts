@@ -1,3 +1,4 @@
+import { clock as clockOfSeconds } from '@/player/util'
 import { locale, msg, tr } from './i18n'
 
 const UNITS = [msg('B'), msg('KB'), msg('MB'), msg('GB'), msg('TB'), msg('PB')]
@@ -41,7 +42,7 @@ export function date(ts: number | null | undefined): string {
 // Photos carry no time zone, so the library reads and shows every date as UTC: the same on every screen.
 
 /** "2024-05" from unix seconds. */
-export function monthKey(ts: number): string {
+function monthKey(ts: number): string {
   const d = new Date(ts * 1000)
   return `${String(d.getUTCFullYear()).padStart(4, '0')}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
 }
@@ -79,13 +80,8 @@ export function fromInputValue(value: string): number | null {
 }
 
 /** "1:23" or "1:02:03" from milliseconds. */
-export function clock(ms: number): string {
-  const total = Math.round(ms / 1000)
-  const h = Math.floor(total / 3600)
-  const m = Math.floor((total % 3600) / 60)
-  const s = total % 60
-  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`
-}
+/** A length of time given in milliseconds, as `1:05` or `1:02:03`. */
+export const clock = (ms: number): string => clockOfSeconds(Math.round(ms / 1000))
 
 export function count(n: number): string {
   return n.toLocaleString(locale())
@@ -104,17 +100,6 @@ export function plural(n: number, word: keyof typeof PLURALS): string {
 
 export function percent(done: number, total: number): number | null {
   return total > 0 ? Math.min(100, Math.floor((100 * done) / total)) : null
-}
-
-/** "docs/a/b.txt" -> "b.txt" */
-export function baseName(path: string): string {
-  return path.slice(path.lastIndexOf('/') + 1)
-}
-
-/** "docs/a/b.txt" -> "docs/a"; "" for a top-level path */
-export function parentPath(path: string): string {
-  const i = path.lastIndexOf('/')
-  return i < 0 ? '' : path.slice(0, i)
 }
 
 export function joinPath(dir: string, name: string): string {

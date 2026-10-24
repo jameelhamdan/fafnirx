@@ -1,6 +1,6 @@
 //! What the master knows about the content of a file beyond its bytes: the kind, the size of an image or
 //! video, the EXIF data and GPS position of a photo, and previews. Read by the background queue, shown by the
-//! admin API.
+//! web API.
 
 use crate::library::media;
 use crate::platform::db::{self, Db};
@@ -384,7 +384,7 @@ fn current_file(c: &mut postgres::Client, p: &JobFile) -> Result<Option<Vec<u8>>
         .query_one(
             "SELECT EXISTS (SELECT 1 FROM files f JOIN devices d ON d.id = f.device_id
                             JOIN versions v ON v.id = f.current_version_id
-                            WHERE d.name = $1 AND f.path = $2 AND v.root_hash = $3)",
+                            WHERE d.folder = $1 AND f.path = $2 AND v.root_hash = $3)",
             &[&p.device, &p.path, &root],
         )?
         .get(0);

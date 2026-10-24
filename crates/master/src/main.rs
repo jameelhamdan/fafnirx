@@ -1,22 +1,28 @@
-//! fafnirx-master: collects files from devices, stores them as plain files, and serves the admin web app.
+//! fafnirx-master: collects files from devices, stores them as plain files, and serves the web app.
 //!
-//! One process does everything: the device gRPC API, the admin JSON API with live updates and the web
+//! One process does everything: the device gRPC API, the JSON API of the web app, with live updates and the web
 //! app, the file watcher, scheduled jobs, sources, mirrors, and the details and previews of photos and
-//! videos.
+//! videos. It serves several users (administrators, normal users and read-only users), each with a folder of their
+//! own for their devices, and the master files that belong to nobody.
 //!
 //! Configuration (environment):
 //!   FAFNIRX_DATABASE_URL    PostgreSQL connection string, e.g. postgres://user:password@host/database (required)
 //!   FAFNIRX_DATA            data directory (default ./data)
 //!   FAFNIRX_LISTEN          gRPC listen address for devices (default 0.0.0.0:7443)
-//!   FAFNIRX_HTTP            admin web listen address (default 0.0.0.0:8080)
-//!   FAFNIRX_ADMIN_PASSWORD  password of the admin web app (required)
+//!   FAFNIRX_HTTP            web listen address (default 0.0.0.0:8080)
+//!   FAFNIRX_ADMIN_PASSWORD  password of the user "admin", set once (required until the user has one; after that the
+//!                           password is changed in the web app and this is not read)
 //!   FAFNIRX_RCLONE          rclone binary used by mirrors (default: rclone from PATH)
-//!   FAFNIRX_CONFIG          the configuration file, see config/mod.rs (default <FAFNIRX_DATA>/fafnirx.json)
-//!   FAFNIRX_RCLONE_CONFIG   rclone config file for mirrors that name a remote (default rclone.conf next to the above)
+//!   FAFNIRX_RCLONE_CONFIG   rclone config file for mirrors that name a remote (default <FAFNIRX_DATA>/rclone.conf)
 //!   FAFNIRX_TICK_SECS       how often sources and mirrors are checked for being due (default 15)
+//!   FAFNIRX_INSTANCE_LEASE_SECS  seconds a device must be silent before another computer may use its token (default 90)
+//!   FAFNIRX_STREAM_URL      where the optional streaming service is (off without it); FAFNIRX_STREAM_TOKEN is the secret
+//!                           shared with it (at least 16 characters)
 //!   FAFNIRX_GDRIVE_API      Google Drive API base URL (default https://www.googleapis.com; for tests)
 //!   FAFNIRX_FFMPEG          ffmpeg binary for video posters and playable copies (default: ffmpeg from PATH)
 //!   FAFNIRX_FFPROBE         ffprobe binary for video details (default: ffprobe from PATH)
+//!   FAFNIRX_TRUSTED_PROXY   addresses or ranges (comma separated) of reverse proxies in front of the master, whose
+//!                           X-Forwarded-For is believed about the client's address (default: none)
 //!   FAFNIRX_MAP_TILES       tile URL of the map, e.g. https://tile.openstreetmap.org/{z}/{x}/{y}.png (the default)
 //!
 //! There is no TLS in the master: run it on a trusted network or VPN, or put a TLS proxy (a Cloudflare
@@ -24,7 +30,6 @@
 
 #![allow(clippy::result_large_err)] // tonic::Status is large and is the error type of every RPC helper
 
-mod config;
 mod devices;
 mod files;
 mod integrations;
@@ -54,9 +59,6 @@ async fn main() -> Result<()> {
         bail!("unknown argument {arg:?}: the master is configured through environment variables only");
     }
     let password = std::env::var("FAFNIRX_ADMIN_PASSWORD").unwrap_or_default();
-    if password.is_empty() {
-        bail!("FAFNIRX_ADMIN_PASSWORD must be set");
-    }
     let data_dir = PathBuf::from(std::env::var("FAFNIRX_DATA").unwrap_or_else(|_| "data".into()));
     std::fs::create_dir_all(&data_dir)?;
     let url = std::env::var("FAFNIRX_DATABASE_URL")
@@ -70,27 +72,29 @@ async fn main() -> Result<()> {
     std::mem::forget(db.clone());
     let store = Arc::new(platform::store::Store::open(&data_dir)?);
 
-    // The configuration file is applied before anything starts, so that jobs and devices begin from it.
-    let config = Arc::new(config::ConfigFile::new(config::path()));
-    config.start(&db, &store).await?;
-    tracing::info!("configuration file: {}", config.path().display());
-    config.clone().spawn(db.clone());
+    // The user "admin" gets its password, and every user a folder, before anything else looks at them.
+    platform::db::with(&db, move |c| web::auth::bootstrap(c, &password)).await?;
+    {
+        let store = store.clone();
+        platform::db::with(&db, move |c| web::users::ensure_dirs(c, &store)).await?;
+    }
 
     library::meta::run_queue(db.clone(), store.clone(), data_dir.join("cache"));
     monitoring::jobs::spawn(db.clone(), store.clone(), data_dir.clone());
     tokio::spawn(integrations::spawn(db.clone(), store.clone(), data_dir.clone()));
 
-    let state = Arc::new(web::AppState::new(db.clone(), store.clone(), data_dir.clone(), password, config)?);
+    let state = Arc::new(web::AppState::new(db.clone(), store.clone(), data_dir.clone())?);
     web::listen(state.clone(), url);
 
     let mut servers = tokio::task::JoinSet::new();
     let addr = address("FAFNIRX_HTTP", "0.0.0.0:8080")?;
     let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("listen on {addr}"))?;
-    tracing::info!("admin web app on http://{addr}");
+    tracing::info!("web app on http://{addr}");
+    let trusted = state.trusted.clone();
     let app = web::router(state).into_make_service_with_connect_info::<SocketAddr>();
-    servers.spawn(async move { axum::serve(listener, app).await.context("admin web server") });
+    servers.spawn(async move { axum::serve(listener, app).await.context("web server") });
 
-    let svc = devices::grpc::Service { db, store, updates_dir: data_dir.join("updates") };
+    let svc = devices::grpc::Service { db, store, updates_dir: data_dir.join("updates"), trusted };
     let addr = address("FAFNIRX_LISTEN", "0.0.0.0:7443")?;
     tracing::info!("fafnirx-master listening for devices on {addr}");
     servers.spawn(async move {

@@ -34,12 +34,12 @@ and a map; the app can show them later. None of this is needed to be safe or use
 | Transport | Plain HTTP on a LAN or VPN, `https://` behind a Cloudflare tunnel | Android blocks cleartext traffic by default: allow it per configured host (a network security config), and prefer https for anything public |
 | Photo metadata | `file_meta` (dimensions, EXIF, date taken, GPS, video length and codec), read by a worker on every new photo and video | HEIC (the preview decoder does not read HEIC; ffmpeg only if its build can) |
 | Previews | `GET /api/media/:id/{thumb,preview,video}` (JPEG pictures, video poster frames and playable copies, cached by content) | HEIC |
-| Reading the backup | Admin API: browse, search, download with ranges, restore; the **timeline** (`/api/timeline/buckets` and `/api/timeline`), albums, map and trash the web app uses | A read-only **API token** (below), so the phone does not need the admin login |
+| Reading the backup | Web API: browse, search, download with ranges, restore; the **timeline** (`/api/timeline/buckets` and `/api/timeline`), albums, map and trash the web app uses | A read-only **API token** (below), so the phone does not need a login |
 | Remote access | Cloudflare tunnel | Cloudflare Access service tokens for the app, if the web app is behind Access |
 
 ### Server work needed (later)
 
-- **Scoped API tokens.** Today the admin API has one login (a cookie from the admin password). The app needs a token that
+- **Scoped API tokens.** Today the web API has a login per user (a cookie). The app needs a token that
   can only *read* what belongs to its own device: list, thumbnails, downloads. Tokens are created in the web app, shown
   once, stored hashed, revocable, and carried as `Authorization: Bearer`. Writing and deleting stay impossible with it.
 - ~~**Timeline endpoint**~~ Built for the web app: `GET /api/timeline/buckets` (months with the file count of each day)
@@ -60,7 +60,7 @@ A native Kotlin app (Jetpack Compose) with three parts:
 1. **Sync engine**: finds new media, hashes it in 4 MiB chunks with BLAKE3, and runs the upload protocol.
 2. **Settings and enrollment**: server address, token, folders, network and charging rules, storage of the token in the
    Android Keystore.
-3. **Timeline viewer**: the grid and the full-screen viewer, reading through the admin API with the read-only token.
+3. **Timeline viewer**: the grid and the full-screen viewer, reading through the web API with the read-only token.
 
 ### Sharing the protocol with the other clients
 

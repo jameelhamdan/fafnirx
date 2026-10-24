@@ -1,4 +1,4 @@
--- 0002: the indexes behind every lookup, listing and search of the admin API and the device API.
+-- 0002: the indexes behind every lookup, listing and search of the web API and the device API.
 
 -- Substring search of the file browser (ILIKE '%text%'). The extension lives in the public schema, so every
 -- schema of the database finds its operator class there.

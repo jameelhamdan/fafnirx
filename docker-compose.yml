@@ -16,6 +16,9 @@ services:
       - "${FAFNIRX_DB_DIR:-./pgdata}:/var/lib/postgresql/data"
 
   master:
+    # Built here by default. On a server, set FAFNIRX_IMAGE=<user>/fafnirx-master:<version> (the release on Docker Hub) in
+    # .env and run `docker compose pull && docker compose up -d` instead of building.
+    image: "${FAFNIRX_IMAGE:-fafnirx-master:local}"
     build: .
     restart: unless-stopped
     user: "${FAFNIRX_UID:-1000}:${FAFNIRX_GID:-1000}"
@@ -24,16 +27,46 @@ services:
         condition: service_healthy
     environment:
       FAFNIRX_DATABASE_URL: "postgresql://fafnirx:${FAFNIRX_DB_PASSWORD}@db/fafnirx"
+      # The password of the user "admin", set at the first start. Change it in the web app afterwards.
       FAFNIRX_ADMIN_PASSWORD: "${FAFNIRX_ADMIN_PASSWORD:?set FAFNIRX_ADMIN_PASSWORD}"
       HOME: /tmp # rclone wants a writable home for its cache
+      # Adaptive video streaming (optional): see the `stream` service below and docs/streaming.md.
+      FAFNIRX_STREAM_URL: "${FAFNIRX_STREAM_URL:-}"
+      FAFNIRX_STREAM_TOKEN: "${FAFNIRX_STREAM_TOKEN:-}"
     ports:
       - "7443:7443" # devices (gRPC)
-      - "8080:8080" # web app and admin API
+      - "8080:8080" # web app and web API
     volumes:
-      # files/<device>/ is the live tree; it can be shared over SMB or NFS as a network drive.
+      # files/ is the live tree: files/<user>/<device>/ for every user, and the master files (which belong to nobody)
+      # straight in files/. It can be shared over SMB or NFS as a network drive.
       - "${FAFNIRX_DATA_DIR:-./data}:/data"
-      # fafnirx.json (settings, devices, mirrors, sources) and, if you use rclone remotes, rclone.conf. The master reads
-      # fafnirx.json at start (restart it after editing; a bad file stops it) and writes it when you change things in the
-      # web app. The folder must exist and be writable by FAFNIRX_UID, or Docker creates it for root and the master cannot
-      # write to it. See docs/configuration.md.
+      # rclone.conf, if you use rclone remotes for mirrors (the master writes to it when rclone refreshes a token, so it
+      # must be writable by FAFNIRX_UID). See docs/usage.md (Mirrors).
       - "${FAFNIRX_CONFIG_DIR:-./config}:/config"
+
+  # Adaptive video streaming (HLS, made with ffmpeg as it is watched). Off unless asked for:
+  #   .env:  FAFNIRX_STREAM_URL=http://stream:8090   FAFNIRX_STREAM_TOKEN=<openssl rand -hex 24>
+  #   then:  mkdir stream-cache && docker compose --profile stream up -d
+  # It has no login of its own and publishes no port: only the master talks to it, behind its login.
+  stream:
+    image: "${FAFNIRX_IMAGE:-fafnirx-master:local}"
+    build: .
+    profiles: ["stream"]
+    restart: unless-stopped
+    user: "${FAFNIRX_UID:-1000}:${FAFNIRX_GID:-1000}"
+    command: ["fafnirx-stream"]
+    environment:
+      FAFNIRX_STREAM_TOKEN: "${FAFNIRX_STREAM_TOKEN:-}"
+      FAFNIRX_STREAM_CACHE: /cache
+      FAFNIRX_STREAM_JOBS: "${FAFNIRX_STREAM_JOBS:-2}"
+      FAFNIRX_STREAM_VCODEC: "${FAFNIRX_STREAM_VCODEC:-libx264}"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    volumes:
+      # The videos are read from files/ and never changed.
+      - "${FAFNIRX_DATA_DIR:-./data}:/data:ro"
+      # Segments made so far; removed after a week without being watched. Must be writable by FAFNIRX_UID.
+      - "${FAFNIRX_STREAM_CACHE_DIR:-./stream-cache}:/cache"

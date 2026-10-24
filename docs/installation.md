@@ -7,13 +7,13 @@ token; the master's web app makes both.
 
 ### Requirements
 
-- Docker with the Compose plugin (the easy way), or Linux with PostgreSQL 14 or newer (with its standard `contrib` extensions: the file search needs `pg_trgm`) and the `fafnirx-master` binary.
+- Docker with the Compose plugin. The master is supported as a Docker image only; Compose also starts the PostgreSQL it needs.
 - Local disk for PostgreSQL (see [Deployment](deployment.md#storage-layout)). Never put the database on SMB or NFS.
 - Disk for the files, at least as large as the data you collect (ZFS recommended).
 - Ports `7443/tcp` (devices) and `8080/tcp` (web app). Both are plain HTTP: keep them on your LAN or VPN, or publish
   them through a [Cloudflare tunnel](deployment.md#remote-access-with-a-cloudflare-tunnel).
 
-### With Docker
+### Install
 
 ```sh
 git clone https://github.com/jameelhamdan/fafnirx.git fafnirx && cd fafnirx
@@ -24,64 +24,51 @@ ENV
 docker compose up -d --build
 ```
 
-Open `http://<server>:8080` and log in. More settings for `.env`:
+Open `http://<server>:8080` and log in as `admin` with `FAFNIRX_ADMIN_PASSWORD`. Add the other users on the **Users** page (see
+[Users and roles](usage.md#users-and-roles)). More settings for `.env`:
 
 ```ini
 FAFNIRX_DATA_DIR=/tank/fafnirx/data      # files, versions, updates; share files/ as a network drive
 FAFNIRX_DB_DIR=/tank/fafnirx/pgdata      # PostgreSQL files (local disk)
-FAFNIRX_CONFIG_DIR=/tank/fafnirx/config  # fafnirx.json (and rclone.conf): the setup, kept outside the container
+FAFNIRX_CONFIG_DIR=/tank/fafnirx/config  # rclone.conf (rclone remotes for mirrors), kept outside the container
 FAFNIRX_UID=1000                         # owner of the files in the data and config dirs
 FAFNIRX_GID=1000
 ```
 
-Compose starts `db` (PostgreSQL 17) and `master`. The schema is created on first start. The master also keeps its
-settings, devices, mirrors and sources in `fafnirx.json` in the config folder (`./config` by default, which must be
-writable by `FAFNIRX_UID`): see [Configuration file](configuration.md). To move a master that already runs onto the
-file, run `node scripts/export-config.mjs` before restarting it.
+Compose starts `db` (PostgreSQL 17) and `master`. The schema is created on first start.
 
 ```sh
 docker compose ps                    # db is "healthy", master is "Up"
-docker compose logs master | tail    # ... admin web app on http://0.0.0.0:8080 ... listening for devices on 0.0.0.0:7443
+docker compose logs master | tail    # ... web app on http://0.0.0.0:8080 ... listening for devices on 0.0.0.0:7443
 ```
-
-### Without Docker (Linux)
-
-Build with the web app first, because it is embedded in the binary:
-
-```sh
-(cd frontend && npm ci && npm run build)
-cargo build --release -p fafnirx-master -p fafnirx-sign
-sudo install target/release/fafnirx-master /usr/local/bin/
-```
-
-Create a database and user in PostgreSQL, write `/etc/fafnirx/master.env` as described in
-[`installer/fafnirx-master.service`](../installer/fafnirx-master.service), and enable that unit. Install `rclone` if you
-want mirrors, and `ffmpeg` (which brings `ffprobe`) if you want video posters, details and playable copies in the photo
-library. Photos need nothing extra.
 
 ### Configuration reference
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `FAFNIRX_DATABASE_URL` | required | `postgresql://user:password@host/database` |
-| `FAFNIRX_ADMIN_PASSWORD` | required | Password of the web app |
+| `FAFNIRX_ADMIN_PASSWORD` | required until set | Password of the user `admin`, set at the first start; after that it is changed in the web app and this is not read |
 | `FAFNIRX_DATA` | `data` (`/data` in Docker) | Data directory |
 | `FAFNIRX_LISTEN` | `0.0.0.0:7443` | Device (gRPC) listen address |
-| `FAFNIRX_HTTP` | `0.0.0.0:8080` | Web app and admin API listen address |
+| `FAFNIRX_HTTP` | `0.0.0.0:8080` | Web app and API listen address |
 | `FAFNIRX_RCLONE` | `rclone` | rclone binary used by mirrors |
-| `FAFNIRX_CONFIG` | `<FAFNIRX_DATA>/fafnirx.json` (`/config/fafnirx.json` in Docker) | The [configuration file](configuration.md): devices, mirrors, sources and settings, read when the master starts and written by the web app as you change things |
-| `FAFNIRX_RCLONE_CONFIG` | `rclone.conf` next to the configuration file | rclone config file for mirrors that name a `remote` |
-| `FAFNIRX_CONFIG_POLL_SECS` | `2` | How often the database is checked for changes to write to the configuration file |
+| `FAFNIRX_STREAM_URL`, `FAFNIRX_STREAM_TOKEN` | unset | Where the optional streaming service is and the secret shared with it; see [Video streaming](streaming.md) |
+| `FAFNIRX_RCLONE_CONFIG` | `<FAFNIRX_DATA>/rclone.conf` (`/config/rclone.conf` in Docker) | rclone config file for mirrors that name a `remote` |
 | `FAFNIRX_TICK_SECS` | `15` | How often due sources and mirrors are looked for |
+| `FAFNIRX_TRUSTED_PROXY` | none | Addresses or ranges (comma separated) of reverse proxies in front of the master. From these, `X-Forwarded-For` is believed about the client's address, so logins are counted per person and not per proxy. [Reverse proxy](deployment.md#reverse-proxy-with-caddy) |
+| `FAFNIRX_INSTANCE_LEASE_SECS` | `90` | How long a device must be silent before another computer may take over its token (see [Usage](usage.md)) |
 | `FAFNIRX_FFMPEG`, `FAFNIRX_FFPROBE` | `ffmpeg`, `ffprobe` | Programs that read videos and make their pictures and playable copies |
 | `FAFNIRX_MAP_TILES` | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | Where the browser loads the map's pictures from; point it at a tile server of your own on a network without internet |
 | `RUST_LOG` | `info` | Log level |
 | Compose only: `FAFNIRX_DB_PASSWORD`, `FAFNIRX_DATA_DIR`, `FAFNIRX_DB_DIR`, `FAFNIRX_CONFIG_DIR`, `FAFNIRX_UID`, `FAFNIRX_GID` | | |
+| Compose only: `FAFNIRX_IMAGE` | `fafnirx-master:local` | The image of the master and the streaming service. Built from this folder by default; on a server set it to the release on Docker Hub (`<user>/fafnirx-master:<version>`) and `docker compose pull && docker compose up -d` |
+| Compose only, with the proxy: `FAFNIRX_WEB_ADDRESS`, `FAFNIRX_DEVICE_ADDRESS`, `FAFNIRX_HTTP_PORT`, `FAFNIRX_HTTPS_PORT`, `FAFNIRX_DEVICE_PORT`, `FAFNIRX_SUBNET` | | See [Reverse proxy](deployment.md#reverse-proxy-with-caddy) |
 
 ## 2. Adding a device
 
 In the web app: **Devices → Add device**. Give it a name (lowercase letters, digits, `.`, `_`, `-`); the name is its
-folder, `files/<name>/`, and cannot change. The next screen shows the token **once**, with the command to run.
+folder in your folder, `files/<you>/<name>/`, and cannot change. The name only has to be unique among your devices, and a device
+always belongs to a user (an administrator can add one for another user). The next screen shows the token **once**, with the command to run.
 
 ### Windows
 
@@ -132,6 +119,11 @@ fafnirx add-folder ~/Documents
 fafnirx status                                                   # online
 ```
 
+A folder is stored on the master under its name, as `<you>/<device>/<name>/`. By default the name is the folder's own name, and
+a second folder with the same name (`~/photos` and `/mnt/photos`) is named `photos-2`. Choose another with `--name`. The
+master does not tell names apart by case or accents (`Photos` and `photos`, or `é` typed in two ways, are the same), so
+`add-folder` refuses a name that clashes and suggests a free one.
+
 Pass `--no-service` to `enroll` to skip the background service and run `fafnirx run` yourself.
 
 The token goes into the operating system's keychain, with a file next to the config as a fallback. Enrolling again
@@ -149,6 +141,7 @@ itself within about 20 seconds.
 | Symptom | Likely cause |
 |---|---|
 | `enroll` prints `warning: could not reach ...` | Wrong address or port, a firewall, or the master is not running. The device is still enrolled; fix the cause and it connects. |
+| Client status: `not sending: device in use ...` | Another computer is connected with the same token. Remove it, or use **Release** on the device page (or add a device for this computer). A computer that has been silent for 90 seconds is replaced by itself. |
 | Client status: `unknown or revoked device token` | The token was rotated or the device revoked. Enroll again with the new token. |
 | Master exits with `cannot connect to the database` | PostgreSQL is not reachable, or the password differs from the one it was first started with. |
 | The web app shows a device offline | No heartbeat for 60 seconds. Check `fafnirx status` on the device. |

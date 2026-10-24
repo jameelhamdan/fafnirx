@@ -140,7 +140,7 @@ let admin
 async function runAndWait(table, name) {
   const before = (await status(table, name))?.[2] ?? 0
   await sleep(1050) // run stamps have one second resolution
-  await admin.post(`/api/${table}/${name}/run`)
+  await admin.post(`/api/${table}/${table === 'sources' ? 'admin/' : ''}${name}/run`)
   const row = await until(async () => {
     const s = await status(table, name)
     return s?.[2] > before && s[0] !== 'running' ? s : null
@@ -149,7 +149,7 @@ async function runAndWait(table, name) {
   return row
 }
 const livePaths = async (device) =>
-  new Set((await schema.rows("SELECT f.path FROM files f JOIN devices d ON d.id = f.device_id WHERE d.name = $1 AND f.deleted_at IS NULL", [device])).map((r) => r[0]))
+  new Set((await schema.rows("SELECT f.path FROM files f JOIN devices d ON d.id = f.device_id WHERE d.folder = $1 AND f.deleted_at IS NULL", [device])).map((r) => r[0]))
 const stored = (device, p) => fs.readFileSync(path.join(data, 'files', device, p))
 const openAlerts = async () => (await admin.get('/api/dashboard')).json.alerts
 
@@ -172,17 +172,17 @@ try {
   drive.flakyOnce.add('FILE000001')
 
   const added = await admin.post('/api/sources', { name: 'drive', folders: FOLDER, service_account: JSON.stringify(sa), interval_hours: 24 })
-  check(added.status === 200, `a google drive source is added through the admin API (${added.json?.error ?? ''})`)
+  check(added.status === 200, `a google drive source is added through the web API (${added.json?.error ?? ''})`)
   const first = await until(() => finished('sources', 'drive'), 90)
   check(first?.[0] === 'ok', `the first run succeeds (${first?.[0]}: ${JSON.stringify(first?.[1])})`)
   check(drive.tokensIssued >= 1, 'the service account assertion was signed and accepted (RS256)')
 
-  let paths = await livePaths('source-drive')
+  let paths = await livePaths('admin/source-drive')
   const want = ['Photos/a.txt', 'Photos/big.bin', 'Photos/dup.txt', 'Photos/dup (FILE00).txt', 'Photos/con_tains_bad_.txt', 'Photos/sub/b.txt']
   check(paths.size === want.length && want.every((p) => paths.has(p)), `the source holds raw files only, names made safe and unique (${[...paths].sort()})`)
   check(first[1].includes('2 skipped'), 'native docs and shortcuts are skipped and counted')
-  check(stored('source-drive', 'Photos/big.bin').equals(big), 'a multi-chunk Drive file is stored byte for byte under files/<source>/')
-  check(stored('source-drive', 'Photos/a.txt').toString() === 'first version', 'a transient 503 from Drive was retried')
+  check(stored('admin/source-drive', 'Photos/big.bin').equals(big), 'a multi-chunk Drive file is stored byte for byte under files/<source>/')
+  check(stored('admin/source-drive', 'Photos/a.txt').toString() === 'first version', 'a transient 503 from Drive was retried')
   const devices = (await admin.get('/api/devices')).json
   check(devices.filter((d) => d.kind === 'device').length === 0 && devices.some((d) => d.kind === 'source'), 'a source is listed as a source, never as a device')
 
@@ -194,13 +194,13 @@ try {
   drive.put('FILE000009', 'new.txt', 'fresh')
   const second = await runAndWait('sources', 'drive')
   check(second[0] === 'ok', `the second run succeeds (${JSON.stringify(second[1])})`)
-  paths = await livePaths('source-drive')
+  paths = await livePaths('admin/source-drive')
   check(paths.has('Photos/big-renamed.bin') && !paths.has('Photos/big.bin') && paths.has('Photos/new.txt') && !paths.has('Photos/sub/b.txt'), 'edit, rename, add and delete in Drive are all picked up')
   check(drive.mediaRequests.filter((i) => i === 'FILE000002').length === downloadsBefore, 'a renamed file is not downloaded again')
-  check(stored('source-drive', 'Photos/a.txt').toString() === 'second version', 'an edited file has the new content')
-  const info = (await admin.get('/api/files/info?device=source-drive&path=Photos/a.txt')).json
+  check(stored('admin/source-drive', 'Photos/a.txt').toString() === 'second version', 'an edited file has the new content')
+  const info = (await admin.get('/api/files/info?device=admin/source-drive&path=Photos/a.txt')).json
   check(info.versions.length === 2, 'the previous version is kept')
-  const gone = await admin.bytes('/api/files/download?device=source-drive&path=Photos/sub/b.txt')
+  const gone = await admin.bytes('/api/files/download?device=admin/source-drive&path=Photos/sub/b.txt')
   check(gone.status === 200 && gone.body.toString() === 'in a sub folder', 'a file deleted in Drive stays recoverable (retention)')
   const [ev] = await schema.rows("SELECT action, detail FROM events WHERE path = 'Photos/big-renamed.bin'")
   check(ev?.[0] === 'rename' && ev?.[1] === 'Photos/big.bin', 'the rename is recorded in the change log')
@@ -209,8 +209,8 @@ try {
   drive.failListing = true
   const failed = await runAndWait('sources', 'drive')
   check(failed[0] === 'failed', `a failing listing fails the run (${failed[1].slice(0, 80)})`)
-  check((await livePaths('source-drive')).size === paths.size, 'nothing was deleted because Drive was unreachable')
-  check((await openAlerts()).some((a) => a.kind === 'source_failed' && a.key === 'drive'), 'a failed run raises an alert on the dashboard')
+  check((await livePaths('admin/source-drive')).size === paths.size, 'nothing was deleted because Drive was unreachable')
+  check((await openAlerts()).some((a) => a.kind === 'source_failed' && a.key === 'admin/source-drive'), 'a failed run raises an alert on the dashboard')
   drive.failListing = false
   const recovered = await runAndWait('sources', 'drive')
   check(recovered[0] === 'ok' && !(await openAlerts()).some((a) => a.kind === 'source_failed'), 'the alert clears after a good run')
@@ -227,21 +227,21 @@ try {
   // --- mirror ----------------------------------------------------------------------------------------------------------------------------------
   const mirrorDir = path.join(tmp, 'offsite')
   const form = { name: 'offsite', remote_type: 'local', options: '', remote_path: mirrorDir.replaceAll('\\', '/'), interval_hours: 72, keep_runs: 3 }
-  check((await admin.post('/api/mirrors', form)).status === 200, 'a mirror is added through the admin API')
+  check((await admin.post('/api/mirrors', form)).status === 200, 'a mirror is added through the web API')
   const m1 = await until(() => finished('mirrors', 'offsite'), 90)
   check(m1?.[0] === 'ok', `the first mirror run succeeds (${m1?.[0]}: ${JSON.stringify(m1?.[1])})`)
   let files = tree(path.join(mirrorDir, 'files'))
-  check(files['source-drive/Photos/a.txt']?.toString() === 'second version' && files['source-drive/Photos/big-renamed.bin']?.equals(big), 'the mirror holds the current Drive files as a plain tree')
-  check(files['laptop/docs/x.txt']?.toString() === 'from a device' && files['laptop/docs/deep/y.txt']?.toString() === 'deeper', 'the mirror holds device files under files/<name>/, the same layout as the master')
-  check(!('source-drive/Photos/sub/b.txt' in files) && !('source-drive/Photos/big.bin' in files), 'deleted and renamed-away files are not in the current tree')
+  check(files['admin/source-drive/Photos/a.txt']?.toString() === 'second version' && files['admin/source-drive/Photos/big-renamed.bin']?.equals(big), 'the mirror holds the current Drive files as a plain tree')
+  check(files['admin/laptop/docs/x.txt']?.toString() === 'from a device' && files['admin/laptop/docs/deep/y.txt']?.toString() === 'deeper', 'the mirror holds device files under files/<name>/, the same layout as the master')
+  check(!('admin/source-drive/Photos/sub/b.txt' in files) && !('admin/source-drive/Photos/big.bin' in files), 'deleted and renamed-away files are not in the current tree')
   const stats = JSON.parse(fs.readFileSync(path.join(mirrorDir, 'meta', 'stats.json'), 'utf8'))
   check(stats.files === Object.keys(files).length && new Set(stats.namespaces.map((n) => n.namespace)).size === 2, `stats.json describes the tree (${stats.files} files)`)
-  const listing = JSON.parse(fs.readFileSync(path.join(mirrorDir, 'meta', 'laptop.json'), 'utf8'))
+  const listing = JSON.parse(fs.readFileSync(path.join(mirrorDir, 'meta', 'admin_laptop.json'), 'utf8'))
   check(listing.files.length === 2 && listing.files.every((f) => f.root_hash && f.size), 'a file list per device is written as JSON')
   const library = JSON.parse(fs.readFileSync(path.join(mirrorDir, 'meta', 'library.json'), 'utf8'))
   check(Array.isArray(library.albums) && Array.isArray(library.tags) && Array.isArray(library.files), 'albums, tags and what was said about files are written as JSON too')
   check(
-    Object.entries(files).filter(([k]) => k.startsWith('laptop/')).every(([k, v]) => v.length === listing.files.find((f) => `laptop/${f.path}` === k).size),
+    Object.entries(files).filter(([k]) => k.startsWith('admin/laptop/')).every(([k, v]) => v.length === listing.files.find((f) => `admin/laptop/${f.path}` === k).size),
     'file list sizes match the mirrored files',
   )
   check(Number((await schema.rows('SELECT last_files FROM mirrors'))[0][0]) === Object.keys(files).length, 'the mirrored file count is recorded')
@@ -255,11 +255,11 @@ try {
   const m2 = await runAndWait('mirrors', 'offsite')
   check(m2[0] === 'ok' && m2[1].startsWith('2 uploaded'), `only the two changed files are uploaded (${m2[1].split('\n')[0]})`)
   files = tree(path.join(mirrorDir, 'files'))
-  check(files['source-drive/Photos/a.txt']?.toString() === 'third version' && files['laptop/docs/x.txt']?.toString() === 'device edit', 'the changes reached the mirror')
-  check(!('source-drive/Photos/new.txt' in files), 'a file deleted at the source is gone from the current tree')
+  check(files['admin/source-drive/Photos/a.txt']?.toString() === 'third version' && files['admin/laptop/docs/x.txt']?.toString() === 'device edit', 'the changes reached the mirror')
+  check(!('admin/source-drive/Photos/new.txt' in files), 'a file deleted at the source is gone from the current tree')
   const kept = Object.fromEntries(Object.entries(tree(path.join(mirrorDir, 'versions'))).map(([k, v]) => [k.split('/').slice(1).join('/'), v]))
-  check(kept['source-drive/Photos/a.txt']?.toString() === 'second version' && kept['laptop/docs/x.txt']?.toString() === 'from a device', 'replaced files are kept under versions/<run>/')
-  check(kept['source-drive/Photos/new.txt']?.toString() === 'fresh', 'removed files are kept under versions/<run>/')
+  check(kept['admin/source-drive/Photos/a.txt']?.toString() === 'second version' && kept['admin/laptop/docs/x.txt']?.toString() === 'from a device', 'replaced files are kept under versions/<run>/')
+  check(kept['admin/source-drive/Photos/new.txt']?.toString() === 'fresh', 'removed files are kept under versions/<run>/')
 
   // --- only the newest runs are kept ------------------------------------------------------------------------------------------------------
   for (let n = 0; n < 5; n++) {
@@ -272,7 +272,7 @@ try {
   check(new Set(dirs).size === 3 && dirs.every((d) => /^\d{8}T\d{6}Z$/.test(d)), 'version directories are UTC timestamps')
 
   // --- bit rot in the stored files is caught before it reaches the mirror ---------------------------------------------------------------------
-  const rotten = path.join(data, 'files', 'laptop', 'docs', 'deep', 'y.txt')
+  const rotten = path.join(data, 'files', 'admin', 'laptop', 'docs', 'deep', 'y.txt')
   const blob = fs.readFileSync(rotten)
   blob[0] ^= 1
   fs.writeFileSync(rotten, blob)
@@ -283,7 +283,7 @@ try {
   }, 90)
   check(partial?.[0] === 'partial' && partial[1].includes('docs/deep/y.txt'), `a corrupt stored file is reported, the rest still mirrors (${partial?.[0]})`)
   check((await openAlerts()).some((a) => a.kind === 'mirror_failed'), 'a partial mirror run raises an alert')
-  check(tree(path.join(mirrorDir, 'files'))['laptop/docs/deep/y.txt']?.toString() === 'deeper', 'the previously good copy on the mirror was not overwritten with corrupt data')
+  check(tree(path.join(mirrorDir, 'files'))['admin/laptop/docs/deep/y.txt']?.toString() === 'deeper', 'the previously good copy on the mirror was not overwritten with corrupt data')
 
   // --- a broken target fails loudly ---------------------------------------------------------------------------------------------------------------
   await admin.post('/api/mirrors', { ...form, name: 'broken', remote_type: 'doesnotexist' })

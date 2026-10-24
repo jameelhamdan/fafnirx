@@ -8,12 +8,14 @@ use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tonic::{Request, Status};
 
+/// The token (which device) and the instance (which installation of the client is using it).
 #[derive(Clone)]
-pub struct Auth(MetadataValue<tonic::metadata::Ascii>);
+pub struct Auth(MetadataValue<tonic::metadata::Ascii>, MetadataValue<tonic::metadata::Ascii>);
 
 impl tonic::service::Interceptor for Auth {
     fn call(&mut self, mut req: Request<()>) -> Result<Request<()>, Status> {
         req.metadata_mut().insert("authorization", self.0.clone());
+        req.metadata_mut().insert("x-fafnirx-instance", self.1.clone());
         Ok(req)
     }
 }
@@ -22,7 +24,7 @@ pub type Client = CollectorClient<InterceptedService<Channel, Auth>>;
 
 /// Builds a client. The connection is established lazily, so this works while
 /// the server is unreachable.
-pub fn client(cfg: &Config, token: &str) -> Result<Client> {
+pub fn client(cfg: &Config, token: &str, instance: &str) -> Result<Client> {
     let mut endpoint = Endpoint::from_shared(cfg.server.clone()).context("invalid server URL")?;
     if cfg.server.starts_with("https://") {
         // Behind a TLS proxy (a Cloudflare tunnel, a reverse proxy) the certificate is a public one.
@@ -35,7 +37,8 @@ pub fn client(cfg: &Config, token: &str) -> Result<Client> {
         .keep_alive_while_idle(true)
         .connect_lazy();
     let value = format!("Bearer {token}").parse().context("token contains invalid characters")?;
-    Ok(CollectorClient::with_interceptor(channel, Auth(value))
+    let instance = instance.parse().context("instance id contains invalid characters")?;
+    Ok(CollectorClient::with_interceptor(channel, Auth(value, instance))
         .max_decoding_message_size(MAX_MESSAGE)
         .max_encoding_message_size(MAX_MESSAGE))
 }

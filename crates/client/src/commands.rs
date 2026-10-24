@@ -58,7 +58,7 @@ pub async fn enroll(config_path: PathBuf, server: String, token: String, start_s
     println!("token stored in the {where_}");
 
     let errors = Mutex::new(Vec::new());
-    let mut client = net::client(&cfg, &token)?;
+    let mut client = net::client(&cfg, &token, &crate::instance::client_id(&cfg.state_dir(&config_path)))?;
     match daemon::send_heartbeat(&mut client, &cfg, &errors, &daemon::Status::default()).await {
         Ok(name) => println!("connected to {} as device \"{name}\"", cfg.server),
         Err(e) => println!("warning: could not reach {} yet: {e:#}", cfg.server),
@@ -163,7 +163,7 @@ pub async fn sync_once(config_path: PathBuf) -> Result<()> {
     let dir = cfg.state_dir(&config_path);
     std::fs::create_dir_all(&dir)?;
     let token = credentials::load(&cfg.server, &config_path, cfg.token.as_deref())?;
-    let client = net::client(&cfg, &token)?;
+    let client = net::client(&cfg, &token, &crate::instance::client_id(&dir))?;
     let mut engine = sync::Engine::new(
         client,
         state::State::open(&dir.join("state.db"))?,
@@ -185,7 +185,7 @@ pub async fn update_now(config_path: PathBuf) -> Result<()> {
     let cfg = Config::load(&config_path)?;
     let dir = cfg.state_dir(&config_path);
     let token = credentials::load(&cfg.server, &config_path, cfg.token.as_deref())?;
-    let mut client = net::client(&cfg, &token)?;
+    let mut client = net::client(&cfg, &token, &crate::instance::client_id(&dir))?;
     if update::check_and_apply(&mut client, &cfg, &dir).await? {
         println!("updated; start fafnirx again");
     } else {

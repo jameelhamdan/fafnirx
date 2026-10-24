@@ -1,16 +1,24 @@
 import { createContext, useContext } from 'react'
 import ar from '../../translations/ar.json'
 import en from '../../translations/en.json'
+import es from '../../translations/es.json'
+import ja from '../../translations/ja.json'
+import ru from '../../translations/ru.json'
+import zh from '../../translations/zh.json'
 
 /**
  * A very small translation service. The English text is the key: write `t('Add mirror')` and the strings of
  * every language live in translations/<lang>.json. `npm run i18n` collects the t('…') calls of src/ into
- * translations/en.json and lists what ar.json still lacks. A string without a translation shows in English.
+ * translations/en.json and lists what the other languages still lack. A string without a translation shows in English.
  * Placeholders are written {name} and filled from the second argument: t('Mirror {name} added', { name }).
  */
 export const LANGUAGES = {
   en: { label: 'English', dir: 'ltr', strings: en as Record<string, string> },
+  es: { label: 'Español', dir: 'ltr', strings: es as Record<string, string> },
+  zh: { label: '中文', dir: 'ltr', strings: zh as Record<string, string> },
   ar: { label: 'العربية', dir: 'rtl', strings: ar as Record<string, string> },
+  ru: { label: 'Русский', dir: 'ltr', strings: ru as Record<string, string> },
+  ja: { label: '日本語', dir: 'ltr', strings: ja as Record<string, string> },
 } as const
 
 export type Lang = keyof typeof LANGUAGES

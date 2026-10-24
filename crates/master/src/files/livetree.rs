@@ -1,7 +1,8 @@
-//! The live tree (`files/<device name>/<path>`) can also be used as a network drive, so files appear,
-//! change and vanish there without a client. This notices that and brings the database in line:
-//! new and changed files become versions, removed files are marked deleted. A new folder in `files/`
-//! with a valid name becomes a device of its own (kind `local`).
+//! The live tree (`files/<user>/<device>/<path>`, and the master files straight in `files/`) can also be used as a
+//! network drive, so files appear, change and vanish there without a client. This notices that and brings the
+//! database in line: new and changed files become versions, removed files are marked deleted. Whatever is in
+//! `files/` and is not the folder of a user is a master file. A new folder `files/<user>/<name>` with a valid name
+//! becomes a device of that user (kind `local`).
 //!
 //! A file system watcher queues the paths that were touched; once a path has been quiet for a moment
 //! it is compared with the database. What the master itself just wrote matches its record (same size
@@ -10,13 +11,15 @@
 
 use crate::files::ingest::{self, Seen};
 use crate::platform::db::{self, Db, Device};
-use crate::platform::store::{hash_file, Store};
+use crate::platform::store::{hash_file, Store, MASTER_FOLDER};
 use anyhow::Result;
 use fafnirx_common::{clean_remote_path, mode_of, mtime_ns, unix_now, valid_device_name};
 use notify::{RecursiveMode, Watcher};
 use postgres::Client;
+use postgres::GenericClient;
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -32,11 +35,11 @@ const SCAN_SETTLE: Duration = Duration::from_secs(30);
 const FULL_SCAN: Duration = Duration::from_secs(5 * 60);
 const FIRST_FULL_SCAN: Duration = Duration::from_secs(30);
 
-/// A device folder and a path inside it (`""` for the folder itself).
-type Target = (String, String);
+/// A path relative to the live tree: what was touched.
+type Target = String;
 
-/// Reports the device folder and path of everything touched under `root`. Watching stops when the
-/// watcher is dropped.
+/// Reports the path (relative to `root`) of everything touched under it. Watching stops when the watcher is
+/// dropped.
 fn watch(root: &Path) -> (Option<notify::RecommendedWatcher>, mpsc::Receiver<Target>) {
     let (tx, rx) = mpsc::channel();
     let base = root.to_path_buf();
@@ -57,6 +60,33 @@ fn watch(root: &Path) -> (Option<notify::RecommendedWatcher>, mpsc::Receiver<Tar
             (None, rx)
         }
     }
+}
+
+/// Set while a comparison of the whole tree is running, so that the periodic one and one asked for by hand never overlap.
+static SCANNING: AtomicBool = AtomicBool::new(false);
+
+/// Runs [`scan`] unless one is already running. Returns whether it ran.
+fn scan_once(db: &Db, store: &Store) -> bool {
+    if SCANNING.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+    if let Err(e) = scan(db, store, SCAN_SETTLE) {
+        tracing::error!("comparison of the file store failed: {e:#}");
+    }
+    SCANNING.store(false, Ordering::Release);
+    true
+}
+
+/// Compares the whole tree with the database now, in the background, instead of at the next round. Returns false when a
+/// comparison is already running.
+pub fn rescan(db: Db, store: Arc<Store>) -> bool {
+    if SCANNING.load(Ordering::Acquire) {
+        return false;
+    }
+    std::thread::spawn(move || {
+        scan_once(&db, &store);
+    });
+    true
 }
 
 /// Starts the watcher and the thread that works through what it reports.
@@ -86,20 +116,47 @@ pub fn spawn(db: Db, store: Arc<Store>) {
             }
             if Instant::now() >= next_full {
                 next_full = Instant::now() + FULL_SCAN;
-                if let Err(e) = scan(&db, &store, SCAN_SETTLE) {
-                    tracing::error!("comparison of the file store failed: {e:#}");
-                }
+                scan_once(&db, &store);
             }
         }
     });
 }
 
-/// Which device folder and path (relative to it) an event is about.
+/// The path of an event relative to the live tree.
 fn locate(root: &Path, changed: &Path) -> Option<Target> {
-    let mut parts = changed.strip_prefix(root).ok()?.components();
-    let Component::Normal(device) = parts.next()? else { return None };
-    let rel: Vec<_> = parts.map(|c| c.as_os_str().to_str()).collect::<Option<_>>()?;
-    Some((device.to_str()?.to_string(), rel.join("/")))
+    let mut parts = changed.strip_prefix(root).ok()?.components().peekable();
+    parts.peek()?;
+    let rel: Vec<_> = parts
+        .map(|c| match c {
+            Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    Some(rel.join("/"))
+}
+
+/// The device that holds the master files.
+fn master() -> Device {
+    Device { id: ingest::MASTER_DEVICE_ID, name: MASTER_FOLDER.to_string() }
+}
+
+/// The names of the users: their folders in `files/` are not master files.
+fn user_names(conn: &mut impl GenericClient) -> Result<HashSet<String>> {
+    Ok(conn.query("SELECT name FROM users", &[])?.iter().map(|r| r.get(0)).collect())
+}
+
+/// The device and the path inside it that a path of the live tree is about: the first part is the folder of a user (then
+/// the second is a device of that user), or else the path is a master file.
+fn resolve(conn: &mut Client, store: &Store, rel: &str) -> Result<Option<(Device, String)>> {
+    let parts: Vec<&str> = rel.split('/').collect();
+    if user_names(conn)?.contains(&parts[0].to_lowercase()) {
+        if parts.len() < 2 || parts[0] != parts[0].to_lowercase() {
+            return Ok(None); // the folder of the user itself: its devices are looked at one by one
+        }
+        let folder = format!("{}/{}", parts[0], parts[1]);
+        return Ok(device_for_folder(conn, store, &folder)?.map(|dev| (dev, parts[2..].join("/"))));
+    }
+    Ok(Some((master(), rel.to_string())))
 }
 
 fn work(db: &Db, store: &Store, targets: &[Target]) {
@@ -107,13 +164,16 @@ fn work(db: &Db, store: &Store, targets: &[Target]) {
         Ok(c) => c,
         Err(e) => return tracing::error!("file store: no database connection: {e}"),
     };
-    for (name, rel) in targets {
-        let result = device_for_folder(&mut conn, store, name)
-            .and_then(|dev| dev.map_or(Ok((0, 0)), |dev| sync_subtree(&mut conn, store, &dev, rel, EVENT_SETTLE)));
+    for target in targets {
+        let result = resolve(&mut conn, store, target).and_then(|found| {
+            found.map_or(Ok(None), |(dev, rel)| {
+                sync_subtree(&mut conn, store, &dev, &rel, EVENT_SETTLE).map(|counts| Some((dev.name, counts)))
+            })
+        });
         match result {
-            Ok((changed, deleted)) if changed + deleted > 0 => report(name, changed, deleted),
+            Ok(Some((name, (changed, deleted)))) if changed + deleted > 0 => report(&name, changed, deleted),
             Ok(_) => {}
-            Err(e) => tracing::error!("file store: {rel} of {name}: {e:#}"),
+            Err(e) => tracing::error!("file store: {target}: {e:#}"),
         }
     }
 }
@@ -122,45 +182,60 @@ fn report(name: &str, changed: usize, deleted: usize) {
     tracing::info!("file store of {name}: {changed} files added or changed, {deleted} removed");
 }
 
-/// The device that owns the folder `files/<name>`. A folder nobody owns yet, with a valid name, becomes
-/// a `local` device; anything else that is not a device is ignored.
-fn device_for_folder(conn: &mut Client, store: &Store, name: &str) -> Result<Option<Device>> {
+/// The device that owns the folder `files/<user>/<name>` (`folder` is `<user>/<name>`). A folder nobody owns yet, with a
+/// valid name, in the folder of a user who can have devices, becomes a `local` device of the user; anything else
+/// that is not a device is ignored.
+fn device_for_folder(conn: &mut Client, store: &Store, folder: &str) -> Result<Option<Device>> {
     // Only a local folder is written to in place. What a device or a source sends is a copy of theirs and is not
     // changed from here: edits made inside such a folder are not recorded.
-    if let Some(row) = conn.query_opt("SELECT id, kind FROM devices WHERE name = $1", &[&name])? {
-        return Ok((row.get::<_, String>(1) == "local").then(|| Device { id: row.get(0), name: name.to_string() }));
+    if let Some(row) = conn.query_opt("SELECT id, kind FROM devices WHERE folder = $1", &[&folder])? {
+        return Ok((row.get::<_, String>(1) == "local").then(|| Device { id: row.get(0), name: folder.to_string() }));
     }
-    if !valid_device_name(name) || !store.live_dir(name).is_dir() {
+    let Some((user, name)) = folder.split_once('/') else { return Ok(None) };
+    if !valid_device_name(name) || !store.live_dir(folder).is_dir() {
         return Ok(None);
     }
+    let owner = conn
+        .query_opt("SELECT id FROM users WHERE name = $1 AND disabled_at IS NULL AND role <> 'readonly'", &[&user])?;
+    let Some(owner) = owner else { return Ok(None) };
     let id: i64 = conn
         .query_one(
-            "INSERT INTO devices (name, kind, token_hash, created_at) VALUES ($1, 'local', '!', $2)
-             ON CONFLICT (name) DO UPDATE SET name = devices.name RETURNING id",
-            &[&name, &unix_now()],
+            "INSERT INTO devices (name, kind, token_hash, created_at, user_id) VALUES ($1, 'local', '!', $2, $3)
+             ON CONFLICT (user_id, name) DO UPDATE SET name = devices.name RETURNING id",
+            &[&name, &unix_now(), &owner.get::<_, i64>(0)],
         )?
         .get(0);
-    tracing::info!("new folder files/{name}: added as a device");
-    db::notify(conn, "devices", name)?;
-    Ok(Some(Device { id, name: name.to_string() }))
+    tracing::info!("new folder files/{folder}: added as a device");
+    db::notify(conn, "devices", folder)?;
+    Ok(Some(Device { id, name: folder.to_string() }))
 }
 
-/// Compares every device folder with the database. `settle` is how long a file must have been left
-/// alone to be recorded.
+/// Compares the master files and every device folder of every user with the database. `settle` is how long a file
+/// must have been left alone to be recorded.
 pub fn scan(db: &Db, store: &Store, settle: Duration) -> Result<()> {
     let mut conn = db.get()?;
-    let folders: Vec<String> = std::fs::read_dir(store.live_root())?
-        .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .filter_map(|e| e.file_name().into_string().ok())
-        .collect();
-    for name in folders {
-        let result = device_for_folder(&mut conn, store, &name)
-            .and_then(|dev| dev.map_or(Ok((0, 0)), |dev| sync_subtree(&mut conn, store, &dev, "", settle)));
-        match result {
-            Ok((changed, deleted)) if changed + deleted > 0 => report(&name, changed, deleted),
+    let mut devices = vec![master()];
+    let users: Vec<String> = conn.query("SELECT name FROM users", &[])?.iter().map(|r| r.get(0)).collect();
+    for user in users {
+        let folders: Vec<String> = std::fs::read_dir(store.user_dir(&user))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect();
+        for name in folders {
+            match device_for_folder(&mut conn, store, &format!("{user}/{name}")) {
+                Ok(dev) => devices.extend(dev),
+                Err(e) => tracing::error!("comparison of the files of {user}/{name} failed: {e:#}"),
+            }
+        }
+    }
+    for dev in devices {
+        match sync_subtree(&mut conn, store, &dev, "", settle) {
+            Ok((changed, deleted)) if changed + deleted > 0 => report(&dev.name, changed, deleted),
             Ok(_) => {}
-            Err(e) => tracing::error!("comparison of the files of {name} failed: {e:#}"),
+            Err(e) => tracing::error!("comparison of the files of {} failed: {e:#}", dev.name),
         }
     }
     Ok(())
@@ -187,8 +262,10 @@ fn sync_subtree(conn: &mut Client, store: &Store, dev: &Device, rel: &str, settl
         .map(|r| (r.get(0), (r.get(1), r.get(2))))
         .collect();
 
+    // The master files share `files/` with the folders of the users, which are not theirs to record.
+    let skip = if dev.id == ingest::MASTER_DEVICE_ID && rel.is_empty() { user_names(conn)? } else { HashSet::new() };
     let files = match std::fs::symlink_metadata(&base) {
-        Ok(m) if m.is_dir() => walk(&base, rel),
+        Ok(m) if m.is_dir() => walk(&base, rel, &skip),
         Ok(m) if m.is_file() => vec![(rel.to_string(), base)],
         _ => Vec::new(),
     };
@@ -246,8 +323,8 @@ fn check_file(
 }
 
 /// Every regular file under `dir` as (path with `/`, full path); `prefix` is the path of `dir` itself.
-/// Links are skipped.
-fn walk(dir: &Path, prefix: &str) -> Vec<(String, PathBuf)> {
+/// Links are skipped, and so are the folders in `skip` at the top.
+fn walk(dir: &Path, prefix: &str, skip: &HashSet<String>) -> Vec<(String, PathBuf)> {
     let mut out = Vec::new();
     let mut pending = vec![(prefix.to_string(), dir.to_path_buf())];
     while let Some((prefix, folder)) = pending.pop() {
@@ -256,6 +333,9 @@ fn walk(dir: &Path, prefix: &str) -> Vec<(String, PathBuf)> {
                 tracing::warn!("ignoring {}: unreadable or not a valid name", entry.path().display());
                 continue;
             };
+            if prefix.is_empty() && skip.contains(&name.to_lowercase()) {
+                continue;
+            }
             let (name, path) = composed(&entry.path(), name);
             let rel = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
             if kind.is_dir() {
@@ -291,7 +371,7 @@ mod tests {
     use std::fs;
 
     fn put(store: &Store, path: &str, data: &[u8]) -> PathBuf {
-        let p = store.live_path("d", path).unwrap();
+        let p = store.live_path("admin/d", path).unwrap();
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(&p, data).unwrap();
         p
@@ -350,11 +430,11 @@ mod tests {
         let store = Store::open(dir.path()).unwrap();
         put(&store, "a.txt", b"x");
         assert!(
-            device_for_folder(&mut c, &store, "d").unwrap().is_none(),
+            device_for_folder(&mut c, &store, "admin/d").unwrap().is_none(),
             "the folder of a device is not changed from here"
         );
-        c.execute("UPDATE devices SET kind = 'local'", &[]).unwrap();
-        assert!(device_for_folder(&mut c, &store, "d").unwrap().is_some());
+        c.execute("UPDATE devices SET kind = 'local' WHERE name = 'd'", &[]).unwrap();
+        assert!(device_for_folder(&mut c, &store, "admin/d").unwrap().is_some());
     }
 
     #[test]
@@ -367,7 +447,7 @@ mod tests {
         assert_eq!(sync_subtree(&mut c, &store, &testing::device(), "", Duration::ZERO).unwrap(), (1, 0));
         let paths: Vec<String> = live(&mut c).into_iter().map(|(p, _)| p).collect();
         assert_eq!(paths, ["café/menu.txt"]);
-        assert!(store.live_path("d", "café/menu.txt").unwrap().is_file());
+        assert!(store.live_path("admin/d", "café/menu.txt").unwrap().is_file());
     }
 
     #[test]
@@ -384,7 +464,7 @@ mod tests {
         assert_eq!(sync_subtree(&mut c, &store, &dev, "a", none).unwrap(), (1, 0), "x is known, y is new");
         assert_eq!(live(&mut c).len(), 2, "b/z was not looked at");
 
-        fs::remove_dir_all(store.live_path("d", "a").unwrap()).unwrap();
+        fs::remove_dir_all(store.live_path("admin/d", "a").unwrap()).unwrap();
         assert_eq!(
             sync_subtree(&mut c, &store, &dev, "a", none).unwrap(),
             (0, 2),
@@ -395,34 +475,63 @@ mod tests {
     }
 
     #[test]
-    fn events_are_mapped_to_a_device_and_path() {
+    fn events_are_mapped_to_a_path_of_the_live_tree() {
         let root = Path::new("data").join("files");
-        assert_eq!(
-            locate(&root, &root.join("pc").join("docs").join("a.txt")),
-            Some(("pc".into(), "docs/a.txt".into()))
-        );
-        assert_eq!(locate(&root, &root.join("pc")), Some(("pc".into(), String::new())));
+        assert_eq!(locate(&root, &root.join("bob").join("pc").join("a.txt")), Some("bob/pc/a.txt".into()));
+        assert_eq!(locate(&root, &root.join("scans")), Some("scans".into()));
+        assert_eq!(locate(&root, &root), None);
         assert_eq!(locate(&root, Path::new("elsewhere/pc/a")), None);
     }
 
     #[test]
-    fn a_new_folder_becomes_a_local_device_and_bad_names_are_ignored() {
+    fn a_new_folder_in_a_users_folder_becomes_their_local_device_and_bad_names_are_ignored() {
         let db = testing::db();
         let mut c = db.get().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();
-        fs::create_dir_all(store.live_dir("camera")).unwrap();
-        fs::create_dir_all(store.live_dir("Bad Name")).unwrap();
-        let dev = device_for_folder(&mut c, &store, "camera").unwrap().unwrap();
-        let kind: String = c.query_one("SELECT kind FROM devices WHERE id = $1", &[&dev.id]).unwrap().get(0);
-        assert_eq!(kind, "local");
+        fs::create_dir_all(store.live_dir("admin/camera")).unwrap();
+        fs::create_dir_all(store.live_dir("admin/Bad Name")).unwrap_or_default();
+        fs::create_dir_all(store.live_dir("nobody/camera")).unwrap();
+        let dev = device_for_folder(&mut c, &store, "admin/camera").unwrap().unwrap();
+        let row = c.query_one("SELECT kind, user_id FROM devices WHERE id = $1", &[&dev.id]).unwrap();
+        assert_eq!((row.get::<_, String>(0), row.get::<_, i64>(1)), ("local".into(), 1));
         assert_eq!(
-            device_for_folder(&mut c, &store, "camera").unwrap().unwrap().id,
+            device_for_folder(&mut c, &store, "admin/camera").unwrap().unwrap().id,
             dev.id,
             "found again, not duplicated"
         );
-        assert!(device_for_folder(&mut c, &store, "Bad Name").unwrap().is_none());
-        assert!(device_for_folder(&mut c, &store, "missing").unwrap().is_none());
+        assert!(device_for_folder(&mut c, &store, "admin/Bad Name").unwrap().is_none());
+        assert!(device_for_folder(&mut c, &store, "admin/missing").unwrap().is_none());
+        assert!(device_for_folder(&mut c, &store, "nobody/camera").unwrap().is_none(), "there is no such user");
+        c.execute("UPDATE users SET role = 'readonly'", &[]).unwrap();
+        fs::create_dir_all(store.live_dir("admin/second")).unwrap();
+        assert!(
+            device_for_folder(&mut c, &store, "admin/second").unwrap().is_none(),
+            "a user who can only read has no devices"
+        );
+    }
+
+    #[test]
+    fn what_is_not_the_folder_of_a_user_is_a_master_file() {
+        let db = testing::db();
+        let mut c = db.get().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        for (path, data) in [("loose.txt", &b"1"[..]), ("scans/2024/a.txt", b"2"), ("admin/laptop/b.txt", b"3")] {
+            let p = store.live_root().join(path);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, data).unwrap();
+        }
+        // The folder of the user is not part of the master files: its subfolder is a device of the user.
+        scan(&db, &store, Duration::ZERO).unwrap();
+        let paths: Vec<String> = live(&mut c).into_iter().map(|(p, _)| p).collect();
+        assert_eq!(paths, ["b.txt", "loose.txt", "scans/2024/a.txt"]);
+        let master: i64 = c.query_one("SELECT COUNT(*) FROM files WHERE device_id = 0", &[]).unwrap().get(0);
+        assert_eq!(master, 2, "b.txt belongs to the device admin/laptop");
+
+        let (found, rel) = resolve(&mut c, &store, "scans/2024/a.txt").unwrap().unwrap();
+        assert_eq!((found.id, rel.as_str()), (0, "scans/2024/a.txt"));
+        assert!(resolve(&mut c, &store, "admin").unwrap().is_none(), "the folder of a user is not a master file");
     }
 
     #[test]
@@ -434,7 +543,7 @@ mod tests {
         let dev = testing::device();
         put(&store, "a", b"x");
         sync_subtree(&mut c, &store, &dev, "", Duration::ZERO).unwrap();
-        fs::remove_dir_all(store.live_dir("d")).unwrap();
+        fs::remove_dir_all(store.live_dir("admin/d")).unwrap();
         assert_eq!(sync_subtree(&mut c, &store, &dev, "", Duration::ZERO).unwrap(), (0, 0));
         assert_eq!(live(&mut c).len(), 1);
     }

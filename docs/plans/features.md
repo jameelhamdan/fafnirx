@@ -7,9 +7,8 @@ Nothing here exists yet. The rest of the documentation describes only what is bu
 - **Rename, move and edit in local folders** from the web app. Files in local folders (the ones uploaded to the master)
   can be uploaded and deleted today, but not renamed or moved.
 - **Android client** that backs up the photos of a phone: see [the Android plan](android.md).
-- **Scoped API tokens** for the admin API, which the phone app needs.
+- **Scoped API tokens** for the web API, which the phone app needs.
 - **Google Keep source**, through an unofficial library.
-- **Native packages for the master** other than Docker and the systemd unit.
 - **Email and webhook alerts.**
 
 ## Release work

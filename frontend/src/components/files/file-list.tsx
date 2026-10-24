@@ -6,6 +6,7 @@ import type { Entry } from '@/lib/types'
 import { entryKey } from '@/lib/entries'
 import { cn } from '@/lib/utils'
 import { Checkbox } from '../ui/checkbox'
+import { AccessBadge } from './access-badge'
 import { FileIcon } from './file-icon'
 import { useT } from '@/lib/i18n'
 
@@ -78,6 +79,7 @@ export function FileList({
                   <span className={cn('truncate', e.kind !== 'file' && 'font-medium', gone && 'text-muted-foreground line-through')}>{e.name}</span>
                   {gone && e.kind === 'file' && <span className="shrink-0 text-xs text-destructive">{t('deleted')}</span>}
                   {e.kind !== 'file' && <span className="shrink-0 text-xs text-muted-foreground">{plural(e.files ?? 0, 'file')}</span>}
+                  {e.kind === 'device' && <AccessBadge writable={e.writable} kind={e.device_kind} />}
                 </button>
                 <span className="text-right text-muted-foreground tabular-nums" title={e.size === null ? undefined : t('{n} bytes', { n: e.size.toLocaleString() })}>
                   {bytes(e.size)}

@@ -15,14 +15,21 @@ import { api } from '@/lib/api'
 import { ago, bytes, count } from '@/lib/format'
 import type { DeviceDetail, DeviceSummary } from '@/lib/types'
 import { useT } from '@/lib/i18n'
+import { deviceAddress, useSession } from '@/lib/session'
+import type { UserInfo } from '@/lib/types'
 
 export function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail) => void }) {
   const t = useT()
   const client = useQueryClient()
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
+  const [owner, setOwner] = useState('')
+  const session = useSession()
+  const isAdmin = session?.user?.role === 'admin'
+  // An administrator can add a device for any user who can have one.
+  const users = useQuery({ queryKey: ['users'], queryFn: () => api.get<UserInfo[]>('/api/users'), enabled: isAdmin && open })
   const create = useMutation({
-    mutationFn: () => api.post<DeviceDetail>('/api/devices', { name, kind: 'device' }),
+    mutationFn: () => api.post<DeviceDetail>('/api/devices', { name, kind: 'device', user: owner || undefined }),
     onSuccess: (made) => {
       setOpen(false)
       setName('')
@@ -44,13 +51,22 @@ export function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail)
           <DialogHeader>
             <DialogTitle>{t('Add a device')}</DialogTitle>
             <DialogDescription>
-              {t("The name is the device's folder on the master (files/<name>/) and cannot change later.")}
+              {t("The name is the device's folder on the master (files/<user>/<name>/) and cannot change later.")}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
             <Label htmlFor="device-name">{t('Name')}</Label>
             <Input id="device-name" autoFocus placeholder="laptop" value={name} onChange={(e) => setName(e.target.value)} />
             <p className="text-xs text-muted-foreground">{t('Lowercase letters, digits, dot, underscore and dash; up to 63 characters.')}</p>
+            {isAdmin && users.data && (
+              <div className="space-y-2 pt-2">
+                <Label htmlFor="device-owner">{t('For user')}</Label>
+                <select id="device-owner" className="h-9 w-full rounded-md border bg-background px-2 text-sm" value={owner} onChange={(e) => setOwner(e.target.value)}>
+                  <option value="">{t('Me ({name})', { name: session?.user?.name ?? '' })}</option>
+                  {users.data.filter((u) => !u.disabled && u.role !== 'readonly' && u.name !== session?.user?.name).map((u) => <option key={u.name} value={u.name}>{u.name}</option>)}
+                </select>
+              </div>
+            )}
             {create.error && <p role="alert" className="text-sm text-destructive">{create.error.message}</p>}
           </div>
           <DialogFooter>
@@ -62,13 +78,13 @@ export function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail)
   )
 }
 
-function Row({ d, now }: { d: DeviceSummary; now: number }) {
+function Row({ d, now, showUser }: { d: DeviceSummary; now: number; showUser: boolean }) {
   const t = useT()
   return (
     <TableRow>
       <TableCell>
         <div className="flex items-center gap-2">
-          <Link to={d.kind === 'device' ? `/devices/${d.name}` : `/files?device=${d.name}`} className="font-medium hover:underline">{d.name}</Link>
+          <Link to={d.kind === 'device' ? `/devices/${deviceAddress(d.folder)}` : `/files?device=${encodeURIComponent(d.folder)}`} className="font-medium hover:underline">{showUser ? d.folder : d.name}</Link>
           <KindBadge kind={d.kind} />
         </div>
         {d.activity && <div className="mt-2 max-w-sm"><ActivityView activity={d.activity} /></div>}
@@ -94,6 +110,8 @@ export default function Devices() {
   const [made, setMade] = useState<DeviceDetail | null>(null)
   const { data, error } = useQuery({ queryKey: ['devices'], queryFn: () => api.get<DeviceSummary[]>('/api/devices') })
   const shown = data?.filter((d) => d.kind !== 'source')
+  // An administrator sees the devices of every user, so a device is named with its user.
+  const showUser = useSession()?.user?.role === 'admin'
 
   return (
     <div>
@@ -119,11 +137,11 @@ export default function Devices() {
                 <TableHead className="hidden sm:table-cell">{t('Last seen')}</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>{shown.map((d) => <Row key={d.name} d={d} now={now} />)}</TableBody>
+            <TableBody>{shown.map((d) => <Row key={d.folder} d={d} now={now} showUser={showUser} />)}</TableBody>
           </Table>
         </div>
       )}
-      <EnrollDialog name={made?.device.name ?? ''} token={made?.token ?? null} onClose={() => setMade(null)} />
+      <EnrollDialog name={made?.device.folder ?? ''} token={made?.token ?? null} onClose={() => setMade(null)} />
     </div>
   )
 }

@@ -1,12 +1,14 @@
-//! The file browser: folders and files of every device, search, details, history, delete and restore.
+//! The file browser: folders and files of the devices a user can reach (and the master files), search, details, history,
+//! delete and restore. A device is named by its folder (`<user>/<device>`; `_master` for the master files).
 
 use crate::devices::api::device_summaries;
 use crate::files::ingest;
 use crate::library::meta;
 use crate::platform::db::{self, setting, Device};
+use crate::web::access::Access;
 use crate::web::{done, run, ApiError, Done, Res, Shared};
 use axum::extract::{Query, State};
-use axum::Json;
+use axum::{Extension, Json};
 use fafnirx_common::clean_remote_path;
 use postgres::Client;
 use serde::{Deserialize, Serialize};
@@ -66,11 +68,18 @@ pub struct Entry {
     width: Option<i64>,
     height: Option<i64>,
     taken_at: Option<i64>,
+    /// For a device entry: master, device, local or source.
+    device_kind: Option<String>,
+    /// For a device entry: whether the web app may add, change or delete files there.
+    writable: bool,
 }
 
 #[derive(Serialize)]
 pub struct Listing {
     device: Option<String>,
+    /// What the device is (master, device, local or source) and whether the web app may change its files.
+    device_kind: Option<String>,
+    writable: bool,
     path: String,
     entries: Vec<Entry>,
     /// Files matching, before `offset` and `limit`.
@@ -79,10 +88,24 @@ pub struct Listing {
     retention_days: i64,
 }
 
-pub fn find_device(c: &mut Client, name: &str) -> anyhow::Result<Device> {
-    c.query_opt("SELECT id, name FROM devices WHERE name = $1", &[&name])?
+/// Whether the web app changes the files of a device of this kind: the master files and local folders. What a device or
+/// a source sends is theirs to change; here it can be read, downloaded and brought back from the trash.
+pub fn editable_kind(kind: &str) -> bool {
+    matches!(kind, "local" | "master")
+}
+
+/// The device with this folder, if `who` may look at it: a device someone else owns does not exist for them.
+pub fn find_device(c: &mut Client, who: &Access, folder: &str) -> anyhow::Result<Device> {
+    who.check_see(folder)?;
+    c.query_opt("SELECT id, folder FROM devices WHERE folder = $1", &[&folder])?
         .map(|r| Device { id: r.get(0), name: r.get(1) })
         .ok_or_else(|| ApiError::not_found("No such device").into())
+}
+
+/// The same, for a change: the user must be allowed to write there too.
+pub fn find_device_to_change(c: &mut Client, who: &Access, folder: &str) -> anyhow::Result<Device> {
+    who.check_write(folder)?;
+    find_device(c, who, folder)
 }
 
 /// `a/b/` for `a/b`, and `""` for the root.
@@ -109,7 +132,11 @@ fn order_by(sort: &str) -> Result<&'static str, ApiError> {
 const FILE_COLUMNS: &str = "f.path, v.size, v.mtime, v.created_at, f.deleted_at, m.mime, m.width, m.height, m.taken_at,
     (SELECT COUNT(*) FROM versions x WHERE x.file_id = f.id), COUNT(*) OVER ()";
 
-pub async fn list(State(state): State<Shared>, Query(q): Query<ListQuery>) -> Res<Listing> {
+pub async fn list(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    Query(q): Query<ListQuery>,
+) -> Res<Listing> {
     let prefix = prefix_of(&q.path)?;
     let sort = q.sort.as_deref().unwrap_or("name");
     let desc = match q.order.as_deref() {
@@ -136,24 +163,41 @@ pub async fn list(State(state): State<Shared>, Query(q): Query<ListQuery>) -> Re
         let retention_days = setting(c, "retention_days", 30);
         let searching = search.is_some() || type_regex.is_some();
         let Some(device_name) = device_name else {
-            // The top level: one folder per device.
-            let entries = device_summaries(c, None)?
-                .into_iter()
-                .filter(|d| d.kind != "source" || d.files > 0)
-                .map(|d| Entry {
-                    kind: "device",
-                    name: d.name.clone(),
-                    device: d.name,
-                    files: Some(d.files),
-                    size: Some(d.bytes),
-                    ..Default::default()
-                })
-                .collect::<Vec<_>>();
+            // The top level: the master files, then one folder per device (an administrator's own and the others').
+            let master = c.query_one("SELECT file_count, total_bytes FROM devices WHERE kind = 'master'", &[])?;
+            let mut entries = vec![Entry {
+                kind: "device",
+                name: crate::platform::store::MASTER_FOLDER.into(),
+                device: crate::platform::store::MASTER_FOLDER.into(),
+                files: Some(master.get(0)),
+                size: Some(master.get(1)),
+                device_kind: Some("master".into()),
+                writable: who.can_write(crate::platform::store::MASTER_FOLDER),
+                ..Default::default()
+            }];
+            entries.extend(
+                device_summaries(c, &who, None)?
+                    .into_iter()
+                    .filter(|d| d.kind != "source" || d.files > 0)
+                    .map(|d| Entry {
+                        kind: "device",
+                        name: if d.user == who.name { d.name.clone() } else { d.folder.clone() },
+                        writable: editable_kind(&d.kind) && who.can_write(&d.folder),
+                        device_kind: Some(d.kind),
+                        device: d.folder,
+                        files: Some(d.files),
+                        size: Some(d.bytes),
+                        ..Default::default()
+                    }),
+            );
             let total = entries.len() as i64;
-            return Ok(Listing { device: None, path, entries, total, searching: false, retention_days });
+            return Ok(Listing { device: None, device_kind: None, writable: false, path, entries, total, searching: false, retention_days });
         };
-        let dev = find_device(c, &device_name)?;
-        let n = prefix.len() as i32;
+        let dev = find_device(c, &who, &device_name)?;
+        let kind: String = c.query_one("SELECT kind FROM devices WHERE id = $1", &[&dev.id])?.get(0);
+        let writable = editable_kind(&kind) && who.can_write(&device_name);
+        // SQL counts characters, not bytes.
+        let n = prefix.chars().count() as i32;
         let below = db::like_prefix(&prefix);
         let mut entries = Vec::new();
         let total: i64;
@@ -231,7 +275,7 @@ pub async fn list(State(state): State<Shared>, Query(q): Query<ListQuery>) -> Re
             total = rows.first().map_or(0, |r| r.get(10));
             entries.extend(rows.iter().map(|r| file_entry(r, prefix.len())));
         }
-        Ok(Listing { device: Some(device_name.clone()), path, entries, total, searching, retention_days })
+        Ok(Listing { device: Some(device_name.clone()), device_kind: Some(kind), writable, path, entries, total, searching, retention_days })
     })
     .await?;
     Ok(Json(listing))
@@ -258,6 +302,8 @@ pub struct VersionInfo {
 
 #[derive(Serialize)]
 pub struct Info {
+    /// The id of the file, which is also its address for streaming (`/api/stream/<id>/...`).
+    id: i64,
     device: String,
     path: String,
     name: String,
@@ -294,10 +340,14 @@ pub fn version_file(
     }
 }
 
-pub async fn info(State(state): State<Shared>, Query(r): Query<FileRef>) -> Res<Info> {
+pub async fn info(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    Query(r): Query<FileRef>,
+) -> Res<Info> {
     let store = state.store.clone();
     let out = run(&state, move |c| {
-        let dev = find_device(c, &r.device)?;
+        let dev = find_device(c, &who, &r.device)?;
         let path = clean_remote_path(&r.path).map_err(|e| ApiError::bad(e.to_string()))?;
         let retention = setting(c, "retention_days", 30);
         let row = c
@@ -335,7 +385,7 @@ pub async fn info(State(state): State<Shared>, Query(r): Query<FileRef>) -> Res<
             .collect();
         let events = c
             .query(
-                "SELECT e.id, e.ts, e.action, e.path, e.detail, d.name FROM events e JOIN devices d ON d.id = e.device_id
+                "SELECT e.id, e.ts, e.action, e.path, e.detail, d.folder FROM events e JOIN devices d ON d.id = e.device_id
                  WHERE e.device_id = $1 AND e.path = $2 ORDER BY e.id DESC LIMIT 30",
                 &[&dev.id, &path],
             )?
@@ -344,6 +394,7 @@ pub async fn info(State(state): State<Shared>, Query(r): Query<FileRef>) -> Res<
             .collect();
         let exif: Option<String> = row.get(11);
         Ok(Info {
+            id: file_id,
             device: dev.name,
             name: path.rsplit('/').next().unwrap_or(&path).to_string(),
             deleted_at,
@@ -390,12 +441,29 @@ pub fn expand(c: &mut Client, dev: &Device, path: &str, include_deleted: bool) -
     .collect())
 }
 
-pub async fn remove(State(state): State<Shared>, Json(body): Json<Items>) -> Res<Removed> {
+#[derive(Serialize)]
+pub struct Rescan {
+    /// False when a comparison was already running.
+    started: bool,
+}
+
+/// Compares the file store with the database now instead of at the next round (administrators). Files put on the disk
+/// by hand, or over a network share, are picked up either way; this is for when one does not want to wait.
+pub async fn rescan(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Rescan> {
+    who.require_admin()?;
+    Ok(Json(Rescan { started: crate::files::livetree::rescan(state.db.clone(), state.store.clone()) }))
+}
+
+pub async fn remove(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    Json(body): Json<Items>,
+) -> Res<Removed> {
     let store = state.store.clone();
     let deleted = run(&state, move |c| {
         let mut deleted = 0;
         for item in &body.items {
-            let dev = find_device(c, &item.device)?;
+            let dev = find_device_to_change(c, &who, &item.device)?;
             for path in expand(c, &dev, &item.path, false)? {
                 if ingest::mark_deleted(c, &store, &dev, &path, true)? {
                     deleted += 1;
@@ -416,10 +484,14 @@ pub struct Restore {
     version: i64,
 }
 
-pub async fn restore(State(state): State<Shared>, Json(r): Json<Restore>) -> Res<Done> {
+pub async fn restore(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    Json(r): Json<Restore>,
+) -> Res<Done> {
     let store = state.store.clone();
     run(&state, move |c| {
-        let dev = find_device(c, &r.device)?;
+        let dev = find_device_to_change(c, &who, &r.device)?;
         let path = clean_remote_path(&r.path).map_err(|e| ApiError::bad(e.to_string()))?;
         let row = c
             .query_opt(
@@ -434,7 +506,7 @@ pub async fn restore(State(state): State<Shared>, Json(r): Json<Restore>) -> Res
         }
         // What a device or a source sends is theirs to change: here it can be brought back from the trash, not edited.
         let kind: String = c.query_one("SELECT kind FROM devices WHERE id = $1", &[&dev.id])?.get(0);
-        if kind != "local" && deleted_at.is_none() {
+        if !editable_kind(&kind) && deleted_at.is_none() {
             return Err(ApiError::conflict(
                 "Files sent by a device cannot be changed here. Download the version instead.",
             )

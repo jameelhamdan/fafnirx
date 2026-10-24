@@ -139,6 +139,18 @@ pub fn stop_marker(state_dir: &Path) -> PathBuf {
     state_dir.join("stop")
 }
 
+/// The master refused this client because another computer is using the same device: it must not send anything.
+#[derive(Debug)]
+pub struct InUse(pub String);
+
+impl std::fmt::Display for InUse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for InUse {}
+
 pub async fn send_heartbeat(
     client: &mut Client,
     cfg: &Config,
@@ -173,6 +185,7 @@ pub async fn send_heartbeat(
                 *e = restored;
             }
             match other {
+                Ok(Err(s)) if s.code() == tonic::Code::PermissionDenied => Err(InUse(s.message().to_string()).into()),
                 Ok(Err(s)) => Err(anyhow::anyhow!("{:?}: {}", s.code(), s.message())),
                 _ => Err(anyhow::anyhow!("timed out")),
             }
@@ -183,8 +196,12 @@ pub async fn send_heartbeat(
 /// `state_dir` is the client's own folder: its status file changes all the time and must not wake a cycle.
 fn spawn_watcher(folders: &[PathBuf], state_dir: PathBuf, wake: Arc<Notify>) -> Option<notify::RecommendedWatcher> {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    // Events name paths as the watched folder spells them, which may be a symlinked or canonical form of `state_dir`.
+    let state_canonical = state_dir.canonicalize().unwrap_or_else(|_| state_dir.clone());
     let mut watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if res.is_ok_and(|e| !e.paths.iter().all(|p| p.starts_with(&state_dir))) {
+        // An event without paths (an overflow, a rescan) says "something may have changed": it always wakes a cycle.
+        let own = |p: &PathBuf| p.starts_with(&state_dir) || p.starts_with(&state_canonical);
+        if res.is_ok_and(|e| e.paths.is_empty() || !e.paths.iter().all(own)) {
             let _ = tx.send(());
         }
     }) {
@@ -319,7 +336,10 @@ fn spawn_heartbeat(shared: Shared, mut client: Client, config_path: PathBuf, ide
                         }
                         shared.status.edit(|s| {
                             s.online = false;
-                            s.message = format!("cannot reach the master: {e:#}");
+                            s.message = match e.downcast_ref::<InUse>() {
+                                Some(in_use) => format!("not sending: {in_use}"),
+                                None => format!("cannot reach the master: {e:#}"),
+                            };
                         });
                     }
                 }
@@ -402,7 +422,7 @@ pub async fn run(config_path: PathBuf) -> Result<()> {
 
 async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Result<()> {
     let token = credentials::load(&cfg.server, &config_path, cfg.token.as_deref())?;
-    let client = net::client(&cfg, &token)?;
+    let client = net::client(&cfg, &token, &crate::instance::client_id(&state_dir))?;
     let identity = Identity::load(&cfg, &config_path)?;
     let marker = paused_marker(&state_dir);
 

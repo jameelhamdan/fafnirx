@@ -5,6 +5,7 @@ import type { Entry } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { Thumb } from '../library/thumb'
 import { Checkbox } from '../ui/checkbox'
+import { AccessBadge } from './access-badge'
 import { FileIcon } from './file-icon'
 import { useT } from '@/lib/i18n'
 
@@ -39,6 +40,7 @@ export function FileGrid({
               <div className="px-2.5 py-2">
                 <p className={cn('truncate text-sm', e.kind !== 'file' && 'font-medium')}>{e.name}</p>
                 <p className="text-xs text-muted-foreground">{e.kind === 'file' ? bytes(e.size) : `${plural(e.files ?? 0, 'file')} · ${bytes(e.size)}`}</p>
+                {e.kind === 'device' && <div className="mt-1"><AccessBadge writable={e.writable} kind={e.device_kind} /></div>}
               </div>
             </button>
             <Checkbox

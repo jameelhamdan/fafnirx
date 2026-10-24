@@ -6,17 +6,16 @@ import type { Activity } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { Badge } from './ui/badge'
 import { Progress } from './ui/progress'
+import { STATUS } from '@/lib/status'
 
-const STATUS: Record<string, string> = {
-  ok: msg('OK'),
-  online: msg('Online'),
-  partial: msg('Partial'),
-  paused: msg('Paused'),
-  running: msg('Running'),
-  failed: msg('Failed'),
-  offline: msg('Offline'),
-  revoked: msg('Revoked'),
-  'never run': msg('Never run'),
+/** A small label over a value, for a list of facts about one thing; an empty value shows as a dash. */
+export function Fact({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="mt-0.5 break-words text-sm">{children === null || children === undefined || children === '' ? '—' : children}</dd>
+    </div>
+  )
 }
 
 const PHASE: Record<string, string> = { scanning: msg('Scanning'), hashing: msg('Hashing'), uploading: msg('Uploading') }

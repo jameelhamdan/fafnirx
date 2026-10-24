@@ -25,7 +25,7 @@ flowchart LR
    interrupted upload resumes with the missing chunks; content the device already has under another path (a copy or
    a rename) needs no data at all.
 4. **The master verifies every chunk**, writes them into one file at their offsets, checks the root hash of the
-   result, and moves it to `files/<device>/<path>`. The file it replaces moves to `versions/<id>/<device>/<path>`.
+   result, and moves it to `files/<user>/<device>/<path>`. The file it replaces moves to `versions/<id>/<user>/<device>/<path>`.
 5. **Deleting on the device only marks the path deleted.** The data stays until the retention period has passed.
 6. **Mirrors** copy the current tree (and what changed since the last run) to storage you choose.
 
@@ -52,11 +52,13 @@ preview photos, read their metadata, see every version, download or upload. A zi
 any size. Everything on the pages updates live: a device's progress bar moves, a new file appears in an open folder.
 
 For photos and videos there is a **library** on top of the same files: a timeline by month and day with a scrubber,
-favorites, an archive, a trash, albums, a map, tags,
-ratings and descriptions, and corrections of dates and places. None of it touches the original files.
+favorites, an archive, a trash, albums (also a whole folder as an album, like a TV show), a map, tags,
+ratings and descriptions, and corrections of dates and places. None of it touches the original files. Videos play in a
+player of their own, with subtitles from the file or beside it.
 
 Because the files are plain files, you can also reach them without the web app: share `data/files/` over SMB or NFS
-and use it as a **network drive**. Files you add or change there are noticed and recorded as versions.
+and use it as a **network drive**. Files you add or change there are noticed and recorded as versions. What you put in
+`files/` outside the folders of the users is a **master file**, which belongs to nobody and which every user can see.
 
 ## Rules that do not change
 
@@ -75,17 +77,18 @@ and use it as a **network drive**. Files you add or change there are noticed and
 - Not a sync tool: nothing is ever sent back to a device. Restoring is a download or a copy.
 - Not an encryption layer: data on the master and on mirrors is not encrypted by fafnirx. Use an encrypted disk, and an
   encrypting rclone remote (`crypt`) if the mirror needs it.
-- Not multi-user: one admin password. Put Cloudflare Access or a VPN in front if you need more.
+- Not an access-control system for a company: there are three roles (administrator, normal, read only) and a workspace per
+  user, with shared master files. Put Cloudflare Access or a VPN in front if you need more.
 
 ## The pieces
 
 | Piece | What it is |
 |---|---|
 | `fafnirx` | The client: watcher, resumable upload, offline queue, tray icon, signed self-update |
-| `fafnirx-master` | The master: device API, admin API and web app, file store, background work |
+| `fafnirx-master` | The master: device API, web API and web app, users, file store, background work |
 | `fafnirx-sign` | Creates the update signing key and publishes signed client builds |
-| PostgreSQL | All metadata: devices, files, versions, events, settings, jobs |
-| `fafnirx.json` | The setup (settings, devices, mirrors, sources), read at start and written by the web app; see [Configuration file](configuration.md) |
+| `fafnirx-stream` | Optional: streams videos in several qualities to the web app ([Video streaming](streaming.md)) |
+| PostgreSQL | All metadata: users, devices, files, versions, events, settings, jobs |
 | rclone | Performs mirror uploads (installed in the Docker image) |
 
 Read next: [Installation](installation.md), then [Usage](usage.md).

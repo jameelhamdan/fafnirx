@@ -14,8 +14,8 @@ The master speaks plain HTTP on purpose. The threat model is in
 [docs/architecture.md](docs/architecture.md#security-model) and the hardening checklist in
 [docs/deployment.md](docs/deployment.md#security-checklist). In particular:
 
-- A device token can only add data; it cannot read, list or delete.
-- The admin password protects everything else. There is one admin and no per-user permissions.
+- A device token can only add data; it cannot read, list or delete. A device is used by one installation of the client at a time (the first to connect holds it for as long as it is heard from), so a copied token cannot run beside the original; the owner is alerted when it tries. This protects the data from two views of one device, not against someone who has the token and waits for the first to go quiet: revoke or rotate a leaked token.
+- A user's login protects everything else. There are three roles (administrator, normal, read only); users see only their own devices and the master files, and administrators see everything. SMB or NFS shares of `files/` have logins of their own and are not covered by these roles.
 - Data is not encrypted at rest or on mirrors by fafnirx.
 - Client updates are accepted only with a valid Ed25519 signature from a key that is not on the master.
 
