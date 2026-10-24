@@ -1,7 +1,9 @@
 # The one way to release, and nothing has to be done by hand before it: Actions -> Release -> Run workflow, on master, with
 # the new version (X.Y.Z, no "v"). The workflow makes the commit that sets that version in Cargo.toml and Cargo.lock.
 #
-#   1. validate   the version is X.Y.Z, newer than every release so far, not used before, and not below Cargo.toml's
+#   1. validate   the version is X.Y.Z, newer than every release so far, not used before, and not below Cargo.toml's;
+#                 the secrets of the publishing steps are set and Docker Hub accepts the login (so that a missing one is
+#                 found now and not after master has been changed)
 #   2. prepare    the commit "Release X.Y.Z" (made from the commit the run started on) is pushed to the temporary branch
 #                 release/X.Y.Z, and from here on EVERY job builds and tests that exact commit. If Cargo.toml already
 #                 says X.Y.Z (the first release of a version, a rerun) there is nothing to commit and the run's own
@@ -83,6 +85,28 @@ jobs:
           fi
           echo "releasing $VERSION (Cargo.toml says $current, the last release is ${latest:-nothing})"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # Found out now, before anything is changed, and not at the last step after the version commit is on master.
+      - name: Check that the secrets of the publishing steps are set
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          WITH_HOMEBREW: ${{ inputs.homebrew }}
+        run: |
+          missing=""
+          [ -n "$DOCKERHUB_USERNAME" ] || missing="$missing DOCKERHUB_USERNAME"
+          [ -n "$DOCKERHUB_TOKEN" ] || missing="$missing DOCKERHUB_TOKEN"
+          if [ "$WITH_HOMEBREW" = true ] && [ -z "$HOMEBREW_TAP_TOKEN" ]; then missing="$missing HOMEBREW_TAP_TOKEN"; fi
+          if [ -n "$missing" ]; then
+            echo "::error::These secrets are not set:$missing. Add each as a REPOSITORY secret with exactly this name (Settings -> Secrets and variables -> Actions -> Secrets -> New repository secret). Secrets of an environment, of Dependabot, and variables are not seen by the publishing jobs. Nothing was changed."
+            exit 1
+          fi
+      - name: Check that Docker Hub accepts the login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
   prepare:
     needs: validate
