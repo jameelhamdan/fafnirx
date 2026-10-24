@@ -20,6 +20,10 @@ on:
         description: Push to Docker Hub (otherwise only build and check)
         type: boolean
         default: false
+      ref:
+        description: The commit to build (the Release workflow passes the commit it is releasing); default is the one that started the run
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -36,6 +40,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
@@ -56,6 +62,8 @@ jobs:
       IMAGE: ${{ vars.DOCKERHUB_IMAGE || format('{0}/fafnirx-master', secrets.DOCKERHUB_USERNAME) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 

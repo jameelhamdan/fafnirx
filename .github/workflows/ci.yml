@@ -7,6 +7,11 @@ on:
     branches: [master]
   pull_request:
   workflow_call:
+    inputs:
+      ref:
+        description: The commit to check (the Release workflow passes the commit it is releasing); default is the one that started the run
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -26,6 +31,8 @@ jobs:
       FAFNIRX_TEST_DATABASE_URL: postgresql://postgres:test@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -41,6 +48,13 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Build the web app (it is embedded in the master)
         run: cd frontend && npm ci && npm run build
+      # The Release workflow commits the new version with this script. Doing it here too means that a new crate or a
+      # change in Cargo's lockfile breaks CI today and not on the day of a release.
+      - name: The version bump of the Release workflow works with this Cargo.lock
+        run: |
+          python3 .github/scripts/set_version.py 999.0.0
+          cargo metadata --locked --format-version 1 > /dev/null
+          git checkout -- Cargo.toml Cargo.lock
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
@@ -49,6 +63,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
