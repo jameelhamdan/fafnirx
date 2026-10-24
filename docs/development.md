@@ -177,7 +177,8 @@ without publishing, and *homebrew* to also update the Homebrew formula (off by d
 What it does, in order:
 
 1. **Checks the version:** it must be `X.Y.Z`, newer than every earlier release, not used before, and not below the one in
-   `Cargo.toml`.
+   `Cargo.toml`. It also checks that the secrets of the publishing steps are set and that Docker Hub accepts the login, so
+   that a missing secret stops the run now and not after `master` has been changed.
 2. **Makes the version commit.** `.github/scripts/prepare-release.sh` sets the version in `Cargo.toml` (`[workspace.package]`)
    and for the workspace's crates in `Cargo.lock`, commits it as "Release X.Y.Z" by the `github-actions[bot]`, and pushes it
    to the temporary branch `release/X.Y.Z`. From here on every job builds and tests *that exact commit*, so what is tested is
@@ -193,8 +194,11 @@ ran, the version commit cannot be added to it: nothing is published, run the wor
 run it again with the same version: the version commit is on `master` by then, so the rerun has nothing to commit and
 releases `master` as it is.
 
-One-time setup: the secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (an access token with write rights), optionally the
-variable `DOCKERHUB_IMAGE`, and `HOMEBREW_TAP_TOKEN` for Homebrew. The workflow pushes to `master` as the
+One-time setup, in the repository's Settings -> Secrets and variables -> Actions, as **repository secrets** with exactly
+these names: `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (an access token with write rights, made in Docker Hub under
+Account settings -> Personal access tokens; not the account password), and `HOMEBREW_TAP_TOKEN` if you use Homebrew.
+Optionally the *variable* `DOCKERHUB_IMAGE`. Secrets kept in an environment, in Dependabot's list or as variables are
+not seen by the publishing jobs. The workflow pushes to `master` as the
 `github-actions[bot]`, so if `master` is protected, that bot must be allowed to push there. To ask for a click before
 publishing, add required reviewers to the `release` environment (Settings -> Environments). The server is installed from the
 Docker image only, so there is no server package. `.github/scripts/smoke-image.sh <image>` runs the image check by hand, and
