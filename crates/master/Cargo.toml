@@ -31,7 +31,7 @@ axum = "0.7"
 crc32fast = "1"
 getrandom = "0.2"
 futures-util = "0.3"
-hmac = "0.12"
+argon2 = "0.5"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff"] }
 kamadak-exif = "0.5"
 mime_guess = "2"

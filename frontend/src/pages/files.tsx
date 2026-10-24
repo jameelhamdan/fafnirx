@@ -1,7 +1,7 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowDownUp, ChevronRight, Download, FolderPlus, Grid2x2, List, Search, Trash2, Upload, X } from 'lucide-react'
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { ArrowDownUp, ChevronRight, Download, FolderPlus, Grid2x2, Images, List, Search, Trash2, Upload, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Empty, ErrorNote, PageHeader } from '@/components/common'
 import { Confirm } from '@/components/confirm'
@@ -22,7 +22,11 @@ import { useNow } from '@/hooks/use-now'
 import { api, downloadZip, query } from '@/lib/api'
 import { count, joinPath, plural } from '@/lib/format'
 import { msg, useT } from '@/lib/i18n'
-import type { DeviceSummary, Entry, Listing } from '@/lib/types'
+import { MASTER, hasWorkspace, useRole } from '@/lib/session'
+import { AccessBadge } from '@/components/files/access-badge'
+import { AlbumPicker } from '@/components/library/album-picker'
+import { RescanButton } from '@/components/files/rescan-button'
+import type { AlbumInfo, DeviceSummary, Entry, Listing } from '@/lib/types'
 import { collectDropped, enqueueUploads, fromInput } from '@/lib/upload'
 import { cn } from '@/lib/utils'
 
@@ -54,7 +58,7 @@ function NewFolder({ open, onClose, onCreated }: { open: boolean; onClose: () =>
       void client.invalidateQueries({ queryKey: ['devices'] })
       void client.invalidateQueries({ queryKey: ['files'] })
       setName('')
-      onCreated(made.device.name)
+      onCreated(made.device.folder)
     },
   })
   const submit = (e: FormEvent) => { e.preventDefault(); create.mutate() }
@@ -65,7 +69,7 @@ function NewFolder({ open, onClose, onCreated }: { open: boolean; onClose: () =>
           <DialogHeader>
             <DialogTitle>{t('New local folder')}</DialogTitle>
             <DialogDescription>
-              {t('A top-level folder that lives on the master. Upload into it from this page, or copy files straight into files/<name>/ on the server or its network share.')}
+              {t('A folder of yours that lives on the master. Upload into it from this page, or copy files straight into files/<you>/<name>/ on the server.')}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
@@ -119,12 +123,13 @@ export default function Files() {
   useEffect(() => setSelected(new Set()), [device, path, q, type, showDeleted])
   const [newFolder, setNewFolder] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [albumPicker, setAlbumPicker] = useState(false)
   const [dragging, setDragging] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const folderInput = useRef<HTMLInputElement>(null)
 
-  const devices = useQuery({ queryKey: ['devices'], queryFn: () => api.get<DeviceSummary[]>('/api/devices') })
-  const canUpload = devices.data?.find((d) => d.name === device)?.kind === 'local'
+  const role = useRole()
+  const where = device === MASTER ? t('Master files') : device
 
   const listing = useInfiniteQuery({
     queryKey: ['files', device, path, q, type, sort, order, showDeleted],
@@ -138,12 +143,19 @@ export default function Files() {
     },
     placeholderData: (previous) => previous,
   })
-  const entries = useMemo(() => listing.data?.pages.flatMap((p) => p.entries) ?? [], [listing.data])
+  // The master files are not a device: they are named for what they are.
+  const entries = useMemo(
+    () => (listing.data?.pages.flatMap((p) => p.entries) ?? []).map((e) => (e.kind === 'device' && e.device === MASTER ? { ...e, name: t('Master files') } : e)),
+    [listing.data, t],
+  )
   const total = listing.data?.pages[0]?.total ?? 0
   const searching = listing.data?.pages[0]?.searching ?? false
+  // The master says what the web app may do here: the master files and local folders can be changed, what a device or a
+  // source sends cannot.
+  const canUpload = listing.data?.pages[0]?.writable ?? false
 
   const open = (e: Entry) => {
-    if (e.kind === 'device') go({ device: e.name, path: null, q: null, type: null, file: null })
+    if (e.kind === 'device') go({ device: e.device, path: null, q: null, type: null, file: null })
     else if (e.kind === 'dir') go({ path: e.path, q: null, file: null })
     else go({ file: e.path })
   }
@@ -156,6 +168,17 @@ export default function Files() {
   const toggleAll = () => setSelected((s) => (entries.every((e) => s.has(entryKey(e))) ? new Set() : new Set(entries.map(entryKey))))
   const chosen = entries.filter((e) => selected.has(entryKey(e)))
 
+  const navigate = useNavigate()
+  // A folder becomes an album that shows what is in it as it comes (a show, a trip). There is one per folder, so asking
+  // again opens the one there is.
+  const asAlbum = useMutation({
+    mutationFn: (folder: { device: string; path: string }) => api.post<AlbumInfo>('/api/albums', { name: '', folder }),
+    onSuccess: (album) => {
+      void client.invalidateQueries({ queryKey: ['albums'] })
+      navigate(`/albums/${album.id}`)
+    },
+    onError: (e) => toast.error(e.message),
+  })
   const remove = useMutation({
     mutationFn: () => api.post<{ deleted: number }>('/api/files/delete', { items: chosen.map((e) => ({ device: e.device, path: e.path })) }),
     onSuccess: (r) => {
@@ -178,7 +201,7 @@ export default function Files() {
 
   const crumbs = [
     { name: t('Files'), to: { device: null, path: null } },
-    ...(device ? [{ name: device, to: { device, path: null } }] : []),
+    ...(device ? [{ name: where, to: { device, path: null } }] : []),
     ...path.split('/').filter(Boolean).map((part, i, all) => ({ name: part, to: { device, path: all.slice(0, i + 1).join('/') } })),
   ]
   const filtering = q !== '' || type !== 'all'
@@ -192,14 +215,15 @@ export default function Files() {
     >
       {dragging && (
         <div className="pointer-events-none fixed inset-3 z-30 grid place-items-center rounded-xl border-2 border-dashed border-primary bg-primary/10 backdrop-blur-sm">
-          <p className="text-lg font-medium">{t('Drop to upload to {target}', { target: device + (path ? `/${path}` : '') })}</p>
+          <p className="text-lg font-medium">{t('Drop to upload to {target}', { target: where + (path ? `/${path}` : '') })}</p>
         </div>
       )}
       <PageHeader
         title={t('Files')}
         actions={
           <>
-            {!device && <Button variant="outline" onClick={() => setNewFolder(true)}><FolderPlus className="size-4" />{t('New local folder')}</Button>}
+            {role === 'admin' && <RescanButton />}
+            {!device && hasWorkspace(role) && <Button variant="outline" onClick={() => setNewFolder(true)}><FolderPlus className="size-4" />{t('New local folder')}</Button>}
             {device && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -226,12 +250,15 @@ export default function Files() {
             )}
           </span>
         ))}
+        {device && listing.data && (
+          <span className="ml-2"><AccessBadge writable={canUpload} kind={listing.data.pages[0]?.device_kind ?? null} /></span>
+        )}
       </nav>
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="relative min-w-48 flex-1 sm:max-w-xs">
           <Search className="absolute top-2.5 left-2.5 size-4 text-muted-foreground" />
-          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={device ? t('Search in {where}', { where: device + (path ? `/${path}` : '') }) : t('Search a device first')} disabled={!device} className="pl-8" aria-label={t('Search')} />
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={device ? t('Search in {where}', { where: where + (path ? `/${path}` : '') }) : t('Search a device first')} disabled={!device} className="pl-8" aria-label={t('Search')} />
         </div>
         <Select value={type} onValueChange={(v) => go({ type: v === 'all' ? null : v }, true)} disabled={!device}>
           <SelectTrigger className="w-36" aria-label={t('File type')}><SelectValue /></SelectTrigger>
@@ -248,7 +275,12 @@ export default function Files() {
           <Switch checked={showDeleted} onCheckedChange={(v) => go({ deleted: v ? '1' : null }, true)} disabled={!device} />
           {t('Deleted')}
         </label>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          {device && hasWorkspace(role) && !showDeleted && (
+            <Button variant="outline" size="sm" disabled={asAlbum.isPending} onClick={() => asAlbum.mutate({ device, path })}>
+              <Images className="size-4" />{t('Use folder as album')}
+            </Button>
+          )}
           <ToggleGroup
             value={view}
             onChange={(v) => go({ view: v === 'grid' ? 'grid' : null }, true)}
@@ -265,6 +297,14 @@ export default function Files() {
             <Button size="sm" variant="outline" onClick={() => downloadZip(chosen.map((e) => ({ device: e.device, path: e.kind === 'device' ? '' : e.path })), chosen.length === 1 ? chosen[0].name : device || 'fafnirx')}>
               <Download className="size-4" />{chosen.length === 1 && chosen[0].kind === 'file' ? t('Download') : t('Download as zip')}
             </Button>
+            {hasWorkspace(role) && !showDeleted && (
+              <Button size="sm" variant="outline" onClick={() => setAlbumPicker(true)}><Images className="size-4" />{t('Add to album')}</Button>
+            )}
+            {hasWorkspace(role) && !showDeleted && chosen.length === 1 && chosen[0].kind === 'dir' && (
+              <Button size="sm" variant="outline" disabled={asAlbum.isPending} onClick={() => asAlbum.mutate({ device: chosen[0].device, path: chosen[0].path })}>
+                <Images className="size-4" />{t('Use folder as album')}
+              </Button>
+            )}
             <Button size="sm" variant="outline" disabled={chosen.some((e) => e.kind === 'device')} onClick={() => setConfirmDelete(true)}><Trash2 className="size-4" />{t('Delete')}</Button>
           </div>
         </div>
@@ -302,6 +342,12 @@ export default function Files() {
       )}
 
       <DetailsSheet device={device} path={openFile} onClose={() => go({ file: null }, true)} onDeleted={() => { go({ file: null }, true); void client.invalidateQueries({ queryKey: ['files'] }) }} />
+      <AlbumPicker
+        open={albumPicker}
+        items={chosen.map((e) => ({ device: e.device, path: e.kind === 'device' ? '' : e.path }))}
+        onClose={() => setAlbumPicker(false)}
+        onDone={() => setSelected(new Set())}
+      />
       <NewFolder open={newFolder} onClose={() => setNewFolder(false)} onCreated={(name) => { setNewFolder(false); go({ device: name, path: null }) }} />
       <Confirm
         open={confirmDelete}

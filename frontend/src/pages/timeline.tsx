@@ -14,6 +14,7 @@ import { count, monthTitle } from '@/lib/format'
 import { monthBodyHeight, monthHeight, useGrid } from '@/lib/grid'
 import { monthQuery, useTags, type TimelineFilters } from '@/lib/library'
 import { msg, useT } from '@/lib/i18n'
+import { MASTER } from '@/lib/session'
 import type { Asset, Buckets, DeviceSummary, Scope } from '@/lib/types'
 
 const TITLES: Record<Scope, string> = { timeline: msg('Photos'), favorites: msg('Favorites'), archive: msg('Archive') }
@@ -167,7 +168,8 @@ export default function Timeline({ scope }: { scope: Scope }) {
               <SelectTrigger className="w-40" aria-label={t('Device')}><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">{t('All devices')}</SelectItem>
-                {devices.data?.filter((d) => d.files > 0).map((d) => <SelectItem key={d.name} value={d.name}>{d.name}</SelectItem>)}
+                <SelectItem value={MASTER}>{t('Master files')}</SelectItem>
+                {devices.data?.filter((d) => d.files > 0).map((d) => <SelectItem key={d.folder} value={d.folder}>{d.folder}</SelectItem>)}
               </SelectContent>
             </Select>
             <Select value={filters.kind || 'all'} onValueChange={(v) => setFilter('kind', v)}>

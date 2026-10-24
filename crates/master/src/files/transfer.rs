@@ -1,16 +1,17 @@
 //! Moving file contents: download (with ranges, so video and photos stream), previews, bulk zip, and
 //! chunked, resumable uploads that fit behind proxies with request size limits.
 
-use crate::files::browse::{expand, find_device, version_file, FileRef};
+use crate::files::browse::{expand, find_device, find_device_to_change, version_file, FileRef};
 use crate::files::ingest::{self, NewVersion};
 use crate::library::meta;
 use crate::platform::db;
+use crate::web::access::Access;
 use crate::web::{run, ApiError, Res, Shared};
 use axum::body::Body;
 use axum::extract::{Form, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::{Extension, Json};
 use fafnirx_common::{clean_remote_path, unix_now};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -20,7 +21,10 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
 
 /// One upload being filled chunk by chunk.
+#[derive(Clone)]
 pub struct Upload {
+    /// The user who started it: nobody else can add to it or finish it.
+    user_id: i64,
     device: String,
     path: String,
     size: u64,
@@ -53,10 +57,14 @@ struct Stored {
     codec: Option<String>,
 }
 
-fn stored_version(state: &Shared, q: &FileQuery) -> impl FnOnce(&mut postgres::Client) -> anyhow::Result<Stored> {
+fn stored_version(
+    state: &Shared,
+    who: Access,
+    q: &FileQuery,
+) -> impl FnOnce(&mut postgres::Client) -> anyhow::Result<Stored> {
     let (store, device, path, version) = (state.store.clone(), q.device.clone(), q.path.clone(), q.version);
     move |c| {
-        let dev = find_device(c, &device)?;
+        let dev = find_device(c, &who, &device)?;
         let path = clean_remote_path(&path).map_err(|e| ApiError::bad(e.to_string()))?;
         let file = c
             .query_opt(
@@ -116,10 +124,11 @@ fn parse_range(header: &str, size: u64) -> Option<(u64, u64)> {
 
 pub async fn download(
     State(state): State<Shared>,
+    Extension(who): Extension<Access>,
     Query(q): Query<FileQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let stored = run(&state, stored_version(&state, &q)).await?;
+    let stored = run(&state, stored_version(&state, who, &q)).await?;
     let etag = format!("\"{}\"", hex::encode(&stored.root));
     let file =
         SendFile { disk: &stored.disk, etag, size: stored.size, name: &stored.name, inline: q.inline == Some(1) };
@@ -203,19 +212,23 @@ async fn preview_response(state: &Shared, stored: &Stored, max: u32, immutable: 
     Ok(([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, cache_control)], bytes).into_response())
 }
 
-pub async fn thumbnail(State(state): State<Shared>, Query(q): Query<FileQuery>) -> Result<Response, ApiError> {
-    let stored = run(&state, stored_version(&state, &q)).await?;
+pub async fn thumbnail(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    Query(q): Query<FileQuery>,
+) -> Result<Response, ApiError> {
+    let stored = run(&state, stored_version(&state, who, &q)).await?;
     let max = q.size.unwrap_or(256).clamp(64, 1600);
     preview_response(&state, &stored, max, false).await
 }
 
 /// The file with this id as the library knows it: its current content, deleted or not.
-fn stored_by_id(state: &Shared, id: i64) -> impl FnOnce(&mut postgres::Client) -> anyhow::Result<Stored> {
+fn stored_by_id(state: &Shared, who: Access, id: i64) -> impl FnOnce(&mut postgres::Client) -> anyhow::Result<Stored> {
     let store = state.store.clone();
     move |c| {
         let row = c
             .query_opt(
-                "SELECT d.name, f.path, f.current_version_id, f.deleted_at, v.root_hash, v.size, m.codec
+                "SELECT d.folder, f.path, f.current_version_id, f.deleted_at, v.root_hash, v.size, m.codec
                  FROM files f JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id
                  LEFT JOIN file_meta m ON m.root_hash = v.root_hash WHERE f.id = $1",
                 &[&id],
@@ -223,6 +236,8 @@ fn stored_by_id(state: &Shared, id: i64) -> impl FnOnce(&mut postgres::Client) -
             .ok_or_else(|| ApiError::not_found("No such file"))?;
         let (device, path, version, deleted_at): (String, String, i64, Option<i64>) =
             (row.get(0), row.get(1), row.get(2), row.get(3));
+        // A file of someone else's device does not exist for this user.
+        who.check_see(&device).map_err(|_| ApiError::not_found("No such file"))?;
         Ok(Stored {
             disk: version_file(&store, &device, &path, version, Some(version), deleted_at.is_some())?,
             root: row.get(4),
@@ -266,12 +281,13 @@ pub struct MediaQuery {
 /// Answers a request for one of the views of a file.
 pub async fn media(
     State(state): State<Shared>,
+    Extension(who): Extension<Access>,
     Path((id, variant)): Path<(i64, String)>,
     Query(q): Query<MediaQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let variant = Variant::parse(&variant).ok_or_else(|| ApiError::not_found("No such view"))?;
-    let stored = run(&state, stored_by_id(&state, id)).await?;
+    let stored = run(&state, stored_by_id(&state, who, id)).await?;
     let root_hex = hex::encode(&stored.root);
     let immutable = q.v.as_deref().is_some_and(|v| !v.is_empty() && root_hex.starts_with(v));
     match variant {
@@ -320,7 +336,11 @@ pub struct ZipForm {
     name: Option<String>,
 }
 
-pub async fn zip(State(state): State<Shared>, Form(form): Form<ZipForm>) -> Result<Response, ApiError> {
+pub async fn zip(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    Form(form): Form<ZipForm>,
+) -> Result<Response, ApiError> {
     let items: Vec<FileRef> =
         serde_json::from_str(&form.items).map_err(|_| ApiError::bad("items must be a JSON list"))?;
     if items.is_empty() {
@@ -331,7 +351,7 @@ pub async fn zip(State(state): State<Shared>, Form(form): Form<ZipForm>) -> Resu
         let several = items.iter().map(|i| &i.device).collect::<std::collections::HashSet<_>>().len() > 1;
         let mut entries = Vec::new();
         for item in &items {
-            let dev = find_device(c, &item.device)?;
+            let dev = find_device(c, &who, &item.device)?;
             let selected = item.path.trim_matches('/');
             // Names inside the zip start at the selected folder (or file), not at the device root.
             let parent = selected.rfind('/').map_or(0, |i| i + 1);
@@ -364,11 +384,20 @@ pub async fn zip(State(state): State<Shared>, Form(form): Form<ZipForm>) -> Resu
         let _ = writer.shutdown().await;
     });
     let name = form.name.filter(|n| !n.is_empty()).unwrap_or_else(|| "fafnirx".into());
-    let name = name.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')).collect::<String>();
+    // Any script is fine in the name; what a header or a file system would trip on is not.
+    let name = name.chars().filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ' ')).collect::<String>();
+    let name = if name.trim().is_empty() { "fafnirx".to_string() } else { name };
+    let ascii = name.chars().map(|c| if c.is_ascii() { c } else { '_' }).collect::<String>();
     Ok((
         [
             (header::CONTENT_TYPE, "application/zip".to_string()),
-            (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}.zip\"")),
+            (
+                header::CONTENT_DISPOSITION,
+                format!(
+                    "attachment; filename=\"{ascii}.zip\"; filename*=UTF-8''{}",
+                    percent_encode(&format!("{name}.zip"))
+                ),
+            ),
         ],
         Body::from_stream(ReaderStream::new(reader)),
     )
@@ -390,16 +419,23 @@ pub struct UploadId {
     received: u64,
 }
 
-pub async fn start_upload(State(state): State<Shared>, Json(b): Json<NewUpload>) -> Res<UploadId> {
+pub async fn start_upload(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    Json(b): Json<NewUpload>,
+) -> Res<UploadId> {
     let path = clean_remote_path(&b.path).map_err(|e| ApiError::bad(e.to_string()))?;
     let device = b.device.clone();
+    let user = who.clone();
     let kind: String = run(&state, move |c| {
-        Ok(c.query_opt("SELECT kind FROM devices WHERE name = $1", &[&device])?
+        user.check_write(&device)?;
+        Ok(c.query_opt("SELECT kind FROM devices WHERE folder = $1", &[&device])?
             .ok_or_else(|| ApiError::not_found("No such device"))?
             .get(0))
     })
     .await?;
-    if kind != "local" {
+    // Only folders that live on the master take uploads: a device's files are what the device sends.
+    if !crate::files::browse::editable_kind(&kind) {
         return Err(ApiError::bad("Files can only be uploaded to a local folder. Create one on the Files page first."));
     }
     state.store.live_path(&b.device, &path).map_err(|e| ApiError::bad(e.to_string()))?;
@@ -421,14 +457,26 @@ pub async fn start_upload(State(state): State<Shared>, Json(b): Json<NewUpload>)
     let mtime_ns = b.mtime_ms.map_or_else(|| unix_now() * 1_000_000_000, |ms| ms * 1_000_000);
     uploads.insert(
         id.clone(),
-        Upload { device: b.device, path, size: b.size, mtime_ns, received: 0, file, touched: Instant::now() },
+        Upload {
+            user_id: who.user_id,
+            device: b.device,
+            path,
+            size: b.size,
+            mtime_ns,
+            received: 0,
+            file,
+            touched: Instant::now(),
+        },
     );
     Ok(Json(UploadId { id, received: 0 }))
 }
 
-fn session<T>(state: &Shared, id: &str, f: impl FnOnce(&mut Upload) -> T) -> Result<T, ApiError> {
+fn session<T>(state: &Shared, user_id: i64, id: &str, f: impl FnOnce(&mut Upload) -> T) -> Result<T, ApiError> {
     let mut uploads = state.uploads.lock().unwrap_or_else(|e| e.into_inner());
-    let upload = uploads.get_mut(id).ok_or_else(|| ApiError::not_found("No such upload (it may have expired)"))?;
+    let upload = uploads
+        .get_mut(id)
+        .filter(|u| u.user_id == user_id)
+        .ok_or_else(|| ApiError::not_found("No such upload (it may have expired)"))?;
     upload.touched = Instant::now();
     Ok(f(upload))
 }
@@ -439,8 +487,12 @@ pub struct Received {
     size: u64,
 }
 
-pub async fn upload_status(State(state): State<Shared>, Path(id): Path<String>) -> Res<Received> {
-    Ok(Json(session(&state, &id, |u| Received { received: u.received, size: u.size })?))
+pub async fn upload_status(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    Path(id): Path<String>,
+) -> Res<Received> {
+    Ok(Json(session(&state, who.user_id, &id, |u| Received { received: u.received, size: u.size })?))
 }
 
 #[derive(Deserialize)]
@@ -450,12 +502,13 @@ pub struct Offset {
 
 pub async fn upload_chunk(
     State(state): State<Shared>,
+    Extension(who): Extension<Access>,
     Path(id): Path<String>,
     Query(q): Query<Offset>,
     body: Body,
 ) -> Result<Json<Received>, Response> {
-    let (file, received, size) =
-        session(&state, &id, |u| (u.file.clone(), u.received, u.size)).map_err(IntoResponse::into_response)?;
+    let (file, received, size) = session(&state, who.user_id, &id, |u| (u.file.clone(), u.received, u.size))
+        .map_err(IntoResponse::into_response)?;
     if q.offset != received {
         let wrong = Json(serde_json::json!({ "error": format!("expected offset {received}"), "received": received }));
         return Err((StatusCode::CONFLICT, wrong).into_response());
@@ -474,7 +527,7 @@ pub async fn upload_chunk(
         out.write_all(&part).await.map_err(|e| fail(e.into()))?;
     }
     out.flush().await.map_err(|e| fail(e.into()))?;
-    let received = session(&state, &id, |u| {
+    let received = session(&state, who.user_id, &id, |u| {
         u.received = received + written;
         u.received
     })
@@ -489,19 +542,36 @@ pub struct Finished {
     size: u64,
 }
 
-pub async fn finish_upload(State(state): State<Shared>, Path(id): Path<String>) -> Res<Finished> {
+pub async fn finish_upload(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    Path(id): Path<String>,
+) -> Res<Finished> {
     let upload = {
         let mut uploads = state.uploads.lock().unwrap_or_else(|e| e.into_inner());
-        let u = uploads.get(&id).ok_or_else(|| ApiError::not_found("No such upload (it may have expired)"))?;
+        let u = uploads
+            .get(&id)
+            .filter(|u| u.user_id == who.user_id)
+            .ok_or_else(|| ApiError::not_found("No such upload (it may have expired)"))?;
         if u.received != u.size {
             return Err(ApiError::conflict(format!("Only {} of {} bytes arrived", u.received, u.size)));
         }
         uploads.remove(&id).expect("just found")
     };
     let store = state.store.clone();
+    // Committing consumes the file whether it works or not, so a second name for it is kept until it has worked: the
+    // upload can then be finished again after a failure instead of being sent again. (No second name, no second try.)
+    let spare = {
+        let mut name = upload.file.clone().into_os_string();
+        name.push(".again");
+        PathBuf::from(name)
+    };
+    let kept =
+        std::fs::hard_link(&upload.file, &spare).is_ok().then(|| Upload { file: spare.clone(), ..upload.clone() });
     let result = run(&state, move |c| {
         let (root, size) = crate::platform::store::hash_file(&upload.file)?;
-        let dev = find_device(c, &upload.device)?;
+        // Checked again: the user may have lost the right while the file was on its way.
+        let dev = find_device_to_change(c, &who, &upload.device)?;
         ingest::commit_version(
             c,
             &store,
@@ -518,14 +588,32 @@ pub async fn finish_upload(State(state): State<Shared>, Path(id): Path<String>) 
         )?;
         Ok(Finished { device: upload.device, path: upload.path, size })
     })
-    .await?;
-    Ok(Json(result))
+    .await;
+    match kept {
+        // Not finished: the upload stays. It expires like any other upload that nobody touches.
+        Some(kept) if result.is_err() => {
+            state.uploads.lock().unwrap_or_else(|e| e.into_inner()).insert(id, kept);
+        }
+        Some(_) => {
+            let _ = std::fs::remove_file(&spare);
+        }
+        None => {}
+    }
+    Ok(Json(result?))
 }
 
-pub async fn abort_upload(State(state): State<Shared>, Path(id): Path<String>) -> Res<crate::web::Done> {
-    let upload = state.uploads.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
-    if let Some(u) = upload {
-        let _ = std::fs::remove_file(u.file);
+pub async fn abort_upload(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    Path(id): Path<String>,
+) -> Res<crate::web::Done> {
+    {
+        let mut uploads = state.uploads.lock().unwrap_or_else(|e| e.into_inner());
+        if uploads.get(&id).is_some_and(|u| u.user_id == who.user_id) {
+            if let Some(u) = uploads.remove(&id) {
+                let _ = std::fs::remove_file(u.file);
+            }
+        }
     }
     crate::web::done()
 }

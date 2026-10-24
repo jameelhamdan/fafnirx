@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { X } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { STATUS } from '@/lib/status'
 import { ActivityView, Empty, ErrorNote, KindBadge, PageHeader, StatusDot } from '@/components/common'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -20,13 +21,7 @@ const ALERT: Record<string, string> = {
   disk_usage: msg('Disk usage'),
   source_failed: msg('Source failed'),
   mirror_failed: msg('Mirror failed'),
-}
-
-const STATUS: Record<string, string> = {
-  ok: msg('OK'),
-  partial: msg('Partial'),
-  failed: msg('Failed'),
-  'never run': msg('Never run'),
+  device_conflict: msg('Device used by two computers'),
 }
 
 const ACTION: Record<string, string> = { add: msg('add'), update: msg('update'), delete: msg('delete'), rename: msg('rename') }
@@ -157,10 +152,10 @@ export default function Dashboard() {
               <Empty title={t('No devices yet')}>{t('Add one on the Devices page, or create a local folder on the Files page.')}</Empty>
             ) : (
               data.devices.map((d) => (
-                <div key={d.name} className="space-y-2">
+                <div key={d.folder} className="space-y-2">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
-                      <Link to={d.kind === 'device' ? `/devices/${d.name}` : `/files?device=${d.name}`} className="font-medium hover:underline">{d.name}</Link>
+                      <Link to={d.kind === 'device' ? `/devices/${encodeURIComponent(d.folder)}` : `/files?device=${encodeURIComponent(d.folder)}`} className="font-medium hover:underline">{d.folder}</Link>
                       <KindBadge kind={d.kind} />
                     </div>
                     <div className="flex items-center gap-4 text-xs text-muted-foreground">
@@ -193,8 +188,8 @@ export default function Dashboard() {
                 <p className="text-sm text-muted-foreground">{t('None configured.')}</p>
               ) : (
                 jobs.map((j) => (
-                  <div key={j.type + j.name} className="flex items-center justify-between gap-2 text-sm">
-                    <Link to={j.type === 'source' ? '/sources' : '/mirrors'} className="truncate hover:underline">{j.name}</Link>
+                  <div key={j.type + j.key} className="flex items-center justify-between gap-2 text-sm">
+                    <Link to={j.type === 'source' ? '/sources' : '/mirrors'} className="truncate hover:underline">{j.key}</Link>
                     <StatusDot status={j.enabled ? j.status : 'paused'} label={j.running ? t('Running') : j.enabled ? `${t(STATUS[j.status] ?? j.status)} · ${ago(j.last_run_at, now)}` : t('Paused')} />
                   </div>
                 ))
@@ -216,7 +211,7 @@ export default function Dashboard() {
               {data.recent.map((e) => (
                 <li key={e.id} className="flex items-center gap-3 py-2 text-sm">
                   <span className={cn('w-16 shrink-0 text-xs font-medium uppercase', e.action === 'delete' ? 'text-destructive' : e.action === 'update' ? 'text-warning' : 'text-success')}>{t(ACTION[e.action] ?? e.action)}</span>
-                  <Link to={`/files?device=${e.device}&file=${encodeURIComponent(e.path)}`} className="min-w-0 flex-1 truncate hover:underline" title={e.path}>
+                  <Link to={`/files?device=${encodeURIComponent(e.device)}&file=${encodeURIComponent(e.path)}`} className="min-w-0 flex-1 truncate hover:underline" title={e.path}>
                     <span className="text-muted-foreground">{e.device}/</span>{e.path}
                   </Link>
                   <span className="shrink-0 text-xs text-muted-foreground">{ago(e.ts, now)}</span>

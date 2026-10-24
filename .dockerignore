@@ -1,8 +1,38 @@
-target
-data
-.git
-frontend/node_modules
+# The Dockerfile only needs Cargo.toml, Cargo.lock, crates/, proto/ and frontend/ (see COPY lines); keep the rest out of
+# the build context so it is small, and so secrets and local data never reach the image or the layer cache.
+
+# Build output and dependencies (rebuilt inside the image)
+**/target
+**/node_modules
 frontend/dist
+dist
+.venv
+
+# Local data and secrets
+.env
+.env.*
+data
 pgdata
 docker-data
-.env
+stream-cache
+config
+
+# Repository and tooling
+.git
+.github
+.gitignore
+.gitattributes
+.dockerignore
+.vscode
+.idea
+**/.DS_Store
+
+# Not part of the image
+docs
+installer
+scripts
+tests
+*.md
+LICENSE
+docker-compose.yml
+Dockerfile

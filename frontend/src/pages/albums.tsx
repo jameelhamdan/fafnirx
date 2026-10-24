@@ -1,5 +1,5 @@
 import { useMutation } from '@tanstack/react-query'
-import { Images, Plus } from 'lucide-react'
+import { FolderOpen, Images, Plus } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -75,6 +75,11 @@ export default function Albums() {
                     <Thumb src={mediaUrl(a.cover, 'thumb')} className="size-full transition-transform group-hover:scale-105" fallback={<Images className="size-8 text-muted-foreground" />} />
                   ) : (
                     <div className="grid size-full place-items-center"><Images className="size-8 text-muted-foreground" /></div>
+                  )}
+                  {a.folder && (
+                    <span title={t('Shows a folder')} className="absolute top-1.5 left-1.5 grid size-6 place-items-center rounded-full bg-black/55 text-white">
+                      <FolderOpen className="size-3.5" />
+                    </span>
                   )}
                 </div>
                 <div className="p-3">

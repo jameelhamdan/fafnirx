@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { lazy, Suspense, useEffect } from 'react'
+import { lazy, Suspense, useEffect, type ReactNode } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppShell } from './components/app-shell.tsx'
 import { api, UNAUTHORIZED } from './lib/api.ts'
 import { LiveUpdates } from './lib/live.tsx'
-import type { Session } from './lib/types.ts'
+import { hasWorkspace } from './lib/session.ts'
+import type { Role, Session } from './lib/types.ts'
 import { Skeleton } from './components/ui/skeleton.tsx'
 import Login from './pages/login.tsx'
 
@@ -21,6 +22,13 @@ const Albums = lazy(() => import('./pages/albums.tsx'))
 const Album = lazy(() => import('./pages/album.tsx'))
 const MapPage = lazy(() => import('./pages/map.tsx'))
 const Trash = lazy(() => import('./pages/trash.tsx'))
+const Users = lazy(() => import('./pages/users.tsx'))
+
+/** A page for some of the roles; the others are sent to the first page. */
+function Only({ allow, role, children }: { allow: 'admin' | 'workspace'; role: Role; children: ReactNode }) {
+  const ok = allow === 'admin' ? role === 'admin' : hasWorkspace(role)
+  return ok ? children : <Navigate to="/" replace />
+}
 
 /** The login page, or the app behind it. */
 export default function App() {
@@ -29,13 +37,15 @@ export default function App() {
 
   // Any call that finds the login ended sends the user back to the login page.
   useEffect(() => {
-    const ended = () => client.setQueryData(['session'], { admin: false })
+    const ended = () => client.setQueryData<Session>(['session'], { user: null, stream: false })
     window.addEventListener(UNAUTHORIZED, ended)
     return () => window.removeEventListener(UNAUTHORIZED, ended)
   }, [client])
 
   if (session.isPending) return null
-  if (!session.data?.admin) return <Login />
+  const user = session.data?.user
+  if (!user) return <Login />
+  const role = user.role
 
   return (
     <LiveUpdates>
@@ -45,18 +55,19 @@ export default function App() {
             <Route path="/" element={<Dashboard />} />
             {/* A key per view, so that a selection or an open photo does not carry over from one to another. */}
             <Route path="/timeline" element={<Timeline key="timeline" scope="timeline" />} />
-            <Route path="/favorites" element={<Timeline key="favorites" scope="favorites" />} />
-            <Route path="/archive" element={<Timeline key="archive" scope="archive" />} />
-            <Route path="/albums" element={<Albums />} />
-            <Route path="/albums/:id" element={<Album />} />
+            <Route path="/favorites" element={<Only allow="workspace" role={role}><Timeline key="favorites" scope="favorites" /></Only>} />
+            <Route path="/archive" element={<Only allow="workspace" role={role}><Timeline key="archive" scope="archive" /></Only>} />
+            <Route path="/albums" element={<Only allow="workspace" role={role}><Albums /></Only>} />
+            <Route path="/albums/:id" element={<Only allow="workspace" role={role}><Album /></Only>} />
             <Route path="/map" element={<MapPage />} />
-            <Route path="/trash" element={<Trash />} />
+            <Route path="/trash" element={<Only allow="workspace" role={role}><Trash /></Only>} />
             <Route path="/files" element={<Files />} />
-            <Route path="/devices" element={<Devices />} />
-            <Route path="/devices/:name" element={<DeviceDetailPage />} />
-            <Route path="/sources" element={<Sources />} />
-            <Route path="/mirrors" element={<Mirrors />} />
-            <Route path="/settings" element={<Settings />} />
+            <Route path="/devices" element={<Only allow="workspace" role={role}><Devices /></Only>} />
+            <Route path="/devices/:name" element={<Only allow="workspace" role={role}><DeviceDetailPage /></Only>} />
+            <Route path="/sources" element={<Only allow="workspace" role={role}><Sources /></Only>} />
+            <Route path="/mirrors" element={<Only allow="admin" role={role}><Mirrors /></Only>} />
+            <Route path="/settings" element={<Only allow="admin" role={role}><Settings /></Only>} />
+            <Route path="/users" element={<Only allow="admin" role={role}><Users /></Only>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>

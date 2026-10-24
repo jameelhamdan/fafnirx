@@ -1,5 +1,5 @@
-//! The admin API end to end, through the real router: login, a local folder, a chunked upload, browsing,
-//! downloading (whole, ranged, zipped), history and delete.
+//! The API end to end, through the real router: login, a local folder, a chunked upload, browsing,
+//! downloading (whole, ranged, zipped), history and delete, and what each role may reach.
 
 use super::{router, AppState};
 use crate::platform::db::testing;
@@ -7,6 +7,7 @@ use crate::platform::store::Store;
 use axum::body::Body;
 use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{header, Method, Request, StatusCode};
+use axum::response::IntoResponse;
 use axum::Router;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
@@ -22,23 +23,27 @@ fn block<F: std::future::Future>(f: F) -> F::Output {
 struct Api {
     app: Router,
     db: crate::platform::db::Db,
+    #[allow(dead_code)]
     store: Arc<Store>,
-    config: Arc<crate::config::ConfigFile>,
     cookie: String,
     _dir: tempfile::TempDir,
 }
 
 impl Api {
     fn new() -> Self {
+        Self::with_stream(None)
+    }
+
+    fn with_stream(stream: Option<crate::library::stream::Backend>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(Store::open(dir.path()).unwrap());
         let db = testing::db();
-        let config = Arc::new(crate::config::ConfigFile::new(dir.path().join("fafnirx.json")));
-        let state = Arc::new(
-            AppState::new(db.clone(), store.clone(), dir.path().to_path_buf(), "secret".into(), config.clone()).unwrap(),
-        );
+        super::auth::bootstrap(&mut *db.get().unwrap(), "secret").unwrap();
+        let mut state = AppState::new(db.clone(), store.clone(), dir.path().to_path_buf()).unwrap();
+        state.stream = stream;
+        let state = Arc::new(state);
         let app = router(state.clone()).layer(MockConnectInfo("127.0.0.1:1".parse::<SocketAddr>().unwrap()));
-        Self { app, db, store, config, cookie: String::new(), _dir: dir }
+        Self { app, db, store, cookie: String::new(), _dir: dir }
     }
     /// What the minute job does: the totals shown for devices catch up with their files.
     async fn catch_up_totals(&self) {
@@ -98,32 +103,118 @@ impl Api {
 }
 
 #[test]
+fn streaming_is_for_whoever_can_see_the_file_and_only_when_a_service_is_set_up() {
+    // Not set up: nothing to offer, and nothing is passed on.
+    let mut api = Api::new();
+    block(async {
+        assert_eq!(api.get("/api/stream/1/master.m3u8").await.0, StatusCode::UNAUTHORIZED, "the login comes first");
+        api.cookie = login(&api).await;
+        assert_eq!(api.get("/api/session").await.1["stream"], false);
+        assert_eq!(api.get("/api/stream/1/master.m3u8").await.0, StatusCode::NOT_FOUND);
+    });
+
+    // A stand-in for the streaming service: answers only with the right token, and says what it was asked for.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let mut api = Api::with_stream(Some(crate::library::stream::Backend::new(&url, "stream-token")));
+    block(async {
+        let service = Router::new().route(
+            "/hls/*rest",
+            axum::routing::get(
+                |axum::extract::Path(rest): axum::extract::Path<String>,
+                 axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+                 headers: axum::http::HeaderMap| async move {
+                    if headers.get("authorization").and_then(|v| v.to_str().ok()) != Some("Bearer stream-token") {
+                        return (StatusCode::UNAUTHORIZED, "no".to_string()).into_response();
+                    }
+                    if rest.ends_with("seg9.ts") {
+                        return (StatusCode::NOT_FOUND, "no such segment".to_string()).into_response();
+                    }
+                    let body = format!("#EXTM3U {rest} p={} h={}", q["p"], q["h"]);
+                    ([(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")], body).into_response()
+                },
+            ),
+        );
+        tokio::spawn(async move {
+            axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), service).await.unwrap();
+        });
+
+        assert_eq!(api.get("/api/stream/1/master.m3u8").await.0, StatusCode::UNAUTHORIZED);
+        api.cookie = login(&api).await;
+        assert_eq!(api.get("/api/session").await.1["stream"], true);
+        api.json(Method::POST, "/api/devices", json!({"name": "videos", "kind": "local"})).await;
+        api.upload("admin/videos", "trip/clip.mkv", b"video bytes").await;
+        let id: i64 = crate::platform::db::with(&api.db, |c| {
+            Ok(c.query_one("SELECT id FROM files WHERE path = 'trip/clip.mkv'", &[])?.get(0))
+        })
+        .await
+        .unwrap();
+
+        let (status, headers, body) =
+            api.send(Method::GET, &format!("/api/stream/{id}/720p/index.m3u8"), Body::empty(), None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], "application/vnd.apple.mpegurl");
+        let text = String::from_utf8(body).unwrap();
+        assert!(
+            text.contains("720p/index.m3u8 p=admin/videos/trip/clip.mkv h="),
+            "the service is told which file and content: {text}"
+        );
+        assert!(!text.contains("stream-token"));
+
+        let (status, error) = api.get(&format!("/api/stream/{id}/720p/seg9.ts")).await;
+        assert_eq!(
+            (status, error["error"].as_str()),
+            (StatusCode::NOT_FOUND, Some("no such segment")),
+            "its answer is passed on"
+        );
+        for bad in ["../master.m3u8", "720p/seg1.mp4", "other"] {
+            assert_eq!(api.get(&format!("/api/stream/{id}/{bad}")).await.0, StatusCode::NOT_FOUND, "{bad}");
+        }
+        assert_eq!(api.get("/api/stream/99999/master.m3u8").await.0, StatusCode::NOT_FOUND, "no such file");
+
+        api.json(
+            Method::POST,
+            "/api/files/delete",
+            json!({"items": [{"device": "admin/videos", "path": "trip/clip.mkv"}]}),
+        )
+        .await;
+        assert_eq!(
+            api.get(&format!("/api/stream/{id}/master.m3u8")).await.0,
+            StatusCode::NOT_FOUND,
+            "a deleted file is not streamed"
+        );
+    });
+}
+
+#[test]
 fn login_is_required_and_wrong_passwords_are_refused() {
     let mut api = Api::new();
     block(async {
         assert_eq!(api.get("/api/dashboard").await.0, StatusCode::UNAUTHORIZED);
-        assert_eq!(api.get("/api/session").await.1["admin"], false);
-        assert_eq!(api.json(Method::POST, "/api/login", json!({"password": "nope"})).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(api.get("/api/session").await.1["user"], Value::Null);
+        assert_eq!(
+            api.json(Method::POST, "/api/login", json!({"username": "admin", "password": "nope"})).await.0,
+            StatusCode::UNAUTHORIZED
+        );
 
         let (status, headers, _) = api
             .send(
                 Method::POST,
                 "/api/login",
-                Body::from(json!({"password": "secret"}).to_string()),
+                Body::from(json!({"username": "admin", "password": "secret"}).to_string()),
                 Some("application/json"),
                 &[],
             )
             .await;
         assert_eq!(status, StatusCode::OK);
         api.cookie = headers[header::SET_COOKIE].to_str().unwrap().split(';').next().unwrap().to_string();
-        assert_eq!(api.get("/api/session").await.1["admin"], true);
+        assert_eq!(api.get("/api/session").await.1["user"]["role"], "admin");
         let (status, dash) = api.get("/api/dashboard").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(dash["totals"]["files"], 0);
 
         // A changing call without the marker header is refused even with a valid cookie.
-        let (status, _, _) = api.send(Method::POST, "/api/logout", Body::empty(), None, &[]).await;
-        assert_eq!(status, StatusCode::OK);
         let req = Request::builder()
             .method(Method::POST)
             .uri("/api/devices")
@@ -131,6 +222,18 @@ fn login_is_required_and_wrong_passwords_are_refused() {
             .body(Body::empty())
             .unwrap();
         assert_eq!(api.app.clone().oneshot(req).await.unwrap().status(), StatusCode::FORBIDDEN);
+
+        // Logging out ends the session in the database, so the cookie is no good afterwards.
+        let (status, _, _) = api.send(Method::POST, "/api/logout", Body::empty(), None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(api.get("/api/dashboard").await.0, StatusCode::UNAUTHORIZED);
+
+        // Wrong guesses are counted per user name as well as per address, and the right password is refused meanwhile.
+        for _ in 0..5 {
+            assert_eq!(login_as(&api, "bob", "wrong").await, "");
+        }
+        let blocked = api.json(Method::POST, "/api/login", json!({"username": "bob", "password": "wrong"})).await;
+        assert_eq!(blocked.0, StatusCode::TOO_MANY_REQUESTS);
     });
 }
 
@@ -176,17 +279,17 @@ fn devices_are_slugs_and_tokens_are_shown_once() {
         assert_eq!(made["device"]["name"], "laptop");
         assert!(made["token"].as_str().unwrap().len() >= 40);
         assert_eq!(api.json(Method::POST, "/api/devices", json!({"name": "laptop"})).await.0, StatusCode::CONFLICT);
-        let (_, again) = api.get("/api/devices/laptop").await;
+        let (_, again) = api.get("/api/devices/admin%2Flaptop").await;
         assert!(again["token"].is_null(), "the token is never shown again");
-        let (_, rotated) = api.json(Method::POST, "/api/devices/laptop/token", json!({})).await;
+        let (_, rotated) = api.json(Method::POST, "/api/devices/admin%2Flaptop/token", json!({})).await;
         assert_ne!(rotated["token"], made["token"]);
-        assert_eq!(api.json(Method::POST, "/api/devices/laptop/revoke", json!({})).await.0, StatusCode::OK);
-        assert_eq!(api.get("/api/devices/laptop").await.1["device"]["revoked"], true);
+        assert_eq!(api.json(Method::POST, "/api/devices/admin%2Flaptop/revoke", json!({})).await.0, StatusCode::OK);
+        assert_eq!(api.get("/api/devices/admin%2Flaptop").await.1["device"]["revoked"], true);
     });
 }
 
 #[test]
-fn what_the_admin_changes_is_written_to_the_config_file() {
+fn what_the_admin_sets_up_stays_in_the_database_and_the_file_is_not_touched() {
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
@@ -194,48 +297,42 @@ fn what_the_admin_changes_is_written_to_the_config_file() {
         assert_eq!(api.json(Method::POST, "/api/mirrors", json!({"name": "m"})).await.0, StatusCode::BAD_REQUEST);
         let mirror = json!({"name": "vault", "remote": "crypt:backups/fafnirx", "keep_runs": 5});
         assert_eq!(api.json(Method::POST, "/api/mirrors", mirror).await.0, StatusCode::OK);
-        let direct = json!({"name": "offsite", "remote_type": "S3", "options": "region=eu
-provider=AWS", "remote_path": "b/x"});
+        let direct =
+            json!({"name": "offsite", "remote_type": "S3", "options": "region=eu\nprovider=AWS", "remote_path": "b/x"});
         assert_eq!(api.json(Method::POST, "/api/mirrors", direct).await.0, StatusCode::OK);
-        let (_, made) = api.json(Method::POST, "/api/devices", json!({"name": "laptop"})).await;
         api.json(Method::PUT, "/api/settings", json!({"version_count": 9, "retention_days": 45})).await;
-        api.config.sync(&api.db).await.unwrap();
 
-        let path = api.config.path().to_path_buf();
-        let file = crate::config::Config::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        let mirrors = file.mirrors.clone().unwrap();
-        assert_eq!((mirrors[0].name.as_str(), mirrors[0].remote.as_str(), mirrors[0].keep_runs), ("offsite", "", 3));
-        assert_eq!((mirrors[0].remote_type.as_str(), mirrors[0].options["region"].clone()), ("s3", json!("eu")));
-        assert_eq!((mirrors[1].name.as_str(), mirrors[1].remote.as_str(), mirrors[1].keep_runs), ("vault", "crypt:backups/fafnirx", 5));
-        let settings = file.settings.clone().unwrap();
-        assert_eq!((settings.version_count, settings.retention_days), (Some(9), Some(45)));
-        let device = &file.devices.as_ref().unwrap()[0];
-        let token = made["token"].as_str().unwrap();
-        assert_eq!(device.token_hash.as_deref(), Some(crate::platform::db::hash_token(token).as_str()), "the file keeps the hash, never the token");
-
-        // The other way, after a restart: a mirror edited in the file shows in the web app, with the credentials hidden.
-        let mut edited = file.clone();
-        edited.mirrors.as_mut().unwrap().retain(|m| m.name != "vault");
-        edited.mirrors.as_mut().unwrap()[0].enabled = false;
-        std::fs::write(&path, serde_json::to_string(&edited).unwrap()).unwrap();
-        crate::config::ConfigFile::new(path.clone()).start(&api.db, &api.store).await.unwrap();
         let (_, mirrors) = api.get("/api/mirrors").await;
-        assert_eq!(mirrors.as_array().unwrap().len(), 1);
-        assert_eq!((mirrors[0]["name"].clone(), mirrors[0]["enabled"].clone()), (json!("offsite"), json!(false)));
-        assert_eq!(mirrors[0]["detail"]["option_keys"], json!(["provider", "region"]));
+        assert_eq!(mirrors.as_array().unwrap().len(), 2);
+        assert_eq!(mirrors[1]["detail"]["option_keys"], json!([]), "the mirror of the rclone config has no options");
+        assert_eq!(
+            mirrors[0]["detail"]["option_keys"],
+            json!(["provider", "region"]),
+            "credentials are never sent back"
+        );
+        let (_, settings) = api.get("/api/settings").await;
+        assert_eq!((settings["version_count"].clone(), settings["retention_days"].clone()), (json!(9), json!(45)));
     });
 }
 
 async fn login(api: &Api) -> String {
-    let (_, headers, _) = api
+    login_as(api, "admin", "secret").await
+}
+
+/// The session cookie of a user ("" when the login is refused).
+async fn login_as(api: &Api, username: &str, password: &str) -> String {
+    let (status, headers, _) = api
         .send(
             Method::POST,
             "/api/login",
-            Body::from(json!({"password": "secret"}).to_string()),
+            Body::from(json!({"username": username, "password": password}).to_string()),
             Some("application/json"),
             &[],
         )
         .await;
+    if status != StatusCode::OK {
+        return String::new();
+    }
     headers[header::SET_COOKIE].to_str().unwrap().split(';').next().unwrap().to_string()
 }
 
@@ -247,16 +344,16 @@ fn upload_browse_download_history_and_delete() {
         // Uploads go to local folders only.
         api.json(Method::POST, "/api/devices", json!({"name": "pc"})).await;
         let (status, _) =
-            api.json(Method::POST, "/api/uploads", json!({"device": "pc", "path": "a.txt", "size": 1})).await;
+            api.json(Method::POST, "/api/uploads", json!({"device": "admin/pc", "path": "a.txt", "size": 1})).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(
             api.json(Method::POST, "/api/devices", json!({"name": "photos", "kind": "local"})).await.0,
             StatusCode::OK
         );
 
-        api.upload("photos", "2024/a.txt", b"hello world").await;
-        api.upload("photos", "2024/b.txt", b"second").await;
-        api.upload("photos", "top.txt", b"top").await;
+        api.upload("admin/photos", "2024/a.txt", b"hello world").await;
+        api.upload("admin/photos", "2024/b.txt", b"second").await;
+        api.upload("admin/photos", "top.txt", b"top").await;
 
         let (_, before) = api.get("/api/files").await;
         assert!(
@@ -270,7 +367,7 @@ fn upload_browse_download_history_and_delete() {
             .unwrap()
             .iter()
             .any(|e| e["kind"] == "device" && e["name"] == "photos" && e["files"] == 3));
-        let (_, top) = api.get("/api/files?device=photos").await;
+        let (_, top) = api.get("/api/files?device=admin/photos").await;
         let kinds: Vec<_> = top["entries"]
             .as_array()
             .unwrap()
@@ -278,21 +375,22 @@ fn upload_browse_download_history_and_delete() {
             .map(|e| (e["kind"].as_str().unwrap(), e["name"].as_str().unwrap()))
             .collect();
         assert_eq!(kinds, [("dir", "2024"), ("file", "top.txt")]);
-        let (_, year) = api.get("/api/files?device=photos&path=2024&sort=size&order=desc").await;
+        let (_, year) = api.get("/api/files?device=admin/photos&path=2024&sort=size&order=desc").await;
         let names: Vec<_> = year["entries"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap()).collect();
         assert_eq!(names, ["a.txt", "b.txt"], "largest first");
-        let (_, found) = api.get("/api/files?device=photos&q=B.TX").await;
+        let (_, found) = api.get("/api/files?device=admin/photos&q=B.TX").await;
         assert_eq!(found["entries"][0]["path"], "2024/b.txt");
-        assert_eq!(api.get("/api/files?device=photos&sort=bogus").await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(api.get("/api/files?device=admin/photos&sort=bogus").await.0, StatusCode::BAD_REQUEST);
 
-        let (status, headers, body) =
-            api.send(Method::GET, "/api/files/download?device=photos&path=2024/a.txt", Body::empty(), None, &[]).await;
+        let (status, headers, body) = api
+            .send(Method::GET, "/api/files/download?device=admin/photos&path=2024/a.txt", Body::empty(), None, &[])
+            .await;
         assert_eq!((status, body.as_slice()), (StatusCode::OK, &b"hello world"[..]));
         assert!(headers[header::CONTENT_DISPOSITION].to_str().unwrap().starts_with("attachment"));
         let (status, headers, body) = api
             .send(
                 Method::GET,
-                "/api/files/download?device=photos&path=2024/a.txt",
+                "/api/files/download?device=admin/photos&path=2024/a.txt",
                 Body::empty(),
                 None,
                 &[("range", "bytes=6-")],
@@ -301,7 +399,7 @@ fn upload_browse_download_history_and_delete() {
         assert_eq!((status, body.as_slice()), (StatusCode::PARTIAL_CONTENT, &b"world"[..]));
         assert_eq!(headers[header::CONTENT_RANGE], "bytes 6-10/11");
 
-        let form = format!("items={}", urlencode(&json!([{"device": "photos", "path": "2024"}]).to_string()));
+        let form = format!("items={}", urlencode(&json!([{"device": "admin/photos", "path": "2024"}]).to_string()));
         let (status, _, zipped) = api
             .send(Method::POST, "/api/files/zip", Body::from(form), Some("application/x-www-form-urlencoded"), &[])
             .await;
@@ -315,8 +413,8 @@ fn upload_browse_download_history_and_delete() {
         assert_eq!(text, "second");
 
         // A second version, then the history and a restore.
-        api.upload("photos", "2024/a.txt", b"hello again").await;
-        let (_, info) = api.get("/api/files/info?device=photos&path=2024/a.txt").await;
+        api.upload("admin/photos", "2024/a.txt", b"hello again").await;
+        let (_, info) = api.get("/api/files/info?device=admin/photos&path=2024/a.txt").await;
         let versions = info["versions"].as_array().unwrap();
         assert_eq!(versions.len(), 2);
         assert!(versions.iter().all(|v| v["available"] == true));
@@ -324,7 +422,7 @@ fn upload_browse_download_history_and_delete() {
         let (_, _, body) = api
             .send(
                 Method::GET,
-                &format!("/api/files/download?device=photos&path=2024/a.txt&version={old}"),
+                &format!("/api/files/download?device=admin/photos&path=2024/a.txt&version={old}"),
                 Body::empty(),
                 None,
                 &[],
@@ -335,26 +433,29 @@ fn upload_browse_download_history_and_delete() {
             api.json(
                 Method::POST,
                 "/api/files/restore",
-                json!({"device": "photos", "path": "2024/a.txt", "version": old})
+                json!({"device": "admin/photos", "path": "2024/a.txt", "version": old})
             )
             .await
             .0,
             StatusCode::OK
         );
-        let (_, _, body) =
-            api.send(Method::GET, "/api/files/download?device=photos&path=2024/a.txt", Body::empty(), None, &[]).await;
+        let (_, _, body) = api
+            .send(Method::GET, "/api/files/download?device=admin/photos&path=2024/a.txt", Body::empty(), None, &[])
+            .await;
         assert_eq!(body, b"hello world", "restored as the newest version");
 
         // Delete a folder: its files leave the listing but stay downloadable until retention removes them.
-        let (_, removed) =
-            api.json(Method::POST, "/api/files/delete", json!({"items": [{"device": "photos", "path": "2024"}]})).await;
+        let (_, removed) = api
+            .json(Method::POST, "/api/files/delete", json!({"items": [{"device": "admin/photos", "path": "2024"}]}))
+            .await;
         assert_eq!(removed["deleted"], 2);
-        let (_, after) = api.get("/api/files?device=photos").await;
+        let (_, after) = api.get("/api/files?device=admin/photos").await;
         assert_eq!(after["entries"].as_array().unwrap().len(), 1);
-        let (_, with_deleted) = api.get("/api/files?device=photos&deleted=1").await;
+        let (_, with_deleted) = api.get("/api/files?device=admin/photos&deleted=1").await;
         assert_eq!(with_deleted["entries"].as_array().unwrap().len(), 2);
-        let (status, _, body) =
-            api.send(Method::GET, "/api/files/download?device=photos&path=2024/b.txt", Body::empty(), None, &[]).await;
+        let (status, _, body) = api
+            .send(Method::GET, "/api/files/download?device=admin/photos&path=2024/b.txt", Body::empty(), None, &[])
+            .await;
         assert_eq!((status, body.as_slice()), (StatusCode::OK, &b"second"[..]));
     });
 }
@@ -366,7 +467,7 @@ fn an_upload_resumes_where_it_stopped_and_rejects_gaps() {
         api.cookie = login(&api).await;
         api.json(Method::POST, "/api/devices", json!({"name": "up", "kind": "local"})).await;
         let (_, started) =
-            api.json(Method::POST, "/api/uploads", json!({"device": "up", "path": "f.bin", "size": 10})).await;
+            api.json(Method::POST, "/api/uploads", json!({"device": "admin/up", "path": "f.bin", "size": 10})).await;
         let id = started["id"].as_str().unwrap();
         let put = |offset: u64, data: &'static [u8]| {
             api.send(Method::PUT, format!("/api/uploads/{id}?offset={offset}").leak(), Body::from(data), None, &[])
@@ -387,6 +488,26 @@ fn an_upload_resumes_where_it_stopped_and_rejects_gaps() {
         );
         assert_eq!(put(5, b"56789").await.0, StatusCode::OK);
         assert_eq!(api.json(Method::POST, &format!("/api/uploads/{id}/finish"), json!({})).await.0, StatusCode::OK);
+    });
+}
+
+#[test]
+fn an_upload_that_could_not_be_finished_can_be_finished_again() {
+    let mut api = Api::new();
+    block(async {
+        api.cookie = login(&api).await;
+        api.json(Method::POST, "/api/devices", json!({"name": "up", "kind": "local"})).await;
+        assert_eq!(try_upload(&api, "admin/up", "a", b"one").await, StatusCode::OK);
+        // `a` is a file now, so nothing can be placed below it.
+        let (_, started) =
+            api.json(Method::POST, "/api/uploads", json!({"device": "admin/up", "path": "a/b.txt", "size": 3})).await;
+        let id = started["id"].as_str().unwrap();
+        api.send(Method::PUT, &format!("/api/uploads/{id}?offset=0"), Body::from("two"), None, &[]).await;
+        let first = api.json(Method::POST, &format!("/api/uploads/{id}/finish"), json!({})).await;
+        assert_ne!(first.0, StatusCode::OK, "{}", first.1);
+        let again = api.json(Method::POST, &format!("/api/uploads/{id}/finish"), json!({})).await;
+        assert_eq!(again.0, first.0, "the upload is still there to be finished: {}", again.1);
+        assert_eq!(api.get(&format!("/api/uploads/{id}")).await.1["received"], 3);
     });
 }
 
@@ -426,9 +547,9 @@ fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
     block(async {
         api.cookie = login(&api).await;
         api.json(Method::POST, "/api/devices", json!({"name": "photos", "kind": "local"})).await;
-        api.upload("photos", "trip/a.png", &png(8, 4, [200, 10, 10])).await;
-        api.upload("photos", "b.png", &png(4, 4, [0, 200, 0])).await;
-        api.upload("photos", "notes.txt", b"not a photo").await;
+        api.upload("admin/photos", "trip/a.png", &png(8, 4, [200, 10, 10])).await;
+        api.upload("admin/photos", "b.png", &png(4, 4, [0, 200, 0])).await;
+        api.upload("admin/photos", "notes.txt", b"not a photo").await;
 
         // Only photos and videos are in the library; with no camera date, the file's own date is used.
         let (_, buckets) = api.get("/api/timeline/buckets").await;
@@ -528,8 +649,12 @@ fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
         assert_eq!(bogus.0, StatusCode::NOT_FOUND);
 
         // Deleting moves it to the trash (its picture still works there); restoring brings it back with its state.
-        api.json(Method::POST, "/api/files/delete", json!({"items": [{"device": "photos", "path": "trip/a.png"}]}))
-            .await;
+        api.json(
+            Method::POST,
+            "/api/files/delete",
+            json!({"items": [{"device": "admin/photos", "path": "trip/a.png"}]}),
+        )
+        .await;
         assert_eq!(api.get("/api/timeline/buckets").await.1["total"], 1);
         let (_, trash) = api.get("/api/trash").await;
         assert_eq!(trash["total"], 1);
@@ -546,7 +671,7 @@ fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
             .json(
                 Method::POST,
                 "/api/files/restore",
-                json!({"device": "photos", "path": "trip/a.png", "version": version}),
+                json!({"device": "admin/photos", "path": "trip/a.png", "version": version}),
             )
             .await;
         assert_eq!(status, StatusCode::OK);
@@ -561,14 +686,75 @@ fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
 }
 
 #[test]
+fn a_folder_can_be_an_album_and_files_are_added_from_the_file_browser() {
+    let mut api = Api::new();
+    block(async {
+        api.cookie = login(&api).await;
+        api.json(Method::POST, "/api/devices", json!({"name": "tv", "kind": "local"})).await;
+        for (path, shade) in [("Show/S1/Episode 10.png", 1), ("Show/S1/Episode 2.png", 2), ("Other/x.png", 3)] {
+            api.upload("admin/tv", path, &png(4, 4, [shade, shade, shade])).await;
+        }
+        let folder = json!({"device": "admin/tv", "path": "Show"});
+
+        // The folder is the album: its name is the folder's, and what is below it is in it, in the order of the names.
+        let (status, album) = api.json(Method::POST, "/api/albums", json!({"name": "", "folder": folder})).await;
+        assert_eq!(status, StatusCode::OK, "{album}");
+        let id = album["id"].as_i64().unwrap();
+        assert_eq!(
+            (album["name"].clone(), album["count"].clone(), album["folder"].clone()),
+            (json!("Show"), json!(2), folder.clone())
+        );
+        let names = |detail: &Value| -> Vec<String> {
+            detail["assets"].as_array().unwrap().iter().map(|a| a["path"].as_str().unwrap().to_string()).collect()
+        };
+        let (_, detail) = api.get(&format!("/api/albums/{id}")).await;
+        assert_eq!(
+            names(&detail),
+            ["Show/S1/Episode 2.png", "Show/S1/Episode 10.png"],
+            "Episode 2 comes before Episode 10"
+        );
+
+        // Asking again gives the same album, and a new file in the folder is in it without doing anything.
+        let (_, again) = api.json(Method::POST, "/api/albums", json!({"name": "", "folder": folder})).await;
+        assert_eq!(again["id"].as_i64(), Some(id));
+        api.upload("admin/tv", "Show/S1/Episode 3.png", &png(4, 4, [9, 9, 9])).await;
+        let (_, detail) = api.get(&format!("/api/albums/{id}")).await;
+        assert_eq!(
+            names(&detail),
+            ["Show/S1/Episode 2.png", "Show/S1/Episode 3.png", "Show/S1/Episode 10.png"],
+            "a file that comes later is in the album"
+        );
+        assert_eq!(api.get("/api/albums").await.1[0]["count"], 3);
+
+        // A folder that is not there for this user cannot be an album.
+        let nobody = json!({"device": "nobody/none", "path": ""});
+        assert_eq!(
+            api.json(Method::POST, "/api/albums", json!({"name": "x", "folder": nobody})).await.0,
+            StatusCode::NOT_FOUND
+        );
+
+        // From the file browser: files and folders by where they are, without ids.
+        let (_, trip) = api.json(Method::POST, "/api/albums", json!({"name": "Trip"})).await;
+        let trip_id = trip["id"].as_i64().unwrap();
+        let items =
+            json!({"items": [{"device": "admin/tv", "path": "Other/x.png"}, {"device": "admin/tv", "path": "Show"}]});
+        let (_, added) = api.json(Method::POST, &format!("/api/albums/{trip_id}/files"), items).await;
+        assert_eq!(added["count"], 4, "the file, and the three below the folder");
+        let (_, detail) = api.get(&format!("/api/albums/{trip_id}")).await;
+        assert_eq!(detail["album"]["count"], 4);
+        assert!(detail["album"]["folder"].is_null());
+    });
+}
+
+#[test]
 fn albums_collect_files_and_leave_the_files_alone() {
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
         api.json(Method::POST, "/api/devices", json!({"name": "photos", "kind": "local"})).await;
-        api.upload("photos", "a.png", &png(8, 4, [1, 1, 1])).await;
-        api.upload("photos", "b.png", &png(4, 4, [2, 2, 2])).await;
-        api.upload("photos", "c.png", &png(2, 2, [3, 3, 3])).await;
+        api.upload("admin/photos", "a.png", &png(8, 4, [1, 1, 1])).await;
+        api.upload("admin/photos", "b.png", &png(4, 4, [2, 2, 2])).await;
+        api.upload("admin/photos", "c.png", &png(2, 2, [3, 3, 3])).await;
         let (a, b, c) = (photo_id(&api, "a.png").await, photo_id(&api, "b.png").await, photo_id(&api, "c.png").await);
 
         assert_eq!(api.json(Method::POST, "/api/albums", json!({"name": "  "})).await.0, StatusCode::BAD_REQUEST);
@@ -605,11 +791,16 @@ fn albums_collect_files_and_leave_the_files_alone() {
         assert_eq!(after[0]["cover"], a, "the cover that left is replaced by the newest file");
 
         // Deleting a file takes it out of the album's count; deleting the album leaves the photos.
-        api.json(Method::POST, "/api/files/delete", json!({"items": [{"device": "photos", "path": "a.png"}]})).await;
+        api.json(Method::POST, "/api/files/delete", json!({"items": [{"device": "admin/photos", "path": "a.png"}]}))
+            .await;
         assert_eq!(api.get("/api/albums").await.1[0]["count"], 0);
         let version = api.get("/api/trash").await.1["entries"][0]["version"].clone();
         let restored = api
-            .json(Method::POST, "/api/files/restore", json!({"device": "photos", "path": "a.png", "version": version}))
+            .json(
+                Method::POST,
+                "/api/files/restore",
+                json!({"device": "admin/photos", "path": "a.png", "version": version}),
+            )
             .await;
         assert_eq!(restored.0, StatusCode::OK);
         assert_eq!(api.get("/api/albums").await.1[0]["count"], 1, "and it is back in the album when restored");
@@ -619,5 +810,414 @@ fn albums_collect_files_and_leave_the_files_alone() {
         );
         assert_eq!(api.get(&format!("/api/albums/{id}")).await.0, StatusCode::NOT_FOUND);
         assert_eq!(api.get("/api/timeline/buckets").await.1["total"], 3);
+    });
+}
+
+/// Makes a user as the administrator and returns their session cookie. The API is left logged in as the administrator.
+async fn add_user(api: &mut Api, name: &str, role: &str) -> String {
+    api.cookie = login(api).await;
+    let made =
+        api.json(Method::POST, "/api/users", json!({"name": name, "role": role, "password": "password-1"})).await;
+    assert_eq!(made.0, StatusCode::OK, "{}", made.1);
+    let cookie = login_as(api, name, "password-1").await;
+    assert!(!cookie.is_empty(), "{name} can log in");
+    cookie
+}
+
+/// Uploads a file to a device as whoever is logged in; the status of the start and the finish.
+async fn try_upload(api: &Api, device: &str, path: &str, data: &[u8]) -> StatusCode {
+    let (status, started) =
+        api.json(Method::POST, "/api/uploads", json!({"device": device, "path": path, "size": data.len()})).await;
+    if status != StatusCode::OK {
+        return status;
+    }
+    let id = started["id"].as_str().unwrap();
+    api.send(Method::PUT, &format!("/api/uploads/{id}?offset=0"), Body::from(data.to_vec()), None, &[]).await;
+    api.json(Method::POST, &format!("/api/uploads/{id}/finish"), json!({})).await.0
+}
+
+#[test]
+fn users_have_roles_and_the_last_administrator_stays() {
+    let mut api = Api::new();
+    block(async {
+        let bob = add_user(&mut api, "bob", "normal").await;
+        let admin = api.cookie.clone();
+
+        // Names are slugs, passwords have a length, and a user exists once.
+        let weak = json!({"name": "dave", "role": "normal", "password": "short"});
+        assert_eq!(api.json(Method::POST, "/api/users", weak).await.0, StatusCode::BAD_REQUEST);
+        let bad_name = json!({"name": "Dave Smith", "role": "normal", "password": "password-1"});
+        assert_eq!(api.json(Method::POST, "/api/users", bad_name).await.0, StatusCode::BAD_REQUEST);
+        let no_role = json!({"name": "dave", "role": "boss", "password": "password-1"});
+        assert_eq!(api.json(Method::POST, "/api/users", no_role).await.0, StatusCode::BAD_REQUEST);
+        let twice = json!({"name": "bob", "role": "normal", "password": "password-1"});
+        assert_eq!(api.json(Method::POST, "/api/users", twice).await.0, StatusCode::CONFLICT);
+        assert!(api._dir.path().join("files/bob").is_dir(), "the folder of the user exists from the start");
+
+        // Only an administrator manages users, settings and mirrors.
+        api.cookie = bob.clone();
+        for uri in ["/api/users", "/api/settings", "/api/mirrors"] {
+            assert_eq!(api.get(uri).await.0, StatusCode::FORBIDDEN, "{uri}");
+        }
+        // Only an administrator asks for a rescan of the file store.
+        assert_eq!(api.json(Method::POST, "/api/files/rescan", json!({})).await.0, StatusCode::FORBIDDEN);
+        // Sources are per user: bob has his own, which nobody but an administrator sees.
+        let source = |name: &str| {
+            json!({"name": name, "folders": "abcdefghij0123456789", "service_account": json!({"client_email": "a@b.iam", "private_key": "-----BEGIN PRIVATE KEY-----
+x
+-----END PRIVATE KEY-----
+"}).to_string()})
+        };
+        assert_eq!(api.json(Method::POST, "/api/sources", source("bobs")).await.0, StatusCode::OK);
+        assert_eq!(api.get("/api/sources").await.1.as_array().unwrap().len(), 1);
+        api.cookie = admin.clone();
+        assert_eq!(api.json(Method::POST, "/api/sources", source("roots")).await.0, StatusCode::OK);
+        assert_eq!(api.get("/api/sources").await.1.as_array().unwrap().len(), 2, "an administrator sees all");
+        api.cookie = bob.clone();
+        assert_eq!(api.get("/api/sources").await.1.as_array().unwrap().len(), 1);
+        assert_eq!(api.json(Method::POST, "/api/sources/admin/roots/toggle", json!({})).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(api.json(Method::POST, "/api/sources/bob/bobs/toggle", json!({})).await.0, StatusCode::OK);
+
+        // A source name is only unique per user: the administrator can use bob's name, bob cannot use it twice.
+        assert_eq!(api.json(Method::POST, "/api/sources", source("bobs")).await.0, StatusCode::CONFLICT);
+        api.cookie = admin.clone();
+        assert_eq!(api.json(Method::POST, "/api/files/rescan", json!({})).await.0, StatusCode::OK);
+        assert_eq!(api.json(Method::POST, "/api/sources", source("bobs")).await.0, StatusCode::OK);
+        let (_, all) = api.get("/api/sources").await;
+        let keys: Vec<&str> = all.as_array().unwrap().iter().map(|s| s["key"].as_str().unwrap()).collect();
+        assert_eq!(keys, ["admin/bobs", "admin/roots", "bob/bobs"], "named by the user and the name");
+        // The administrator can reach bob's source, and bob's route does not reach the administrator's.
+        assert_eq!(api.json(Method::POST, "/api/sources/bob/bobs/toggle", json!({})).await.0, StatusCode::OK);
+        api.cookie = bob.clone();
+        assert_eq!(api.json(Method::POST, "/api/sources/admin/bobs/toggle", json!({})).await.0, StatusCode::NOT_FOUND);
+
+        // What goes wrong with a source is for its owner (and the administrators), not for everyone.
+        crate::platform::db::with(&api.db, |c| {
+            crate::platform::db::upsert_alert(c, "source_failed", "bob/source-bobs", "Drive said no")?;
+            crate::platform::db::upsert_alert(c, "source_failed", "admin/source-roots", "Drive said no")?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let (_, board) = api.get("/api/dashboard").await;
+        let keys: Vec<&str> = board["alerts"].as_array().unwrap().iter().map(|a| a["key"].as_str().unwrap()).collect();
+        assert_eq!(keys, ["bob/source-bobs"], "bob is told about his source only");
+        api.cookie = admin.clone();
+        assert_eq!(api.get("/api/dashboard").await.1["alerts"].as_array().unwrap().len(), 2);
+        api.cookie = bob.clone();
+        let (_, session) = api.get("/api/session").await;
+        assert_eq!((session["user"]["name"].clone(), session["user"]["role"].clone()), (json!("bob"), json!("normal")));
+
+        // The last administrator can be neither demoted nor disabled; with another one, either is fine.
+        api.cookie = admin.clone();
+        assert_eq!(
+            api.json(Method::PATCH, "/api/users/admin", json!({"role": "normal"})).await.0,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            api.json(Method::PATCH, "/api/users/admin", json!({"disabled": true})).await.0,
+            StatusCode::CONFLICT
+        );
+        let second = add_user(&mut api, "root2", "admin").await;
+        api.cookie = admin.clone();
+        assert_eq!(api.json(Method::PATCH, "/api/users/root2", json!({"disabled": true})).await.0, StatusCode::OK);
+        api.cookie = second;
+        assert_eq!(api.get("/api/session").await.1["user"], Value::Null, "disabling ends the sessions at once");
+        assert!(login_as(&api, "root2", "password-1").await.is_empty(), "and the user cannot log in");
+        api.cookie = admin.clone();
+        assert_eq!(api.json(Method::PATCH, "/api/users/root2", json!({"disabled": false})).await.0, StatusCode::OK);
+        assert!(!login_as(&api, "root2", "password-1").await.is_empty());
+        assert_eq!(
+            api.json(Method::PATCH, "/api/users/nobody", json!({"role": "normal"})).await.0,
+            StatusCode::NOT_FOUND
+        );
+
+        // Changing the role ends the sessions too, so that the new rights are the ones in force.
+        assert_eq!(api.json(Method::PATCH, "/api/users/admin", json!({"role": "normal"})).await.0, StatusCode::OK);
+        assert_eq!(api.get("/api/users").await.0, StatusCode::UNAUTHORIZED);
+
+        // A user changing their own password keeps the session they do it in; the others end.
+        let other = login_as(&api, "bob", "password-1").await;
+        api.cookie = bob;
+        let wrong = json!({"current": "not it", "new": "password-2"});
+        assert_eq!(api.json(Method::POST, "/api/me/password", wrong).await.0, StatusCode::BAD_REQUEST);
+        let changed = json!({"current": "password-1", "new": "password-2"});
+        assert_eq!(api.json(Method::POST, "/api/me/password", changed).await.0, StatusCode::OK);
+        assert_eq!(api.get("/api/session").await.1["user"]["name"], "bob", "this session stays");
+        api.cookie = other;
+        assert_eq!(api.get("/api/session").await.1["user"], Value::Null, "the other one ends");
+        assert!(login_as(&api, "bob", "password-1").await.is_empty());
+        assert!(!login_as(&api, "bob", "password-2").await.is_empty());
+    });
+}
+
+#[test]
+fn names_in_any_script_are_listed_downloaded_and_found() {
+    let mut api = Api::new();
+    block(async {
+        api.cookie = login(&api).await;
+        assert_eq!(
+            api.json(Method::POST, "/api/devices", json!({"name": "d", "kind": "local"})).await.0,
+            StatusCode::OK
+        );
+        // A folder in Arabic, a name with an accent written decomposed (as macOS does) and one in Japanese, at depth.
+        let files = ["اناشيد/ألبوم الطفل/ملف.txt", "cafe\u{301}/menu.txt", "日本語/写真/猫.txt"];
+        for path in files {
+            assert_eq!(try_upload(&api, "admin/d", path, path.as_bytes()).await, StatusCode::OK, "{path}");
+        }
+        let names = |listing: &Value| -> Vec<String> {
+            listing["entries"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap().to_string()).collect()
+        };
+        let (_, top) = api.get("/api/files?device=admin%2Fd").await;
+        let mut top = names(&top);
+        top.sort();
+        assert_eq!(top, ["caf\u{e9}", "اناشيد", "日本語"], "names are whole, and stored composed");
+        let (_, inner) = api.get("/api/files?device=admin%2Fd&path=%D8%A7%D9%86%D8%A7%D8%B4%D9%8A%D8%AF").await;
+        assert_eq!(names(&inner), ["ألبوم الطفل"]);
+        let (_, deep) = api
+            .get("/api/files?device=admin%2Fd&path=%D8%A7%D9%86%D8%A7%D8%B4%D9%8A%D8%AF%2F%D8%A3%D9%84%D8%A8%D9%88%D9%85%20%D8%A7%D9%84%D8%B7%D9%81%D9%84")
+            .await;
+        assert_eq!(names(&deep), ["ملف.txt"]);
+        let uri = "/api/files/download?device=admin%2Fd&path=%E6%97%A5%E6%9C%AC%E8%AA%9E%2F%E5%86%99%E7%9C%9F%2F%E7%8C%AB.txt";
+        let (status, headers, body) = api.send(Method::GET, uri, Body::empty(), None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "日本語/写真/猫.txt".as_bytes());
+        let disposition = headers.get("content-disposition").unwrap().to_str().unwrap();
+        assert!(disposition.contains("filename*=UTF-8''%E7%8C%AB.txt"), "{disposition}");
+        let items = json!([{"device": "admin/d", "path": "اناشيد"}]).to_string();
+        let form = format!("items={}&name={}", urlencode(&items), urlencode("اناشيد"));
+        let (status, headers, zipped) = api
+            .send(Method::POST, "/api/files/zip", Body::from(form), Some("application/x-www-form-urlencoded"), &[])
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        let disposition = headers.get("content-disposition").unwrap().to_str().unwrap();
+        assert!(disposition.contains("filename*=UTF-8''%D8%A7%D9%86%D8%A7%D8%B4%D9%8A%D8%AF.zip"), "{disposition}");
+        let archive = zip::ZipArchive::new(std::io::Cursor::new(zipped)).unwrap();
+        assert_eq!(archive.file_names().collect::<Vec<_>>(), ["اناشيد/ألبوم الطفل/ملف.txt"]);
+    });
+}
+
+#[test]
+fn every_user_has_a_workspace_and_the_master_files_belong_to_everyone() {
+    let mut api = Api::new();
+    block(async {
+        let bob = add_user(&mut api, "bob", "normal").await;
+        let alice = add_user(&mut api, "alice", "normal").await;
+        let carol = add_user(&mut api, "carol", "readonly").await;
+        let admin = login(&api).await;
+
+        // The administrator puts a master file in place; nobody owns it.
+        api.cookie = admin.clone();
+        assert_eq!(try_upload(&api, "_master", "docs/readme.txt", b"for everyone").await, StatusCode::OK);
+        assert!(api._dir.path().join("files/docs/readme.txt").is_file(), "master files are at the root of files/");
+        let ghost = json!({"name": "a1", "user": "ghost"});
+        assert_eq!(api.json(Method::POST, "/api/devices", ghost).await.0, StatusCode::BAD_REQUEST);
+        let for_carol = json!({"name": "a1", "user": "carol"});
+        assert_eq!(
+            api.json(Method::POST, "/api/devices", for_carol).await.0,
+            StatusCode::BAD_REQUEST,
+            "a user who can only read has no devices"
+        );
+
+        // The same device name for two users is two devices, each in the folder of its user.
+        for (who, cookie) in [("bob", &bob), ("alice", &alice)] {
+            api.cookie = cookie.clone();
+            let (status, made) =
+                api.json(Method::POST, "/api/devices", json!({"name": "phone", "kind": "local"})).await;
+            assert_eq!(status, StatusCode::OK, "{made}");
+            assert_eq!(made["device"]["folder"], format!("{who}/phone"));
+            assert!(api._dir.path().join(format!("files/{who}/phone")).is_dir());
+            assert_eq!(api.json(Method::POST, "/api/devices", json!({"name": "phone"})).await.0, StatusCode::CONFLICT);
+            assert_eq!(try_upload(&api, &format!("{who}/phone"), "me.txt", who.as_bytes()).await, StatusCode::OK);
+        }
+
+        // Each sees their own devices and the master files, and nothing of the other's.
+        api.cookie = bob.clone();
+        let (_, devices) = api.get("/api/devices").await;
+        assert_eq!(devices.as_array().unwrap().len(), 1);
+        assert_eq!(devices[0]["folder"], "bob/phone");
+        let (_, top) = api.get("/api/files").await;
+        let names: Vec<_> = top["entries"].as_array().unwrap().iter().map(|e| e["device"].as_str().unwrap()).collect();
+        assert_eq!(names, ["_master", "bob/phone"]);
+        // What the web app may change is told with each entry: the master files and his local folder, both his to write.
+        let kinds: Vec<_> = top["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| (e["device_kind"].as_str().unwrap(), e["writable"].as_bool().unwrap()))
+            .collect();
+        assert_eq!(kinds, [("master", true), ("local", true)]);
+        let (_, inside) = api.get("/api/files?device=bob/phone").await;
+        assert_eq!((inside["device_kind"].clone(), inside["writable"].clone()), (json!("local"), json!(true)));
+        assert_eq!(api.get("/api/files?device=alice/phone").await.0, StatusCode::NOT_FOUND);
+        assert_eq!(api.get("/api/files/info?device=alice/phone&path=me.txt").await.0, StatusCode::NOT_FOUND);
+        let (status, _, _) =
+            api.send(Method::GET, "/api/files/download?device=alice/phone&path=me.txt", Body::empty(), None, &[]).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(api.get("/api/devices/alice%2Fphone").await.0, StatusCode::NOT_FOUND);
+        let revoke = api.json(Method::POST, "/api/devices/alice%2Fphone/revoke", json!({})).await;
+        assert_eq!(revoke.0, StatusCode::NOT_FOUND);
+        assert_eq!(
+            try_upload(&api, "alice/phone", "x.txt", b"x").await,
+            StatusCode::NOT_FOUND,
+            "no writing in another workspace"
+        );
+        let delete = json!({"items": [{"device": "alice/phone", "path": "me.txt"}]});
+        assert_eq!(api.json(Method::POST, "/api/files/delete", delete).await.0, StatusCode::NOT_FOUND);
+        let (_, body) = api.get("/api/files?device=_master&path=docs").await;
+        assert_eq!(body["entries"][0]["name"], "readme.txt");
+        // A normal user writes to the master files too, but not under the name of a user.
+        assert_eq!(try_upload(&api, "_master", "docs/from-bob.txt", b"hi").await, StatusCode::OK);
+        assert_eq!(
+            try_upload(&api, "_master", "alice/sneaky.txt", b"no").await,
+            StatusCode::CONFLICT,
+            "alice is a user's folder"
+        );
+        let (_, dash) = api.get("/api/dashboard").await;
+        assert_eq!(dash["devices"].as_array().unwrap().len(), 1);
+        assert_eq!(dash["mirrors"], json!([]));
+
+        // Read-only: sees the master files, has nothing of its own and changes nothing.
+        api.cookie = carol.clone();
+        let (_, top) = api.get("/api/files").await;
+        let names: Vec<_> = top["entries"].as_array().unwrap().iter().map(|e| e["device"].as_str().unwrap()).collect();
+        assert_eq!(names, ["_master"]);
+        assert_eq!(api.get("/api/devices").await.1, json!([]));
+        assert_eq!(api.get("/api/sources").await.0, StatusCode::FORBIDDEN, "no workspace, no sources");
+        let (status, _, body) = api
+            .send(Method::GET, "/api/files/download?device=_master&path=docs/readme.txt", Body::empty(), None, &[])
+            .await;
+        assert_eq!((status, body.as_slice()), (StatusCode::OK, &b"for everyone"[..]));
+        assert_eq!(api.get("/api/files?device=bob/phone").await.0, StatusCode::NOT_FOUND);
+        assert_eq!(try_upload(&api, "_master", "docs/x.txt", b"x").await, StatusCode::FORBIDDEN);
+        let own = json!({"name": "mine", "kind": "local"});
+        assert_eq!(api.json(Method::POST, "/api/devices", own).await.0, StatusCode::FORBIDDEN);
+        let delete = json!({"items": [{"device": "_master", "path": "docs/readme.txt"}]});
+        assert_eq!(api.json(Method::POST, "/api/files/delete", delete).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(api.json(Method::POST, "/api/albums", json!({"name": "mine"})).await.0, StatusCode::FORBIDDEN);
+
+        // The administrator reaches everything.
+        api.cookie = admin;
+        let (_, devices) = api.get("/api/devices").await;
+        let folders: Vec<_> = devices.as_array().unwrap().iter().map(|d| d["folder"].as_str().unwrap()).collect();
+        assert_eq!(folders, ["alice/phone", "bob/phone"]);
+        let (status, _, body) =
+            api.send(Method::GET, "/api/files/download?device=bob/phone&path=me.txt", Body::empty(), None, &[]).await;
+        assert_eq!((status, body.as_slice()), (StatusCode::OK, &b"bob"[..]));
+        assert_eq!(try_upload(&api, "alice/phone", "from-admin.txt", b"x").await, StatusCode::OK);
+        let (status, made) = api.json(Method::POST, "/api/devices", json!({"name": "tablet", "user": "bob"})).await;
+        assert_eq!((status, made["device"]["folder"].clone()), (StatusCode::OK, json!("bob/tablet")));
+
+        // A user's name cannot be one the master files use.
+        let docs = json!({"name": "docs", "role": "normal", "password": "password-1"});
+        assert_eq!(
+            api.json(Method::POST, "/api/users", docs).await.0,
+            StatusCode::CONFLICT,
+            "the master has a docs folder"
+        );
+    });
+}
+
+#[test]
+fn what_people_say_about_a_master_file_is_their_own() {
+    let mut api = Api::new();
+    block(async {
+        let bob = add_user(&mut api, "bob", "normal").await;
+        let alice = add_user(&mut api, "alice", "normal").await;
+        let carol = add_user(&mut api, "carol", "readonly").await;
+        api.cookie = login(&api).await;
+        assert_eq!(try_upload(&api, "_master", "shared/pic.png", &png(8, 4, [9, 9, 9])).await, StatusCode::OK);
+
+        api.cookie = bob.clone();
+        let id = photo_id(&api, "pic.png").await;
+        let edit = json!({"favorite": true, "description": "bob's view", "tags": ["Holiday"]});
+        assert_eq!(api.json(Method::PATCH, &format!("/api/library/{id}"), edit).await.0, StatusCode::OK);
+        let (status, album) = api.json(Method::POST, "/api/albums", json!({"name": "Bob's", "ids": [id]})).await;
+        assert_eq!((status, album["count"].clone()), (StatusCode::OK, json!(1)));
+        let album_id = album["id"].as_i64().unwrap();
+        assert_eq!(api.get("/api/timeline/buckets?scope=favorites").await.1["total"], 1);
+
+        // Alice sees the same photo with nothing said about it, and none of Bob's albums or tags.
+        api.cookie = alice.clone();
+        assert_eq!(photo_id(&api, "pic.png").await, id, "one file");
+        let detail = api.get(&format!("/api/library/{id}")).await.1;
+        let said = (detail["favorite"].clone(), detail["description"].clone(), detail["tags"].clone());
+        assert_eq!(said, (json!(false), json!(""), json!([])));
+        assert_eq!(api.get("/api/timeline/buckets?scope=favorites").await.1["total"], 0);
+        assert_eq!(api.get("/api/albums").await.1, json!([]));
+        assert_eq!(api.get(&format!("/api/albums/{album_id}")).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(api.get("/api/tags").await.1, json!([]));
+        let del = api.send(Method::DELETE, &format!("/api/albums/{album_id}"), Body::empty(), None, &[]).await;
+        assert_eq!(del.0, StatusCode::NOT_FOUND);
+        api.json(Method::PATCH, &format!("/api/library/{id}"), json!({"tags": ["Holiday"], "rating": 2})).await;
+        let mine = api.get(&format!("/api/library/{id}")).await.1;
+        assert_eq!((mine["rating"].clone(), mine["tags"][0]["name"].clone()), (json!(2), json!("Holiday")));
+        api.json(Method::PATCH, &format!("/api/library/{id}"), json!({"tags": []})).await;
+
+        // Bob's tag is still there after Alice took hers off, and his state is as he left it.
+        api.cookie = bob;
+        let theirs = api.get(&format!("/api/library/{id}")).await.1;
+        let said = (theirs["favorite"].clone(), theirs["rating"].clone(), theirs["tags"][0]["name"].clone());
+        assert_eq!(said, (json!(true), Value::Null, json!("Holiday")));
+
+        // Read-only users see the photo and cannot say anything about it.
+        api.cookie = carol;
+        assert_eq!(photo_id(&api, "pic.png").await, id);
+        let fav = json!({"favorite": true});
+        assert_eq!(api.json(Method::PATCH, &format!("/api/library/{id}"), fav).await.0, StatusCode::FORBIDDEN);
+        let bulk = json!({"ids": [id], "favorite": true});
+        assert_eq!(api.json(Method::POST, "/api/library/bulk", bulk).await.0, StatusCode::FORBIDDEN);
+        let (status, _, _) =
+            api.send(Method::GET, &format!("/api/media/{id}/original"), Body::empty(), None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+    });
+}
+
+#[test]
+fn a_device_can_be_released_for_another_computer() {
+    let mut api = Api::new();
+    block(async {
+        let bob = add_user(&mut api, "bob", "normal").await;
+        api.cookie = login(&api).await;
+        let admin = api.cookie.clone();
+        let (status, made) = api.json(Method::POST, "/api/devices", json!({"name": "pc"})).await;
+        assert_eq!(status, StatusCode::OK, "{made}");
+        let hold = |api: &Api| {
+            let db = api.db.clone();
+            async move {
+                crate::platform::db::with(&db, |c| {
+                    c.execute("UPDATE devices SET instance_id = 'abc' WHERE name = 'pc'", &[])?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            }
+        };
+        let held = |api: &Api| {
+            let db = api.db.clone();
+            async move {
+                crate::platform::db::with(&db, |c| {
+                    Ok(c.query_one("SELECT instance_id FROM devices WHERE name = 'pc'", &[])?
+                        .get::<_, Option<String>>(0))
+                })
+                .await
+                .unwrap()
+            }
+        };
+        hold(&api).await;
+        api.cookie = bob;
+        assert_eq!(api.json(Method::POST, "/api/devices/admin%2Fpc/release", json!({})).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(held(&api).await.as_deref(), Some("abc"), "someone else's device is not theirs to release");
+        api.cookie = admin;
+        assert_eq!(api.json(Method::POST, "/api/devices/admin%2Fpc/release", json!({})).await.0, StatusCode::OK);
+        assert_eq!(held(&api).await, None);
+        // A new token is for a new computer: it frees the device too.
+        hold(&api).await;
+        assert_eq!(api.json(Method::POST, "/api/devices/admin%2Fpc/token", json!({})).await.0, StatusCode::OK);
+        assert_eq!(held(&api).await, None);
+        assert_eq!(
+            api.json(Method::POST, "/api/devices/admin%2Fnope/release", json!({})).await.0,
+            StatusCode::NOT_FOUND
+        );
     });
 }

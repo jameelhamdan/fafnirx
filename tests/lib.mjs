@@ -141,12 +141,12 @@ export class Master {
     this.proc = null
   }
 
-  /** A logged-in admin API client. */
-  async admin() {
+  /** A logged-in API client: the administrator by default, or another user. */
+  async admin(username = 'admin', password = 'pw') {
     const res = await fetch(`${this.base}/api/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-requested-with': 'e2e' },
-      body: JSON.stringify({ password: 'pw' }),
+      body: JSON.stringify({ username, password }),
     })
     if (!res.ok) throw new Error(`login failed: ${res.status}`)
     const cookie = res.headers.get('set-cookie').split(';')[0]
@@ -220,11 +220,15 @@ export async function harness(prefix = 'fafnirx-e2e-', { binaries = [MASTER, CLI
   }
 }
 
-/** Creates a device through the admin API and enrolls a client for it, keeping the client's state inside `tmp`. */
-export async function enrollDevice({ tmp, master }, admin, name = 'laptop', dir = 'client') {
-  const token = (await admin.post('/api/devices', { name })).json.token
+/** Creates a device through the web API and enrolls a client for it, keeping the client's state inside `tmp`. */
+export async function enrollDevice({ tmp, master }, admin, name = 'laptop', dir = 'client', user = undefined) {
+  const token = (await admin.post('/api/devices', { name, ...(user ? { user } : {}) })).json.token
   const client = clientIn(path.join(tmp, dir))
   client.c.enroll(token, `http://127.0.0.1:${master.grpc}`)
   fs.writeFileSync(client.cfg, `state_dir = "${path.join(tmp, 'state').replaceAll('\\', '/')}"\n${fs.readFileSync(client.cfg, 'utf8')}`)
+  // Enrolling ran with the default state directory, which is one computer; the client of the test keeps its state in
+  // `tmp`, which is another. Release the device so that this one can have it.
+  const folder = encodeURIComponent((await admin.get('/api/devices')).json.find((d) => d.name === name && (!user || d.user === user))?.folder ?? `admin/${name}`)
+  await admin.post(`/api/devices/${folder}/release`)
   return { ...client, token }
 }

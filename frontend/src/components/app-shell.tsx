@@ -1,55 +1,65 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Archive, FolderOpen, GalleryVerticalEnd, HardDrive, Heart, Images, LayoutDashboard, LogOut, MapPin, Languages, Menu, Monitor, Moon, Settings, Sun, Trash2, UploadCloud } from 'lucide-react'
+import { Archive, FolderOpen, GalleryVerticalEnd, HardDrive, Heart, Images, KeyRound, LayoutDashboard, LogOut, MapPin, Menu, Monitor, Moon, Settings, Sun, Trash2, UploadCloud, Users } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import { api } from '@/lib/api'
-import { LANGUAGES, msg, useI18n, type Lang } from '@/lib/i18n'
+import { msg, useI18n } from '@/lib/i18n'
 import { useLive } from '@/lib/live-state'
-import type { Session } from '@/lib/types'
+import { hasWorkspace, useRole, useSession } from '@/lib/session'
+import type { Role, Session } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { UploadPanel } from './files/upload-panel'
+import { ChangePassword } from './change-password'
+import { LanguageMenu } from './language-menu'
 import { Button } from './ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 
-const NAV = [
+/** Who sees an entry: everybody, the roles with a workspace of their own (not read-only), or administrators. */
+type Audience = 'all' | 'workspace' | 'admin'
+
+const NAV: { title: string; items: { to: string; label: string; icon: typeof Images; end?: boolean; for: Audience }[] }[] = [
   {
     title: msg('Photos'),
     items: [
-      { to: '/timeline', label: msg('Timeline'), icon: Images },
-      { to: '/favorites', label: msg('Favorites'), icon: Heart },
-      { to: '/albums', label: msg('Albums'), icon: GalleryVerticalEnd },
-      { to: '/map', label: msg('Map'), icon: MapPin },
-      { to: '/archive', label: msg('Archive'), icon: Archive },
-      { to: '/trash', label: msg('Trash'), icon: Trash2 },
+      { to: '/timeline', label: msg('Timeline'), icon: Images, for: 'all' },
+      { to: '/favorites', label: msg('Favorites'), icon: Heart, for: 'workspace' },
+      { to: '/albums', label: msg('Albums'), icon: GalleryVerticalEnd, for: 'workspace' },
+      { to: '/map', label: msg('Map'), icon: MapPin, for: 'all' },
+      { to: '/archive', label: msg('Archive'), icon: Archive, for: 'workspace' },
+      { to: '/trash', label: msg('Trash'), icon: Trash2, for: 'workspace' },
     ],
   },
   {
     title: msg('Backup'),
     items: [
-      { to: '/', label: msg('Dashboard'), icon: LayoutDashboard, end: true },
-      { to: '/files', label: msg('Files'), icon: FolderOpen },
-      { to: '/devices', label: msg('Devices'), icon: Monitor },
-      { to: '/sources', label: msg('Sources'), icon: UploadCloud },
-      { to: '/mirrors', label: msg('Mirrors'), icon: HardDrive },
-      { to: '/settings', label: msg('Settings'), icon: Settings },
+      { to: '/', label: msg('Dashboard'), icon: LayoutDashboard, end: true, for: 'all' },
+      { to: '/files', label: msg('Files'), icon: FolderOpen, for: 'all' },
+      { to: '/devices', label: msg('Devices'), icon: Monitor, for: 'workspace' },
+      { to: '/sources', label: msg('Sources'), icon: UploadCloud, for: 'workspace' },
+      { to: '/mirrors', label: msg('Mirrors'), icon: HardDrive, for: 'admin' },
+      { to: '/users', label: msg('Users'), icon: Users, for: 'admin' },
+      { to: '/settings', label: msg('Settings'), icon: Settings, for: 'admin' },
     ],
   },
 ]
 
+const allowed = (audience: Audience, role: Role) => audience === 'all' || (audience === 'workspace' ? hasWorkspace(role) : role === 'admin')
+
 function Nav({ onNavigate }: { onNavigate?: () => void }) {
   const { t } = useI18n()
+  const role = useRole()
   return (
     <nav className="flex flex-col gap-4 p-3" aria-label={t('Main')}>
-      {NAV.map(({ title, items }) => (
+      {NAV.map(({ title, items: all }) => ({ title, items: all.filter((i) => allowed(i.for, role)) })).filter((g) => g.items.length > 0).map(({ title, items }) => (
         <div key={title} className="flex flex-col gap-1">
           <p className="px-3 pb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">{t(title)}</p>
-          {items.map(({ to, label, icon: Icon, ...rest }) => (
+          {items.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}
-              end={'end' in rest}
+              end={end}
               onClick={onNavigate}
               className={({ isActive }) =>
                 cn(
@@ -77,22 +87,6 @@ function Brand() {
   )
 }
 
-function LanguageButton() {
-  const { lang, setLang, t } = useI18n()
-  const codes = Object.keys(LANGUAGES) as Lang[]
-  const next = codes[(codes.indexOf(lang) + 1) % codes.length]
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button variant="ghost" size="icon" onClick={() => setLang(next)} aria-label={t('Language: {language}', { language: LANGUAGES[lang].label })}>
-          <Languages className="size-4" />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>{t('Language: {language}', { language: LANGUAGES[lang].label })}</TooltipContent>
-    </Tooltip>
-  )
-}
-
 const THEME: Record<string, string> = { light: msg('light'), dark: msg('dark'), system: msg('system') }
 
 function ThemeButton() {
@@ -117,12 +111,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   const client = useQueryClient()
   const live = useLive()
   const [open, setOpen] = useState(false)
-  const version = client.getQueryData<Session>(['session'])?.version
+  const session = useSession()
+  const version = session?.version
+  const [password, setPassword] = useState(false)
 
   async function logout() {
     await api.post('/api/logout').catch(() => undefined)
     client.clear()
-    client.setQueryData<Session>(['session'], { admin: false })
+    client.setQueryData<Session>(['session'], { user: null, stream: false })
   }
 
   return (
@@ -151,8 +147,19 @@ export function AppShell({ children }: { children: ReactNode }) {
             </TooltipTrigger>
             <TooltipContent>{live ? t('Changes appear as they happen') : t('Updates paused; reconnecting')}</TooltipContent>
           </Tooltip>
-          <LanguageButton />
+          <LanguageMenu />
           <ThemeButton />
+          <span className="hidden px-1 text-xs text-muted-foreground sm:inline" title={t('Logged in as {name}', { name: session?.user?.name ?? '' })}>
+            {session?.user?.name}
+          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" onClick={() => setPassword(true)} aria-label={t('Change password')}>
+                <KeyRound className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{t('Change password')}</TooltipContent>
+          </Tooltip>
           <Button variant="ghost" size="icon" onClick={logout} aria-label={t('Log out')}>
             <LogOut className="size-4" />
           </Button>
@@ -168,6 +175,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Nav onNavigate={() => setOpen(false)} />
         </SheetContent>
       </Sheet>
+      <ChangePassword open={password} onClose={() => setPassword(false)} />
       <UploadPanel />
     </div>
   )

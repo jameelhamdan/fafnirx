@@ -16,6 +16,8 @@ pub struct Service {
     pub db: Db,
     pub store: Arc<Store>,
     pub updates_dir: PathBuf,
+    /// The proxies whose word about a device's address is believed (`FAFNIRX_TRUSTED_PROXY`).
+    pub trusted: crate::platform::proxy::Trusted,
 }
 
 struct Checked {
@@ -34,14 +36,96 @@ fn bearer<T>(req: &Request<T>) -> Result<String, Status> {
         .ok_or_else(|| Status::unauthenticated("missing device token"))
 }
 
-fn authenticate(conn: &mut Client, token: &str) -> Result<Device, Status> {
-    conn.query_opt(
-        "SELECT id, name FROM devices WHERE token_hash = $1 AND revoked_at IS NULL AND kind = 'device'",
-        &[&db::hash_token(token)],
-    )
-    .map_err(internal)?
-    .map(|r| Device { id: r.get(0), name: r.get(1) })
-    .ok_or_else(|| Status::unauthenticated("unknown or revoked device token"))
+/// Who is calling: the token (which device) and the instance (which installation of the client is using it).
+pub struct Caller {
+    token: String,
+    instance: String,
+    ip: Option<String>,
+}
+
+/// The instance of a client that does not say (one from before instances): all such clients are one instance.
+const LEGACY_INSTANCE: &str = "legacy";
+
+/// The address a request comes from: the connection's, or behind a trusted proxy the one the proxy saw.
+fn address_of<T>(req: &Request<T>, trusted: &crate::platform::proxy::Trusted) -> Option<String> {
+    let forwarded = req.metadata().get("x-forwarded-for").and_then(|v| v.to_str().ok());
+    req.remote_addr().map(|a| trusted.client_ip(a.ip(), forwarded).to_string())
+}
+
+fn caller_of<T>(req: &Request<T>, trusted: &crate::platform::proxy::Trusted) -> Result<Caller, Status> {
+    let instance = req
+        .metadata()
+        .get("x-fafnirx-instance")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| clip(v, 64))
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| LEGACY_INSTANCE.into());
+    Ok(Caller { token: bearer(req)?, instance, ip: address_of(req, trusted) })
+}
+
+/// How long a device that is not heard from keeps its credentials to itself. After that another computer using the
+/// same token takes the device over (a reinstalled or replaced computer), and the first one is the one refused.
+fn lease_secs() -> i64 {
+    std::env::var("FAFNIRX_INSTANCE_LEASE_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(90)
+}
+
+/// Finds the device of the token and makes sure the caller is the one computer using it.
+///
+/// A device is used by one installation of the client at a time: the first to connect holds it, and while it is
+/// heard from (heartbeats, and everything it uploads, set `last_seen`) another is refused and an alert is raised for the
+/// owner, so that two computers with one token cannot send two views of the same folders. One decision, in one
+/// statement, so two computers connecting at once cannot both win.
+fn authenticate(conn: &mut Client, who: &Caller) -> Result<Device, Status> {
+    let row = conn
+        .query_opt(
+            // The device is its folder (`<user>/<name>`). A device of a disabled user is refused like a revoked one.
+            "SELECT d.id, d.folder, d.instance_id, d.hostname, d.ip FROM devices d JOIN users u ON u.id = d.user_id
+             WHERE d.token_hash = $1 AND d.revoked_at IS NULL AND d.kind = 'device' AND u.disabled_at IS NULL",
+            &[&db::hash_token(&who.token)],
+        )
+        .map_err(internal)?
+        .ok_or_else(|| Status::unauthenticated("unknown or revoked device token"))?;
+    let (id, folder): (i64, String) = (row.get(0), row.get(1));
+    let holder: Option<String> = row.get(2);
+    if holder.as_deref() == Some(who.instance.as_str()) {
+        return Ok(Device { id, name: folder });
+    }
+    let now = unix_now();
+    let taken = conn
+        .execute(
+            "UPDATE devices SET instance_id = $2, last_seen = $3
+             WHERE id = $1 AND (instance_id IS NULL OR instance_id = $2 OR last_seen IS NULL OR last_seen < $4)",
+            &[&id, &who.instance, &now, &(now - lease_secs())],
+        )
+        .map_err(internal)?;
+    if taken == 1 {
+        if holder.is_some() {
+            tracing::info!("{folder}: taken over by another computer, the first one went quiet");
+            let _ = resolve_alert(conn, "device_conflict", &folder);
+        }
+        return Ok(Device { id, name: folder });
+    }
+    let (host, ip): (Option<String>, Option<String>) = (row.get(3), row.get(4));
+    let holder_is = match (host, ip) {
+        (Some(h), Some(i)) => format!("{h}, {i}"),
+        (Some(h), None) => h,
+        (None, Some(i)) => i,
+        (None, None) => "another computer".into(),
+    };
+    let caller_is = who.ip.as_deref().unwrap_or("unknown address");
+    let _ = upsert_alert(
+        conn,
+        "device_conflict",
+        &folder,
+        &format!(
+            "A second computer ({caller_is}) is using the credentials of this device while {holder_is} is connected. \
+             It was refused. If the credentials leaked, rotate the token; to move the device to the other computer, release it."
+        ),
+    );
+    Err(Status::permission_denied(format!(
+        "device in use: another computer ({holder_is}) is connected as this device. This one sends nothing until \
+         that one goes quiet or the device is released in the web app"
+    )))
 }
 
 fn internal<E: std::fmt::Display>(e: E) -> Status {
@@ -81,9 +165,9 @@ impl Service {
         db::with(&self.db, f).await.map_err(|e| e.downcast::<Status>().unwrap_or_else(internal))
     }
 
-    /// Authenticates a device token and returns the device id.
-    async fn check_token(&self, token: String) -> Result<i64, Status> {
-        self.blocking(move |c| Ok(authenticate(c, &token)?.id)).await
+    /// Authenticates a device and returns its id.
+    async fn check_token(&self, who: Caller) -> Result<i64, Status> {
+        self.blocking(move |c| Ok(authenticate(c, &who)?.id)).await
     }
 
     fn update_dir(&self, platform: &str) -> Result<PathBuf, Status> {
@@ -97,10 +181,10 @@ impl Service {
 #[tonic::async_trait]
 impl Collector for Service {
     async fn identify(&self, req: Request<IdentifyRequest>) -> Result<Response<IdentifyResponse>, Status> {
-        let token = bearer(&req)?;
+        let who = caller_of(&req, &self.trusted)?;
         let master_id = self
             .blocking(move |c| {
-                authenticate(c, &token)?;
+                authenticate(c, &who)?;
                 Ok(c.query_one("SELECT value FROM settings WHERE key = 'master_id'", &[])?.get::<_, String>(0))
             })
             .await?;
@@ -108,12 +192,12 @@ impl Collector for Service {
     }
 
     async fn heartbeat(&self, req: Request<HeartbeatRequest>) -> Result<Response<HeartbeatResponse>, Status> {
-        let token = bearer(&req)?;
-        let ip = req.remote_addr().map(|a| a.ip().to_string());
+        let who = caller_of(&req, &self.trusted)?;
+        let ip = address_of(&req, &self.trusted);
         let hb = req.into_inner();
         let name = self
             .blocking(move |c| {
-                let dev = authenticate(c, &token)?;
+                let dev = authenticate(c, &who)?;
                 c.execute(
                     "UPDATE devices SET hostname = $1, os = $2, ip = $3, client_version = $4,
                      disk_total = $5, disk_free = $6, last_seen = $7 WHERE id = $8",
@@ -128,6 +212,14 @@ impl Collector for Service {
                         &dev.id,
                     ],
                 )?;
+                // A conflict that has not come back for ten minutes is over.
+                if c.execute(
+                    "UPDATE alerts SET resolved_at = $2 WHERE kind = 'device_conflict' AND key = $1 AND resolved_at IS NULL AND updated_at < $3",
+                    &[&dev.name, &unix_now(), &(unix_now() - 600)],
+                )? > 0
+                {
+                    db::notify(c, "alerts", &dev.name)?;
+                }
                 if hb.phase.is_empty() || hb.phase == "idle" {
                     // Going from busy to idle means the sync is done: the totals shown for the device are brought up to date.
                     if c.execute("DELETE FROM device_activity WHERE device_id = $1", &[&dev.id])? > 0 {
@@ -169,11 +261,11 @@ impl Collector for Service {
     }
 
     async fn negotiate(&self, req: Request<Manifest>) -> Result<Response<NegotiateResponse>, Status> {
-        let token = bearer(&req)?;
+        let who = caller_of(&req, &self.trusted)?;
         let m = check_manifest(req.get_ref())?;
         let store = self.store.clone();
         self.blocking(move |c| {
-            let dev = authenticate(c, &token)?;
+            let dev = authenticate(c, &who)?;
             let current: Option<Vec<u8>> = c
                 .query_opt(
                     "SELECT v.root_hash FROM files f JOIN versions v ON v.id = f.current_version_id
@@ -182,7 +274,7 @@ impl Collector for Service {
                 )?
                 .map(|r| r.get(0));
             // Deleted in the web app: the device is told it is up to date, whatever it holds now.
-            if current.as_deref() == Some(&m.root[..]) || ingest::deleted_by_admin(c, dev.id, &m.path)? {
+            if current.as_deref() == Some(&m.root[..]) || ingest::deleted_in_web_app(c, dev.id, &m.path)? {
                 return Ok(Response::new(NegotiateResponse { missing: vec![], already_current: true }));
             }
             // The device already has this content under another path (a rename or a copy): the commit
@@ -197,8 +289,8 @@ impl Collector for Service {
     }
 
     async fn upload_chunks(&self, req: Request<Streaming<Chunk>>) -> Result<Response<UploadSummary>, Status> {
-        let token = bearer(&req)?;
-        let device_id = self.check_token(token).await?;
+        let who = caller_of(&req, &self.trusted)?;
+        let device_id = self.check_token(who).await?;
         let mut stream = req.into_inner();
         let mut stored = 0u32;
         while let Some(chunk) = stream.message().await? {
@@ -221,7 +313,7 @@ impl Collector for Service {
     }
 
     async fn commit(&self, req: Request<CommitRequest>) -> Result<Response<CommitResponse>, Status> {
-        let token = bearer(&req)?;
+        let who = caller_of(&req, &self.trusted)?;
         let r = req.into_inner();
         let m = check_manifest(r.manifest.as_ref().ok_or_else(|| Status::invalid_argument("missing manifest"))?)?;
         let renamed_from =
@@ -229,8 +321,8 @@ impl Collector for Service {
         let store = self.store.clone();
         let version_id = self
             .blocking(move |c| {
-                let dev = authenticate(c, &token)?;
-                if ingest::deleted_by_admin(c, dev.id, &m.path)? {
+                let dev = authenticate(c, &who)?;
+                if ingest::deleted_in_web_app(c, dev.id, &m.path)? {
                     return Ok(0);
                 }
                 // Content the device already has under another path is taken from there; otherwise the
@@ -263,11 +355,11 @@ impl Collector for Service {
     }
 
     async fn mark_deleted(&self, req: Request<DeleteRequest>) -> Result<Response<DeleteResponse>, Status> {
-        let token = bearer(&req)?;
+        let who = caller_of(&req, &self.trusted)?;
         let path = clean_remote_path(&req.get_ref().path).map_err(invalid)?;
         let store = self.store.clone();
         self.blocking(move |c| {
-            let dev = authenticate(c, &token)?;
+            let dev = authenticate(c, &who)?;
             ingest::mark_deleted(c, &store, &dev, &path, false)?;
             Ok(())
         })
@@ -276,8 +368,8 @@ impl Collector for Service {
     }
 
     async fn get_update_info(&self, req: Request<UpdateInfoRequest>) -> Result<Response<UpdateInfo>, Status> {
-        let token = bearer(&req)?;
-        self.check_token(token).await?;
+        let who = caller_of(&req, &self.trusted)?;
+        self.check_token(who).await?;
         let dir = self.update_dir(&req.get_ref().platform)?;
         let (Ok(version), Ok(signature)) =
             (std::fs::read_to_string(dir.join("version")), std::fs::read_to_string(dir.join("signature")))
@@ -303,8 +395,8 @@ impl Collector for Service {
         &self,
         req: Request<UpdateInfoRequest>,
     ) -> Result<Response<Self::DownloadUpdateStream>, Status> {
-        let token = bearer(&req)?;
-        self.check_token(token).await?;
+        let who = caller_of(&req, &self.trusted)?;
+        self.check_token(who).await?;
         let bin = self.update_dir(&req.get_ref().platform)?.join("bin");
         let mut file = tokio::fs::File::open(&bin).await.map_err(|_| Status::not_found("no update"))?;
         let (tx, rx) = tokio::sync::mpsc::channel(4);
@@ -326,5 +418,73 @@ impl Collector for Service {
             }
         });
         Ok(Response::new(ReceiverStream::new(rx)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platform::db::testing::{db_with_device, open_alerts};
+
+    fn caller(instance: &str) -> Caller {
+        Caller { token: "secret".into(), instance: instance.into(), ip: Some("10.0.0.9".into()) }
+    }
+
+    /// A database with a device whose token is "secret".
+    fn setup() -> Db {
+        let db = db_with_device();
+        db.get().unwrap().execute("UPDATE devices SET token_hash = $1", &[&db::hash_token("secret")]).unwrap();
+        db
+    }
+
+    #[test]
+    fn only_one_computer_uses_a_device_at_a_time() {
+        let db = setup();
+        let mut c = db.get().unwrap();
+        authenticate(&mut c, &caller("first")).expect("the first to connect holds the device");
+        authenticate(&mut c, &caller("first")).expect("and keeps it");
+        let refused = authenticate(&mut c, &caller("second")).expect_err("a second computer is refused");
+        assert_eq!(refused.code(), tonic::Code::PermissionDenied);
+        assert!(refused.message().starts_with("device in use"), "{}", refused.message());
+        assert_eq!(open_alerts(&mut c), 1, "and the owner is told");
+        authenticate(&mut c, &caller("second")).expect_err("still refused");
+        assert_eq!(open_alerts(&mut c), 1, "once, not once per attempt");
+        authenticate(&mut c, &caller("first")).expect("the first is not disturbed");
+        let wrong = Caller { token: "other".into(), ..caller("first") };
+        assert_eq!(authenticate(&mut c, &wrong).unwrap_err().code(), tonic::Code::Unauthenticated);
+    }
+
+    #[test]
+    fn a_computer_that_went_quiet_is_replaced() {
+        let db = setup();
+        let mut c = db.get().unwrap();
+        authenticate(&mut c, &caller("old")).unwrap();
+        authenticate(&mut c, &caller("new")).unwrap_err();
+        // The first has not been heard from for longer than the lease.
+        c.execute("UPDATE devices SET last_seen = $1", &[&(unix_now() - lease_secs() - 5)]).unwrap();
+        authenticate(&mut c, &caller("new")).expect("the new computer takes the device over");
+        assert_eq!(open_alerts(&mut c), 0, "the conflict is over");
+        let back =
+            authenticate(&mut c, &caller("old")).expect_err("and the old one, when it returns, is the one refused");
+        assert_eq!(back.code(), tonic::Code::PermissionDenied);
+    }
+
+    #[test]
+    fn a_released_device_goes_to_the_next_computer() {
+        let db = setup();
+        let mut c = db.get().unwrap();
+        authenticate(&mut c, &caller("old")).unwrap();
+        c.execute("UPDATE devices SET instance_id = NULL", &[]).unwrap();
+        authenticate(&mut c, &caller("new")).expect("whoever connects next holds it");
+        authenticate(&mut c, &caller("old")).expect_err("the old one is refused now");
+    }
+
+    #[test]
+    fn clients_that_do_not_say_who_they_are_count_as_one() {
+        let db = setup();
+        let mut c = db.get().unwrap();
+        authenticate(&mut c, &caller(LEGACY_INSTANCE)).unwrap();
+        authenticate(&mut c, &caller(LEGACY_INSTANCE)).unwrap();
+        authenticate(&mut c, &caller("new")).expect_err("but a newer client does not share it");
     }
 }

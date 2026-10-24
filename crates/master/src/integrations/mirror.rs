@@ -50,7 +50,7 @@ impl MirrorOutcome {
 
 struct LiveFile {
     device_id: i64,
-    /// The device's name: its folder on the master and on the mirror.
+    /// The device's folder (`<user>/<device>`, or `_master`): where its files are on the master and on the mirror.
     ns: String,
     path: String,
     root: [u8; HASH_LEN],
@@ -61,7 +61,17 @@ struct LiveFile {
 impl LiveFile {
     /// Path relative to the `files/` directory on the mirror.
     fn rel(&self) -> String {
-        format!("{}/{}", self.ns, self.path)
+        relative(&self.ns, &self.path)
+    }
+}
+
+/// Path relative to the `files/` directory, which is the same on the master and on the mirror: the master files are
+/// at its root, the files of a device below the folder of the device.
+fn relative(folder: &str, path: &str) -> String {
+    if folder == crate::platform::store::MASTER_FOLDER {
+        path.to_string()
+    } else {
+        format!("{folder}/{path}")
     }
 }
 
@@ -201,9 +211,9 @@ fn stage_file(store: &Store, dest: &Path, f: &LiveFile) -> Result<()> {
 
 fn load_live(conn: &mut Client) -> Result<Vec<LiveFile>> {
     let rows = conn.query(
-        "SELECT f.device_id, d.name, f.path, v.root_hash, v.size, v.mtime
+        "SELECT f.device_id, d.folder, f.path, v.root_hash, v.size, v.mtime
          FROM files f JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id
-         WHERE f.deleted_at IS NULL ORDER BY d.name, f.path",
+         WHERE f.deleted_at IS NULL ORDER BY d.folder, f.path",
         &[],
     )?;
     Ok(rows
@@ -309,17 +319,18 @@ pub async fn run(db: Db, store: Arc<Store>, data_dir: PathBuf, m: MirrorRow) -> 
     let stage_root = data_dir.join("mirror-stage").join(m.id.to_string());
     let _ = std::fs::remove_dir_all(&stage_root);
     std::fs::create_dir_all(&stage_root)?;
+    // Removed however the run ends, a panic included.
+    let _stage = RemoveOnDrop(stage_root.clone());
     let empty_config = stage_root.join("rclone.conf");
     std::fs::write(&empty_config, b"")?;
     let rc = Rclone {
         bin: std::env::var("FAFNIRX_RCLONE").unwrap_or_else(|_| "rclone".into()),
-        env: rclone_env(&m, &empty_config, &crate::config::rclone_config())?,
+        env: rclone_env(&m, &empty_config, &crate::integrations::spec::rclone_config())?,
     };
     let stamp = run_stamp(unix_now());
     let remotes = Remotes::new(&base_of(&m), &stamp);
     let job = Job { db, store, stage_root, rc, m, remotes, stamp };
     let result = job.run().await;
-    let _ = std::fs::remove_dir_all(&job.stage_root);
     if let Ok(o) = &result {
         let (id, files, bytes) = (job.m.id, o.total_files as i64, o.bytes as i64);
         let _ = db::with(&job.db, move |c| {
@@ -328,6 +339,15 @@ pub async fn run(db: Db, store: Arc<Store>, data_dir: PathBuf, m: MirrorRow) -> 
         .await;
     }
     result
+}
+
+/// Removes a directory when dropped.
+struct RemoveOnDrop(PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 /// Everything one mirror run needs.
@@ -424,12 +444,12 @@ impl Job {
             return Ok(());
         }
         let namespaces: HashMap<i64, String> = db::with(&self.db, |c| {
-            let rows = c.query("SELECT id, name FROM devices", &[])?;
+            let rows = c.query("SELECT id, folder FROM devices", &[])?;
             Ok(rows.iter().map(|r| (r.get(0), r.get(1))).collect())
         })
         .await?;
         let list: Vec<String> =
-            removed.iter().filter_map(|(d, p)| namespaces.get(d).map(|ns| format!("{ns}/{p}"))).collect();
+            removed.iter().filter_map(|(d, p)| namespaces.get(d).map(|ns| relative(ns, p))).collect();
         let list_file = self.stage_root.join("removed.txt");
         std::fs::write(&list_file, list.join("\n"))?;
         // Exit 3/4: the file or directory is already gone from the mirror, which is the goal.
@@ -530,7 +550,12 @@ mod tests {
 
     #[test]
     fn rclone_options_become_environment() {
-        let env = rclone_env(&row(r#"{"access_key_id":"k","secret_access_key":"s"}"#), Path::new("/tmp/c"), Path::new("/none")).unwrap();
+        let env = rclone_env(
+            &row(r#"{"access_key_id":"k","secret_access_key":"s"}"#),
+            Path::new("/tmp/c"),
+            Path::new("/none"),
+        )
+        .unwrap();
         assert!(env.contains(&("RCLONE_CONFIG_FXMIRROR_TYPE".into(), "s3".into())));
         assert!(env.contains(&("RCLONE_CONFIG_FXMIRROR_SECRET_ACCESS_KEY".into(), "s".into())));
         assert!(
@@ -550,11 +575,19 @@ mod tests {
         m.remote = "crypt:backups/fafnirx/".into();
         let missing = rclone_env(&m, Path::new("/tmp/c"), &conf).unwrap_err();
         assert!(format!("{missing}").contains("rclone config file"), "{missing}");
-        std::fs::write(&conf, "[crypt]
+        std::fs::write(
+            &conf,
+            "[crypt]
 type = local
-").unwrap();
+",
+        )
+        .unwrap();
         let env = rclone_env(&m, Path::new("/tmp/c"), &conf).unwrap();
-        assert_eq!(env, [("RCLONE_CONFIG".to_string(), conf.to_string_lossy().into_owned())], "nothing else reaches rclone");
+        assert_eq!(
+            env,
+            [("RCLONE_CONFIG".to_string(), conf.to_string_lossy().into_owned())],
+            "nothing else reaches rclone"
+        );
         let r = Remotes::new(&base_of(&m), "20240101T000000Z");
         assert_eq!(
             (r.root.as_str(), r.files.as_str(), r.run.as_str()),

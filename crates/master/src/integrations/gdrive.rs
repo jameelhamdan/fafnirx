@@ -410,7 +410,8 @@ fn commit(
     ingest::commit_version(conn, store, &content.path, &version)?;
     conn.execute(
         "INSERT INTO source_items (source_id, remote_id, path, remote_version) VALUES ($1, $2, $3, $4)
-         ON CONFLICT (source_id, remote_id) DO UPDATE SET path = excluded.path, remote_version = excluded.remote_version",
+         ON CONFLICT (source_id, remote_id) DO UPDATE SET path = excluded.path, remote_version = excluded.remote_version,
+                                                          removed_in_web_app = FALSE",
         &[&source_id, &item.id, &item.path, &item.marker],
     )?;
     Ok(())
@@ -437,10 +438,13 @@ pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
             .iter()
             .map(|r| r.get(0))
             .collect();
+        // Deleted in the web app: still in the trash, or already removed by the retention job (then only the
+        // source's own record remembers it).
         let removed = c
             .query(
-                "SELECT path FROM files WHERE device_id = $1 AND deleted_at IS NOT NULL AND deleted_by = 'admin'",
-                &[&device_id],
+                "SELECT path FROM files WHERE device_id = $1 AND deleted_at IS NOT NULL AND deleted_by = 'web'
+                 UNION SELECT path FROM source_items WHERE source_id = $2 AND removed_in_web_app",
+                &[&device_id, &source_id],
             )?
             .iter()
             .map(|r| r.get(0))
@@ -451,7 +455,7 @@ pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
     let plan = plan(&items, &known, &live, &removed);
     let mut out = Outcome { skipped, unchanged: plan.unchanged, ..Default::default() };
     let mut failed = |what: &str, e: anyhow::Error| {
-        tracing::warn!("source {}: {what}: {e:#}", src.name);
+        tracing::warn!("source {}: {what}: {e:#}", src.device.name);
         out.failed.push(format!("{what}: {e:#}"));
     };
 
@@ -600,7 +604,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_leaves_what_the_admin_deleted_until_it_changes() {
+    fn plan_leaves_what_was_deleted_in_the_web_app_until_it_changes() {
         let known = known(&[("a", "d/a.txt", "m1")]);
         let gone = live(&["d/a.txt"]);
         let same = [item("a", "d/a.txt", "m1")];

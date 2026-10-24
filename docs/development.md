@@ -22,7 +22,7 @@ A fresh checkout builds without the web app: `crates/master/build.rs` writes a p
 ```sh
 export FAFNIRX_DATABASE_URL=postgresql://postgres:test@localhost:55432/postgres
 export FAFNIRX_DATA=./data FAFNIRX_ADMIN_PASSWORD=pw
-cargo run -p fafnirx-master                  # device API on :7443, web app and admin API on :8080
+cargo run -p fafnirx-master                  # device API on :7443, web app and web API on :8080
 
 cd frontend && npm run dev                   # the web app with hot reload on :5173, proxying /api to :8080
 ```
@@ -38,11 +38,11 @@ Set `FAFNIRX_TOKEN_STORE=file` to avoid the OS keychain while developing.
 | Web app types and lint | `cd frontend && npx tsc -b && npx oxlint` | |
 | End to end: devices, uploads, watcher, resume, updates | `cd tests && npm i && node e2e.mjs` | Built binaries, test database |
 | End to end: Drive (fake API) and mirrors | `node e2e-io.mjs` | Also `rclone` (`FAFNIRX_RCLONE`) |
-| End to end: the configuration file, rclone remotes, setting up again on an empty database | `node e2e-config.mjs` | Also `rclone` |
+| End to end: video streaming through the master (stand-in ffmpeg) | `node e2e-stream.mjs` | `fafnirx-stream` built (`cargo build --workspace`) |
 | End to end: delete and retention | `node e2e-retention.mjs` | About 2 minutes |
 
 - Database-backed tests create a schema of their own on the test server and drop it afterwards, so they run in parallel.
-- `crates/master/src/web/tests.rs` drives the real admin router in memory: login, devices, chunked upload, browsing,
+- `crates/master/src/web/tests.rs` drives the real router in memory: login, users and roles, devices, chunked upload, browsing,
   range downloads, zip, history, restore and delete, and the photo library (timeline, edits, tags, albums, trash, map). The video parts need `ffmpeg`, which the tests do not: they check the parsing
   of `ffprobe` output and the job lanes instead.
 - The end-to-end scripts start the real `fafnirx-master`, the real client binary and a fake Google Drive. They look for the
@@ -79,7 +79,8 @@ holds its API handlers next to its logic, instead of one folder per kind of file
 | App | Owns | Files |
 |---|---|---|
 | `platform` | What every app builds on | `db.rs` (pool, schema, locks, `NOTIFY`, settings, alerts), `store.rs` (the file store on disk) |
-| `devices` | Clients and their tokens | `grpc.rs` (the device-facing API, upload only), `api.rs` (admin: list, add, rotate, revoke, settings) |
+| `devices` | Clients and their tokens | `grpc.rs` (the device-facing API, upload only), `api.rs` (list, add, rotate, revoke, settings) |
+| `web` (users) | Logins, roles and what each reaches | `auth.rs` (login, sessions, passwords), `access.rs` (the rules: which devices a role can see and change), `users.rs` (the users API) |
 | `files` | Content going in and coming out | `ingest.rs` (commit versions), `livetree.rs` (watcher), `browse.rs` (file browser), `transfer.rs` (downloads, uploads), `zip.rs` |
 | `library` | Photos and videos | `meta.rs` (metadata, previews, job queue), `media.rs` (ffmpeg), `photos.rs` (timeline, map, trash, edits), `albums.rs` |
 | `integrations` | Sources and mirrors | `mod.rs` (scheduler), `gdrive.rs`, `mirror.rs`, `api.rs` |
@@ -116,15 +117,20 @@ database gets all of them; an existing one only the new ones. To change the sche
 
 1. Add the next numbered `.sql` file and an entry at the end of `ALL`. A migration runs once, so it can be plain
    `ALTER TABLE ...`; it should not take long locks on big tables, because the master waits for it before it starts.
-2. Never edit a migration that has been released: the checksum no longer matches and the master refuses to start.
+2. Never edit a migration that has been released: the checksum no longer matches and the master refuses to start. (Before the first release the schema is changed in place and the development database is reset.)
 3. A database that is newer than the master (a downgrade) is refused with a message.
-4. Update [the database diagram](architecture.md#database-structure) and the admin API types in `frontend/src/lib/types.ts`.
+4. Update [the database diagram](architecture.md#database-structure) and the web API types in `frontend/src/lib/types.ts`.
 
-## Changing the admin API
+## Changing the API
 
 Add the handler in the `api.rs` (or, for files, `browse.rs` or `transfer.rs`) of the app it belongs to, register it in `light()` or `heavy()` in `crates/master/src/web/mod.rs` (heavy = moves file
 contents), add the type to `frontend/src/lib/types.ts`, and cover it in `web/tests.rs`. Errors are `ApiError`
 (`bad`, `not_found`, `conflict`) and reach the browser as `{ "error": "..." }`.
+
+Every handler under `/api` gets the user as `Extension<Access>` (the guard in `web/mod.rs` puts it there) and must limit what it
+reads and changes to what that user's role reaches: `access.check_see(folder)` / `check_write(folder)` for one device (a device
+the user may not see answers 404), `access::scope` or `Access::visible_sql()` in a query over files, `require_admin()` for what is
+for administrators, `require_workspace()` for what read-only users do not have. Add a case for each role to `web/tests.rs`.
 
 ## Changing the device gRPC contract
 
@@ -151,7 +157,7 @@ Sources are modules in `crates/master/src/integrations`: `gdrive.rs` is the mode
   (`['files', ...]`, `['device', name]`) so a topic can invalidate a whole family.
 - `src/lib/upload.ts` is the upload queue (chunks, resume, three at a time).
 - Pages are loaded lazily; the file list is virtualized.
-- **Translations.** Every visible string is written in English inside `t('…')` (`const t = useT()` in a component;
+- **Translations.** The web app is available in English, Spanish, Chinese (simplified), Arabic, Russian and Japanese. Every visible string is written in English inside `t('…')` (`const t = useT()` in a component;
   `msg('…')` marks a string in data that is shown with `t(text)` later; `tr('…')` is `t` for code outside components,
   as in `lib/format.ts`). `{name}` placeholders are filled from the second argument. `npm run i18n` collects the calls
   into `translations/en.json` and lists what the other languages lack; `npm run i18n -- --check` fails when `en.json` is
@@ -159,6 +165,36 @@ Sources are modules in `crates/master/src/integrations`: `gdrive.rs` is the mode
   (`src/lib/i18n.ts`); the language is the saved choice, else the browser's, else English, and the page direction follows
   it (`dir="rtl"` for Arabic, so use `start`/`end` utilities, not `left`/`right`). A string without a translation shows
   in English.
+
+## Releasing
+
+`master` is the development branch: every branch is merged there, and CI runs on it. A release is one run of one workflow.
+
+1. In a commit on `master`, set the new version in `Cargo.toml` (`[workspace.package]`) and let `Cargo.lock` follow. Versions
+   are `X.Y.Z` only, no suffix.
+2. Actions -> **Release** -> Run workflow, on `master`, with that version. Tick *dry_run* to try it without publishing, and
+   *homebrew* to also update the Homebrew formula (off by default).
+
+The workflow refuses a version that is not `X.Y.Z`, is not newer than every earlier release, was released before, or
+differs from `Cargo.toml`. It then runs CI, builds the client for Windows, macOS and Linux (`.exe`, tarballs, `.deb`, each
+with a `.sha256`), and builds and starts the Docker image on amd64 and arm64. Only when **all** of that has passed does it
+publish, in this order: the image to Docker Hub (`<version>`, `<major>.<minor>`, `latest`), then the tag and the GitHub
+Release with the client files, then Homebrew. Nothing is published before that point, so a failed run leaves nothing behind;
+if publishing itself fails halfway, run it again with the same version.
+
+One-time setup: the secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (an access token with write rights), optionally the
+variable `DOCKERHUB_IMAGE`, and `HOMEBREW_TAP_TOKEN` for Homebrew. To ask for a click before publishing, add required
+reviewers to the `release` environment (Settings -> Environments). The server is installed from the Docker image only, so
+there is no server package. `.github/scripts/smoke-image.sh <image>` runs the image check by hand.
+
+## The player and the streaming service
+
+The video player is a module of its own, `frontend/src/player`: it imports nothing from the app, and the app joins it in
+`components/app-video.tsx` (language, messages) and `lib/player-source.ts` (the addresses for a library video or a file in
+the browser). Its backend is `crates/stream`, a service that knows nothing of users or databases. Each has a README
+with its contract (the props and the HTTP API), so either can be lifted out and released on its own: keep those two
+documents true when changing either side. What `ffprobe` says about a video is read by `fafnirx_common::probe`, shared
+by the master and the service.
 
 ## Troubleshooting a dev setup
 

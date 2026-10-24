@@ -59,39 +59,18 @@ pub fn probe(path: &Path) -> Result<Probe> {
 }
 
 fn parse_probe(json: &[u8]) -> Result<Probe> {
-    let v: serde_json::Value = serde_json::from_slice(json).context("ffprobe output")?;
-    let stream = v["streams"]
-        .as_array()
-        .and_then(|all| {
-            all.iter().find(|s| s["codec_type"] == "video" && s["disposition"]["attached_pic"].as_i64() != Some(1))
-        })
-        .cloned()
-        .unwrap_or_default();
-    let (mut width, mut height) = (stream["width"].as_i64(), stream["height"].as_i64());
-    // A phone films sideways and says so in a rotation; what people see is the rotated picture.
-    let rotation = stream["side_data_list"]
-        .as_array()
-        .and_then(|l| l.iter().find_map(|d| d["rotation"].as_f64()))
-        .or_else(|| stream["tags"]["rotate"].as_str().and_then(|r| r.parse().ok()))
-        .unwrap_or(0.0);
-    if (rotation.abs() as i64) % 180 == 90 {
-        std::mem::swap(&mut width, &mut height);
-    }
-    let tags = &v["format"]["tags"];
-    let tag = |names: &[&str]| names.iter().find_map(|n| tags[*n].as_str().map(str::to_owned));
+    let p = fafnirx_common::probe::parse(json)?;
+    let (codec, width, height) = p.video.as_ref().map_or((None, None, None), |v| (v.codec.clone(), v.width, v.height));
     Ok(Probe {
-        duration_ms: v["format"]["duration"]
-            .as_str()
-            .and_then(|d| d.parse::<f64>().ok())
-            .filter(|d| d.is_finite() && *d >= 0.0)
-            .map(|d| (d * 1000.0).round() as i64),
-        width,
-        height,
-        codec: stream["codec_name"].as_str().map(str::to_owned),
-        taken_at: tag(&["creation_time", "com.apple.quicktime.creationdate"])
-            .and_then(|t| crate::library::meta::parse_time(&t))
+        duration_ms: p.duration.map(|d| (d * 1000.0).round() as i64),
+        width: width.map(i64::from),
+        height: height.map(i64::from),
+        codec,
+        taken_at: p
+            .tag(&["creation_time", "com.apple.quicktime.creationdate"])
+            .and_then(crate::library::meta::parse_time)
             .filter(|t| *t > 0),
-        position: tag(&["com.apple.quicktime.location.ISO6709", "location"]).and_then(|l| parse_iso6709(&l)),
+        position: p.tag(&["com.apple.quicktime.location.ISO6709", "location"]).and_then(parse_iso6709),
     })
 }
 

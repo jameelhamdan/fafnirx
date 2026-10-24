@@ -19,7 +19,7 @@ flowchart LR
     M -- "rclone, outbound only" --> OFF
 ```
 
-- **Inbound:** `7443` from devices (token-authenticated) and `8080` from admins (password-authenticated). Both are
+- **Inbound:** `7443` from devices (token-authenticated) and `8080` from users (password-authenticated). Both are
   plain HTTP. Keep them on a trusted network or VPN, or publish them through a TLS proxy ([below](#remote-access-with-a-cloudflare-tunnel)).
 - **Outbound:** the master reaches Google Drive and your mirror endpoints. Nothing else leaves.
 
@@ -33,17 +33,17 @@ flowchart LR
 Inside the data directory:
 
 ```text
-files/<device>/<path>            the current tree; shareable as a network drive
+files/<user>/<device>/<path>     the current tree of each device; shareable as a network drive
+files/<path>                    the master files: what is not in the folder of a user
 versions/<id>/<device>/<path>    what a newer version or a delete replaced
 tmp/                             uploads being assembled (removed after a day untouched)
 cache/thumbs/                    photo previews, made on demand (removed after 30 days without a request)
 cache/video/                     playable copies of videos (removed when no version has the video any more)
 updates/<platform>/              signed client builds
-web_secret                       key that signs login cookies
 ```
 
-The setup lives apart from the data, in the config folder (`./config`, `FAFNIRX_CONFIG_DIR`): `fafnirx.json` and, for
-mirrors that use your rclone remotes, `rclone.conf` ([Configuration file](configuration.md)).
+The config folder (`./config`, `FAFNIRX_CONFIG_DIR`) lives apart from the data. It only holds `rclone.conf`, for mirrors that
+use your rclone remotes ([Mirrors](usage.md#mirrors-offsite-copies)). Everything else is set up in the web app and kept in the database.
 
 fafnirx checks hashes on upload and when staging files for a mirror. It does not scrub the stored files, so use a
 checksumming filesystem and scrub it regularly.
@@ -67,8 +67,10 @@ FAFNIRX_GID=1000
 
 ### Sharing `files/` as a network drive
 
-Share `<data>/files` (or a single device's folder) over SMB or NFS with write access for the `FAFNIRX_UID` user. For
-example with Samba:
+Share `<data>/files` over SMB or NFS with write access for the `FAFNIRX_UID` user. Everything in it that is not the folder of a
+user is a master file, so the share is also where master files are dropped. The folders of the users (`files/<user>/`) are
+their private files: make them read-only for the share (the share has logins of its own, not the users of fafnirx, and
+whoever can read it can read all of them), or share only what should be shared. For example with Samba:
 
 ```ini
 [fafnirx]
@@ -82,6 +84,34 @@ example with Samba:
 Every top-level folder is a device; a folder created there with a valid name becomes a local folder by itself. See
 [Usage](usage.md#local-folders-and-the-network-drive) for what is recorded and when. Do not share `versions/` or `tmp/`
 writable.
+
+## Reverse proxy with Caddy
+
+`docker-compose.proxy.yml` puts [Caddy](https://caddyserver.com) in front of fafnirx and closes the master's own ports, so
+that the proxy is the only way in:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d
+# or put COMPOSE_FILE=docker-compose.yml:docker-compose.proxy.yml in .env and use `docker compose` as usual
+```
+
+- By default it is plain HTTP on the same ports as before (the web app on `80`, devices on `7443`), so nothing changes for
+  a network at home. For https on the internet, set a domain in `.env`; Caddy gets and renews the certificate itself:
+
+  ```ini
+  FAFNIRX_WEB_ADDRESS=fafnirx.example.com
+  FAFNIRX_DEVICE_ADDRESS=fafnirx.example.com:7443
+  ```
+
+  Devices then enroll with `fafnirx enroll --server https://fafnirx.example.com:7443`. Ports `80` and `443` must reach the
+  machine for the certificate. Other ports on the host: `FAFNIRX_HTTP_PORT`, `FAFNIRX_HTTPS_PORT`, `FAFNIRX_DEVICE_PORT`.
+- The master is told to believe the client address that Caddy passes on (`FAFNIRX_TRUSTED_PROXY`, set to the compose
+  network), so failed logins are counted per person and not once for the proxy. Nobody else can reach the master, so
+  nobody else can forge that header.
+- The `Caddyfile` is short and meant to be edited: add a second site, access logs, or `trusted_proxies` when Caddy itself
+  sits behind a tunnel.
+- The streaming service stays behind the master and its login, as before; the proxy does not cache its segments (they are
+  made on demand and kept by the service, and a cache in front would serve them without the login).
 
 ## Remote access with a Cloudflare tunnel
 
@@ -109,8 +139,11 @@ The master speaks plain HTTP on purpose; for the internet put TLS in front of it
 Notes:
 
 - The web app sets its login cookie `Secure` when the request arrives with `X-Forwarded-Proto: https`, which Cloudflare
-  sends. It rate-limits password guesses per connecting address and believes no forwarding header, so behind a tunnel
-  all visitors share one address and five wrong guesses lock the login for a minute for everyone.
+  sends. It rate-limits password guesses per connecting address. It believes no forwarding header unless told which
+  proxy to trust, so behind a tunnel on its own all visitors share one address and five wrong guesses lock the login for a
+  minute for everyone. Run the tunnel's `cloudflared` through the [Caddy proxy](#reverse-proxy-with-caddy) (point it at
+  `http://proxy:80` and `http://proxy:7443`), or set `FAFNIRX_TRUSTED_PROXY` to the address `cloudflared` connects from:
+  then the visitor's own address is counted.
 - Every response carries a Content-Security-Policy (the pages may only load their own scripts and styles, plus map
   pictures from the tile server), `X-Frame-Options: DENY`, `nosniff`, a referrer policy and, behind https,
   `Strict-Transport-Security`.
@@ -128,11 +161,15 @@ You need four things; the first three matter most.
 |---|---|---|
 | PostgreSQL | The map from paths to versions, tokens, settings, credentials | `docker compose exec db pg_dump -U fafnirx fafnirx > fafnirx.sql`, or ZFS snapshots of `pgdata` |
 | `data/files/` and `data/versions/` | The data itself | ZFS snapshots, or rely on the offsite mirror |
-| `config/` (`fafnirx.json`, `rclone.conf`) | The setup: settings, devices with their token hashes, mirrors, sources. With it a master can be set up again on an empty database | Copy it, or keep it in a private repository. It holds credentials |
+| `config/rclone.conf` | The rclone remotes of your mirrors, if you use them | Copy it, or keep it in a private repository. It holds credentials |
 | The update signing key | Not on the master by design | Wherever you keep it (`update.key`) |
 
 Snapshot **the database first, then the data directory**. A file that a newer snapshot lacks was replaced or deleted
 after the database snapshot, and it is still under `versions/` until retention removes it.
+
+Keep to the **3-2-1 rule**: 3 copies of the data, on 2 kinds of storage, 1 of them offsite. The master is one copy, a ZFS
+snapshot or another disk is the second, and a mirror (administrators only; it pushes all users' files and the master files)
+is the offsite one.
 
 The offsite mirror is a separate, independent copy of the current tree and its recent history, readable without fafnirx.
 It does not contain the database. A full restore of the master needs the database and data directory backups.
@@ -156,14 +193,14 @@ within about six hours ([Usage](usage.md#signed-client-updates)).
 ## Security checklist
 
 - Choose strong `FAFNIRX_ADMIN_PASSWORD` and `FAFNIRX_DB_PASSWORD`; keep `.env` readable only by you.
-- Keep `8080` and `7443` off the internet unless they are behind a TLS proxy. Keep the PostgreSQL port unpublished (the
+- Keep `8080` and `7443` off the internet unless they are behind a TLS proxy (`docker-compose.proxy.yml` closes them). Keep the PostgreSQL port unpublished (the
   compose file does not publish it).
 - Device tokens are shown once and stored only as SHA-256 hashes. Revoke a lost device in the web app.
-- Source and mirror credentials sit in the database and in `config/fafnirx.json` (and `rclone.conf`) in plain text. Treat
+- Source and mirror credentials sit in the database (and in `rclone.conf`, for rclone remotes) in plain text. Treat
   database backups and the config folder as secrets; do not commit them to a public repository.
 - The update signing key stays off the master. A compromised master cannot ship a client update.
 - A device can add data but cannot read or delete it (the device API has no such call), so a compromised device cannot
-  destroy history. The admin API can read and delete; its login is the thing to protect.
+  destroy history. The web API can read and delete; its login is the thing to protect.
 - Data is not encrypted at rest or on mirrors. Use an encrypted dataset on the host, and an encrypting rclone remote
   (`crypt`) if you need it on mirrors.
 

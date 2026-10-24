@@ -44,9 +44,9 @@ impl From<tonic::Status> for SyncError {
         use tonic::Code::*;
         let msg = format!("{:?}: {}", s.code(), s.message());
         match s.code() {
-            Unavailable | DeadlineExceeded | Cancelled | Unknown | Unauthenticated | ResourceExhausted | Internal => {
-                SyncError::Offline(msg)
-            }
+            // PermissionDenied: another computer is using this device. Stop; the heartbeat says why.
+            Unavailable | DeadlineExceeded | Cancelled | Unknown | Unauthenticated | PermissionDenied
+            | ResourceExhausted | Internal => SyncError::Offline(msg),
             _ => SyncError::File(msg),
         }
     }

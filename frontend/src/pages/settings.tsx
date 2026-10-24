@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
 import { ErrorNote, PageHeader } from '@/components/common'
+import { RescanButton } from '@/components/files/rescan-button'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -54,6 +55,15 @@ export default function Settings() {
     <div>
       <PageHeader title={t('Settings')} />
       {error ? <ErrorNote error={error} /> : !data ? <Skeleton className="h-56 max-w-xl" /> : <SettingsForm data={data} />}
+      <Card className="mt-6 max-w-xl">
+        <CardHeader>
+          <CardTitle>{t('File store')}</CardTitle>
+          <CardDescription>
+            {t('Files put on the disk by hand, or over a network share, are noticed on their own within a few minutes. Scan now to look right away.')}
+          </CardDescription>
+        </CardHeader>
+        <CardContent><RescanButton /></CardContent>
+      </Card>
     </div>
   )
 }

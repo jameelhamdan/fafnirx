@@ -1,17 +1,26 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, Download, FileImage, FolderPlus, Heart, Info, MoreVertical, Trash2, X } from 'lucide-react'
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, type PointerEvent } from 'react'
 import { Button } from '../ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/dropdown-menu'
 import { Skeleton } from '../ui/skeleton'
 import { Confirm } from '../confirm'
 import { mediaUrl } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { whenText } from '@/lib/format'
 import { useLibraryActions } from '@/lib/library'
-import type { Asset } from '@/lib/types'
+import { assetSource } from '@/lib/player-source'
+import { hasWorkspace, useRole } from '@/lib/session'
+import type { Asset, Session } from '@/lib/types'
 import { AlbumPicker } from './album-picker'
+import { AppVideo } from '../lazy-video'
 import { useT } from '@/lib/i18n'
 
 const InfoPanel = lazy(() => import('./info-panel'))
+
+/** Round buttons over the picture: frosted, so that they read on a bright photo and a dark one. */
+const glass = 'rounded-full border border-white/10 bg-black/35 text-white backdrop-blur-md hover:bg-black/55 hover:text-white'
+const bare = 'text-white hover:bg-white/15 hover:text-white'
 
 /** True when the key press belongs to something else (a field, a menu, a dialog on top). */
 function busyElsewhere(e: KeyboardEvent) {
@@ -37,14 +46,45 @@ function Unavailable({ asset, video, retry }: { asset: Asset; video?: boolean; r
   )
 }
 
-function Media({ asset }: { asset: Asset }) {
+/** A photo that zooms in on a double click (or a tap on a touch screen twice) and follows the pointer while zoomed. */
+function Photo({ asset, onFail }: { asset: Asset; onFail: () => void }) {
+  const t = useT()
+  const [zoom, setZoom] = useState<{ x: number; y: number } | null>(null)
+  const at = (e: PointerEvent<HTMLElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    return { x: ((e.clientX - rect.left) / rect.width) * 100, y: ((e.clientY - rect.top) / rect.height) * 100 }
+  }
+  return (
+    <img
+      src={mediaUrl(asset.id, 'preview', asset.hash)}
+      alt={asset.name}
+      draggable={false}
+      title={zoom ? undefined : t('Double-click to zoom')}
+      onError={onFail}
+      onDoubleClick={(e) => setZoom(zoom ? null : at(e as unknown as PointerEvent<HTMLElement>))}
+      onPointerMove={(e) => { if (zoom) setZoom(at(e)) }}
+      style={zoom ? { transform: 'scale(2.5)', transformOrigin: `${zoom.x}% ${zoom.y}%` } : undefined}
+      className={cn(
+        'relative max-h-full max-w-full object-contain shadow-2xl select-none sm:rounded-sm',
+        'transition-transform duration-200 ease-out',
+        zoom ? 'cursor-zoom-out' : 'cursor-zoom-in',
+      )}
+    />
+  )
+}
+
+function Media({ asset, stream }: { asset: Asset; stream: boolean }) {
   const [failed, setFailed] = useState(false)
   const [attempt, setAttempt] = useState(0)
   if (failed) return <Unavailable asset={asset} video={asset.kind === 'video'} retry={() => { setFailed(false); setAttempt((n) => n + 1) }} />
   if (asset.kind === 'video') {
-    return <video key={attempt} src={mediaUrl(asset.id, 'video', asset.hash)} poster={mediaUrl(asset.id, 'preview', asset.hash)} controls autoPlay playsInline onError={() => setFailed(true)} className="max-h-full max-w-full" />
+    return (
+      <Suspense fallback={<Skeleton className="h-64 w-96 max-w-full bg-white/10" />}>
+        <AppVideo key={attempt} source={assetSource(asset, stream)} onFail={() => setFailed(true)} globalKeys />
+      </Suspense>
+    )
   }
-  return <img key={attempt} src={mediaUrl(asset.id, 'preview', asset.hash)} alt={asset.name} draggable={false} onError={() => setFailed(true)} className="max-h-full max-w-full object-contain select-none" />
+  return <Photo key={attempt} asset={asset} onFail={() => setFailed(true)} />
 }
 
 /**
@@ -66,6 +106,11 @@ export function Viewer({
   onEdge?: (direction: 'prev' | 'next') => void
 }) {
   const t = useT()
+  // A read-only user looks at files, downloads and streams them; everything else is for the other roles.
+  const mine = hasWorkspace(useRole())
+  const client = useQueryClient()
+  // With the streaming service videos play adaptively (several qualities), and as the file is when that fails.
+  const streamOn = client.getQueryData<Session>(['session'])?.stream === true
   const { edit, remove } = useLibraryActions()
   const [info, setInfo] = useState(() => window.matchMedia('(min-width: 1024px)').matches)
   const [dialog, setDialog] = useState<'album' | 'delete' | null>(null)
@@ -150,33 +195,37 @@ export function Viewer({
       tabIndex={-1}
       className="fixed inset-0 z-50 flex flex-col bg-black text-white outline-none"
     >
-      <header className="z-10 flex items-center gap-1 bg-gradient-to-b from-black/70 to-transparent p-2">
-        <Button variant="ghost" size="icon" className="text-white hover:bg-white/15 hover:text-white" aria-label={t('Close')} onClick={onClose}><X className="size-5" /></Button>
+      <header className="z-10 flex items-center gap-1 bg-gradient-to-b from-black/75 via-black/30 to-transparent p-2 pb-6">
+        <Button variant="ghost" size="icon" className={bare} aria-label={t('Close')} onClick={onClose}><X className="size-5" /></Button>
         <div className="mr-auto min-w-0 px-2">
           <p className="truncate text-sm font-medium">{asset.name}</p>
           <p className="text-xs text-white/70">{whenText(asset.when)}</p>
         </div>
-        <Button variant="ghost" size="icon" className="text-white hover:bg-white/15 hover:text-white" aria-label={asset.favorite ? t('Remove from favorites') : t('Add to favorites')} aria-pressed={asset.favorite} onClick={() => edit.mutate({ id: asset.id, favorite: !asset.favorite })}>
-          <Heart className={asset.favorite ? 'size-5 fill-current' : 'size-5'} />
-        </Button>
-        <Button variant="ghost" size="icon" className="text-white hover:bg-white/15 hover:text-white" aria-label={t('Info')} aria-pressed={info} onClick={() => setInfo((v) => !v)}><Info className="size-5" /></Button>
+        {mine && (
+          <Button variant="ghost" size="icon" className={bare} aria-label={asset.favorite ? t('Remove from favorites') : t('Add to favorites')} aria-pressed={asset.favorite} onClick={() => edit.mutate({ id: asset.id, favorite: !asset.favorite })}>
+            <Heart className={asset.favorite ? 'size-5 fill-current' : 'size-5'} />
+          </Button>
+        )}
+        <Button variant="ghost" size="icon" className={bare} aria-label={t('Info')} aria-pressed={info} onClick={() => setInfo((v) => !v)}><Info className="size-5" /></Button>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="text-white hover:bg-white/15 hover:text-white" aria-label={t('More actions')}><MoreVertical className="size-5" /></Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className={bare} aria-label={t('More actions')}><MoreVertical className="size-5" /></Button></DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={() => setDialog('album')}><FolderPlus className="size-4" />{t('Add to album')}</DropdownMenuItem>
+            {mine && <DropdownMenuItem onSelect={() => setDialog('album')}><FolderPlus className="size-4" />{t('Add to album')}</DropdownMenuItem>}
             <DropdownMenuItem asChild><a href={mediaUrl(asset.id, 'download', asset.hash)}><Download className="size-4" />{t('Download')}</a></DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => edit.mutate({ id: asset.id, archived: !asset.archived }, { onSuccess: moveOn })}>
-              {asset.archived ? <ArchiveRestore className="size-4" /> : <Archive className="size-4" />}{asset.archived ? 'Unarchive' : 'Archive'}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onSelect={() => setDialog('delete')}><Trash2 className="size-4" />{t('Delete')}</DropdownMenuItem>
+            {mine && (
+              <DropdownMenuItem onSelect={() => edit.mutate({ id: asset.id, archived: !asset.archived }, { onSuccess: moveOn })}>
+                {asset.archived ? <ArchiveRestore className="size-4" /> : <Archive className="size-4" />}{asset.archived ? t('Unarchive') : t('Archive')}
+              </DropdownMenuItem>
+            )}
+            {mine && <DropdownMenuSeparator />}
+            {mine && <DropdownMenuItem variant="destructive" onSelect={() => setDialog('delete')}><Trash2 className="size-4" />{t('Delete')}</DropdownMenuItem>}
           </DropdownMenuContent>
         </DropdownMenu>
       </header>
 
       <div className="relative flex min-h-0 flex-1">
         <div
-          className="relative grid min-w-0 flex-1 place-items-center overflow-hidden"
+          className="relative grid min-w-0 flex-1 place-items-center overflow-hidden bg-neutral-950"
           onTouchStart={(e) => { touch.current = e.touches.length === 1 ? e.touches[0].clientX : null }}
           onTouchEnd={(e) => {
             const start = touch.current
@@ -186,12 +235,23 @@ export function Viewer({
             if (Math.abs(dx) > 70) go(dx > 0 ? -1 : 1)
           }}
         >
-          <Media key={asset.id} asset={asset} />
+          {/* The picture itself, blurred and dimmed, fills what the picture leaves empty. */}
+          <img
+            key={`backdrop-${asset.id}`}
+            src={mediaUrl(asset.id, 'thumb', asset.hash)}
+            alt=""
+            aria-hidden
+            draggable={false}
+            className="pointer-events-none absolute inset-0 size-full scale-125 object-cover opacity-40 blur-3xl saturate-150"
+          />
+          <div key={asset.id} className="animate-in fade-in relative z-[1] grid max-h-full max-w-full place-items-center duration-200 max-sm:size-full">
+            <Media asset={asset} stream={streamOn} />
+          </div>
           {before && (
-            <Button variant="ghost" size="icon" className="absolute top-1/2 left-2 size-11 -translate-y-1/2 rounded-full bg-black/40 text-white hover:bg-black/60 hover:text-white max-sm:hidden" aria-label={t('Previous')} onClick={() => go(-1)}><ChevronLeft className="size-6" /></Button>
+            <Button variant="ghost" size="icon" className={cn(glass, 'absolute top-1/2 left-2 z-[2] size-11 -translate-y-1/2 max-sm:hidden')} aria-label={t('Previous')} onClick={() => go(-1)}><ChevronLeft className="size-6" /></Button>
           )}
           {after && (
-            <Button variant="ghost" size="icon" className="absolute top-1/2 right-2 size-11 -translate-y-1/2 rounded-full bg-black/40 text-white hover:bg-black/60 hover:text-white max-sm:hidden" aria-label={t('Next')} onClick={() => go(1)}><ChevronRight className="size-6" /></Button>
+            <Button variant="ghost" size="icon" className={cn(glass, 'absolute top-1/2 right-2 z-[2] size-11 -translate-y-1/2 max-sm:hidden')} aria-label={t('Next')} onClick={() => go(1)}><ChevronRight className="size-6" /></Button>
           )}
         </div>
         {info && (

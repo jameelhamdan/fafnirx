@@ -1,11 +1,12 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { ArrowLeft, Image as ImageIcon, Pencil, Trash2 } from 'lucide-react'
+import { ArrowLeft, FolderOpen, Image as ImageIcon, Pencil, Trash2 } from 'lucide-react'
 import { useCallback, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Confirm } from '@/components/confirm'
 import { Empty, ErrorNote, PageHeader } from '@/components/common'
 import { DayGrid } from '@/components/library/day-grid'
+import { FolderGrid } from '@/components/library/folder-grid'
 import { SelectionBar } from '@/components/library/selection-bar'
 import { Viewer } from '@/components/library/viewer'
 import { Button } from '@/components/ui/button'
@@ -13,7 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
-import { api, mediaUrl } from '@/lib/api'
+import { api, mediaUrl, query } from '@/lib/api'
 import { bytes, plural } from '@/lib/format'
 import { useRefreshLibrary } from '@/lib/library'
 import type { AlbumInfo, Asset } from '@/lib/types'
@@ -89,6 +90,7 @@ export default function Album() {
   if (error) return <ErrorNote error={error} />
   if (!data) return <Skeleton className="h-96" />
   const { album } = data
+  const folder = album.folder
 
   return (
     <div>
@@ -98,11 +100,13 @@ export default function Album() {
         description={
           <>
             {plural(album.count, 'item')} · {bytes(album.bytes)}
+            {folder && <span className="mt-1 block">{t('Shows the folder {folder}', { folder: [folder.device, folder.path].filter(Boolean).join('/') })}</span>}
             {album.description && <span className="mt-1 block whitespace-pre-line">{album.description}</span>}
           </>
         }
         actions={
           <>
+            {folder && <Button variant="outline" asChild><Link to={`/files${query({ device: folder.device, path: folder.path })}`}><FolderOpen className="size-4" />{t('Open folder')}</Link></Button>}
             <Button variant="outline" onClick={() => setDialog('edit')}><Pencil className="size-4" />{t('Edit')}</Button>
             <Button variant="outline" onClick={() => setDialog('delete')}><Trash2 className="size-4" />{t('Delete album')}</Button>
           </>
@@ -111,16 +115,20 @@ export default function Album() {
 
       {selected.size > 0 && (
         <div className="sticky top-14 z-20 -mx-3 mb-2 flex items-center gap-2 bg-background/90 px-3 py-2 backdrop-blur md:-mx-6 md:px-6">
-          <div className="min-w-0 flex-1"><SelectionBar selected={[...selected.values()]} onClear={clear} albumId={id} /></div>
+          <div className="min-w-0 flex-1"><SelectionBar selected={[...selected.values()]} onClear={clear} albumId={folder ? undefined : id} /></div>
           {selected.size === 1 && <Button variant="outline" size="sm" onClick={() => cover.mutate([...selected.keys()][0])}><ImageIcon className="size-4" />{t('Use as cover')}</Button>}
         </div>
       )}
 
       {assets && assets.length === 0 ? (
-        <Empty title={t('This album is empty')}>{t('Open the timeline, select photos and choose Add to album.')}</Empty>
+        <Empty title={t('This album is empty')}>{folder ? t('No photos or videos in this folder yet.') : t('Open the timeline, select photos and choose Add to album.')}</Empty>
       ) : (
         <>
-          <DayGrid assets={shown} src={(a) => mediaUrl(a.id, 'thumb', a.hash)} selected={ids} onOpen={(a) => setViewing(a.id)} onToggle={toggle} onToggleMany={toggleMany} />
+          {folder ? (
+            <FolderGrid assets={shown} root={folder.path} src={(a) => mediaUrl(a.id, 'thumb', a.hash)} selected={ids} onOpen={(a) => setViewing(a.id)} onToggle={toggle} />
+          ) : (
+            <DayGrid assets={shown} src={(a) => mediaUrl(a.id, 'thumb', a.hash)} selected={ids} onOpen={(a) => setViewing(a.id)} onToggle={toggle} onToggleMany={toggleMany} />
+          )}
           {assets && assets.length > shown.length && (
             <div className="py-4 text-center"><Button variant="outline" onClick={() => setShowAll(true)}>{t('Show all {count}', { count: assets.length.toLocaleString() })}</Button></div>
           )}

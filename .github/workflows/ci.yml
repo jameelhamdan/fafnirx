@@ -1,11 +1,12 @@
 # Checks every push to master and every pull request: formatting, lints, Rust tests (with a real PostgreSQL) and the
-# web app's types and lint.
+# web app's types and lint. The Release workflow calls it too, so nothing is released that does not pass.
 name: CI
 
 on:
   push:
     branches: [master]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read

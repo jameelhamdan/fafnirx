@@ -1,77 +1,118 @@
-//! Admin login: one password, a signed cookie, and a limit on wrong guesses.
+//! Logging in: users with passwords, sessions kept in the database, and a limit on wrong guesses.
+//!
+//! The cookie holds a random token; the database holds only its hash and the user it belongs to. A session therefore ends
+//! the moment the row goes: when the user logs out, is disabled, or gets a new password.
 
-use crate::web::{ApiError, Done, Res, Shared};
+use super::access::{Access, Role};
+use crate::web::{done, run, ApiError, Done, Res, Shared};
+use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use argon2::Argon2;
 use axum::extract::{ConnectInfo, State};
-use axum::http::{header, HeaderMap, HeaderName, HeaderValue};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{AppendHeaders, IntoResponse};
-use axum::Json;
+use axum::{Extension, Json};
 use fafnirx_common::unix_now;
-use hmac::{Hmac, Mac};
+use postgres::GenericClient;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
-use std::path::Path;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 const COOKIE: &str = "fx_session";
 const SESSION_SECS: i64 = 7 * 86400;
 const LOGIN_WINDOW: Duration = Duration::from_secs(60);
 const LOGIN_MAX: usize = 5;
+pub const MIN_PASSWORD: usize = 8;
 
-/// The key that signs cookies: made once and kept in the data directory, so that logins survive a restart.
-pub fn load_secret(data_dir: &Path) -> anyhow::Result<Vec<u8>> {
-    let path = data_dir.join("web_secret");
-    if let Some(key) = std::fs::read_to_string(&path).ok().and_then(|t| hex::decode(t.trim()).ok()) {
-        if key.len() >= 32 {
-            return Ok(key);
-        }
+fn argon() -> Argon2<'static> {
+    // The tests log in all the time: the cheapest parameters keep them quick. Real masters use the defaults.
+    #[cfg(test)]
+    return Argon2::new(
+        argon2::Algorithm::Argon2id,
+        argon2::Version::V0x13,
+        argon2::Params::new(1024, 1, 1, None).expect("valid parameters"),
+    );
+    #[cfg(not(test))]
+    Argon2::default()
+}
+
+pub fn hash_password(password: &str) -> anyhow::Result<String> {
+    let salt =
+        SaltString::encode_b64(&crate::platform::db::random_bytes::<16>()).map_err(|e| anyhow::anyhow!("salt: {e}"))?;
+    let hash = argon().hash_password(password.as_bytes(), &salt).map_err(|e| anyhow::anyhow!("hash password: {e}"))?;
+    Ok(hash.to_string())
+}
+
+/// Whether `password` is the one `hash` was made from. `!` (no password set) never matches.
+pub fn verify_password(hash: &str, password: &str) -> bool {
+    PasswordHash::new(hash).is_ok_and(|parsed| argon().verify_password(password.as_bytes(), &parsed).is_ok())
+}
+
+/// A hash to check against when the user does not exist, so that the answer takes as long either way.
+fn dummy_hash() -> &'static str {
+    static HASH: OnceLock<String> = OnceLock::new();
+    HASH.get_or_init(|| hash_password("no such user").expect("hashing works"))
+}
+
+/// Hex SHA-256 of a session token, which is all the database keeps of it.
+fn token_hash(token: &str) -> String {
+    crate::platform::db::hash_token(token)
+}
+
+/// Gives the user a password. Every session of the user ends, except `keep` (the one that asked for the change).
+pub fn set_password(
+    conn: &mut impl GenericClient,
+    user_id: i64,
+    password: &str,
+    keep: Option<&str>,
+) -> anyhow::Result<()> {
+    let hash = hash_password(password)?;
+    conn.execute("UPDATE users SET password_hash = $2 WHERE id = $1", &[&user_id, &hash])?;
+    conn.execute("DELETE FROM sessions WHERE user_id = $1 AND token_hash <> $2", &[&user_id, &keep.unwrap_or("")])?;
+    Ok(())
+}
+
+/// The default administrator has no password until the master is started with one: `FAFNIRX_ADMIN_PASSWORD` sets it
+/// that once. Afterwards the variable is not read, so a password changed in the web app stays.
+pub fn bootstrap(conn: &mut impl GenericClient, env_password: &str) -> anyhow::Result<()> {
+    let row = conn.query_one("SELECT id, password_hash FROM users WHERE name = 'admin'", &[])?;
+    let (id, hash): (i64, String) = (row.get(0), row.get(1));
+    if hash != "!" {
+        return Ok(());
     }
-    let key: [u8; 32] = crate::platform::db::random_bytes();
-    std::fs::create_dir_all(data_dir)?;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    std::io::Write::write_all(&mut options.open(&path)?, hex::encode(key).as_bytes())?;
-    // `mode` only applies to a file that is created: a key file made earlier may be more open.
-    #[cfg(unix)]
-    std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
-    Ok(key.to_vec())
+    if env_password.is_empty() {
+        anyhow::bail!(
+            "FAFNIRX_ADMIN_PASSWORD must be set: it is the password of the user \"admin\" until you change it"
+        );
+    }
+    set_password(conn, id, env_password, None)?;
+    tracing::info!("the password of the user \"admin\" was set from FAFNIRX_ADMIN_PASSWORD");
+    Ok(())
 }
 
-/// The key cookies are signed with. It changes with the password.
-pub fn session_key(secret: &[u8], password: &str) -> Vec<u8> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("any key length works");
-    mac.update(password.as_bytes());
-    mac.finalize().into_bytes().to_vec()
-}
-
-fn sign(secret: &[u8], expires: i64) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("any key length works");
-    mac.update(expires.to_string().as_bytes());
-    format!("{expires}.{}", hex::encode(mac.finalize().into_bytes()))
-}
-
-fn valid(secret: &[u8], value: &str) -> bool {
-    let Some((expires, _)) = value.split_once('.') else { return false };
-    let Ok(expires) = expires.parse::<i64>() else { return false };
-    expires > unix_now() && constant_time_eq(sign(secret, expires).as_bytes(), value.as_bytes())
-}
-
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).fold(0, |acc, (x, y)| acc | (x ^ y)) == 0
-}
-
-pub fn is_logged_in(state: &Shared, headers: &HeaderMap) -> bool {
-    let Some(cookies) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) else { return false };
+fn cookie_token(headers: &HeaderMap) -> Option<String> {
+    let cookies = headers.get(header::COOKIE)?.to_str().ok()?;
     cookies
         .split(';')
         .filter_map(|c| c.trim().split_once('='))
-        .any(|(name, value)| name == COOKIE && valid(&state.secret, value))
+        .find(|(name, value)| *name == COOKIE && value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit()))
+        .map(|(_, value)| value.to_string())
+}
+
+/// The user a session cookie belongs to, if the session is there, has not expired and the user is not disabled.
+pub fn user_of_session(conn: &mut impl GenericClient, headers: &HeaderMap) -> anyhow::Result<Option<Access>> {
+    let Some(token) = cookie_token(headers) else { return Ok(None) };
+    let row = conn.query_opt(
+        "SELECT u.id, u.name, u.role FROM sessions s JOIN users u ON u.id = s.user_id
+         WHERE s.token_hash = $1 AND s.expires_at > $2 AND u.disabled_at IS NULL",
+        &[&token_hash(&token), &unix_now()],
+    )?;
+    Ok(row.and_then(|r| Some(Access { user_id: r.get(0), name: r.get(1), role: Role::parse(&r.get::<_, String>(2))? })))
 }
 
 #[derive(Deserialize)]
 pub struct Login {
+    username: String,
     password: String,
 }
 
@@ -86,57 +127,148 @@ pub fn is_secure(headers: &HeaderMap) -> bool {
     headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("https"))
 }
 
+fn wrong() -> ApiError {
+    ApiError(StatusCode::UNAUTHORIZED, "Wrong username or password".into())
+}
+
 pub async fn login(
     State(state): State<Shared>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<Login>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // The connection itself: forwarding headers are not believed, anyone who can reach the port could forge them.
-    let ip = peer.ip().to_string();
+    // The connection itself, unless it comes from a proxy the master was told to trust (`FAFNIRX_TRUSTED_PROXY`): then the
+    // address the proxy saw. Otherwise forwarding headers are not believed, anyone who can reach the port could forge them.
+    // Guesses are counted per address and per user name, so that neither one address trying many names nor many
+    // addresses trying one name gets far.
+    let username = body.username.trim().to_lowercase();
+    let forwarded = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
+    let keys = [state.trusted.client_ip(peer.ip(), forwarded).to_string(), format!("user:{username}")];
     {
         let mut failures = state.login_failures.lock().unwrap_or_else(|e| e.into_inner());
-        // Forget addresses that have been quiet, so the table cannot grow without bound.
+        // Forget keys that have been quiet, so the table cannot grow without bound.
         failures.retain(|_, times| {
             times.retain(|t| t.elapsed() <= LOGIN_WINDOW);
             !times.is_empty()
         });
-        let recent = failures.entry(ip.clone()).or_default();
-        if recent.len() >= LOGIN_MAX {
-            return Err(ApiError(axum::http::StatusCode::TOO_MANY_REQUESTS, "Too many attempts, wait a minute".into()));
+        if keys.iter().any(|k| failures.get(k).is_some_and(|times| times.len() >= LOGIN_MAX)) {
+            return Err(ApiError(StatusCode::TOO_MANY_REQUESTS, "Too many attempts, wait a minute".into()));
         }
-        if !constant_time_eq(&Sha256::digest(body.password.as_bytes()), &Sha256::digest(state.password.as_bytes())) {
-            recent.push(Instant::now());
-            return Err(ApiError(axum::http::StatusCode::UNAUTHORIZED, "Wrong password".into()));
-        }
-        failures.remove(&ip);
     }
-    let cookie = cookie_header(&sign(&state.secret, unix_now() + SESSION_SECS), SESSION_SECS, is_secure(&headers));
-    Ok((AppendHeaders([cookie]), Json(Done { ok: true })))
+
+    let name = username.clone();
+    let user = run(&state, move |c| {
+        Ok(c.query_opt("SELECT id, password_hash FROM users WHERE name = $1 AND disabled_at IS NULL", &[&name])?
+            .map(|r| (r.get::<_, i64>(0), r.get::<_, String>(1))))
+    })
+    .await?;
+    let (id, hash) = match &user {
+        Some((id, hash)) => (Some(*id), hash.clone()),
+        None => (None, dummy_hash().to_string()),
+    };
+    let password = body.password;
+    let matched = tokio::task::spawn_blocking(move || verify_password(&hash, &password))
+        .await
+        .map_err(|e| ApiError::from(anyhow::Error::from(e)))?;
+    let Some(id) = id.filter(|_| matched) else {
+        let mut failures = state.login_failures.lock().unwrap_or_else(|e| e.into_inner());
+        for key in keys {
+            failures.entry(key).or_default().push(Instant::now());
+        }
+        return Err(wrong());
+    };
+    {
+        let mut failures = state.login_failures.lock().unwrap_or_else(|e| e.into_inner());
+        for key in &keys {
+            failures.remove(key);
+        }
+    }
+
+    let token = hex::encode(crate::platform::db::random_bytes::<32>());
+    let stored = token_hash(&token);
+    run(&state, move |c| {
+        let now = unix_now();
+        c.execute("DELETE FROM sessions WHERE expires_at <= $1", &[&now])?;
+        c.execute(
+            "INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES ($1, $2, $3, $4)",
+            &[&stored, &id, &now, &(now + SESSION_SECS)],
+        )?;
+        Ok(())
+    })
+    .await?;
+    Ok((AppendHeaders([cookie_header(&token, SESSION_SECS, is_secure(&headers))]), Json(Done { ok: true })))
 }
 
-pub async fn logout(headers: HeaderMap) -> impl IntoResponse {
-    (AppendHeaders([cookie_header("", 0, is_secure(&headers))]), Json(Done { ok: true }))
+pub async fn logout(State(state): State<Shared>, headers: HeaderMap) -> Result<impl IntoResponse, ApiError> {
+    if let Some(token) = cookie_token(&headers) {
+        let stored = token_hash(&token);
+        run(&state, move |c| Ok(c.execute("DELETE FROM sessions WHERE token_hash = $1", &[&stored]).map(|_| ())?))
+            .await?;
+    }
+    Ok((AppendHeaders([cookie_header("", 0, is_secure(&headers))]), Json(Done { ok: true })))
+}
+
+#[derive(Serialize)]
+pub struct Who {
+    name: String,
+    role: &'static str,
 }
 
 #[derive(Serialize)]
 pub struct Session {
-    admin: bool,
-    /// Shown in the top bar; only told to a logged-in admin.
+    /// Who is logged in; none when nobody is.
+    user: Option<Who>,
+    /// Shown in the top bar; only told to a logged-in user.
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<&'static str>,
-    /// Where the map gets its pictures from (`{z}/{x}/{y}` stand for the tile); only told to a logged-in admin.
+    /// Where the map gets its pictures from (`{z}/{x}/{y}` stand for the tile); only told to a logged-in user.
     #[serde(skip_serializing_if = "Option::is_none")]
     map_tiles: Option<String>,
+    /// Whether videos can be streamed in several qualities (a streaming service is set up); only told to a logged-in user.
+    stream: bool,
 }
 
-pub async fn session(State(state): State<Shared>, headers: HeaderMap) -> Res<Session> {
-    let admin = is_logged_in(&state, &headers);
+pub async fn session(State(state): State<Shared>, access: Option<Extension<Access>>) -> Res<Session> {
+    let access = access.map(|Extension(a)| a);
+    let logged_in = access.is_some();
     Ok(Json(Session {
-        admin,
-        version: admin.then_some(env!("CARGO_PKG_VERSION")),
-        map_tiles: admin.then(|| state.map_tiles.clone()),
+        user: access.map(|a| Who { name: a.name, role: a.role.as_str() }),
+        version: logged_in.then_some(env!("CARGO_PKG_VERSION")),
+        map_tiles: logged_in.then(|| state.map_tiles.clone()),
+        stream: logged_in && state.stream.is_some(),
     }))
+}
+
+#[derive(Deserialize)]
+pub struct ChangePassword {
+    current: String,
+    new: String,
+}
+
+/// Users change their own password; the session they do it in stays.
+pub async fn change_password(
+    State(state): State<Shared>,
+    Extension(access): Extension<Access>,
+    headers: HeaderMap,
+    Json(body): Json<ChangePassword>,
+) -> Res<Done> {
+    if body.new.chars().count() < MIN_PASSWORD {
+        return Err(ApiError::bad(format!("The password needs at least {MIN_PASSWORD} characters")));
+    }
+    let keep = cookie_token(&headers).map(|t| token_hash(&t));
+    let id = access.user_id;
+    let hash: String =
+        run(&state, move |c| Ok(c.query_one("SELECT password_hash FROM users WHERE id = $1", &[&id])?.get(0))).await?;
+    let current = body.current;
+    let matched = tokio::task::spawn_blocking(move || verify_password(&hash, &current))
+        .await
+        .map_err(|e| ApiError::from(anyhow::Error::from(e)))?;
+    if !matched {
+        return Err(ApiError::bad("The current password is wrong"));
+    }
+    let new = body.new;
+    run(&state, move |c| set_password(c, id, &new, keep.as_deref())).await?;
+    done()
 }
 
 #[cfg(test)]
@@ -144,21 +276,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cookies_verify_only_with_the_right_key_and_before_they_expire() {
-        let key = b"0123456789abcdef0123456789abcdef";
-        let good = sign(key, unix_now() + 100);
-        assert!(valid(key, &good));
-        assert!(!valid(b"another key another key another!", &good));
-        assert!(!valid(key, &sign(key, unix_now() - 1)), "expired");
-        assert!(!valid(key, "9999999999.00"), "forged");
-        assert!(!valid(key, "garbage"));
+    fn passwords_verify_only_against_their_own_hash() {
+        let hash = hash_password("correct horse").unwrap();
+        assert!(verify_password(&hash, "correct horse"));
+        assert!(!verify_password(&hash, "correct horse "));
+        assert!(!verify_password("!", "!"), "a user without a password cannot log in");
+        assert!(!verify_password("garbage", "garbage"));
+        assert_ne!(hash, hash_password("correct horse").unwrap(), "every hash has its own salt");
     }
 
     #[test]
-    fn a_new_password_ends_every_session() {
-        let secret = b"0123456789abcdef0123456789abcdef";
-        let (old, new) = (session_key(secret, "one"), session_key(secret, "two"));
-        assert!(!valid(&new, &sign(&old, unix_now() + 100)));
-        assert!(valid(&old, &sign(&old, unix_now() + 100)));
+    fn only_a_well_formed_cookie_is_taken_for_a_token() {
+        let mut headers = HeaderMap::new();
+        let token = "ab".repeat(32);
+        headers.insert(header::COOKIE, HeaderValue::from_str(&format!("x=1; {COOKIE}={token}")).unwrap());
+        assert_eq!(cookie_token(&headers).as_deref(), Some(token.as_str()));
+        headers.insert(header::COOKIE, HeaderValue::from_str(&format!("{COOKIE}=short")).unwrap());
+        assert_eq!(cookie_token(&headers), None);
     }
 }

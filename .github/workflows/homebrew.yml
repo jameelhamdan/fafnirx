@@ -1,7 +1,7 @@
 # Writes the Homebrew formula for a published release into the tap repository, so that
 #   brew install jameelhamdan/fafnirx/fafnirx
-# works. Off for now: it only runs by hand (Actions -> Homebrew -> Run workflow), after the Release workflow has
-# published v<version>.
+# works. The Release workflow calls it after the release is published, when "homebrew" is ticked there (off by default).
+# It can also be run by hand (Actions -> Homebrew -> Run workflow) for a release that exists.
 #
 # Needs: the repository jameelhamdan/homebrew-fafnirx (can be empty), and a secret HOMEBREW_TAP_TOKEN: a personal access
 # token with write access to that repository. The formula covers macOS (Intel and Apple silicon). `fafnirx enroll`
@@ -9,6 +9,12 @@
 name: Homebrew
 
 on:
+  workflow_call:
+    inputs:
+      version:
+        description: Release version without the v
+        type: string
+        required: true
   workflow_dispatch:
     inputs:
       version:

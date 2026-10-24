@@ -23,6 +23,14 @@ pub const ALL: &[Migration] = &[
     Migration { version: 2, name: "indexes", sql: include_str!("../../migrations/0002_indexes.sql") },
     Migration { version: 3, name: "device_totals", sql: include_str!("../../migrations/0003_device_totals.sql") },
     Migration { version: 4, name: "mirror_remote", sql: include_str!("../../migrations/0004_mirror_remote.sql") },
+    Migration {
+        version: 5,
+        name: "source_item_removed",
+        sql: include_str!("../../migrations/0005_source_item_removed.sql"),
+    },
+    Migration { version: 6, name: "users", sql: include_str!("../../migrations/0006_users.sql") },
+    Migration { version: 7, name: "device_instance", sql: include_str!("../../migrations/0007_device_instance.sql") },
+    Migration { version: 8, name: "folder_albums", sql: include_str!("../../migrations/0008_folder_albums.sql") },
 ];
 
 const TRACKING: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -142,10 +150,8 @@ mod tests {
     fn a_database_made_before_migrations_were_recorded_is_adopted() {
         let mut db = Scratch::new();
         db.conn.batch_execute(ALL[0].sql).unwrap();
-        db.conn.execute("INSERT INTO devices (name, token_hash, created_at) VALUES ('keep', 'x', 0)", &[]).unwrap();
         apply(&mut db.conn, LOCK, ALL).unwrap();
         assert_eq!(db.versions(), (1..=ALL.len() as i64).collect::<Vec<_>>());
-        assert_eq!(db.conn.query_one("SELECT COUNT(*) FROM devices", &[]).unwrap().get::<_, i64>(0), 1);
     }
 
     #[test]

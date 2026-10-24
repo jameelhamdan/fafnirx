@@ -1,0 +1,30 @@
+# The reverse proxy in front of fafnirx (see docker-compose.proxy.yml and docs/deployment.md). It is the only thing
+# that is reachable from outside: the master and the streaming service stay inside the compose network.
+#
+#   FAFNIRX_WEB_ADDRESS      the address of the web app. ":80" (the default) is plain HTTP on this machine's address,
+#                            like running without a proxy. A domain name, for example "fafnirx.example.com", makes
+#                            Caddy get a certificate and serve https.
+#   FAFNIRX_DEVICE_ADDRESS   the same for devices: ":7443" (default), or "fafnirx.example.com:7443" for https. A client
+#                            then enrolls with --server https://fafnirx.example.com:7443
+{
+	servers {
+		# Devices speak gRPC, which is HTTP/2; on a plain port that is HTTP/2 without TLS (h2c).
+		protocols h1 h2 h2c
+	}
+	# Behind a Cloudflare tunnel or another proxy of your own, the client's address is in the header that proxy adds.
+	# Name the proxy here so that Caddy believes it and passes the real address on to the master:
+	#   servers {
+	#       trusted_proxies static private_ranges
+	#   }
+}
+
+{$FAFNIRX_WEB_ADDRESS::80} {
+	encode zstd gzip
+	# The web app, its API and its live events (server-sent events are flushed as they come).
+	reverse_proxy master:8080
+}
+
+{$FAFNIRX_DEVICE_ADDRESS::7443} {
+	# gRPC from the devices, over h2c inside the network.
+	reverse_proxy h2c://master:7443
+}

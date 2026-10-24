@@ -8,7 +8,7 @@ use std::time::Duration;
 /// the `postgres` crate drives its own runtime and panics when called from async code.
 pub type Db = r2d2::Pool<PostgresConnectionManager<NoTls>>;
 
-/// A device as the data path knows it: the row id and the folder name.
+/// A device as the data path knows it: the row id and its folder (`<user>/<device>`, or `_master` for the master files).
 #[derive(Clone, Debug)]
 pub struct Device {
     pub id: i64,
@@ -195,15 +195,15 @@ pub mod testing {
 
     /// The device made by [`db_with_device`].
     pub fn device() -> Device {
-        Device { id: 1, name: "d".into() }
+        Device { id: 1, name: "admin/d".into() }
     }
 
-    /// `db()` with one ordinary device named `d` (id 1).
+    /// `db()` with one ordinary device named `d` (id 1) of the administrator (user 1), so its folder is `admin/d`.
     pub fn db_with_device() -> Db {
         let db = db();
         db.get()
             .unwrap()
-            .execute("INSERT INTO devices (name, token_hash, created_at) VALUES ('d', 'x', 0)", &[])
+            .execute("INSERT INTO devices (name, token_hash, created_at, user_id) VALUES ('d', 'x', 0, 1)", &[])
             .unwrap();
         db
     }

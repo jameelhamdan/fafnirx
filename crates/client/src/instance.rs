@@ -31,6 +31,35 @@ pub fn claim(state_dir: &Path, name: &'static str, attempts: u32) -> Result<bool
     Ok(false)
 }
 
+/// Which installation of the client this is: made the first time it is asked for and kept in the state directory. It tells the
+/// master apart two computers that use one device token (a config copied to a second machine has no state directory yet, so
+/// it gets an id of its own). It is not a secret and proves nothing; it only keeps two clients from working as one device.
+pub fn client_id(state_dir: &Path) -> String {
+    let path = state_dir.join("instance-id");
+    if let Some(known) = std::fs::read_to_string(&path)
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| t.len() == 32 && t.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return known;
+    }
+    use sha2::{Digest, Sha256};
+    use std::hash::{BuildHasher, Hasher};
+    // The operating system seeds `RandomState` differently for every one, which is all the randomness this needs.
+    let mut hasher = Sha256::new();
+    for _ in 0..4 {
+        hasher.update(std::collections::hash_map::RandomState::new().build_hasher().finish().to_le_bytes());
+    }
+    hasher.update(
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()).to_le_bytes(),
+    );
+    hasher.update(std::process::id().to_le_bytes());
+    let id = hex::encode(&hasher.finalize()[..16]);
+    let _ = std::fs::create_dir_all(state_dir);
+    let _ = std::fs::write(&path, &id);
+    id
+}
+
 /// Lets go of a lock early, so that a process this one starts can take it.
 pub fn release(name: &str) {
     HELD.lock().unwrap_or_else(|e| e.into_inner()).retain(|(n, _)| *n != name);
@@ -51,6 +80,15 @@ mod tests {
         assert!(claim(dir.path(), "daemon", 1).unwrap(), "free again once released");
         release("daemon");
         release("tray");
+    }
+
+    #[test]
+    fn an_installation_keeps_its_id_and_another_gets_its_own() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let first = client_id(a.path());
+        assert_eq!(first.len(), 32);
+        assert_eq!(client_id(a.path()), first, "kept across runs");
+        assert_ne!(client_id(b.path()), first, "a second state directory is a second installation");
     }
 
     #[test]

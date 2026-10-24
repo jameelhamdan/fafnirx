@@ -7,6 +7,7 @@ import { Confirm } from '../confirm'
 import { api, downloadZip } from '@/lib/api'
 import { plural } from '@/lib/format'
 import { useLibraryActions, useRefreshLibrary } from '@/lib/library'
+import { hasWorkspace, useRole } from '@/lib/session'
 import type { Asset } from '@/lib/types'
 import { AlbumPicker } from './album-picker'
 import { TagDialog } from './tag-dialog'
@@ -14,6 +15,7 @@ import { useT } from '@/lib/i18n'
 
 /** What can be done to the selected photos and videos. Sticks to the top while you scroll. */
 export function SelectionBar({ selected, onClear, albumId }: { selected: Asset[]; onClear: () => void; albumId?: number }) {
+  const mine = hasWorkspace(useRole())
   const { bulk, remove } = useLibraryActions()
   const t = useT()
   const refresh = useRefreshLibrary()
@@ -42,23 +44,27 @@ export function SelectionBar({ selected, onClear, albumId }: { selected: Asset[]
     <div role="toolbar" aria-label={t('Selection')} className="flex items-center gap-1 rounded-lg border bg-popover p-1.5 shadow-md">
       <Button variant="ghost" size="icon" className="size-8" aria-label={t('Clear selection')} onClick={onClear}><X className="size-4" /></Button>
       <span className="mr-auto px-1 text-sm font-medium">{t('{count} selected', { count: selected.length })}</span>
-      <Button variant="ghost" size="sm" aria-label={allFavorite ? t('Remove from favorites') : t('Add to favorites')} onClick={() => bulk.mutate({ ids, favorite: !allFavorite }, { onSuccess: onClear })}>
-        <Heart className={allFavorite ? 'size-4 fill-current' : 'size-4'} /><span className="max-sm:sr-only">{allFavorite ? t('Unfavorite') : t('Favorite')}</span>
-      </Button>
-      <Button variant="ghost" size="sm" onClick={() => setDialog('album')}><FolderPlus className="size-4" /><span className="max-sm:sr-only">{t('Add to album')}</span></Button>
+      {mine && (
+        <Button variant="ghost" size="sm" aria-label={allFavorite ? t('Remove from favorites') : t('Add to favorites')} onClick={() => bulk.mutate({ ids, favorite: !allFavorite }, { onSuccess: onClear })}>
+          <Heart className={allFavorite ? 'size-4 fill-current' : 'size-4'} /><span className="max-sm:sr-only">{allFavorite ? t('Unfavorite') : t('Favorite')}</span>
+        </Button>
+      )}
+      {mine && <Button variant="ghost" size="sm" onClick={() => setDialog('album')}><FolderPlus className="size-4" /><span className="max-sm:sr-only">{t('Add to album')}</span></Button>}
       {albumId !== undefined && <Button variant="ghost" size="sm" onClick={() => void leaveAlbum()}><FolderMinus className="size-4" /><span className="max-sm:sr-only">{t('Remove from album')}</span></Button>}
       <DropdownMenu>
         <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="size-8" aria-label={t('More actions')}><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuItem onSelect={() => setDialog('tags')}><Tag className="size-4" />{t('Add tags')}</DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => bulk.mutate({ ids, archived: !allArchived }, { onSuccess: onClear })}>
-            {allArchived ? <ArchiveRestore className="size-4" /> : <Archive className="size-4" />}{allArchived ? t('Unarchive') : t('Archive')}
-          </DropdownMenuItem>
+          {mine && <DropdownMenuItem onSelect={() => setDialog('tags')}><Tag className="size-4" />{t('Add tags')}</DropdownMenuItem>}
+          {mine && (
+            <DropdownMenuItem onSelect={() => bulk.mutate({ ids, archived: !allArchived }, { onSuccess: onClear })}>
+              {allArchived ? <ArchiveRestore className="size-4" /> : <Archive className="size-4" />}{allArchived ? t('Unarchive') : t('Archive')}
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem onSelect={() => downloadZip(selected.map((a) => ({ device: a.device, path: a.path })), selected.length === 1 ? selected[0].name : 'photos')}>
             <Download className="size-4" />{t('Download')}
           </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem variant="destructive" onSelect={() => setDialog('delete')}><Trash2 className="size-4" />{t('Delete')}</DropdownMenuItem>
+          {mine && <DropdownMenuSeparator />}
+          {mine && <DropdownMenuItem variant="destructive" onSelect={() => setDialog('delete')}><Trash2 className="size-4" />{t('Delete')}</DropdownMenuItem>}
         </DropdownMenuContent>
       </DropdownMenu>
 

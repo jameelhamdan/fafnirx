@@ -1,13 +1,15 @@
-//! The admin HTTP API (JSON under `/api`) and the web app that uses it. Separate from the device gRPC
+//! The HTTP API (JSON under `/api`) and the web app that uses it. Separate from the device gRPC
 //! API: devices can only add data, everything here (browsing, downloading, deleting, configuring)
-//! needs the admin login.
+//! needs a login, and what a user can reach depends on their role (see `access`).
 //!
 //! The routes are split by cost: `light` routes are quick JSON calls, `heavy` routes move file contents
 //! (downloads, uploads, zip) and have no body size limit.
 
+pub mod access;
 mod assets;
-mod auth;
+pub mod auth;
 mod events;
+pub mod users;
 
 #[cfg(test)]
 mod tests;
@@ -35,14 +37,11 @@ pub struct AppState {
     pub db: Db,
     pub store: Arc<Store>,
     pub data_dir: PathBuf,
-    /// The configuration file; changes made through the API tell it to write itself.
-    pub config: Arc<crate::config::ConfigFile>,
-    pub password: String,
-    /// Key that signs the session cookie: made from the stored secret and the password, so a new password ends every session.
-    pub secret: Vec<u8>,
     /// Changes announced by `NOTIFY`, as JSON text, for the live event streams.
     pub events: broadcast::Sender<String>,
     pub login_failures: Mutex<HashMap<String, Vec<Instant>>>,
+    /// The proxies whose word about a client's address is believed (`FAFNIRX_TRUSTED_PROXY`).
+    pub trusted: crate::platform::proxy::Trusted,
     /// Upload sessions that are being filled.
     pub uploads: Mutex<HashMap<String, crate::files::transfer::Upload>>,
     /// At most this many files are streamed at once, so that transfers cannot starve everything else.
@@ -51,31 +50,25 @@ pub struct AppState {
     pub previews: Arc<Semaphore>,
     /// Tile address of the map, with `{z}`, `{x}` and `{y}` in it.
     pub map_tiles: String,
+    /// The video streaming service, when there is one (see `library::stream`).
+    pub stream: Option<library::stream::Backend>,
 }
 
 pub type Shared = Arc<AppState>;
 
 impl AppState {
-    pub fn new(
-        db: Db,
-        store: Arc<Store>,
-        data_dir: PathBuf,
-        password: String,
-        config: Arc<crate::config::ConfigFile>,
-    ) -> Result<Self, anyhow::Error> {
-        let secret = auth::session_key(&auth::load_secret(&data_dir)?, &password);
+    pub fn new(db: Db, store: Arc<Store>, data_dir: PathBuf) -> Result<Self, anyhow::Error> {
         Ok(Self {
             db,
             store,
             data_dir,
-            config,
-            password,
-            secret,
             events: broadcast::channel(256).0,
             login_failures: Mutex::default(),
+            trusted: crate::platform::proxy::Trusted::from_env()?,
             uploads: Mutex::default(),
             streams: Arc::new(Semaphore::new(32)),
             previews: Arc::new(Semaphore::new(4)),
+            stream: library::stream::Backend::from_env(),
             map_tiles: std::env::var("FAFNIRX_MAP_TILES")
                 .ok()
                 .filter(|t| !t.is_empty())
@@ -113,7 +106,7 @@ impl From<anyhow::Error> for ApiError {
         match e.downcast::<ApiError>() {
             Ok(api) => api,
             Err(e) => {
-                tracing::error!("admin api: {e:#}");
+                tracing::error!("web api: {e:#}");
                 Self(StatusCode::INTERNAL_SERVER_ERROR, "internal error".into())
             }
         }
@@ -158,16 +151,21 @@ fn light() -> Router<Shared> {
         .route("/api/login", post(auth::login))
         .route("/api/logout", post(auth::logout))
         .route("/api/session", get(auth::session))
+        .route("/api/me/password", post(auth::change_password))
+        .route("/api/users", get(users::list).post(users::create))
+        .route("/api/users/:name", axum::routing::patch(users::update))
         .route("/api/dashboard", get(monitoring::api::dashboard))
         .route("/api/alerts/:id/dismiss", post(monitoring::api::dismiss))
         .route("/api/settings", get(devices::api::settings).put(devices::api::save_settings))
         .route("/api/devices", get(devices::api::list).post(devices::api::create))
         .route("/api/devices/:name", get(devices::api::detail))
         .route("/api/devices/:name/token", post(devices::api::rotate_token))
+        .route("/api/devices/:name/release", post(devices::api::release))
         .route("/api/devices/:name/revoke", post(devices::api::revoke))
         .route("/api/files", get(files::browse::list))
         .route("/api/files/info", get(files::browse::info))
         .route("/api/files/delete", post(files::browse::remove))
+        .route("/api/files/rescan", post(files::browse::rescan))
         .route("/api/files/restore", post(files::browse::restore))
         .route("/api/timeline/buckets", get(library::photos::buckets))
         .route("/api/timeline", get(library::photos::timeline))
@@ -186,9 +184,9 @@ fn light() -> Router<Shared> {
         .route("/api/albums/:id/files", post(library::albums::add))
         .route("/api/albums/:id/files/remove", post(library::albums::remove))
         .route("/api/sources", get(integrations::api::sources).post(integrations::api::create_source))
-        .route("/api/sources/:name", delete(integrations::api::delete_source))
-        .route("/api/sources/:name/run", post(integrations::api::run_source))
-        .route("/api/sources/:name/toggle", post(integrations::api::toggle_source))
+        .route("/api/sources/:user/:name", delete(integrations::api::delete_source))
+        .route("/api/sources/:user/:name/run", post(integrations::api::run_source))
+        .route("/api/sources/:user/:name/toggle", post(integrations::api::toggle_source))
         .route("/api/mirrors", get(integrations::api::mirrors).post(integrations::api::create_mirror))
         .route("/api/mirrors/:name", delete(integrations::api::delete_mirror))
         .route("/api/mirrors/:name/run", post(integrations::api::run_mirror))
@@ -203,6 +201,7 @@ fn heavy() -> Router<Shared> {
         .route("/api/files/download", get(files::transfer::download))
         .route("/api/files/thumb", get(files::transfer::thumbnail))
         .route("/api/media/:id/:variant", get(files::transfer::media))
+        .route("/api/stream/:id/*rest", get(library::stream::proxy))
         .route("/api/files/zip", post(files::transfer::zip))
         .route("/api/uploads", post(files::transfer::start_upload))
         .route(
@@ -215,7 +214,7 @@ fn heavy() -> Router<Shared> {
         .layer(DefaultBodyLimit::disable())
 }
 
-/// Every route, behind the admin login, plus the web app.
+/// Every route, behind the login, plus the web app.
 pub fn router(state: Shared) -> Router {
     light()
         .merge(heavy())
@@ -274,13 +273,23 @@ async fn security_headers(State(state): State<Shared>, req: axum::extract::Reque
     resp
 }
 
-/// Everything under `/api` except logging in needs a valid session; changes also need the
-/// marker header (a cross-site form cannot set it).
-async fn guard(State(state): State<Shared>, req: axum::extract::Request, next: Next) -> Response {
-    let path = req.uri().path();
-    if path.starts_with("/api/") && path != "/api/login" && path != "/api/session" {
-        if !auth::is_logged_in(&state, req.headers()) {
-            return ApiError(StatusCode::UNAUTHORIZED, "login required".into()).into_response();
+/// Everything under `/api` except logging in needs a valid session (and tells the handlers who it is, as an
+/// [`access::Access`]); changes also need the marker header (a cross-site form cannot set it).
+async fn guard(State(state): State<Shared>, mut req: axum::extract::Request, next: Next) -> Response {
+    let path = req.uri().path().to_string();
+    if path.starts_with("/api/") && path != "/api/login" {
+        let headers = req.headers().clone();
+        let who = match crate::platform::db::with(&state.db, move |c| auth::user_of_session(c, &headers)).await {
+            Ok(who) => who,
+            Err(e) => return ApiError::from(e).into_response(),
+        };
+        match who {
+            Some(who) => {
+                req.extensions_mut().insert(who);
+            }
+            // The page asks who is logged in before it knows: nobody is an answer.
+            None if path == "/api/session" => return next.run(req).await,
+            None => return ApiError(StatusCode::UNAUTHORIZED, "login required".into()).into_response(),
         }
         let changes = !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
         // The zip download is a plain form post; the strict same-site cookie already keeps other sites out.

@@ -1,14 +1,13 @@
 //! Scheduler for third-party sources (inbound) and mirrors (outbound).
 //!
-//! Both are configured in the web UI or in the configuration file (see `crate::config`) and kept in the database,
-//! which is what the scheduler reads; the file and the database are made to agree at start and as the web UI changes
-//! them. A run starts when the interval has
-//! passed, when it has never run, or when someone pressed "run now" (`run_requested`). Sources and
+//! Both are configured in the web UI and kept in the database, which is what the scheduler reads. A run starts when the
+//! interval has passed, when it has never run, or when someone pressed "run now" (`run_requested`). Sources and
 //! mirrors each run one job at a time.
 
 pub mod api;
 pub mod gdrive;
 pub mod mirror;
+pub mod spec;
 
 use crate::platform::db::{self, resolve_alert, upsert_alert, Db, Device};
 use crate::platform::store::Store;
@@ -42,9 +41,9 @@ impl std::fmt::Display for Table {
     }
 }
 
+/// A source that is due. Its device carries the folder (`<user>/source-<name>`), which names it in logs and alerts.
 pub struct SourceRow {
     pub id: i64,
-    pub name: String,
     pub kind: String,
     pub config: String,
     pub device: Device,
@@ -105,7 +104,8 @@ fn tick() -> Duration {
 }
 
 pub async fn spawn(db: Db, store: Arc<Store>, data_dir: PathBuf) {
-    // A restart interrupts whatever was running.
+    // A restart interrupts whatever was running, and leaves the staging folders of its mirror runs behind.
+    let _ = std::fs::remove_dir_all(data_dir.join("mirror-stage"));
     let _ = db::with(&db, |c| {
         for table in [Table::Sources, Table::Mirrors] {
             c.execute(
@@ -121,7 +121,7 @@ pub async fn spawn(db: Db, store: Arc<Store>, data_dir: PathBuf) {
         loop {
             tokio::time::sleep(tick()).await;
             while let Some(src) = blocking_claim(&d, claim_source).await {
-                let (id, name) = (src.id, src.name.clone());
+                let (id, name) = (src.id, src.device.name.clone());
                 let (d2, s2) = (d.clone(), s.clone());
                 // On its own task, so that a panic fails this run instead of ending the scheduler.
                 if let Err(e) = tokio::spawn(async move { run_source(&d2, &s2, src).await }).await {
@@ -155,8 +155,8 @@ async fn blocking_claim<T: Send + 'static>(db: &Db, claim: fn(&Db) -> Option<T>)
 }
 
 /// Picks one due row of `table` (a source or a mirror), marks it running and builds it from `columns`,
-/// which follow `id` (column 0). One statement, so a row can only be claimed once.
-fn claim<T>(db: &Db, table: Table, columns: &str, build: fn(&Row) -> T) -> Option<T> {
+/// which follow `id` (column 0). One statement, so a row can only be claimed once. `key` is who the change is announced to.
+fn claim<T>(db: &Db, table: Table, columns: &str, build: fn(&Row) -> T, key: fn(&T) -> String) -> Option<T> {
     let mut conn = db.get().ok()?;
     let row = conn
         .query_opt(
@@ -170,35 +170,42 @@ fn claim<T>(db: &Db, table: Table, columns: &str, build: fn(&Row) -> T) -> Optio
         )
         .map_err(|e| tracing::error!("claim from {table}: {e}"))
         .ok()??;
-    let _ = db::notify(&mut *conn, "jobs", table.as_str());
-    Some(build(&row))
+    let item = build(&row);
+    let _ = db::notify(&mut *conn, "jobs", &key(&item));
+    Some(item)
 }
 
 fn claim_source(db: &Db) -> Option<SourceRow> {
     claim(
         db,
         Table::Sources,
-        "name, kind, config, device_id, (SELECT d.name FROM devices d WHERE d.id = device_id)",
+        "kind, config, device_id, (SELECT d.folder FROM devices d WHERE d.id = device_id)",
         |r| SourceRow {
             id: r.get(0),
-            name: r.get(1),
-            kind: r.get(2),
-            config: r.get(3),
-            device: Device { id: r.get(4), name: r.get(5) },
+            kind: r.get(1),
+            config: r.get(2),
+            device: Device { id: r.get(3), name: r.get(4) },
         },
+        |s| s.device.name.clone(),
     )
 }
 
 fn claim_mirror(db: &Db) -> Option<MirrorRow> {
-    claim(db, Table::Mirrors, "name, remote_type, options, remote_path, keep_runs, remote", |r| MirrorRow {
-        id: r.get(0),
-        name: r.get(1),
-        remote_type: r.get(2),
-        options: r.get(3),
-        remote_path: r.get(4),
-        keep_runs: r.get(5),
-        remote: r.get(6),
-    })
+    claim(
+        db,
+        Table::Mirrors,
+        "name, remote_type, options, remote_path, keep_runs, remote",
+        |r| MirrorRow {
+            id: r.get(0),
+            name: r.get(1),
+            remote_type: r.get(2),
+            options: r.get(3),
+            remote_path: r.get(4),
+            keep_runs: r.get(5),
+            remote: r.get(6),
+        },
+        |_| "mirrors".into(),
+    )
 }
 
 /// Messages are shown in the web UI: start them with a capital letter.
@@ -223,7 +230,14 @@ fn finish(
         &format!("UPDATE {table} SET last_status = $1, last_message = $2, last_ok_at = COALESCE($3, last_ok_at) WHERE id = $4"),
         &[&status, message, &ok_at, &id],
     );
-    let _ = db::notify(conn, "jobs", table.as_str());
+    let _ = db::notify(
+        conn,
+        "jobs",
+        &match table {
+            Table::Sources => name.to_string(),
+            Table::Mirrors => "mirrors".to_string(),
+        },
+    );
     if status == "ok" {
         let _ = resolve_alert(conn, alert_kind, name);
     } else {
@@ -232,7 +246,7 @@ fn finish(
 }
 
 async fn run_source(db: &Db, store: &Arc<Store>, src: SourceRow) {
-    let (id, name) = (src.id, src.name.clone());
+    let (id, name) = (src.id, src.device.name.clone());
     tracing::info!("source {name}: starting");
     let result = match src.kind.as_str() {
         "gdrive" => crate::integrations::gdrive::run(db.clone(), store.clone(), src).await.map(|o| o.report()),
@@ -280,13 +294,13 @@ mod tests {
         let db = testing::db();
         let mut c = db.get().unwrap();
         c.execute(
-            "INSERT INTO devices (name, kind, token_hash, created_at) VALUES ('source-d', 'source', '!', 0)",
+            "INSERT INTO devices (name, kind, token_hash, created_at, user_id) VALUES ('source-d', 'source', '!', 0, 1)",
             &[],
         )
         .unwrap();
         c.execute(
             "INSERT INTO sources (name, kind, config, device_id, created_at, interval_secs)
-             VALUES ('d', 'gdrive', '{}', (SELECT id FROM devices), 0, 3600)",
+             VALUES ('d', 'gdrive', '{}', (SELECT id FROM devices WHERE kind = 'source'), 0, 3600)",
             &[],
         )
         .unwrap();
@@ -299,7 +313,7 @@ mod tests {
         let db = db();
         let sql = |q: &str, p: &[&(dyn postgres::types::ToSql + Sync)]| db.get().unwrap().execute(q, p).unwrap();
         let first = claim_source(&db).expect("never run: due immediately");
-        assert_eq!(first.name, "d");
+        assert_eq!(first.device.name, "admin/source-d", "named by its folder");
         assert!(claim_source(&db).is_none(), "now running");
         sql("UPDATE sources SET last_status = 'ok'", &[]);
         assert!(claim_source(&db).is_none(), "ran just now, interval not over");

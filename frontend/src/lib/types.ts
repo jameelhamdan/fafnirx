@@ -1,4 +1,4 @@
-// Shapes of the master's admin API (`web`, `devices`, `files`, ... in crates/master/src).
+// Shapes of the master's web API (`web`, `devices`, `files`, ... in crates/master/src).
 
 export type DeviceKind = 'device' | 'local' | 'source'
 
@@ -13,7 +13,12 @@ export interface Activity {
 }
 
 export interface DeviceSummary {
+  /** The name of the device; unique among the devices of its user. */
   name: string
+  /** The user the device belongs to. */
+  user: string
+  /** `<user>/<name>`: how the files, the library and the live updates name the device. */
+  folder: string
   kind: DeviceKind
   online: boolean
   revoked: boolean
@@ -48,6 +53,8 @@ export interface DeviceDetail {
 
 export interface JobState {
   name: string
+  /** What the API calls it, and what is shown: user/name for a source, the name for a mirror. */
+  key: string
   status: string
   running: boolean
   enabled: boolean
@@ -96,10 +103,17 @@ export interface Entry {
   width: number | null
   height: number | null
   taken_at: number | null
+  /** For a device entry: what it is. */
+  device_kind: DeviceKind | "master" | null
+  /** For a device entry: whether the web app may add, change or delete files there. */
+  writable: boolean
 }
 
 export interface Listing {
   device: string | null
+  /** What the device is and whether the web app may change its files; null at the top level. */
+  device_kind: DeviceKind | "master" | null
+  writable: boolean
   path: string
   entries: Entry[]
   total: number
@@ -119,6 +133,8 @@ export interface VersionInfo {
 }
 
 export interface FileInfo {
+  /** The id of the file, also its address for streaming. */
+  id: number
   device: string
   path: string
   name: string
@@ -143,17 +159,25 @@ export interface Settings {
   retention_days: number
 }
 
-export interface FileRef {
-  device: string
-  path: string
+export type Role = 'admin' | 'normal' | 'readonly'
+
+export interface UserInfo {
+  name: string
+  role: Role
+  disabled: boolean
+  created_at: number
+  devices: number
 }
 
 export interface Session {
-  admin: boolean
-  /** Master version; only sent to a logged-in admin. */
+  /** Who is logged in; null when nobody is. */
+  user: { name: string; role: Role } | null
+  /** Master version; only sent to a logged-in user. */
   version?: string
   /** Tile address of the map, with {z}, {x} and {y} in it. */
   map_tiles?: string
+  /** Videos can be streamed in several qualities (a streaming service is set up). */
+  stream?: boolean
 }
 
 /** A photo or video of the library. */
@@ -217,6 +241,8 @@ export interface AlbumInfo {
   count: number
   bytes: number
   cover: number | null
+  /** Set when the album shows a folder of a device: what is in the folder is in the album. */
+  folder: { device: string; path: string } | null
 }
 
 export interface TrashEntry {

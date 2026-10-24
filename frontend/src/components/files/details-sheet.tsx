@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Download, ExternalLink, History, RotateCcw, Trash2 } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { Download, ExternalLink, History, Play, RotateCcw, Trash2 } from 'lucide-react'
+import { Suspense, useState } from 'react'
 import { toast } from 'sonner'
-import { ErrorNote } from '../common'
+import { ErrorNote, Fact } from '../common'
 import { Confirm } from '../confirm'
+import { AppVideo } from '../lazy-video'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Separator } from '../ui/separator'
@@ -12,25 +13,55 @@ import { Skeleton } from '../ui/skeleton'
 import { useNow } from '@/hooks/use-now'
 import { api, downloadUrl, thumbUrl } from '@/lib/api'
 import { ago, bytes, dateTime } from '@/lib/format'
+import { fileSource } from '@/lib/player-source'
+import { useSession } from '@/lib/session'
 import type { FileInfo } from '@/lib/types'
 import { FileIcon } from './file-icon'
 import { useT } from '@/lib/i18n'
 
-function Fact({ label, children }: { label: string; children: ReactNode }) {
+/**
+ * A video plays in the same player as in the library viewer (qualities, subtitles, the keys). Opening the details does
+ * not start it: the picture waits for a click, so that looking at a file's details never makes the server work.
+ */
+function VideoPreview({ info }: { info: FileInfo }) {
+  const t = useT()
+  const stream = useSession()?.stream === true
+  const [started, setStarted] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const source = fileSource(info, stream)
+  if (failed) {
+    return (
+      <div className="grid gap-2 rounded-lg border bg-muted/40 p-4 text-center text-sm text-muted-foreground">
+        <p>{t('This video cannot be played in the browser yet. A playable copy is made in the background for formats browsers do not support.')}</p>
+        <Button variant="outline" size="sm" className="mx-auto" asChild><a href={downloadUrl(info.device, info.path)}><Download className="size-4" />{t('Download')}</a></Button>
+      </div>
+    )
+  }
+  if (!started) {
+    return (
+      <button
+        type="button"
+        aria-label={t('Play')}
+        onClick={() => setStarted(true)}
+        className="group relative grid h-56 w-full place-items-center overflow-hidden rounded-lg border bg-black"
+      >
+        {source.poster && <img src={source.poster} alt="" className="absolute inset-0 size-full object-contain opacity-80" />}
+        <span className="relative grid size-14 place-items-center rounded-full bg-black/55 text-white ring-1 ring-white/20 transition-transform group-hover:scale-105">
+          <Play className="size-6 translate-x-0.5 fill-current" />
+        </span>
+      </button>
+    )
+  }
   return (
-    <div className="min-w-0">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-0.5 break-words text-sm">{children}</dd>
-    </div>
+    <Suspense fallback={<Skeleton className="h-56 w-full" />}>
+      <AppVideo source={source} onFail={() => setFailed(true)} className="w-full rounded-lg [&_video]:max-h-80 [&_video]:w-full" />
+    </Suspense>
   )
 }
 
 function Preview({ info }: { info: FileInfo }) {
   const url = downloadUrl(info.device, info.path, { inline: true })
-  // A video has a poster picture too, but what people want from it here is to play it.
-  if (info.mime.startsWith('video/')) {
-    return <video src={url} poster={info.preview ? thumbUrl(info.device, info.path, 1000) : undefined} controls preload="none" className="max-h-80 w-full rounded-lg border bg-black" />
-  }
+  if (info.mime.startsWith('video/')) return <VideoPreview info={info} />
   if (info.preview) {
     return (
       <a href={url} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg border bg-muted/40">

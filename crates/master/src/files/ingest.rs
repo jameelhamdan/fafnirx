@@ -1,5 +1,5 @@
 //! Recording files in the database and the file store. Shared by the gRPC Commit/MarkDeleted calls
-//! (devices), by the admin API (uploads, deletes), by sources that the master collects itself and by
+//! (devices), by the web API (uploads, deletes), by sources that the master collects itself and by
 //! the file watcher. The content must already be complete in a temporary file.
 //!
 //! Everything that changes one path takes that path's advisory lock first (see [`db::lock_path`]) and
@@ -12,6 +12,9 @@ use anyhow::Result;
 use fafnirx_common::{unix_now, HASH_LEN};
 use postgres::{Client, GenericClient};
 use std::path::Path;
+
+/// The id of the device that holds the master files (see migration 0006).
+pub const MASTER_DEVICE_ID: i64 = 0;
 
 pub struct NewVersion<'a> {
     pub device: &'a Device,
@@ -172,10 +175,10 @@ pub fn live_path_with_root(
 
 /// Whether the path was deleted in the web app. The device is the source of truth for what it holds, but a delete
 /// made on the master is kept: the device is not asked again for that path, and nothing happens on the device.
-pub fn deleted_by_admin(conn: &mut impl GenericClient, device_id: i64, path: &str) -> Result<bool, postgres::Error> {
+pub fn deleted_in_web_app(conn: &mut impl GenericClient, device_id: i64, path: &str) -> Result<bool, postgres::Error> {
     Ok(conn
         .query_opt(
-            "SELECT 1 FROM files WHERE device_id = $1 AND path = $2 AND deleted_at IS NOT NULL AND deleted_by = 'admin'",
+            "SELECT 1 FROM files WHERE device_id = $1 AND path = $2 AND deleted_at IS NOT NULL AND deleted_by = 'web'",
             &[&device_id, &path],
         )?
         .is_some())
@@ -208,10 +211,27 @@ pub fn commit_version(conn: &mut Client, store: &Store, staged: &Path, v: &NewVe
     result
 }
 
+/// The master files share the root of `files/` with the folders of the users: a master path cannot start with the
+/// name of a user, whose folder it would be (the other way round is checked when a user is added).
+pub fn check_master_path(conn: &mut impl GenericClient, device: &Device, path: &str) -> Result<()> {
+    if device.id != MASTER_DEVICE_ID {
+        return Ok(());
+    }
+    let first = path.split('/').next().unwrap_or("").to_lowercase();
+    if conn.query_opt("SELECT 1 FROM users WHERE name = $1", &[&first])?.is_some() {
+        return Err(crate::web::ApiError::conflict(format!(
+            "{first} is the folder of a user: the master files cannot use that name"
+        ))
+        .into());
+    }
+    Ok(())
+}
+
 fn commit_inner(conn: &mut Client, store: &Store, staged: &Path, v: &NewVersion) -> Result<u64> {
     let ts = unix_now();
     let root: &[u8] = &v.root;
     let dev = v.device;
+    check_master_path(conn, dev, v.path)?;
     let mut tx = conn.transaction()?;
     // Both paths of a rename, in a fixed order so that two renames cannot wait for each other.
     let mut locked = vec![v.path];
@@ -293,10 +313,10 @@ fn delete_path(
     device: &Device,
     path: &str,
     ts: i64,
-    by_admin: bool,
+    in_web_app: bool,
     detail: Option<&str>,
 ) -> Result<Option<i64>> {
-    let by = by_admin.then_some("admin");
+    let by = in_web_app.then_some("web");
     let row = conn.query_opt(
         "UPDATE files SET deleted_at = $1, deleted_by = $4 WHERE device_id = $2 AND path = $3 AND deleted_at IS NULL
          RETURNING current_version_id",
@@ -319,13 +339,13 @@ fn archive_deleted(store: &Store, device: &Device, path: &str, version_id: i64) 
     }
 }
 
-/// Marks a path deleted. The data stays until the retention period has passed. `by_admin` is a delete in the
-/// web app: the device keeps its file, and its later changes to it are no longer taken (see [`deleted_by_admin`]).
+/// Marks a path deleted. The data stays until the retention period has passed. `in_web_app` is a delete in the
+/// web app: the device keeps its file, and its later changes to it are no longer taken (see [`deleted_in_web_app`]).
 /// Returns whether anything changed.
-pub fn mark_deleted(conn: &mut Client, store: &Store, device: &Device, path: &str, by_admin: bool) -> Result<bool> {
+pub fn mark_deleted(conn: &mut Client, store: &Store, device: &Device, path: &str, in_web_app: bool) -> Result<bool> {
     let mut tx = conn.transaction()?;
     db::lock_path(&mut tx, device.id, path)?;
-    let changed = delete_locked(&mut tx, store, device, path, by_admin)?;
+    let changed = delete_locked(&mut tx, store, device, path, in_web_app)?;
     tx.commit()?;
     Ok(changed)
 }
@@ -336,10 +356,17 @@ fn delete_locked(
     store: &Store,
     device: &Device,
     path: &str,
-    by_admin: bool,
+    in_web_app: bool,
 ) -> Result<bool> {
     let ts = unix_now();
-    let deleted = delete_path(tx, device, path, ts, by_admin, None)?;
+    let deleted = delete_path(tx, device, path, ts, in_web_app, None)?;
+    if in_web_app && deleted.is_some() {
+        // A file a source collected stays deleted until it changes at the source, whatever the retention period does.
+        tx.execute(
+            "UPDATE source_items SET removed_in_web_app = TRUE WHERE path = $2 AND source_id IN (SELECT id FROM sources WHERE device_id = $1)",
+            &[&device.id, &path],
+        )?;
+    }
     tx.execute("UPDATE devices SET last_seen = $1, totals_stale = TRUE WHERE id = $2", &[&ts, &device.id])?;
     db::notify(tx, "devices", &device.name)?;
     if let Some(version_id) = deleted {
@@ -423,7 +450,7 @@ mod tests {
     }
 
     fn live(store: &Store, path: &str) -> Option<Vec<u8>> {
-        std::fs::read(store.live_path("d", path).unwrap()).ok()
+        std::fs::read(store.live_path("admin/d", path).unwrap()).ok()
     }
 
     #[test]
@@ -441,7 +468,7 @@ mod tests {
         assert!(v2 > v1);
         assert_eq!(live(&store, "a").unwrap(), b"two");
         assert_eq!(
-            std::fs::read(dir.path().join(format!("versions/{v1}/d/a"))).unwrap(),
+            std::fs::read(dir.path().join(format!("versions/{v1}/admin/d/a"))).unwrap(),
             b"one",
             "the replaced file moves to its version"
         );
@@ -456,7 +483,7 @@ mod tests {
         assert!(mark_deleted(&mut c, &store, &device, "b", false).unwrap());
         assert!(live(&store, "b").is_none());
         assert!(!mark_deleted(&mut c, &store, &device, "b", false).unwrap(), "deleting twice changes nothing");
-        assert!(!deleted_by_admin(&mut *c, device.id, "b").unwrap(), "a delete on the device is the device's own");
+        assert!(!deleted_in_web_app(&mut *c, device.id, "b").unwrap(), "a delete on the device is the device's own");
         let actions: Vec<String> =
             c.query("SELECT action FROM events ORDER BY id", &[]).unwrap().iter().map(|r| r.get(0)).collect();
         assert_eq!(actions, ["add", "update", "rename", "delete", "delete"]);
@@ -465,9 +492,25 @@ mod tests {
         assert_eq!(live(&store, "b").unwrap(), b"back", "a deleted path can be added again");
 
         assert!(mark_deleted(&mut c, &store, &device, "b", true).unwrap());
-        assert!(deleted_by_admin(&mut *c, device.id, "b").unwrap(), "a delete in the web app is remembered");
+        assert!(deleted_in_web_app(&mut *c, device.id, "b").unwrap(), "a delete in the web app is remembered");
         commit(&mut c, &store, "b", b"restored", None).unwrap();
-        assert!(!deleted_by_admin(&mut *c, device.id, "b").unwrap(), "and ends when the file is brought back");
+        assert!(!deleted_in_web_app(&mut *c, device.id, "b").unwrap(), "and ends when the file is brought back");
+
+        // A file that a source collected is remembered as removed in the web app in the source's own record.
+        c.execute(
+            "INSERT INTO sources (name, kind, config, device_id, created_at) VALUES ('s', 'gdrive', '{}', 1, 0)",
+            &[],
+        )
+        .unwrap();
+        c.execute("INSERT INTO source_items (source_id, remote_id, path, remote_version) SELECT id, 'r', 'b', 'm' FROM sources", &[]).unwrap();
+        let flag = |c: &mut postgres::Client| -> bool {
+            c.query_one("SELECT removed_in_web_app FROM source_items", &[]).unwrap().get(0)
+        };
+        assert!(mark_deleted(&mut c, &store, &device, "b", false).unwrap());
+        assert!(!flag(&mut c), "a delete by the source itself is not one made in the web app");
+        commit(&mut c, &store, "b", b"again", None).unwrap();
+        assert!(mark_deleted(&mut c, &store, &device, "b", true).unwrap());
+        assert!(flag(&mut c));
     }
 
     #[test]

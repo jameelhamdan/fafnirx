@@ -76,7 +76,7 @@ fn offline_alerts(conn: &mut impl GenericClient) -> Result<(), postgres::Error> 
     let rows: Vec<(String, i64)> = conn
         // Only clients heartbeat; sources and local folders also get a last_seen when they collect something.
         .query(
-            "SELECT name, last_seen FROM devices WHERE kind = 'device' AND revoked_at IS NULL AND last_seen IS NOT NULL",
+            "SELECT folder, last_seen FROM devices WHERE kind = 'device' AND revoked_at IS NULL AND last_seen IS NOT NULL",
             &[],
         )?
         .iter()
@@ -232,7 +232,7 @@ mod tests {
         let db = testing::db_with_device();
         let mut c = db.get().unwrap();
         let c = &mut *c;
-        c.execute("UPDATE devices SET kind = 'source', last_seen = $1", &[&(unix_now() - 600)]).unwrap();
+        c.execute("UPDATE devices SET kind = 'source', last_seen = $1 WHERE id = 1", &[&(unix_now() - 600)]).unwrap();
         offline_alerts(c).unwrap();
         assert_eq!(testing::open_alerts(c), 0, "only clients send heartbeats");
     }
@@ -242,10 +242,10 @@ mod tests {
         let db = testing::db_with_device();
         let mut c = db.get().unwrap();
         let c = &mut *c;
-        c.execute("UPDATE devices SET last_seen = $1", &[&(unix_now() - 600)]).unwrap();
+        c.execute("UPDATE devices SET last_seen = $1 WHERE id = 1", &[&(unix_now() - 600)]).unwrap();
         offline_alerts(c).unwrap();
         assert_eq!(testing::open_alerts(c), 1);
-        c.execute("UPDATE devices SET last_seen = $1", &[&unix_now()]).unwrap();
+        c.execute("UPDATE devices SET last_seen = $1 WHERE id = 1", &[&unix_now()]).unwrap();
         offline_alerts(c).unwrap();
         assert_eq!(testing::open_alerts(c), 0);
     }

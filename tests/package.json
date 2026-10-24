@@ -7,8 +7,8 @@
     "e2e": "node e2e.mjs",
     "retention": "node e2e-retention.mjs",
     "io": "node e2e-io.mjs",
-    "config": "node e2e-config.mjs",
-    "all": "node e2e.mjs && node e2e-retention.mjs && node e2e-io.mjs && node e2e-config.mjs"
+    "stream": "node e2e-stream.mjs",
+    "all": "node e2e.mjs && node e2e-retention.mjs && node e2e-io.mjs && node e2e-stream.mjs"
   },
   "dependencies": {
     "pg": "^8.13.0"

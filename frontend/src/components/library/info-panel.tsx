@@ -11,6 +11,7 @@ import { api, query } from '@/lib/api'
 import { bytes, clock, fromInputValue, toInputValue, whenText } from '@/lib/format'
 import { DEFAULT_TILES } from '@/lib/leaflet-defaults'
 import { useLibraryActions, useTags } from '@/lib/library'
+import { hasWorkspace, useRole } from '@/lib/session'
 import type { AssetDetail, Session } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import type { Place } from './location-picker'
@@ -194,6 +195,8 @@ const parent = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf('/')
 export default function InfoPanel({ id, onClose }: { id: number; onClose: () => void }) {
   const t = useT()
   const { edit } = useLibraryActions()
+  // A read-only user sees everything about a file and changes nothing.
+  const mine = hasWorkspace(useRole())
   const [dialog, setDialog] = useState<'date' | 'place' | null>(null)
   const { data: d, error } = useQuery({ queryKey: ['asset', id], queryFn: () => api.get<AssetDetail>(`/api/library/${id}`) })
   const exif = d?.exif ? Object.entries(d.exif) : []
@@ -206,15 +209,19 @@ export default function InfoPanel({ id, onClose }: { id: number; onClose: () => 
       </div>
       {error ? <p className="text-sm text-destructive">{error.message}</p> : !d ? <Skeleton className="h-64" /> : (
         <>
-          <Description key={`${d.id}:${d.description}`} id={d.id} text={d.description} />
-          <Stars value={d.rating} onChange={(rating) => edit.mutate({ id: d.id, rating })} />
-          <Tags id={d.id} tags={d.tags} />
+          {mine ? (
+            <>
+              <Description key={`${d.id}:${d.description}`} id={d.id} text={d.description} />
+              <Stars value={d.rating} onChange={(rating) => edit.mutate({ id: d.id, rating })} />
+              <Tags id={d.id} tags={d.tags} />
+            </>
+          ) : null}
 
-          <Row icon={Calendar} label={t('Date')} action={<Button variant="ghost" size="sm" onClick={() => setDialog('date')}>{t('Edit')}</Button>}>
+          <Row icon={Calendar} label={t('Date')} action={mine ? <Button variant="ghost" size="sm" onClick={() => setDialog('date')}>{t('Edit')}</Button> : undefined}>
             {whenText(d.when)}
             {d.when_edited && <span className="ml-1.5 text-xs text-muted-foreground">{t('(changed)')}</span>}
           </Row>
-          <Row icon={MapPin} label={t('Place')} action={<Button variant="ghost" size="sm" onClick={() => setDialog('place')}>{d.lat === null ? t('Add') : t('Edit')}</Button>}>
+          <Row icon={MapPin} label={t('Place')} action={mine ? <Button variant="ghost" size="sm" onClick={() => setDialog('place')}>{d.lat === null ? t('Add') : t('Edit')}</Button> : undefined}>
             {d.lat !== null && d.lon !== null ? <span className="tabular-nums">{d.lat.toFixed(5)}, {d.lon.toFixed(5)}{d.place_edited && <span className="ml-1.5 text-xs text-muted-foreground">{t('(changed)')}</span>}</span> : <span className="text-muted-foreground">{t('No place')}</span>}
           </Row>
           <Row icon={FolderOpen} label={t('File')}>

@@ -2,8 +2,33 @@
 
 ## The web app
 
-Log in at `http://<master>:8080` with the admin password. The page title bar shows **Live** when changes are being
-pushed to you; pages refresh by themselves.
+Log in at `http://<master>:8080` with your user name and password. A new master has one user, `admin`, whose password is
+`FAFNIRX_ADMIN_PASSWORD`; change it with the key icon in the top bar. The page title bar shows **Live** when changes are
+being pushed to you; pages refresh by themselves.
+
+## Users and roles
+
+Every device, album, tag and favorite belongs to a user, and each user has a folder of their own on the master. Files that
+belong to nobody are the **master files**; everybody can see those.
+
+| Role | Own devices, sources and files | Master files | Other users' files | Users, settings, mirrors |
+|---|---|---|---|---|
+| **Administrator** | read and write | read and write | read and write | yes |
+| **Normal** | read and write | read and write | no | no |
+| **Read only** | none: no devices, sources, albums, tags or favorites | read | no | no |
+
+An administrator adds users on the **Users** page (name, role, password), changes a role, sets a new password, or disables a
+user. A user can be neither deleted nor renamed: their name is their folder, and what they sent stays. Disabling ends their logins at once
+and their devices stop sending. The master keeps at least one administrator.
+
+* A device belongs to the user who adds it; the same device name can be used by two users (`bob/laptop` and `alice/laptop`).
+  An administrator can add a device for another user. Devices cannot be added without a user, and a read-only user has none.
+* In the file browser the master files are the first entry (**Master files**), then your devices. An administrator also sees
+  the devices of all users, named `user/device`. Uploads go to your local folders and to the master files.
+* Favorites, archive, ratings, descriptions, tags, albums and corrected dates and places are your own, also on master files:
+  what one user says about a master file is not seen by another.
+* The master files cannot be called like a user: a path in the master files that starts with a user's name is refused, and a
+  user whose name the master files already use cannot be added.
 
 | Page | Use it to |
 |---|---|
@@ -14,8 +39,9 @@ pushed to you; pages refresh by themselves.
 | **Dashboard** | See alerts, what is stored (totals are brought up to date when a device finishes syncing), disk usage, who is online and uploading right now, changes of the last two weeks, recent activity, and the state of sources and mirrors |
 | **Files** | Browse, search, preview, download, upload and delete (below) |
 | **Devices** | Add a device, see its status and progress; open one to rotate its token, revoke it, or see its recent changes |
-| **Sources** | Collect Google Drive folders on a schedule |
+| **Sources** | Collect your own Google Drive folders on a schedule (each user has their own; an administrator sees all) |
 | **Mirrors** | Copy everything offsite |
+| **Video streaming** | In the photo viewer, a video's menu offers adaptive quality streaming when the [streaming service](streaming.md) is on |
 | **Settings** | Versions kept per file and the retention period |
 
 ### Photos
@@ -42,12 +68,23 @@ copied or moved: it is another view of the same files.
 - **Albums** group pictures without moving them. Select pictures, choose **Add to album**, and pick an album or type a new
   name. On an album's page you can rename it, set a cover (select one picture), remove pictures from it, or delete it
   (the pictures stay).
+  - In **Files**, select files or folders and choose **Add to album**: a folder adds the photos and videos below it.
+  - **Use folder as album** (in **Files**, for the folder you are in or one you selected) makes an album that *is* the
+    folder: whatever is in it, and below it, is in the album, and a new episode or photo that arrives later shows up by
+    itself. It is made for things like a TV show: the files come in the order of their names (`Episode 2` before
+    `Episode 10`), under a heading for each season folder, with the name under each one. There is one such album per
+    folder; asking again opens it. Files cannot be removed from it, only from the folder.
 - The **Map** shows pictures that have a place, grouped in numbered bubbles that open as you zoom. The strip below lists what
   is in view.
 
 ### Files
 
 The top level lists every device, local folder and source as a folder. Open one and browse like in any file manager.
+Each has its own icon: a server for the **master files**, a monitor for a **computer** that sends its files, a drive for a
+**local folder** and a cloud for a **source**. A badge says whether the web app can change what is inside:
+**Changeable** (the master files and local folders, if your role may write) or **Read-only** (a computer's or a source's
+files, which nothing can be uploaded to or edited in; they can still be browsed, downloaded and hidden by deleting). The badge is also
+shown next to the path inside a folder.
 Every folder shows how many files it holds and how much space they take (the current versions, not the older ones).
 
 - **Search** looks in the current folder and everything below it. **Type** filters by images, videos, audio, documents or
@@ -55,10 +92,14 @@ Every folder shows how many files it holds and how much space they take (the cur
   **Deleted** also lists deleted files, struck through, with the date they will be removed for good.
 - **List or grid**: the grid shows photo thumbnails. Long folders load as you scroll and in pages of 1000 files.
 - **Select** files and folders with the checkboxes. The bar offers **Download** (a zip when it is more than one
-  file or a folder; it streams, so size is no limit) and **Delete**.
+  file or a folder; it streams, so size is no limit), **Add to album** (a folder adds the photos and videos below it),
+  **Use folder as album** (for one selected folder; the toolbar has it for the folder you are in) and **Delete**.
 - **Open a file** to see a preview (photos, video, audio), its size, type, dimensions, when it was taken, the
   photo's EXIF data (camera, lens, exposure, GPS), its content hash, and its **history**: every version with its date
-  and size, each downloadable and restorable. Restoring makes that content the newest version; nothing is lost.
+  and size, each downloadable and restorable. Restoring makes that content the newest version; nothing is lost. A video
+  there plays in the same player as in the photo viewer (click the picture to start it): qualities when
+  [streaming](streaming.md) is set up, subtitles from inside the file or next to it, and the subtitle look and delay in
+  the gear menu.
 - **Upload** into a **local folder**: drag files or folders onto the page, or use the buttons. Uploads run in
   parallel in 8 MiB pieces, resume after a network hiccup, and appear in a panel in the corner. Create a local folder
   from the top level with **New local folder**. Devices and sources are filled by their own sending, so they are
@@ -77,6 +118,14 @@ Deleting never erases at once: the file leaves the listing and its data stays, r
 **Add device** gives a name and a token. The token is shown once, with the exact command to run on the device.
 **Rotate token** replaces the token (the old one stops working immediately) and re-enables a revoked device.
 **Revoke** stops a device from sending; its data stays.
+**Release** lets the next computer that connects with the token take the device over (see below).
+
+**One computer per device.** A device is used by one computer at a time: the first to connect holds it, and a second
+computer that uses the same token (a copied config, a restored backup that is still running) is refused while the first is
+heard from. The second one waits, sends nothing and says so in `fafnirx status` and the tray, and the owner gets an alert
+(**Device used by two computers**) so that two views of the same folders can never be mixed up. If the first computer
+goes quiet for 90 seconds the second takes over by itself, as when a computer is replaced or reinstalled; **Release** does
+it at once, and **Rotate token** frees it too. The computer that lost the device is the one refused from then on.
 
 A device that is uploading shows what it is doing, with a progress bar, speed and time left, on the Dashboard, the
 Devices list and its own page. Local folders and sources have no status; they are just folders.
@@ -129,7 +178,8 @@ The token is not in the file; it is in the OS keychain (`FAFNIRX_TOKEN_STORE=fil
 - A file that becomes a folder of the same name, or the other way round, is handled: the old path is marked deleted
   first.
 - Kept: size and modification time always, permission bits best effort. No extended attributes.
-- Paths are stored normalized (NFC) with `/` separators.
+- The web app speaks English, Spanish, Chinese, Arabic, Russian and Japanese: pick one with the language icon in the top bar (the first visit follows the browser's language).
+- Files and folders can be named in any script (Arabic, Chinese, emoji...): paths are UTF-8, stored normalized (NFC) with `/` separators. Only the names of users, devices and sources are limited to lowercase letters, digits, `.`, `_` and `-`, because they are folders of their own.
 - A file that keeps changing during upload is retried after 10 minutes, then 1 hour, then 1 day.
 - While the master is unreachable, changes queue on the device and flow when it returns.
 
@@ -187,10 +237,16 @@ The change log (the activity lists) is kept 90 days.
 
 ## Local folders and the network drive
 
-`data/files/` is a plain tree: `files/<name>/<path>`. You can share it over SMB or NFS and use it like a drive.
+`data/files/` is a plain tree: `files/<user>/<device>/<path>` for the devices of every user, and the **master files** straight
+in `files/<path>`: whatever is in `files/` and is not the folder of a user. You can share it over SMB or NFS and use it like a drive;
+everything dropped into `files/` outside the folders of the users becomes a master file.
 
 - Write as the user the master runs as (`FAFNIRX_UID`), or it cannot move or delete what the share creates.
-- A **new folder** directly under `files/` with a valid name becomes a local folder (a device of its own) by itself.
+- A **new folder** `files/<user>/<name>` with a valid name becomes a local folder (a device of that user) by itself. A new
+  folder directly under `files/` is just a folder of the master files.
+- The folders of the users hold their private files. Share them read-only (or not at all): anyone who can write to the share
+  as the user the master runs as can change them, and anyone who can read the share can read all of them. The share has its
+  own logins; they are not the users of fafnirx.
 - Only local folders are written to in place. The folder of a device or a source is the copy of theirs: share it read-only,
   because what is written inside it directly is not recorded.
 - Files you add, change or delete in a local folder are recorded as versions of that folder's files within seconds (the master
@@ -198,6 +254,8 @@ The change log (the activity lists) is kept 90 days.
 - A file overwritten in place has no previous copy to keep, so only versions replaced through a client or the web
   app are kept as history. Deleting a file moves it to `versions/`, so it can be restored.
 - Files being copied in are recorded once they have been quiet for a few seconds.
+- To look right away instead of waiting, an administrator can press **Scan now** (on the Files page, and under **Settings → File
+  store**). It compares the whole of `files/` with the database in the background; a scan already running is not started twice.
 - Names that a Mac writes decomposed (accents as separate characters) are renamed to the composed form, which is how
   every path is stored.
 
@@ -207,22 +265,31 @@ The change log (the activity lists) is kept 90 days.
 2. Share each Drive folder you want with the service account's email address (viewer is enough).
 3. **Sources → Add Google Drive source**: a name, the folder ids or URLs (one per line), the key, and how often to collect.
 
-Files appear under the folder `source-<name>`, with the same versions and retention as any device's. The key is stored in
-the database and in the [configuration file](configuration.md), and is never shown in the web app again.
+A source belongs to the user who adds it (an administrator sees and manages all of them). Its name only has to be unique among
+your own sources, so two users can both have one called `photos`: the web app names it `<user>/<name>`. Files appear under
+the folder `<user>/source-<name>`, with the same versions and retention as any device's. The key is stored in the database and
+is never shown in the web app again.
 
+- A file you delete in the web app stays deleted, even after the retention period has removed it, until it changes on
+  Drive.
 - Only raw files are collected. Google Docs, Sheets, Slides, forms and shortcuts are skipped and counted in the run message.
 - File names are made safe for all platforms (`/ \ : * ? " < > |` become `_`); duplicates get a ` (<id prefix>)` suffix.
 - Renamed or moved files with the same content are not downloaded again.
 - A file you delete in the web app stays deleted until it changes on Drive.
 - Files that disappear from Drive are marked deleted. If listing Drive fails, the run fails and deletes nothing.
-- A failed or partial run raises an alert; the next good run clears it.
+- A failed or partial run raises an alert for the owner of the source (and the administrators); the next good run clears it.
 
 ## Mirrors: offsite copies
 
 **Mirrors → Add mirror**: a name, an rclone backend type, its options, a path on the remote, the interval (default 72 hours)
 and how many runs of history to keep (default 3). Or, if you already have rclone remotes, the name of one (`remote`,
-as `name:path`, from the `rclone.conf` next to the [configuration file](configuration.md)). Mirrors are part of that
-file: one added here is written there, and one added there appears here after a restart.
+as `name:path`, from the `rclone.conf` of the [config folder](#mirrors-that-use-an-rclone-remote)). Mirrors are for
+administrators only, and they push **all** the data (every user's files and the master files) offsite.
+
+> **Remember 3-2-1.** A mirror is the "offsite" copy of a good backup plan: keep **3** copies of your data, on **2** different
+> kinds of storage, with **1** copy offsite. The master is the first copy, a second storage (a snapshot or another disk, see
+> [Deployment](deployment.md#backups)) is the second, and a mirror is the offsite one. A mirror is not a backup of the database,
+> and a single mirror is one copy: add a second one on a different provider if the data matters.
 
 ```text
 # type: s3
@@ -237,13 +304,39 @@ Options are rclone's backend options as `key = value` lines (any backend from <h
 Passwords for backends that need them (SFTP, WebDAV) must be in rclone's obscured form: `rclone obscure <password>`.
 Values are never displayed again; only the option names are.
 
-What a mirror holds, in the same layout as the master:
+### Mirrors that use an rclone remote
+
+If you already have rclone remotes (an encrypted `crypt` remote, a `b2` bucket with an application key, an OAuth login that
+`rclone config` made), use them: put `rclone.conf` in the config folder (`./config`; `FAFNIRX_RCLONE_CONFIG` names another
+file) and give the remote's name in the **rclone remote** field of **Add mirror**.
+
+```ini
+# config/rclone.conf
+[b2]
+type = b2
+account = ...
+key = ...
+
+[b2crypt]
+type = crypt
+remote = b2:my-bucket/fafnirx
+password = ...      # from: rclone obscure
+```
+
+`remote` is `name:path` (here `b2crypt:`). Keep `rclone.conf` writable by the master: rclone refreshes tokens in it. It holds
+credentials, so keep it readable by its owner only.
+
+### What a mirror holds
+
+In the same layout as the master:
 
 ```text
-files/<device>/...              the current tree of each device, local folder and source
+files/<user>/<device>/...       the current tree of each device, local folder and source
+files/<path>                    the master files
 versions/<UTC time>/...         what that run replaced or removed (same relative paths)
 meta/stats.json                 run statistics
-meta/<device>.json              file list (path, size, mtime, root hash) per device
+meta/<user>_<device>.json       file list (path, size, mtime, root hash) per device
+meta/_master.json               the same for the master files
 meta/library.json               albums, tags, favorites, ratings, descriptions, corrected dates and places
 ```
 
@@ -267,8 +360,8 @@ Any alert can be dismissed by hand. Collection is never paused automatically. Th
 ## Restoring data
 
 Use the web app: open the file, pick a version, **Download** it or **Restore** it. Or take it from disk: the current
-version of a path is `<data>/files/<device>/<path>`; a replaced or deleted version is
-`<data>/versions/<version id>/<device>/<path>` (the version ids are in the web app and in the database). Or copy from a
+version of a path is `<data>/files/<user>/<device>/<path>` (`<data>/files/<path>` for a master file); a replaced or deleted
+version is `<data>/versions/<version id>/<user>/<device>/<path>` (the version ids are in the web app and in the database). Or copy from a
 [mirror's `files/` tree](#mirrors-offsite-copies), which needs nothing from fafnirx.
 
 ## Signed client updates

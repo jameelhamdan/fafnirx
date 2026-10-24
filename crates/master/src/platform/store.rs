@@ -1,6 +1,7 @@
 //! Plain-file store. The current version of every file lives under its own name:
-//!   files/<device name>/<path>                     the live tree
-//!   versions/<version id>/<device name>/<path>     what a newer version or a deletion replaced
+//!   files/<user>/<device>/<path>                   the live tree: the files of a device (its "folder" is <user>/<device>)
+//!   files/<path>                                   master files, which belong to no user (folder `_master`)
+//!   versions/<version id>/<folder>/<path>          what a newer version or a deletion replaced (master: no folder)
 //!   tmp/                                         uploads and downloads that are not complete yet
 
 use anyhow::{bail, Context, Result};
@@ -9,6 +10,9 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// The folder name of the master files, those that belong to no user. No user or device can be called this.
+pub const MASTER_FOLDER: &str = "_master";
 
 pub struct Store {
     files: PathBuf,
@@ -30,13 +34,30 @@ impl Store {
         Ok(store)
     }
 
-    /// `<base>/<device name>/<path>`. Remote paths are already validated; this refuses what could still
-    /// leave the directory on the server's platform.
-    fn resolve(base: &Path, device: &str, path: &str) -> Result<PathBuf> {
-        if device.is_empty() || device.contains(['/', '\\', ':']) || device.starts_with('.') {
-            bail!("device name {device:?} cannot be stored");
+    /// `<base>/<folder>`: `<user>/<device>`, or `base` itself for the master files.
+    fn folder_in(base: &Path, folder: &str) -> Result<PathBuf> {
+        if folder == MASTER_FOLDER {
+            return Ok(base.to_path_buf());
         }
-        let mut out = base.join(device);
+        let mut out = base.to_path_buf();
+        let mut parts = 0;
+        for part in folder.split('/') {
+            parts += 1;
+            if part.is_empty() || part.contains(['\\', ':']) || part.starts_with('.') {
+                bail!("device folder {folder:?} cannot be stored");
+            }
+            out.push(part);
+        }
+        if parts != 2 {
+            bail!("device folder {folder:?} cannot be stored");
+        }
+        Ok(out)
+    }
+
+    /// `<base>/<folder>/<path>`. Remote paths are already validated; this refuses what could still
+    /// leave the directory on the server's platform.
+    fn resolve(base: &Path, folder: &str, path: &str) -> Result<PathBuf> {
+        let mut out = Self::folder_in(base, folder)?;
         for part in path.split('/') {
             if part.is_empty()
                 || part == "."
@@ -51,14 +72,19 @@ impl Store {
         Ok(out)
     }
 
-    /// The live tree: one folder per device.
+    /// The live tree: one folder per user with one folder per device in it, and the master files beside them.
     pub fn live_root(&self) -> &Path {
         &self.files
     }
 
-    /// The folder of a device in the live tree.
-    pub fn live_dir(&self, device: &str) -> PathBuf {
-        self.files.join(device)
+    /// The folder of a device in the live tree (the whole live tree for the master files).
+    pub fn live_dir(&self, folder: &str) -> PathBuf {
+        Self::folder_in(&self.files, folder).unwrap_or_else(|_| self.files.join("\0invalid"))
+    }
+
+    /// The folder of a user in the live tree.
+    pub fn user_dir(&self, user: &str) -> PathBuf {
+        self.files.join(user)
     }
 
     pub fn live_path(&self, device: &str, path: &str) -> Result<PathBuf> {
@@ -295,8 +321,8 @@ mod tests {
         store.write_chunk(1, &root, 0, &data[..CHUNK_SIZE]).unwrap();
         let staged = store.finish_upload(1, &root, data.len() as u64).unwrap();
 
-        store.install("d", "docs/a.bin", &staged, 1_000_000_000, 0).unwrap();
-        assert_eq!(fs::read(store.live_path("d", "docs/a.bin").unwrap()).unwrap(), data);
+        store.install("u/d", "docs/a.bin", &staged, 1_000_000_000, 0).unwrap();
+        assert_eq!(fs::read(store.live_path("u/d", "docs/a.bin").unwrap()).unwrap(), data);
     }
 
     #[test]
@@ -327,8 +353,8 @@ mod tests {
         let (_dir, store) = store();
         let root = root_hash(&[], 0);
         let staged = store.finish_upload(1, &root, 0).unwrap();
-        store.install("d", "empty", &staged, 0, 0).unwrap();
-        assert_eq!(fs::metadata(store.live_path("d", "empty").unwrap()).unwrap().len(), 0);
+        store.install("u/d", "empty", &staged, 0, 0).unwrap();
+        assert_eq!(fs::metadata(store.live_path("u/d", "empty").unwrap()).unwrap().len(), 0);
     }
 
     #[test]
@@ -336,18 +362,18 @@ mod tests {
         let (_dir, store) = store();
         let tmp = store.temp_path();
         fs::write(&tmp, b"one").unwrap();
-        store.install("d", "a/b.txt", &tmp, 0, 0).unwrap();
+        store.install("u/d", "a/b.txt", &tmp, 0, 0).unwrap();
 
-        assert!(store.archive("d", "a/b.txt", 9).unwrap());
-        assert!(!store.live_path("d", "a/b.txt").unwrap().exists());
-        assert_eq!(fs::read(store.version_path(9, "d", "a/b.txt").unwrap()).unwrap(), b"one");
-        assert!(!store.archive("d", "a/b.txt", 10).unwrap(), "nothing live to archive");
+        assert!(store.archive("u/d", "a/b.txt", 9).unwrap());
+        assert!(!store.live_path("u/d", "a/b.txt").unwrap().exists());
+        assert_eq!(fs::read(store.version_path(9, "u/d", "a/b.txt").unwrap()).unwrap(), b"one");
+        assert!(!store.archive("u/d", "a/b.txt", 10).unwrap(), "nothing live to archive");
 
-        store.unarchive("d", "a/b.txt", 9).unwrap();
-        assert!(store.live_path("d", "a/b.txt").unwrap().is_file());
-        store.archive("d", "a/b.txt", 9).unwrap();
+        store.unarchive("u/d", "a/b.txt", 9).unwrap();
+        assert!(store.live_path("u/d", "a/b.txt").unwrap().is_file());
+        store.archive("u/d", "a/b.txt", 9).unwrap();
         store.remove_version(9);
-        assert!(!store.version_path(9, "d", "a/b.txt").unwrap().exists());
+        assert!(!store.version_path(9, "u/d", "a/b.txt").unwrap().exists());
     }
 
     #[test]
@@ -356,14 +382,14 @@ mod tests {
         let tmp = store.temp_path();
         fs::write(&tmp, b"same").unwrap();
         let (root, _) = hash_file(&tmp).unwrap();
-        store.install("d", "x", &tmp, 0, 0).unwrap();
-        let copy = store.copy_live_to_temp("d", "x", &root).unwrap();
-        store.install("d", "y", &copy, 0, 0).unwrap();
-        assert_eq!(fs::read(store.live_path("d", "x").unwrap()).unwrap(), b"same");
-        assert_eq!(fs::read(store.live_path("d", "y").unwrap()).unwrap(), b"same");
+        store.install("u/d", "x", &tmp, 0, 0).unwrap();
+        let copy = store.copy_live_to_temp("u/d", "x", &root).unwrap();
+        store.install("u/d", "y", &copy, 0, 0).unwrap();
+        assert_eq!(fs::read(store.live_path("u/d", "x").unwrap()).unwrap(), b"same");
+        assert_eq!(fs::read(store.live_path("u/d", "y").unwrap()).unwrap(), b"same");
 
-        fs::write(store.live_path("d", "x").unwrap(), b"edited").unwrap();
-        assert!(store.copy_live_to_temp("d", "x", &root).is_err(), "a file edited since it was recorded is refused");
+        fs::write(store.live_path("u/d", "x").unwrap(), b"edited").unwrap();
+        assert!(store.copy_live_to_temp("u/d", "x", &root).is_err(), "a file edited since it was recorded is refused");
     }
 
     #[test]
@@ -382,7 +408,7 @@ mod tests {
     fn paths_cannot_escape_the_store() {
         let (_dir, store) = store();
         for bad in ["../x", "a/../../x", "a//b", "a\\b", ""] {
-            assert!(store.live_path("d", bad).is_err(), "{bad:?}");
+            assert!(store.live_path("u/d", bad).is_err(), "{bad:?}");
         }
     }
 }

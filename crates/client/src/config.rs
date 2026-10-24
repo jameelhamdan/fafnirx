@@ -87,8 +87,13 @@ impl Config {
             if f.name.is_empty() || f.name.contains(['/', '\\']) || f.name == "." || f.name == ".." {
                 bail!("folder name {:?} must be a single path component", f.name);
             }
-            if !names.insert(f.name.to_lowercase()) {
-                bail!("duplicate folder name {:?}", f.name);
+            if !names.insert(fold(&f.name)) {
+                bail!(
+                    "two folders are called {:?}: the master keeps them side by side under this name, and names that differ \
+                     only in case or accents are the same there. Give one a different name, for example {:?}",
+                    f.name,
+                    format!("{}-2", f.name)
+                );
             }
         }
         Ok(())
@@ -120,6 +125,12 @@ impl Config {
     pub fn state_dir(&self, config_path: &Path) -> PathBuf {
         self.state_dir.clone().unwrap_or_else(|| default_state_dir(config_path))
     }
+}
+
+/// What the master tells folder names apart by: letters in any case and any Unicode form (é as one character or as e and
+/// an accent) are the same name, because a file system or a share on the way may not tell them apart.
+fn fold(name: &str) -> String {
+    fafnirx_common::nfc(name).to_lowercase()
 }
 
 /// Hosts that are not reachable from the internet: names without a dot, `.local`/`.lan`/`.internal`
@@ -177,10 +188,10 @@ pub fn add_folder_to_file(config_path: &Path, dir: &Path, name: Option<&str>) ->
                 .map(|n| n.to_string_lossy().into_owned())
                 .filter(|n| !n.is_empty())
                 .context("this folder has no name of its own; choose one with --name")?;
-            let taken: std::collections::HashSet<String> = cfg.folders.iter().map(|f| f.name.to_lowercase()).collect();
+            let taken: std::collections::HashSet<String> = cfg.folders.iter().map(|f| fold(&f.name)).collect();
             let mut candidate = base.clone();
             let mut n = 2;
-            while taken.contains(&candidate.to_lowercase()) {
+            while taken.contains(&fold(&candidate)) {
                 candidate = format!("{base}-{n}");
                 n += 1;
             }
@@ -348,6 +359,21 @@ watch = false
             "a folder containing collected ones"
         );
         assert!(err(add_folder_to_file(&cfg, &dir.path().join("missing"), None)).contains("cannot read"));
+
+        // Names that differ only in case or in Unicode form are the same name to the master.
+        let same = |name: &str| err(add_folder_to_file(&cfg, &dir.path().join("c"), Some(name)));
+        assert!(same("docs").contains("already collected"), "the same folder again");
+        std::fs::create_dir_all(dir.path().join("d")).unwrap();
+        let clash = |name: &str| err(add_folder_to_file(&cfg, &dir.path().join("d"), Some(name)));
+        assert!(clash("DOCS").contains("different name"), "case: {}", clash("DOCS"));
+        assert!(clash("photos").contains("\"photos-2\""), "the error suggests a free name");
+        add_folder_to_file(&cfg, &dir.path().join("d"), Some("caf\u{e9}")).unwrap();
+        std::fs::create_dir_all(dir.path().join("e")).unwrap();
+        assert!(
+            err(add_folder_to_file(&cfg, &dir.path().join("e"), Some("cafe\u{301}"))).contains("different name"),
+            "an accent as its own character"
+        );
+        remove_folder_from_file(&cfg, "caf\u{e9}").unwrap();
 
         remove_folder_from_file(&cfg, "photos-2").unwrap();
         let names: Vec<String> = Config::load(&cfg).unwrap().folders.into_iter().map(|f| f.name).collect();
