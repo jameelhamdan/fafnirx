@@ -204,7 +204,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.name }}
+          name: client-${{ matrix.name }}
           path: out/*
           if-no-files-found: error
 
@@ -262,8 +262,11 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
+      # Only the client files: a run also holds other artifacts (the build records that docker/build-push-action uploads),
+      # and downloading those too failed the release.
       - uses: actions/download-artifact@v4
         with:
+          pattern: client-*
           path: out
           merge-multiple: true
       - name: Create the tag and the release
