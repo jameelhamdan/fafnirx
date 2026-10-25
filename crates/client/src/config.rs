@@ -32,6 +32,9 @@ pub struct Config {
     /// Full scan interval in seconds, 0 disables periodic scans.
     #[serde(default = "default_scan")]
     pub scan_interval_secs: u64,
+    /// How long the deletion of a large share of a folder's files is held back before it is sent to the master.
+    #[serde(default = "default_hold")]
+    pub delete_hold_hours: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_dir: Option<PathBuf>,
     /// Web UI of the master, opened from the tray menu. Default: port 8080 on the server's host.
@@ -47,6 +50,9 @@ fn yes() -> bool {
 fn default_scan() -> u64 {
     3600
 }
+fn default_hold() -> u64 {
+    crate::guard::DEFAULT_HOLD_HOURS
+}
 
 impl Config {
     /// A config with the defaults and no folders yet.
@@ -58,6 +64,7 @@ impl Config {
             bandwidth_limit_kbps: 0,
             watch: true,
             scan_interval_secs: default_scan(),
+            delete_hold_hours: default_hold(),
             state_dir: None,
             web_url: None,
             folders: Vec::new(),

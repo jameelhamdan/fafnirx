@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::HashMap;
 use std::path::Path;
 
 pub struct State {
@@ -43,9 +44,50 @@ impl State {
              CREATE TABLE IF NOT EXISTS retry (
                  path TEXT PRIMARY KEY, fail_count INTEGER NOT NULL, next_retry INTEGER NOT NULL,
                  size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL, last_error TEXT);
-             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS held (folder TEXT PRIMARY KEY, files INTEGER NOT NULL, since INTEGER NOT NULL);",
         )?;
         Ok(Self { conn })
+    }
+
+    /// The folders whose deletes are held back (see `guard`): folder -> (files held, when the hold began).
+    pub fn holds(&self) -> Result<HashMap<String, (usize, i64)>> {
+        let mut stmt = self.conn.prepare("SELECT folder, files, since FROM held")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)? as usize, r.get(2)?))))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Replaces the holds with the ones the last cycle decided on.
+    pub fn set_holds(&mut self, holds: &HashMap<String, (usize, i64)>) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM held", [])?;
+        for (folder, (files, since)) in holds {
+            tx.execute(
+                "INSERT INTO held (folder, files, since) VALUES (?1, ?2, ?3)",
+                params![folder, *files as i64, since],
+            )?;
+        }
+        Ok(tx.commit()?)
+    }
+
+    /// Asks for held deletes to be sent at the next cycle (`fafnirx release-deletes`; the daemon is another process).
+    pub fn request_release(&self) -> Result<()> {
+        self.conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('release_deletes', '1')", [])?;
+        Ok(())
+    }
+
+    /// Whether a release was asked for; the request is used up.
+    pub fn take_release(&self) -> Result<bool> {
+        Ok(self.conn.execute("DELETE FROM meta WHERE key = 'release_deletes'", [])? > 0)
+    }
+
+    /// Files synced per folder.
+    pub fn synced_per_folder(&self) -> Result<HashMap<String, usize>> {
+        let mut counts = HashMap::new();
+        for s in self.all_synced()? {
+            *counts.entry(crate::guard::folder_of(&s.path).to_string()).or_default() += 1;
+        }
+        Ok(counts)
     }
 
     /// Ties this record to one master. When `master_id` is not the one the record was made against, what it
@@ -60,7 +102,8 @@ impl State {
         let tx = self.conn.transaction()?;
         let cleared = tx.execute("DELETE FROM synced", [])?;
         tx.execute("DELETE FROM retry", [])?;
-        tx.execute("DELETE FROM meta WHERE key = 'initial_sync_done'", [])?;
+        tx.execute("DELETE FROM held", [])?;
+        tx.execute("DELETE FROM meta WHERE key IN ('initial_sync_done', 'release_deletes')", [])?;
         tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('master_id', ?1)", [master_id])?;
         tx.commit()?;
         Ok(cleared)

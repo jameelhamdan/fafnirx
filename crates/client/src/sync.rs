@@ -3,6 +3,7 @@
 
 use crate::config::{Config, Folder};
 use crate::daemon::Activity;
+use crate::guard::{self, folder_of};
 use crate::hash::{hash_file, stat, Hashed};
 use crate::net::Client;
 use crate::scan::{scan_folder, Entry};
@@ -10,7 +11,7 @@ use crate::state::{may_attempt, State, Synced, BACKOFF_SECS};
 use crate::throttle::Limiter;
 use fafnirx_common::{chunk_hash, pb, unix_now, CHUNK_SIZE};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -98,10 +99,6 @@ pub struct Engine {
     /// The client's own state folder, which is never collected.
     pub exclude: Option<PathBuf>,
     logged_skips: HashSet<String>,
-}
-
-fn top(path: &str) -> &str {
-    path.split('/').next().unwrap_or("")
 }
 
 /// A file to hash, and whether it is new (never uploaded before).
@@ -196,11 +193,12 @@ impl Engine {
             // Nothing can be a rename, so a file goes out as soon as it is hashed. The first sync of a big
             // folder starts uploading at once, and an interruption loses at most the file in hand.
             self.hash_and_upload(changed, &mut report).await?;
+            self.delete_vanished(vanished, cfg, &mut report).await?;
         } else {
             let candidates = self.hash_changed(changed, &mut vanished, &mut report).await?;
             // Deletes go first: a file that became a folder (or the other way round) cannot be stored while the
             // master still has the old path.
-            self.delete_vanished(vanished, &mut report).await?;
+            self.delete_vanished(vanished, cfg, &mut report).await?;
             self.upload_all(candidates, &mut report).await?;
         }
         // The first sync is over once a cycle has gone through every folder and left nothing behind.
@@ -257,7 +255,7 @@ impl Engine {
             .state
             .all_synced()?
             .into_iter()
-            .filter(|s| scanned.contains(top(&s.path)) && !seen.contains(s.path.as_str()))
+            .filter(|s| scanned.contains(folder_of(&s.path)) && !seen.contains(s.path.as_str()))
             .collect();
         Ok((changed, vanished))
     }
@@ -360,9 +358,41 @@ impl Engine {
         }
     }
 
-    /// The master keeps the data and only marks the path deleted.
-    async fn delete_vanished(&mut self, vanished: Vec<Synced>, report: &mut Report) -> Result<(), SyncError> {
-        for v in vanished {
+    /// Tells the master which files are gone (it keeps the data and only marks the path deleted), except for the
+    /// folders whose deletes the guard holds back. With nothing vanished it still runs, to end holds whose files
+    /// came back.
+    async fn delete_vanished(
+        &mut self,
+        vanished: Vec<Synced>,
+        cfg: &Config,
+        report: &mut Report,
+    ) -> Result<(), SyncError> {
+        let release = self.state.take_release()?;
+        let now = unix_now();
+        let before = self.state.holds()?;
+        let since: HashMap<String, i64> = before.iter().map(|(f, (_, since))| (f.clone(), *since)).collect();
+        let plan = guard::plan(
+            vanished,
+            &self.state.synced_per_folder()?,
+            &since,
+            now,
+            (cfg.delete_hold_hours * 3600) as i64,
+            release,
+        );
+        if plan.held != before {
+            self.state.set_holds(&plan.held)?;
+        }
+        for (folder, (files, _)) in &plan.held {
+            if !before.contains_key(folder) {
+                self.report_error(format!(
+                    "{folder}: {files} files are gone, which is a large part of the folder. Their deletion is held back \
+                     for {} hours in case this is a mistake (a drive not mounted, a folder emptied); `fafnirx \
+                     release-deletes` sends it now",
+                    cfg.delete_hold_hours
+                ));
+            }
+        }
+        for v in plan.send {
             self.check_paused()?;
             self.client.mark_deleted(pb::DeleteRequest { path: v.path.clone() }).await?;
             self.state.remove_synced(&v.path)?;
@@ -496,3 +526,6 @@ async fn send_group(
     response?;
     Ok(total)
 }
+
+#[cfg(test)]
+mod tests;
