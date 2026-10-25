@@ -181,8 +181,8 @@ docker compose exec -T db psql -U fafnirx fafnirx < fafnirx.sql      # restore i
 ## Upgrades
 
 ```sh
-git pull
-docker compose up -d --build
+docker compose pull          # or set FAFNIRX_IMAGE to the new version in .env first
+docker compose up -d
 ```
 
 The master applies the database migrations it is missing on start (in order, in one transaction, serialized by an

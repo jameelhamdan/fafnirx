@@ -66,7 +66,12 @@ and use it as a **network drive**. Files you add or change there are noticed and
   anything in them, and nothing is ever sent back to a device.
 - The device is the source of truth, the master is an aggregator. A file deleted on a device is marked deleted on the
   master, kept in the trash, and removed for good after the retention period. A file renamed or moved on a device is
-  renamed and moved on the master, without sending it again.
+  renamed and moved on the master, without sending it again. If a large part of a folder disappears at once (an unmounted
+  drive, an accidental delete), the client holds those deletions back for hours before passing them on
+  ([when many files disappear](usage.md#when-many-files-disappear)).
+- The master changes only its own files, never a file on a device. There are three roles: an administrator reaches
+  everything, a normal user reads the master files and reads and writes their own folders, a read-only user only reads
+  the master files.
 - A file deleted on the master is hidden and goes to the trash; it is not synced again, and nothing happens on the device.
 - Files a device or a source sent cannot be changed or renamed on the master. Only local folders, the files uploaded
   to the master itself, are changed there.

@@ -16,10 +16,9 @@ services:
       - "${FAFNIRX_DB_DIR:-./pgdata}:/var/lib/postgresql/data"
 
   master:
-    # Built here by default. On a server, set FAFNIRX_IMAGE=<user>/fafnirx-master:<version> (the release on Docker Hub) in
-    # .env and run `docker compose pull && docker compose up -d` instead of building.
-    image: "${FAFNIRX_IMAGE:-fafnirx-master:local}"
-    build: .
+    # The release on Docker Hub. Pin a version in .env (FAFNIRX_IMAGE=jameelh99/fafnirx-master:3.0.1) to upgrade on purpose.
+    # To build from a checkout instead: docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+    image: "${FAFNIRX_IMAGE:-jameelh99/fafnirx-master:latest}"
     restart: unless-stopped
     user: "${FAFNIRX_UID:-1000}:${FAFNIRX_GID:-1000}"
     depends_on:
@@ -49,8 +48,7 @@ services:
   #   then:  mkdir stream-cache && docker compose --profile stream up -d
   # It has no login of its own and publishes no port: only the master talks to it, behind its login.
   stream:
-    image: "${FAFNIRX_IMAGE:-fafnirx-master:local}"
-    build: .
+    image: "${FAFNIRX_IMAGE:-jameelh99/fafnirx-master:latest}"
     profiles: ["stream"]
     restart: unless-stopped
     user: "${FAFNIRX_UID:-1000}:${FAFNIRX_GID:-1000}"

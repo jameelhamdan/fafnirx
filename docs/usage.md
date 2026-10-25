@@ -138,6 +138,7 @@ fafnirx add-folder ~/Documents --name documents                # name inside the
 fafnirx remove-folder documents                                # stops collecting; what is on the master stays
 fafnirx folders                                                # list collected folders
 fafnirx status | pause | resume                                # talk to the running client
+fafnirx release-deletes                                        # send the deletions the delete guard holds back, now
 fafnirx sync                                                   # one cycle in the foreground, then exit
 fafnirx run                                                    # the client itself, in the foreground
 fafnirx update                                                 # check for a signed update now
@@ -157,6 +158,7 @@ server = "http://nas.lan:7443"  # https://... behind a TLS proxy
 bandwidth_limit_kbps = 0        # upload limit in KiB/s, 0 = unlimited
 watch = true                    # react to file changes
 scan_interval_secs = 3600       # full scan interval, 0 disables periodic scans
+delete_hold_hours = 12          # how long a mass deletion is held back, see "When many files disappear"
 update_public_key = "..."       # see Signed client updates
 web_url = "http://nas.lan:8080" # opened from the tray menu (default: port 8080 on the master's host)
 
@@ -182,6 +184,21 @@ The token is not in the file; it is in the OS keychain (`FAFNIRX_TOKEN_STORE=fil
 - Files and folders can be named in any script (Arabic, Chinese, emoji...): paths are UTF-8, stored normalized (NFC) with `/` separators. Only the names of users, devices and sources are limited to lowercase letters, digits, `.`, `_` and `-`, because they are folders of their own.
 - A file that keeps changing during upload is retried after 10 minutes, then 1 hour, then 1 day.
 - While the master is unreachable, changes queue on the device and flow when it returns.
+
+### When many files disappear
+
+On the device, the client is the source of truth: a file it changes, renames or deletes is changed, renamed or marked
+deleted on the master too (the master keeps its data for the retention period). To protect against accidents, a **large**
+deletion is not passed on at once. When at least 10 files of a collected folder are gone and they are more than 20% of
+the files sent from that folder (a drive that is not mounted, a folder emptied by mistake, a runaway script), the client
+holds those deletions back, reports it as an alert in the web app and in `fafnirx status`, and keeps uploading everything
+else. Then:
+
+- If the files come back (the drive is mounted again), the hold ends and nothing was deleted.
+- If they stay gone for `delete_hold_hours` (default 12), it was meant, and the deletions are sent.
+- `fafnirx release-deletes` sends them now.
+
+Smaller deletions are never held. The master's copy of a file deleted in the web app is not touched by this.
 
 ### The first sync
 

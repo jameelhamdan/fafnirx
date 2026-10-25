@@ -1,8 +1,8 @@
 # fafnirx
 
 Collect the files of your computers and phones on a server you own, keep every version, browse them from anywhere,
-and copy them offsite. Data flows one way: devices → master → mirrors. A device can add data to the master; it can
-never read, list or delete what the master holds.
+and copy them offsite. Data flows one way: devices → master → mirrors. A device only reads its own folders and sends
+them; the master never changes a file on a device, and a device can never read or list what the master holds.
 
 ```mermaid
 flowchart LR
@@ -41,22 +41,25 @@ flowchart LR
 
 ## Quick start
 
-On the server (Docker):
+On the server (Docker only, nothing to build):
 
 ```sh
-git clone https://github.com/jameelhamdan/fafnirx.git fafnirx && cd fafnirx
+mkdir fafnirx && cd fafnirx
+curl -fsSLO https://raw.githubusercontent.com/jameelhamdan/fafnirx/master/docker-compose.yml
 printf 'FAFNIRX_ADMIN_PASSWORD=choose-one\nFAFNIRX_DB_PASSWORD=another-one\n' > .env
-docker compose up -d --build        # ./config can hold an rclone.conf for mirrors
+docker compose up -d
 ```
 
-Open `http://<server>:8080`, log in as `admin` with that password, and add a device. It shows the command to run on that device:
+Open `http://<server>:8080`, log in as `admin` with that password, and add a device: the web app shows its token once.
+On the device, install the client from the [latest release](https://github.com/jameelhamdan/fafnirx/releases/latest)
+(Windows setup, macOS and Linux tarball, or a `.deb`), then:
 
 ```sh
-fafnirx enroll --server http://<server>:7443      # asks for the token
+fafnirx enroll --server http://<server>:7443      # asks for the token; also starts the client at every login
 fafnirx add-folder ~/Documents
 ```
 
-`enroll` also starts the client in the background and at every login. That is all.
+Per-platform steps, upgrades and settings: [Installation](docs/installation.md).
 
 ## Documentation
 
@@ -68,7 +71,7 @@ fafnirx add-folder ~/Documents
 | [Deployment](docs/deployment.md) | Storage, backups, Cloudflare tunnel, security |
 | [Architecture](docs/architecture.md) | Components, data model, locking, live updates |
 | [Development](docs/development.md) | Building, running and testing |
-| [Plans](docs/plans/features.md) | Features that are not built |
+| [Plans](docs/plans/features.md) | Features that are not built, and [what could be simplified](docs/plans/simplification.md) |
 
 ## Repository
 

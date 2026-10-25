@@ -43,8 +43,8 @@ pub struct Caller {
     ip: Option<String>,
 }
 
-/// The instance of a client that does not say (one from before instances): all such clients are one instance.
-const LEGACY_INSTANCE: &str = "legacy";
+/// The instance of a caller that does not name one: all such callers count as one computer.
+const UNNAMED_INSTANCE: &str = "unnamed";
 
 /// The address a request comes from: the connection's, or behind a trusted proxy the one the proxy saw.
 fn address_of<T>(req: &Request<T>, trusted: &crate::platform::proxy::Trusted) -> Option<String> {
@@ -59,7 +59,7 @@ fn caller_of<T>(req: &Request<T>, trusted: &crate::platform::proxy::Trusted) -> 
         .and_then(|v| v.to_str().ok())
         .map(|v| clip(v, 64))
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| LEGACY_INSTANCE.into());
+        .unwrap_or_else(|| UNNAMED_INSTANCE.into());
     Ok(Caller { token: bearer(req)?, instance, ip: address_of(req, trusted) })
 }
 
@@ -480,11 +480,11 @@ mod tests {
     }
 
     #[test]
-    fn clients_that_do_not_say_who_they_are_count_as_one() {
+    fn callers_that_do_not_name_an_instance_count_as_one() {
         let db = setup();
         let mut c = db.get().unwrap();
-        authenticate(&mut c, &caller(LEGACY_INSTANCE)).unwrap();
-        authenticate(&mut c, &caller(LEGACY_INSTANCE)).unwrap();
-        authenticate(&mut c, &caller("new")).expect_err("but a newer client does not share it");
+        authenticate(&mut c, &caller(UNNAMED_INSTANCE)).unwrap();
+        authenticate(&mut c, &caller(UNNAMED_INSTANCE)).unwrap();
+        authenticate(&mut c, &caller("new")).expect_err("but a caller that names one does not share it");
     }
 }
