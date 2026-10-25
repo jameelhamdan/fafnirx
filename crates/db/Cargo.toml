@@ -1,28 +1,27 @@
-# This file was generated with `cornucopia`. Do not modify.
-
+# The typed queries: made by build.rs, with Cornucopia, from queries/*.sql and the migrations, and not stored in the
+# repository (see build.rs and docs/development.md).
 [package]
 name = "fafnirx-db"
+version.workspace = true
 edition = "2024"
 rust-version = "1.85"
+license.workspace = true
+publish = false
+build = "build.rs"
 
-[package.version]
-workspace = true
+[dependencies]
+postgres = "0.19.13"
+postgres-protocol = "0.6.11"
+postgres-types = { version = "0.2.13", features = ["derive"] }
 
-[dependencies.postgres]
-version = "^0.19.13"
-optional = true
-
-[dependencies.postgres-protocol]
-version = "^0.6.11"
-
-[dependencies.postgres-types]
-version = "^0.2.13"
-features = ["derive"]
+[build-dependencies]
+cornucopia = "1.0.1"
 
 [features]
-default = ["dep:postgres"]
+# Used by the generated code.
 wasm-sync = []
 
 [lints.rust]
+# Generated code defines helpers that this crate does not happen to use.
 dead_code = "allow"
 unused_imports = "allow"

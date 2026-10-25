@@ -9,12 +9,21 @@ COPY frontend ./
 RUN npm run build
 
 FROM rust:1-bookworm AS build
+# The typed queries (crates/db) are made while building, from the SQL and the migrations, and checked against a real
+# PostgreSQL. One runs in this stage, for the length of the build only; it is not part of the image.
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
+COPY queries queries
 COPY proto proto
 COPY --from=web /src/frontend/dist frontend/dist
-RUN cargo build --release -p fafnirx-master -p fafnirx-sign -p fafnirx-stream
+RUN service postgresql start \
+    && until pg_isready -h localhost -q; do sleep 1; done \
+    && su postgres -c "psql -qc \"ALTER USER postgres PASSWORD 'build'\"" \
+    && FAFNIRX_CODEGEN_DATABASE_URL=postgresql://postgres:build@localhost:5432 \
+       cargo build --release -p fafnirx-master -p fafnirx-sign -p fafnirx-stream \
+    && service postgresql stop
 
 FROM debian:bookworm-slim
 # rclone performs the offsite mirror uploads; ca-certificates lets it (and the master) verify remote TLS; ffmpeg

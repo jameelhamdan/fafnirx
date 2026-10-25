@@ -1,4 +1,4 @@
-# The Dockerfile only needs Cargo.toml, Cargo.lock, crates/, proto/ and frontend/ (see COPY lines); keep the rest out of
+# The Dockerfile only needs Cargo.toml, Cargo.lock, crates/, queries/, proto/ and frontend/ (see COPY lines); keep the rest out of
 # the build context so it is small, and so secrets and local data never reach the image or the layer cache.
 
 # Build output and dependencies (rebuilt inside the image)

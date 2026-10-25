@@ -14,6 +14,10 @@ export FAFNIRX_TEST_DATABASE_URL=postgresql://postgres:test@localhost:55432/post
 cargo build --workspace
 ```
 
+Building the master (and so `--workspace`) makes its typed queries, which are checked against a real PostgreSQL: with
+`FAFNIRX_TEST_DATABASE_URL` set as above that just works, see [Typed queries](#typed-queries-cornucopia). The client
+builds without a database.
+
 A fresh checkout builds without the web app: `crates/master/build.rs` writes a placeholder page into
 `frontend/dist` when there is none. Build the app (`npm run build` in `frontend/`) before building the master you will use.
 
@@ -108,19 +112,31 @@ transaction) stay in the app that owns them. There is no ORM (see [Typed queries
 ## Typed queries (Cornucopia)
 
 SQL lives in `queries/*.sql`, one file per area, written as [Cornucopia](https://github.com/cornucopia-rs/cornucopia)
-queries (`--! name`, named `:parameters`). `scripts/codegen.sh` turns them into the crate
-`crates/db` (`fafnirx-db`): a typed function and row struct per query, checked against the real schema, which is the
-migrations in `crates/master/migrations`. The generated crate is committed, so building needs no database; CI
-regenerates it and fails on a difference. To add or change a query:
+queries (`--! name`, named `:parameters`). The crate `crates/db` (`fafnirx-db`) turns them into a typed function and a
+row struct per query, checked against the real schema (the migrations in `crates/master/migrations`).
 
-1. Edit or add the `.sql` file in `queries/`.
-2. Start a PostgreSQL (the test one will do) and run `DATABASE_URL=postgresql://postgres:test@localhost:55432
-   scripts/codegen.sh`. Install the CLI once with `cargo install cornucopia --locked`.
-3. Call it from a repository function: `fafnirx_db::queries::alerts::resolve_alert().bind(&mut Pg(conn), &now, &kind, &key)`.
-   `platform::pg::Pg` lets generated queries run on any `postgres` client or transaction.
+The generated code is **not in the repository**: `crates/db/build.rs` makes it, into the build folder (`target/`),
+whenever a query, a migration or the script changed, so it is always what the SQL says. Checking the queries needs a
+real PostgreSQL while building. It uses, in this order:
 
-New SQL goes here, not inline in handlers. Queries that are built at run time (for example the folder listing with its
-sort and filter) stay as explicit SQL in a repository function until they can be expressed as fixed queries.
+1. `FAFNIRX_CODEGEN_DATABASE_URL`, a server such as `postgresql://postgres:test@localhost:55432`. A temporary database is
+   made in it and dropped again.
+2. `FAFNIRX_TEST_DATABASE_URL`, the server the tests use (its database name is ignored). With that set, which you need
+   for `cargo test` anyway, nothing more is needed.
+3. Otherwise Docker (or Podman) starts a throwaway PostgreSQL container.
+
+The Docker image build runs a PostgreSQL inside its build stage for this (see the `Dockerfile`), and CI uses its
+PostgreSQL service. The client does not use `fafnirx-db`, so building it needs no database.
+
+To add or change a query:
+
+1. Edit or add the `.sql` file in `queries/`, and build.
+2. Call it from a repository function in `crates/master/src/repo/`, for example
+   `fafnirx_db::queries::alerts::resolve_alert().bind(&mut Pg(conn), &now, &kind, &key)`. `platform::pg::Pg` lets
+   generated queries run on any `postgres` client or transaction.
+
+New SQL goes here, not inline in handlers. A query whose text depends on the request (today only the file listing,
+whose sort order the user chooses) stays as explicit SQL in a repository function (`repo/listing.rs`).
 
 ## Database access in the master
 
