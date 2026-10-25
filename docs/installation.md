@@ -102,7 +102,7 @@ Get the installer from the [latest release](https://github.com/jameelhamdan/fafn
 | Windows | `fafnirx-setup-<version>.exe` |
 | macOS, Apple silicon | `fafnirx-<version>-macos-aarch64.tar.gz` |
 | macOS, Intel | `fafnirx-<version>-macos-x86_64.tar.gz` |
-| Debian, Ubuntu | `fafnirx_<version>_amd64.deb`, `fafnirx_<version>_arm64.deb` |
+| Debian, Ubuntu | `fafnirx_<version>-1_amd64.deb`, `fafnirx_<version>-1_arm64.deb` |
 | Other Linux | `fafnirx-<version>-linux-x86_64.tar.gz`, `fafnirx-<version>-linux-aarch64.tar.gz` |
 
 ### Windows
@@ -117,6 +117,16 @@ Silent install, for several machines:
 ```powershell
 fafnirx-setup-<version>.exe /VERYSILENT /SERVER=nas.lan /TOKEN=<token> /FOLDER="C:\Users\me\Documents"
 ```
+
+### macOS and Linux (one command)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jameelhamdan/fafnirx/master/installer/get.sh | sh -s -- \
+    --server http://<server>:7443 --folder ~/Documents
+```
+
+It downloads the release for this machine, checks its `.sha256`, and runs the install below (it asks for the token on
+the terminal; `FAFNIRX_TOKEN` and `FAFNIRX_VERSION=<version>` are read from the environment).
 
 ### macOS and Linux (tarball)
 
@@ -133,7 +143,7 @@ browser, run `xattr -d com.apple.quarantine ~/.local/bin/fafnirx`.
 ### Debian and Ubuntu (package)
 
 ```sh
-sudo apt install ./fafnirx_<version>_amd64.deb
+sudo apt install ./fafnirx_<version>-1_amd64.deb
 fafnirx enroll --server http://<server>:7443       # asks for the token; starts the client now and at every login
 fafnirx add-folder ~/Documents
 ```
