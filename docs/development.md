@@ -73,7 +73,7 @@ Before sending a change:
 
 ```sh
 cargo fmt --all
-cargo clippy --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
 cd frontend && npx tsc -b && npx oxlint
 ```
 
@@ -102,7 +102,7 @@ holds its API handlers next to its logic, instead of one folder per kind of file
 | `library` | Photos and videos | `meta.rs` (metadata, previews, job queue), `media.rs` (ffmpeg), `photos.rs` (timeline, map, trash, edits), `albums.rs` |
 | `integrations` | Sources and mirrors | `mod.rs` (scheduler), `gdrive.rs`, `mirror.rs`, `api.rs` |
 | `monitoring` | Watching the system | `api.rs` (dashboard, alerts), `jobs.rs` (scheduled alerts, retention) |
-| `web` | The HTTP shell | `mod.rs` (state, errors, the route table), `auth.rs`, `events.rs` (live updates), `assets.rs` (the embedded web app), `tests/` |
+| `web` | The HTTP shell | `mod.rs` (state, errors, the route table), `events.rs` (live updates), `assets.rs` (the embedded web app), `tests/` |
 
 Rules of thumb: a new endpoint goes in the `api.rs` of its app and is registered in `web/mod.rs`; apps may use
 `platform` freely and each other's public functions, but `platform` knows nothing of the apps. SQL lives only in `queries/*.sql` (typed, generated) and in `repo/`: handlers, the gRPC service and the jobs call
@@ -148,7 +148,7 @@ The master uses the synchronous `postgres` crate behind an `r2d2` pool (`crates/
 - **Never create or drop a `Db` (the pool) on an async thread.** `main` leaks one reference on purpose, and tests that
   need the runtime build their state first and call `block_on` afterwards.
 - Helpers take `&mut impl GenericClient`, so they work on both a `Client` and a `Transaction`.
-- Parameters are `$1, $2`; integers are `i64` (every integer column is `BIGINT`).
+- Parameters are named in `queries/*.sql` (`:name`); integers are `i64` (every integer column is `BIGINT`).
 - Use `INSERT ... RETURNING id` instead of "last insert id".
 - Anything that changes one path takes `db::lock_path` first and moves files before the transaction ends
   (`ingest::commit_version` is the model). Announce changes with `db::notify` inside the same transaction.
@@ -164,7 +164,8 @@ database gets all of them; an existing one only the new ones. To change the sche
 
 1. Add the next numbered `.sql` file and an entry at the end of `ALL`. A migration runs once, so it can be plain
    `ALTER TABLE ...`; it should not take long locks on big tables, because the master waits for it before it starts.
-2. Never edit a migration that has been released: the checksum no longer matches and the master refuses to start.3. A database that is newer than the master (a downgrade) is refused with a message.
+2. Never edit a migration that has been released: the checksum no longer matches and the master refuses to start.
+3. A database that is newer than the master (a downgrade) is refused with a message.
 4. Update [the database diagram](architecture.md#database-structure) and the web API types in `frontend/src/lib/types.ts`.
 
 ## Changing the API
@@ -175,7 +176,7 @@ contents), add the type to `frontend/src/lib/types.ts`, and cover it in `web/tes
 
 Every handler under `/api` gets the user as `Extension<Access>` (the guard in `web/mod.rs` puts it there) and must limit what it
 reads and changes to what that user's role reaches: `access.check_see(folder)` / `check_write(folder)` for one device (a device
-the user may not see answers 404), `access::scope` or `Access::visible_sql()` in a query over files, `require_admin()` for what is
+the user may not see answers 404), `Access::viewer()` (or `scope_args()`) passed to the repository function for a query over files, `require_admin()` for what is
 for administrators, `require_workspace()` for what read-only users do not have. Add a case for each role in `web/tests/`, and a line for the route in `ROUTES` (`tests/routes.rs`).
 
 ## Changing the device gRPC contract

@@ -1345,6 +1345,7 @@ dependencies = [
  "protoc-bin-vendored",
  "serde",
  "serde_json",
+ "tokio",
  "tonic",
  "tonic-build",
  "unicode-normalization",

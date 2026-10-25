@@ -1,11 +1,11 @@
 //! Installs the client so it starts when the user logs in / the machine comes up.
 //! Linux: systemd user unit. macOS: LaunchAgent. Windows: per-user Run registry key.
 
-const WINDOWS_RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+const WINDOWS_RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 
 pub fn systemd_unit(exe: &Path, config: &Path) -> String {
     format!(
@@ -17,18 +17,25 @@ pub fn systemd_unit(exe: &Path, config: &Path) -> String {
     )
 }
 
-pub fn launchd_plist(exe: &Path, config: &Path) -> String {
+/// A LaunchAgent that runs `fafnirx --config <config> <command...>` at login, and restarts it when it stops if `keep_alive`.
+fn launchd_plist(label: &str, exe: &Path, config: &Path, command: &[&str], keep_alive: bool) -> String {
+    let command: String = command.iter().map(|word| format!("<string>{word}</string>")).collect();
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
          <plist version=\"1.0\"><dict>\n\
-         <key>Label</key><string>io.fafnirx.client</string>\n\
-         <key>ProgramArguments</key><array><string>{}</string><string>--config</string><string>{}</string><string>run</string><string>--log-file</string></array>\n\
-         <key>RunAtLoad</key><true/>\n<key>KeepAlive</key><true/>\n\
+         <key>Label</key><string>{label}</string>\n\
+         <key>ProgramArguments</key><array><string>{}</string><string>--config</string><string>{}</string>{command}</array>\n\
+         <key>RunAtLoad</key><true/>\n<key>KeepAlive</key><{keep_alive}/>\n\
          </dict></plist>\n",
         exe.display(),
         config.display()
     )
+}
+
+/// The LaunchAgent of the client itself.
+pub fn client_plist(exe: &Path, config: &Path) -> String {
+    launchd_plist("io.fafnirx.client", exe, config, &["run", "--log-file"], true)
 }
 
 pub fn tray_desktop_entry(exe: &Path, config: &Path) -> String {
@@ -44,11 +51,9 @@ X-GNOME-Autostart-enabled=true
     )
 }
 
+/// The LaunchAgent of the tray icon, which is not restarted when the user quits it.
 pub fn tray_plist(exe: &Path, config: &Path) -> String {
-    launchd_plist(exe, config)
-        .replace("io.fafnirx.client", "io.fafnirx.tray")
-        .replace("<string>run</string><string>--log-file</string>", "<string>tray</string>")
-        .replace("<key>KeepAlive</key><true/>", "<key>KeepAlive</key><false/>")
+    launchd_plist("io.fafnirx.tray", exe, config, &["tray"], false)
 }
 
 /// Windows: starts this executable again with `args`, detached from the console.
@@ -106,7 +111,7 @@ pub fn install(config: &Path, dry: bool) -> Result<()> {
         }
     } else if cfg!(target_os = "macos") {
         let plist = home().join("Library/LaunchAgents/io.fafnirx.client.plist");
-        write(dry, &plist, &launchd_plist(&exe, &config))?;
+        write(dry, &plist, &client_plist(&exe, &config))?;
         run(dry, "launchctl", &["load", "-w", &plist.to_string_lossy()])?;
         if cfg!(feature = "tray") {
             let tray = home().join("Library/LaunchAgents/io.fafnirx.tray.plist");
@@ -117,7 +122,6 @@ pub fn install(config: &Path, dry: bool) -> Result<()> {
         // The per-user Run key starts the client at logon without administrator rights.
         let command = format!("\"{}\" --config \"{}\" run --log-file --hidden", exe.display(), config.display());
         run(dry, "reg", &["add", WINDOWS_RUN_KEY, "/v", "fafnirx", "/t", "REG_SZ", "/d", &command, "/f"])?;
-        println!("$ {command}");
         let tray = format!("\"{}\" --config \"{}\" tray --hidden", exe.display(), config.display());
         if cfg!(feature = "tray") {
             run(dry, "reg", &["add", WINDOWS_RUN_KEY, "/v", "fafnirx-tray", "/t", "REG_SZ", "/d", &tray, "/f"])?;
@@ -178,13 +182,16 @@ mod tests {
             "ExecStart=\"/usr/local/bin/fafnirx\" --config \"/home/u/.config/fafnirx/config.toml\" run --log-file"
         ));
         assert!(unit.contains("Restart=always"));
-        let plist = launchd_plist(exe, cfg);
-        assert!(plist.contains("<string>/usr/local/bin/fafnirx</string>") && plist.contains("<key>KeepAlive</key>"));
+        let plist = client_plist(exe, cfg);
+        assert!(
+            plist.contains("<string>/usr/local/bin/fafnirx</string>") && plist.contains("<key>KeepAlive</key><true/>")
+        );
         let tray = tray_plist(exe, cfg);
         assert!(
             tray.contains("io.fafnirx.tray")
                 && tray.contains("<string>tray</string>")
                 && !tray.contains("<string>run</string>")
+                && tray.contains("<key>KeepAlive</key><false/>")
         );
         assert!(
             tray_desktop_entry(exe, cfg).contains("fafnirx\" --config \"/home/u/.config/fafnirx/config.toml\" tray")

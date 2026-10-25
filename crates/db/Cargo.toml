@@ -25,3 +25,7 @@ wasm-sync = []
 # Generated code defines helpers that this crate does not happen to use.
 dead_code = "allow"
 unused_imports = "allow"
+
+[package.metadata.cargo-machete]
+# Used by the generated code, which cargo-machete does not see.
+ignored = ["postgres", "postgres-protocol", "postgres-types"]

@@ -146,6 +146,37 @@ pub fn nfc(name: &str) -> String {
     name.nfc().collect()
 }
 
+/// Seconds in a day.
+pub const DAY_SECS: i64 = 86_400;
+
+/// A unix time in nanoseconds (as `mtime_ns` gives) in seconds.
+pub fn secs_of_ns(ns: i64) -> i64 {
+    ns / 1_000_000_000
+}
+
+/// The last component of a remote path: the name of the file or folder.
+pub fn base_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// Resolves when the process is asked to stop: Ctrl-C, or SIGTERM, which is what `docker stop` and systemd send. A process
+/// that does not handle SIGTERM is not stopped by it when it is the first process of a container.
+#[cfg(feature = "server")]
+pub async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        if let Ok(mut term) = signal(SignalKind::terminate()) {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+            return;
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
+}
+
 /// Validates a remote path and returns it NFC normalized. Remote paths are
 /// relative, '/' separated, and never contain '.', '..', empty or control
 /// components. The master checks them again when it maps them to a place on disk.

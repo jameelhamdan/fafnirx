@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# For the programs that run as servers (the master and the streaming service): `shutdown_signal`.
+server = ["dep:tokio"]
+
 [dependencies]
 fs4 = { version = "1", default-features = false, features = ["sync"] }
 anyhow.workspace = true
@@ -12,9 +16,14 @@ blake3.workspace = true
 prost.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tokio = { workspace = true, optional = true, features = ["signal", "macros"] }
 tonic.workspace = true
 unicode-normalization.workspace = true
 
 [build-dependencies]
 tonic-build = "0.12"
 protoc-bin-vendored = "3"
+
+[package.metadata.cargo-machete]
+# Used by the generated gRPC code.
+ignored = ["prost"]

@@ -16,11 +16,10 @@ use crate::web::access::Access;
 use crate::web::{done, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
-use fafnirx_common::unix_now;
+use fafnirx_common::{base_name, unix_now, DAY_SECS};
 use postgres::{Client, GenericClient};
 use serde::{Deserialize, Deserializer, Serialize};
 
-const DAY: i64 = 86400;
 /// More than a library of one household holds in one month, and few enough to answer in one go.
 pub const MAX_ASSETS: i64 = 20_000;
 const MAX_POINTS: i64 = 200_000;
@@ -32,10 +31,6 @@ const TRASH_PAGE: i64 = 500;
 /// The start of a content hash, which is enough to tell versions of a file apart in a link.
 fn short_hash(root: &[u8]) -> String {
     hex::encode(&root[..root.len().min(6)])
-}
-
-fn file_name(path: &str) -> String {
-    path.rsplit('/').next().unwrap_or(path).to_string()
 }
 
 /// A photo or video as the grid and the viewer need it.
@@ -65,7 +60,7 @@ impl From<library::Asset> for Asset {
     fn from(a: library::Asset) -> Self {
         Self {
             id: a.id,
-            name: file_name(&a.path),
+            name: base_name(&a.path).to_string(),
             kind: meta::kind(&a.path).unwrap_or("image"),
             hash: short_hash(&a.root_hash),
             device: a.folder,
@@ -586,11 +581,11 @@ pub async fn trash(
             .into_iter()
             .map(|r| TrashEntry {
                 id: r.id,
-                name: file_name(&r.path),
+                name: base_name(&r.path).to_string(),
                 device: r.folder,
                 size: r.size,
                 deleted_at: r.deleted_at,
-                purge_at: r.deleted_at + retention_days * DAY,
+                purge_at: r.deleted_at + retention_days * DAY_SECS,
                 version: r.version_id,
                 kind: meta::kind(&r.path),
                 hash: short_hash(&r.root_hash),

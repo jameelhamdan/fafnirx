@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
     tracing::info!("fafnirx-stream listening on {addr}");
     tokio::select! {
         r = axum::serve(listener, service::router(app)) => r.context("server")?,
-        _ = tokio::signal::ctrl_c() => tracing::info!("shutting down"),
+        _ = fafnirx_common::shutdown_signal() => tracing::info!("shutting down"),
     }
     Ok(())
 }

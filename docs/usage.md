@@ -391,7 +391,7 @@ fafnirx-sign keygen --out update.key        # once. Keep update.key off the mast
 # put the printed  update_public_key = "..."  in each client's config.toml
 
 cargo build --profile client -p fafnirx
-fafnirx-sign publish --key update.key --platform linux-x86_64 --version 0.2.0 \
+fafnirx-sign publish --key update.key --platform linux-x86_64 --version <version> \
     --bin target/client/fafnirx --out /path/to/data/updates
 ```
 
