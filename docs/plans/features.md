@@ -14,7 +14,7 @@ Nothing here exists yet. The rest of the documentation describes only what is bu
 ## Release work
 
 - Screenshots in the README.
-- Try the release, Docker and Homebrew workflows on a pre-release before announcing.
+- Try the Homebrew workflow (the release and Docker workflows have run: see the releases and Docker Hub).
 - Test the Linux and macOS autostart, the tray icon, Google Drive against Google, the Cloudflare tunnel setup and the
   video parts against a real ffmpeg.
 - Publish the Homebrew tap and, if wanted, an apt repository (releases already carry `.deb` files).

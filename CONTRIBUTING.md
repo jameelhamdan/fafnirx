@@ -19,7 +19,7 @@ cargo test --workspace
 
 ```sh
 cargo fmt --all
-cargo clippy --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cd frontend && npx tsc -b && npx oxlint
 ```
