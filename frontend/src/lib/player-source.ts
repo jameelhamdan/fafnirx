@@ -3,7 +3,7 @@ import { downloadUrl, mediaUrl, thumbUrl } from './api'
 import type { Asset, FileInfo } from './types'
 
 /** The streaming addresses of a file: the master serves them for the file's id (see `library::stream` in the master). */
-function streamOf(id: number): Pick<PlayerSource, 'hls' | 'subtitles'> {
+function streamOf(id: string): Pick<PlayerSource, 'hls' | 'subtitles'> {
   const base = `/api/stream/${id}`
   return { hls: `${base}/master.m3u8`, subtitles: { list: `${base}/subtitles.json`, track: `${base}/subtitles/{index}.vtt` } }
 }

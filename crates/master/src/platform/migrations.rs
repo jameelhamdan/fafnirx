@@ -32,6 +32,12 @@ pub const ALL: &[Migration] = &[
     Migration { version: 7, name: "device_instance", sql: include_str!("../../migrations/0007_device_instance.sql") },
     Migration { version: 8, name: "folder_albums", sql: include_str!("../../migrations/0008_folder_albums.sql") },
     Migration { version: 9, name: "job_visibility", sql: include_str!("../../migrations/0009_job_visibility.sql") },
+    Migration { version: 10, name: "uuid_ids", sql: include_str!("../../migrations/0010_uuid_ids.sql") },
+    Migration {
+        version: 11,
+        name: "job_notes_and_rename_cleanup",
+        sql: include_str!("../../migrations/0011_job_notes_and_rename_cleanup.sql"),
+    },
 ];
 
 const TRACKING: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -167,6 +173,75 @@ mod tests {
         assert_eq!(db.versions(), [1, 2]);
         let row = db.conn.query_one("SELECT a, b FROM t", &[]).unwrap();
         assert_eq!((row.get::<_, i64>(0), row.get::<_, i64>(1)), (7, 5));
+    }
+
+    #[test]
+    fn ids_become_uuids_and_every_link_follows() {
+        let mut db = Scratch::new();
+        apply(&mut db.conn, LOCK, &ALL[..9]).unwrap();
+        db.conn
+            .batch_execute(
+                "INSERT INTO devices (name, kind, token_hash, created_at, user_id) VALUES ('d', 'local', '!', 0, 1);
+                 INSERT INTO files (device_id, path) VALUES (1, 'a.jpg'), (1, 'b.jpg');
+                 INSERT INTO versions (file_id, root_hash, size, mtime, created_at) VALUES (1, decode('00', 'hex'), 1, 0, 0), (2, decode('01', 'hex'), 1, 0, 0);
+                 UPDATE files SET current_version_id = id;
+                 INSERT INTO file_state (file_id, user_id, updated_at, favorite) VALUES (2, 1, 0, TRUE);
+                 INSERT INTO tags (name, user_id) VALUES ('t', 1);
+                 INSERT INTO file_tags VALUES (2, 1);
+                 INSERT INTO albums (name, created_at, updated_at, user_id, cover_file_id) VALUES ('al', 0, 0, 1, 2);
+                 INSERT INTO album_files VALUES (1, 2, 0);
+                 INSERT INTO jobs (kind, payload, created_at) VALUES ('meta', '{}', 1), ('meta', '{\"n\":2}', 2);
+                 INSERT INTO alerts (kind, message, created_at) VALUES ('disk_usage', 'm', 0);",
+            )
+            .unwrap();
+        apply(&mut db.conn, LOCK, ALL).unwrap();
+
+        let one = |c: &mut Client, sql: &str| -> String { c.query_one(sql, &[]).unwrap().get::<_, String>(0) };
+        let c = &mut db.conn;
+        assert_eq!(one(c, "SELECT data_type FROM information_schema.columns WHERE table_name = 'files' AND column_name = 'id' AND table_schema = current_schema()"), "uuid");
+        assert_eq!(
+            one(c, "SELECT f.path FROM files f JOIN file_state s ON s.file_id = f.id WHERE s.favorite"),
+            "b.jpg"
+        );
+        assert_eq!(one(c, "SELECT f.path FROM files f JOIN versions v ON v.file_id = f.id AND v.id = f.current_version_id ORDER BY f.path LIMIT 1"), "a.jpg");
+        assert_eq!(
+            one(c, "SELECT f.path FROM files f JOIN file_tags ft ON ft.file_id = f.id JOIN tags t ON t.id = ft.tag_id"),
+            "b.jpg"
+        );
+        assert_eq!(one(c, "SELECT f.path FROM files f JOIN albums a ON a.cover_file_id = f.id JOIN album_files af ON af.album_id = a.id AND af.file_id = f.id"), "b.jpg");
+        assert_eq!(
+            one(c, "SELECT string_agg(payload, ',' ORDER BY seq) FROM jobs"),
+            "{},{\"n\":2}",
+            "jobs keep their order"
+        );
+        assert_eq!(one(c, "SELECT message FROM alerts"), "m");
+        c.execute("DELETE FROM files WHERE path = 'b.jpg'", &[]).unwrap_err(); // still referenced by its versions
+    }
+
+    #[test]
+    fn old_renames_are_no_longer_deletes() {
+        let mut db = Scratch::new();
+        apply(&mut db.conn, LOCK, &ALL[..10]).unwrap();
+        db.conn
+            .batch_execute(
+                "INSERT INTO devices (name, kind, token_hash, created_at, user_id) VALUES ('d', 'local', '!', 0, 1);
+                 INSERT INTO files (device_id, path, deleted_at) VALUES (1, 'old', 5), (1, 'gone', 5);
+                 INSERT INTO events (device_id, path, action, ts, detail) VALUES
+                   (1, 'new', 'rename', 5, 'old'), (1, 'old', 'delete', 5, 'renamed to new'), (1, 'gone', 'delete', 5, NULL);",
+            )
+            .unwrap();
+        apply(&mut db.conn, LOCK, ALL).unwrap();
+        let by: Vec<(String, Option<String>)> = db
+            .conn
+            .query("SELECT path, deleted_by FROM files ORDER BY path", &[])
+            .unwrap()
+            .iter()
+            .map(|r| (r.get(0), r.get(1)))
+            .collect();
+        assert_eq!(by, [("gone".to_string(), None), ("old".to_string(), Some("rename".to_string()))]);
+        let actions: Vec<String> =
+            db.conn.query("SELECT action FROM events ORDER BY id", &[]).unwrap().iter().map(|r| r.get(0)).collect();
+        assert_eq!(actions, ["rename", "delete"], "only the delete of the rename is gone");
     }
 
     #[test]

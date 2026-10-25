@@ -26,6 +26,7 @@ pub struct Day {
     day: i64,
     added: i64,
     updated: i64,
+    renamed: i64,
     deleted: i64,
 }
 
@@ -47,7 +48,7 @@ impl From<events::Recent> for Recent {
 
 #[derive(Serialize)]
 pub struct Alert {
-    id: i64,
+    id: crate::platform::id::Id,
     kind: String,
     key: String,
     message: String,
@@ -90,12 +91,14 @@ fn activity(c: &mut Client, who: &Access) -> Result<Vec<Day>, postgres::Error> {
     let first = today - (DAYS - 1);
     let (all, user) = who.scope_args();
     let rows = events::activity_by_day(c, first * 86400, all, user)?;
-    let mut days: Vec<Day> = (first..=today).map(|day| Day { day, added: 0, updated: 0, deleted: 0 }).collect();
+    let mut days: Vec<Day> =
+        (first..=today).map(|day| Day { day, added: 0, updated: 0, renamed: 0, deleted: 0 }).collect();
     for (day, action, n) in rows {
         if let Some(d) = days.get_mut((day - first) as usize) {
             match action.as_str() {
-                "add" | "rename" => d.added += n,
+                "add" => d.added += n,
                 "update" => d.updated += n,
+                "rename" => d.renamed += n,
                 "delete" => d.deleted += n,
                 _ => {}
             }
@@ -122,7 +125,7 @@ pub async fn dashboard(State(state): State<Shared>, Extension(who): Extension<Ac
             .into_iter()
             .filter(|a| who.is_admin() || who.can_see(&a.key))
             .map(|a| Alert {
-                id: a.id,
+                id: crate::platform::id::Id(a.id),
                 kind: a.kind,
                 key: a.key,
                 message: a.message,
@@ -154,7 +157,11 @@ pub async fn dashboard(State(state): State<Shared>, Extension(who): Extension<Ac
     Ok(Json(out))
 }
 
-pub async fn dismiss(State(state): State<Shared>, Extension(who): Extension<Access>, Path(id): Path<i64>) -> Res<Done> {
+pub async fn dismiss(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    Path(crate::platform::id::Id(id)): Path<crate::platform::id::Id>,
+) -> Res<Done> {
     run(&state, move |c| {
         // Only the alerts of a device the user can see.
         let key = alerts::key_of(c, id)?;

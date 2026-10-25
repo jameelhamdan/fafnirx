@@ -1,53 +1,32 @@
 # fafnirx
 
-Collect the files of your computers and phones on a server you own, keep every version, browse them from anywhere,
-and copy them offsite. Data flows one way: devices → master → mirrors. A device only reads its own folders and sends
-them; the master never changes a file on a device, and a device can never read or list what the master holds.
-
-The **core** is a storage service: the client, the master that keeps every version as plain files, users and roles, the
-file browser, retention and offsite mirrors. **Add-ons** build on the same files and database: the photo library
-(timeline, map, albums, tags), video streaming and Google Drive sources. For now everything ships together; the add-ons
-are kept apart in the code so that they can become installable modules later (see
-[Development](docs/development.md#core-and-add-ons)).
+Collect the files of your computers on a server you own, keep every version, browse them from anywhere, and copy them
+offsite. Data flows one way: devices → master → mirrors. A device only reads its own folders and sends them; the
+master never changes a file on a device, and a device can never read or list what the master holds.
 
 ```mermaid
 flowchart LR
     D["Devices<br/>(client: fafnirx)"] -->|"upload only"| M["Master<br/>(fafnirx-master + web app + PostgreSQL)"]
     G["Google Drive<br/>(sources)"] --> M
-    U["Users, in the browser<br/>(web app)"] <-->|"browse, upload, download"| M
-    M -->|"rclone"| O["Offsite mirrors<br/>(S3, SFTP, WebDAV, ...)"]
+    U["Users, in the browser"] <-->|"browse, upload, download"| M
+    M -->|"rclone"| O["Offsite mirrors"]
 ```
 
-## What you get
+## Features
 
-- **A client** for Windows, macOS and Linux that watches the folders you choose, uploads what changes (resumable,
-  verified, deduplicated) and runs by itself from then on. A tray icon shows what it is doing.
-- **A master**, one Rust binary with the web app built in, that stores every file as a normal file under
-  `files/<user>/<device>/<path>`, keeps the newest 5 versions of each, and removes deleted files only after a retention
-  period (30 days by default).
-- **A file browser** in the web app: browse, search, filter by type, sort, preview photos with their EXIF data, see
-  every version of a file, download one file or many (as a zip), upload by dragging files and folders in, delete
-  and restore. Folders show their size. It updates live as devices upload.
-- **A photo library** on the same files, without moving them: a timeline by month and day with a scrubber (on a phone
-  too), thumbnails and previews of photos and videos, favorites, archive, trash, albums (a folder can be an album: a
-  TV show with its seasons, with its first video as the cover; Jellyfin/Kodi-style artwork and `.nfo` next to a video are used), a map of where pictures were taken, and tags, ratings, descriptions and corrected dates and
-  places. Originals are never changed.
-- **Sources and mirrors**: every user can collect their own Google Drive folders on a schedule; administrators copy
-  everything offsite to any storage rclone supports (spelled out in the web app or taken from your own `rclone.conf`).
-  Remember **3-2-1**: 3 copies of your data, on 2 kinds of storage, 1 of them offsite.
-- **Six languages**: English, Spanish, Chinese, Arabic (right to left), Russian and Japanese.
-- **Users and roles**: administrators, normal users and read-only users. Each user has a folder and devices of their own;
-  the **master files**, which belong to nobody, are shared by everybody. See [Users and roles](docs/usage.md#users-and-roles).
-- **A video player** with its own controls, in the photo viewer and in the file browser. Subtitles inside the file or
-  next to it are found by themselves, and you choose the track, the look and the delay. With the optional **streaming**
-  service it plays HLS in several qualities, made as a video is watched. See [Video streaming](docs/streaming.md).
-- **A network drive**: `data/files/` is a plain tree you can share over SMB or NFS and write to; the master notices.
-- **Remote access** without a VPN through a Cloudflare tunnel, behind the bundled Caddy proxy (which also closes the
-  master's own ports), or plain HTTP on your own network. The server is installed with Docker.
+- **Client** (Windows, macOS, Linux): watches folders, uploads changes (resumable, verified, deduplicated), tray icon,
+  self-update from GitHub releases.
+- **Master**: one Rust binary with the web app built in. Files are stored as plain files in
+  `files/<user>/<device>/<path>`; the newest 5 versions are kept, deleted files are removed after 30 days (both configurable).
+- **File browser**: search, filter, sort, preview, version history, zip download, drag-and-drop upload, delete and restore.
+  Photos and videos can be opened in the viewer and rated or favorited from here.
+- **Photo and video library** over the same files: timeline, favorites, archive, trash, albums (a folder can be an album),
+  map, tags, ratings, corrected dates and places. Originals are never changed.
+- **Video player** with subtitles; optional [streaming](docs/streaming.md) in several qualities.
+- **Sources and mirrors**: Google Drive folders in; any [rclone](https://rclone.org) remote out.
+- **Users and roles**: administrator, normal, read-only. Six languages (English, Spanish, Chinese, Arabic, Russian, Japanese).
 
 ## Quick start
-
-On the server (Docker only, nothing to build):
 
 ```sh
 mkdir fafnirx && cd fafnirx
@@ -56,54 +35,42 @@ printf 'FAFNIRX_ADMIN_PASSWORD=choose-one\nFAFNIRX_DB_PASSWORD=another-one\n' > 
 docker compose up -d
 ```
 
-Open `http://<server>:8080`, log in as `admin` with that password, and add a device: the web app shows its token once.
-On the device, install the client from the [latest release](https://github.com/jameelhamdan/fafnirx/releases/latest)
-(Windows setup, a `.deb`, or on macOS and Linux `curl -fsSL .../installer/get.sh | sh`, see the guide), then:
+Open `http://<server>:8080`, log in as `admin`, add a device (its token is shown once). On the device, install the client
+from the [latest release](https://github.com/jameelhamdan/fafnirx/releases/latest), then:
 
 ```sh
-fafnirx enroll --server http://<server>:7443      # asks for the token; also starts the client at every login
+fafnirx enroll --server http://<server>:7443     # asks for the token
 fafnirx add-folder ~/Documents
 ```
-
-Per-platform steps, upgrades and settings: [Installation](docs/installation.md).
 
 ## Documentation
 
 | | |
 | --- | --- |
-| [Overview](docs/overview.md) | What it is and how files move |
-| [Installation](docs/installation.md) | The master and the clients, on every platform |
-| [Usage](docs/usage.md) | The web app, the client, sources, mirrors, restoring |
-| [Deployment](docs/deployment.md) | Storage, backups, Cloudflare tunnel, security |
-| [Architecture](docs/architecture.md) | Components, data model, locking, live updates |
-| [Development](docs/development.md) | Building, running and testing |
-| [Plans](docs/plans/features.md) | Features that are not built |
+| [Overview](docs/overview.md) | What it does, how a file travels, the rules |
+| [Installation](docs/installation.md) | Master and clients, configuration reference |
+| [Usage](docs/usage.md) | Web app, library, processing, change log, client, sources, mirrors |
+| [Video streaming](docs/streaming.md) | Optional adaptive playback |
+| [Deployment](docs/deployment.md) | Storage, proxy, tunnel, backups, security checklist |
+| [Architecture](docs/architecture.md) | Components, data model, IDs, locking, API |
+| [Development](docs/development.md) | Build, test, extend, release |
+| [Plans](docs/plans/features.md) | Not built yet |
 
 ## Repository
 
 | Path | What |
 | --- | --- |
-| `crates/master` | `fafnirx-master`, organized in apps (`devices`, `files`, `library`, `integrations`, `monitoring`, `web`, `platform`), with its database `migrations` |
-| `crates/client` | `fafnirx`: the client, tray and self-update (from GitHub releases) |
-| `crates/db` | `fafnirx-db`: the typed queries, made at build time from `queries/*.sql` (not stored in the repository) |
-| `crates/common` | Shared hashing, chunking, path rules and the generated gRPC types |
-| `crates/stream` | `fafnirx-stream`: the optional video streaming service (HLS, made with ffmpeg as it is watched) |
-| `crates/sign` | `fafnirx-sign`: creates the update key and publishes your own signed client builds (optional) |
-| `frontend` | The web app (React, shadcn/ui), built into the master |
-| `proto` | The device gRPC contract |
-| `installer` | Windows installer and the Linux/macOS install script |
-| `tests` | End-to-end tests (Node) |
-| `docs` | The documentation |
+| `crates/master` | `fafnirx-master`, split into apps (`devices`, `files`, `library`, `integrations`, `monitoring`, `web`, `platform`, `repo`) and its `migrations` |
+| `crates/client` | `fafnirx`: client, tray, self-update |
+| `crates/db` | Typed queries, generated at build time from `queries/*.sql` |
+| `crates/common` | Hashing, chunking, path rules, gRPC types |
+| `crates/stream` | `fafnirx-stream`: optional HLS service |
+| `crates/sign` | `fafnirx-sign`: signed client builds (optional) |
+| `frontend` | Web app (React, shadcn/ui), built into the master |
+| `proto`, `installer`, `tests`, `docs` | Device contract, installers, end-to-end tests, documentation |
 
-MIT licensed: see [LICENSE](LICENSE). Third-party licenses are in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+MIT licensed: [LICENSE](LICENSE), [third-party notices](THIRD_PARTY_LICENSES.md). Written with
+[Claude](https://claude.com/claude-code) under human direction and review.
 
-## Made with Claude
-
-This project was written with [Claude](https://claude.com/claude-code), Anthropic's AI coding assistant, under human direction and review.
-
-## Disclaimer
-
-fafnirx is open source software, provided as is under the [MIT license](LICENSE), without warranty of any kind. You
-are responsible for your own storage, backups and data. The author and contributors are not liable for any data loss,
-corruption or damage from using it. Keep tested copies of anything that matters (for example the 3-2-1 rule above),
-and check that you can restore from them.
+fafnirx is provided as is, without warranty. You are responsible for your storage and backups; keep tested copies of
+anything that matters (3 copies, 2 kinds of storage, 1 offsite) and check that you can restore from them.

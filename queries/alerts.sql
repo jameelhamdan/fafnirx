@@ -13,7 +13,7 @@ UPDATE alerts SET resolved_at = :now
 WHERE kind = 'upload_error' AND resolved_at IS NULL AND COALESCE(updated_at, created_at) < :before;
 
 --! open_alerts : (updated_at?)
-SELECT id, kind, key, message, created_at, updated_at FROM alerts WHERE resolved_at IS NULL ORDER BY id DESC;
+SELECT id, kind, key, message, created_at, updated_at FROM alerts WHERE resolved_at IS NULL ORDER BY created_at DESC, id;
 
 --! alert_key
 SELECT key FROM alerts WHERE id = :id;

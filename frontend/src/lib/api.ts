@@ -62,7 +62,7 @@ export const thumbUrl = (device: string, path: string, size = 256) =>
 export type MediaView = 'thumb' | 'preview' | 'video' | 'original' | 'download'
 
 /** A view of a library file by its id. The hash makes the link specific to one content, so browsers keep it for good. */
-export const mediaUrl = (id: number, view: MediaView, hash?: string) =>
+export const mediaUrl = (id: string, view: MediaView, hash?: string) =>
   `/api/media/${id}/${view}${query({ v: hash })}`
 
 /** Starts a browser download of a zip of the selection (a plain form post, so the browser streams it). */

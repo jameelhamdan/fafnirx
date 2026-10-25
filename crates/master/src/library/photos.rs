@@ -10,6 +10,7 @@
 
 use crate::library::{artwork, meta};
 use crate::platform::db;
+use crate::platform::id::{uuids, Id};
 use crate::repo::library::{self, Media, Scope};
 use crate::repo::{albums, file_state, files, settings, snapshot, tags};
 use crate::web::access::Access;
@@ -36,7 +37,7 @@ fn short_hash(root: &[u8]) -> String {
 /// A photo or video as the grid and the viewer need it.
 #[derive(Serialize)]
 pub struct Asset {
-    pub id: i64,
+    pub id: Id,
     pub device: String,
     pub path: String,
     pub name: String,
@@ -54,12 +55,14 @@ pub struct Asset {
     pub rating: Option<i16>,
     pub lat: Option<f64>,
     pub lon: Option<f64>,
+    /// Its details have not been read yet (a job is waiting or running, or failed): see Processing.
+    pub processing: bool,
 }
 
 impl From<library::Asset> for Asset {
     fn from(a: library::Asset) -> Self {
         Self {
-            id: a.id,
+            id: Id(a.id),
             name: base_name(&a.path).to_string(),
             kind: meta::kind(&a.path).unwrap_or("image"),
             hash: short_hash(&a.root_hash),
@@ -74,6 +77,7 @@ impl From<library::Asset> for Asset {
             rating: a.rating,
             lat: a.lat,
             lon: a.lon,
+            processing: a.processing,
             path: a.path,
         }
     }
@@ -87,7 +91,7 @@ pub struct Filter {
     device: Option<String>,
     /// image or video
     kind: Option<String>,
-    tag: Option<i64>,
+    tag: Option<Id>,
     /// YYYY-MM
     month: Option<String>,
 }
@@ -115,7 +119,7 @@ impl Filter {
             scope,
             device: self.device.as_deref().filter(|d| !d.is_empty()),
             kind,
-            tag: self.tag,
+            tag: self.tag.map(|t| t.0),
             month,
         })
     }
@@ -215,7 +219,8 @@ pub async fn by_ids(
     Extension(who): Extension<Access>,
     Query(q): Query<IdsQuery>,
 ) -> Res<Assets> {
-    let ids: Vec<i64> = q.ids.split(',').filter_map(|s| s.trim().parse().ok()).take(500).collect();
+    let ids: Vec<uuid::Uuid> =
+        q.ids.split(',').filter_map(|s| s.trim().parse::<Id>().ok()).map(|i| i.0).take(500).collect();
     let assets =
         run(&state, move |c| Ok(library::by_ids(c, who.viewer(), &ids)?.into_iter().map(Asset::from).collect()))
             .await?;
@@ -224,13 +229,13 @@ pub async fn by_ids(
 
 #[derive(Serialize)]
 pub struct TagRef {
-    id: i64,
+    id: Id,
     name: String,
 }
 
 #[derive(Serialize)]
 pub struct AlbumRef {
-    id: i64,
+    id: Id,
     name: String,
 }
 
@@ -257,12 +262,34 @@ pub struct Detail {
     preview: bool,
     /// What the .nfo next to a video says about it (title, season, episode, plot), when there is one.
     described: Option<artwork::Described>,
+    /// Work still to do on it: waiting, running or failed. Not set when everything is done.
+    work: Option<String>,
+}
+
+/// The photos and videos in the folder of a file, in the order of their names: what the viewer opened from the file browser
+/// steps through. The file itself is in it.
+pub async fn folder(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    Path(Id(id)): Path<Id>,
+) -> Res<Assets> {
+    let assets = run(&state, move |c| {
+        let mut assets: Vec<Asset> =
+            library::folder_of(c, who.viewer(), id, MAX_ASSETS)?.into_iter().map(Asset::from).collect();
+        if !assets.iter().any(|a| a.id.0 == id) {
+            return Err(ApiError::not_found("No such file").into());
+        }
+        assets.sort_by(|a, b| crate::library::albums::natural_cmp(&a.path, &b.path));
+        Ok(assets)
+    })
+    .await?;
+    Ok(Json(Assets { assets }))
 }
 
 pub async fn detail(
     State(state): State<Shared>,
     Extension(who): Extension<Access>,
-    Path(id): Path<i64>,
+    Path(Id(id)): Path<Id>,
 ) -> Res<Detail> {
     let store = state.store.clone();
     let out = run(&state, move |c| {
@@ -270,10 +297,13 @@ pub async fn detail(
         let not_found = || ApiError::not_found("No such file");
         let asset = library::by_ids(c, viewer, &[id])?.into_iter().next().ok_or_else(not_found)?;
         let extras = library::extras(c, viewer.uid, id)?.ok_or_else(not_found)?;
-        let tags = tags::of_file(c, viewer.uid, id)?.into_iter().map(|(id, name)| TagRef { id, name }).collect();
-        let albums = albums::of_file(c, viewer.uid, id)?.into_iter().map(|(id, name)| AlbumRef { id, name }).collect();
+        let tags =
+            tags::of_file(c, viewer.uid, id)?.into_iter().map(|(id, name)| TagRef { id: Id(id), name }).collect();
+        let albums =
+            albums::of_file(c, viewer.uid, id)?.into_iter().map(|(id, name)| AlbumRef { id: Id(id), name }).collect();
         let asset = Asset::from(asset);
         let described = described(c, &store, &asset);
+        let work = work_state(c, &asset.device, &asset.path, asset.processing)?;
         Ok(Detail {
             mime: extras.mime.unwrap_or_else(|| meta::mime(&asset.path)),
             description: extras.description,
@@ -289,11 +319,34 @@ pub async fn detail(
             changed: extras.changed,
             preview: meta::can_preview(&asset.path),
             described,
+            work,
             asset,
         })
     })
     .await?;
     Ok(Json(out))
+}
+
+/// Whether a file still has work to do, from its unfinished jobs: `running`, `waiting` or `failed`. A file whose details were
+/// never read counts as waiting even before its job is queued.
+pub fn work_state(
+    c: &mut impl GenericClient,
+    device: &str,
+    path: &str,
+    unread: bool,
+) -> Result<Option<String>, postgres::Error> {
+    let jobs = crate::repo::jobs::pending_of(c, device, path)?;
+    let has = |s: &str| jobs.iter().any(|(_, status)| status == s);
+    Ok(if has("running") {
+        Some("running")
+    } else if has("queued") || (unread && !has("failed")) {
+        Some("waiting")
+    } else if has("failed") {
+        Some("failed")
+    } else {
+        None
+    }
+    .map(str::to_string))
 }
 
 /// What the .nfo next to a video says about it. Anything that goes wrong means no description, never an error.
@@ -396,12 +449,12 @@ fn clean_tags(names: &[String]) -> Result<Vec<String>, ApiError> {
 }
 
 /// The ids of these tags of the user, made when they are new.
-fn tag_ids(tx: &mut impl GenericClient, uid: i64, names: &[String]) -> Result<Vec<i64>, postgres::Error> {
+fn tag_ids(tx: &mut impl GenericClient, uid: i64, names: &[String]) -> Result<Vec<uuid::Uuid>, postgres::Error> {
     names.iter().map(|name| tags::ensure(tx, uid, name)).collect()
 }
 
 /// Applies an edit to one file, for the user who made it. The caller's transaction makes it all or nothing.
-fn apply(tx: &mut impl GenericClient, who: &Access, id: i64, e: &Edit) -> anyhow::Result<()> {
+fn apply(tx: &mut impl GenericClient, who: &Access, id: uuid::Uuid, e: &Edit) -> anyhow::Result<()> {
     who.require_workspace()?;
     let uid = who.user_id;
     e.check()?;
@@ -442,7 +495,7 @@ fn apply(tx: &mut impl GenericClient, who: &Access, id: i64, e: &Edit) -> anyhow
 pub async fn edit(
     State(state): State<Shared>,
     Extension(who): Extension<Access>,
-    Path(id): Path<i64>,
+    Path(Id(id)): Path<Id>,
     Json(e): Json<Edit>,
 ) -> Res<Done> {
     run(&state, move |c| {
@@ -458,7 +511,7 @@ pub async fn edit(
 
 #[derive(Deserialize)]
 pub struct Bulk {
-    ids: Vec<i64>,
+    ids: Vec<Id>,
     favorite: Option<bool>,
     archived: Option<bool>,
     add_tags: Option<Vec<String>>,
@@ -479,20 +532,21 @@ pub async fn bulk(State(state): State<Shared>, Extension(who): Extension<Access>
         return Err(ApiError::bad(format!("Select at most {MAX_BULK} files at a time")));
     }
     let new_tags = b.add_tags.as_deref().map(clean_tags).transpose()?;
+    let ids = uuids(&b.ids);
     let changed = run(&state, move |c| {
         let mut tx = c.transaction()?;
         let (viewer, now) = (who.viewer(), unix_now());
         // The files touched by any of the changes asked for are those the user can see.
         let mut changed = 0;
         if let Some(v) = b.favorite {
-            changed = changed.max(file_state::bulk_set_favorite(&mut tx, viewer, &b.ids, v, now)?);
+            changed = changed.max(file_state::bulk_set_favorite(&mut tx, viewer, &ids, v, now)?);
         }
         if let Some(v) = b.archived {
-            changed = changed.max(file_state::bulk_set_archived(&mut tx, viewer, &b.ids, v, now)?);
+            changed = changed.max(file_state::bulk_set_archived(&mut tx, viewer, &ids, v, now)?);
         }
         if let Some(names) = new_tags.filter(|t| !t.is_empty()) {
-            let ids = tag_ids(&mut tx, viewer.uid, &names)?;
-            changed = changed.max(tags::add_to_files(&mut tx, viewer, &b.ids, &ids)?);
+            let tag_ids = tag_ids(&mut tx, viewer.uid, &names)?;
+            changed = changed.max(tags::add_to_files(&mut tx, viewer, &ids, &tag_ids)?);
         }
         db::notify(&mut tx, "library", "")?;
         tx.commit()?;
@@ -504,7 +558,7 @@ pub async fn bulk(State(state): State<Shared>, Extension(who): Extension<Access>
 
 #[derive(Serialize)]
 pub struct Tag {
-    id: i64,
+    id: Id,
     name: String,
     count: i64,
 }
@@ -513,7 +567,7 @@ pub async fn tags(State(state): State<Shared>, Extension(who): Extension<Access>
     let out = run(&state, move |c| {
         Ok(tags::counted(c, who.viewer())?
             .into_iter()
-            .map(|t| Tag { id: t.id, name: t.name, count: t.files })
+            .map(|t| Tag { id: Id(t.id), name: t.name, count: t.files })
             .collect())
     })
     .await?;
@@ -523,7 +577,7 @@ pub async fn tags(State(state): State<Shared>, Extension(who): Extension<Access>
 pub async fn delete_tag(
     State(state): State<Shared>,
     Extension(who): Extension<Access>,
-    Path(id): Path<i64>,
+    Path(Id(id)): Path<Id>,
 ) -> Res<Done> {
     run(&state, move |c| {
         if !tags::delete(c, who.user_id, id)? {
@@ -539,7 +593,7 @@ pub async fn delete_tag(
 #[derive(Serialize)]
 pub struct MapPoints {
     /// `[id, latitude, longitude, when]`
-    points: Vec<library::Point>,
+    points: Vec<(Id, f64, f64, i64)>,
     /// More photos have a place than are listed.
     truncated: bool,
 }
@@ -555,6 +609,7 @@ pub async fn map(
         let mut points = library::map_points(c, who.viewer(), &filter.checked()?, MAX_POINTS + 1)?;
         let truncated = points.len() as i64 > MAX_POINTS;
         points.truncate(MAX_POINTS as usize);
+        let points = points.into_iter().map(|(id, lat, lon, when)| (Id(id), lat, lon, when)).collect();
         Ok(MapPoints { points, truncated })
     })
     .await?;
@@ -563,7 +618,7 @@ pub async fn map(
 
 #[derive(Serialize)]
 pub struct TrashEntry {
-    id: i64,
+    id: Id,
     device: String,
     path: String,
     name: String,
@@ -603,7 +658,7 @@ pub async fn trash(
         let entries = rows
             .into_iter()
             .map(|r| TrashEntry {
-                id: r.id,
+                id: Id(r.id),
                 name: base_name(&r.path).to_string(),
                 device: r.folder,
                 size: r.size,
@@ -628,8 +683,10 @@ pub fn snapshot(c: &mut Client) -> anyhow::Result<serde_json::Value> {
     use std::collections::BTreeMap;
 
     /// The files of each album or tag, by the id of the album or tag.
-    fn files_by<'a>(rows: impl Iterator<Item = (i64, &'a str, &'a str)>) -> BTreeMap<i64, Vec<serde_json::Value>> {
-        let mut map: BTreeMap<i64, Vec<serde_json::Value>> = BTreeMap::new();
+    fn files_by<'a>(
+        rows: impl Iterator<Item = (uuid::Uuid, &'a str, &'a str)>,
+    ) -> BTreeMap<uuid::Uuid, Vec<serde_json::Value>> {
+        let mut map: BTreeMap<uuid::Uuid, Vec<serde_json::Value>> = BTreeMap::new();
         for (id, device, path) in rows {
             map.entry(id).or_default().push(json!({ "device": device, "path": path }));
         }

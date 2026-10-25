@@ -6,6 +6,7 @@ use fafnirx_common::unix_now;
 use fafnirx_db::client::Params;
 use fafnirx_db::queries::alerts as q;
 use postgres::{Error, GenericClient};
+use uuid::Uuid;
 
 /// Opens an alert, or refreshes the message of the already open one.
 pub fn upsert(c: &mut impl GenericClient, kind: &str, key: &str, message: &str) -> Result<(), Error> {
@@ -36,12 +37,12 @@ pub fn open(c: &mut impl GenericClient) -> Result<Vec<Open>, Error> {
 }
 
 /// The key (a device folder, a source or a mirror) an alert is about.
-pub fn key_of(c: &mut impl GenericClient, id: i64) -> Result<Option<String>, Error> {
+pub fn key_of(c: &mut impl GenericClient, id: Uuid) -> Result<Option<String>, Error> {
     q::alert_key().bind(&mut Pg(c), &id).opt()
 }
 
 /// Closes an alert by hand.
-pub fn dismiss(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
+pub fn dismiss(c: &mut impl GenericClient, id: Uuid) -> Result<(), Error> {
     q::dismiss_alert().bind(&mut Pg(&mut *c), &unix_now(), &id)?;
     notify(c, "alerts", "")
 }

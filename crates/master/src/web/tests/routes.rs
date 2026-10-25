@@ -47,6 +47,7 @@ const ROUTES: &[(&str, &str, Rule)] = &[
     ("POST", "/api/devices", Rule::Workspace),
     ("POST", "/api/albums", Rule::Workspace),
     ("POST", "/api/files/delete", Rule::Workspace),
+    ("POST", "/api/files/move", Rule::Workspace),
     ("POST", "/api/files/restore", Rule::Workspace),
     ("POST", "/api/uploads", Rule::Workspace),
     ("GET", "/api/dashboard", Rule::Reader),
@@ -73,6 +74,7 @@ const ROUTES: &[(&str, &str, Rule)] = &[
     ("POST", "/api/library/bulk", Rule::Reader),
     ("GET", "/api/library/:id", Rule::Reader),
     ("PATCH", "/api/library/:id", Rule::Reader),
+    ("GET", "/api/library/:id/folder", Rule::Reader),
     ("GET", "/api/tags", Rule::Reader),
     ("DELETE", "/api/tags/:id", Rule::Reader),
     ("GET", "/api/map", Rule::Reader),
@@ -125,7 +127,7 @@ fn every_route_has_a_rule_and_the_rule_is_kept() {
             let uri = uri
                 .replace(":name", "x")
                 .replace(":user", "x")
-                .replace(":id", "1")
+                .replace(":id", "AAAAAAAAAAAAAAAAAAAAAA")
                 .replace(":variant", "thumb")
                 .replace("*rest", "a");
             let status = |cookie: String| {

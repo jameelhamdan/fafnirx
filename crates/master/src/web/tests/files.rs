@@ -222,3 +222,48 @@ fn names_in_any_script_are_listed_downloaded_and_found() {
         assert_eq!(archive.file_names().collect::<Vec<_>>(), ["اناشيد/ألبوم الطفل/ملف.txt"]);
     });
 }
+
+#[test]
+fn files_and_folders_of_the_master_can_be_moved_but_not_those_of_a_device() {
+    let mut api = Api::new();
+    block(async {
+        api.cookie = login(&api).await;
+        api.json(Method::POST, "/api/devices", json!({"name": "docs", "kind": "local"})).await;
+        api.upload("admin/docs", "Show/S1/a.txt", b"one").await;
+        api.upload("admin/docs", "Show/S1/b.txt", b"two").await;
+        api.upload("admin/docs", "keep.txt", b"keep").await;
+        let mv = |from: &str, to: &str| json!({"device": "admin/docs", "from": from, "to": to});
+
+        // A folder moves with everything below it; a name in the way stops it before anything moves.
+        let in_the_way = api.json(Method::POST, "/api/files/move", mv("Show", "keep.txt")).await.0;
+        assert_eq!(in_the_way, StatusCode::CONFLICT, "a file where a folder should be");
+        assert_eq!(
+            api.json(Method::POST, "/api/files/move", mv("Show/S1/a.txt", "keep.txt")).await.0,
+            StatusCode::CONFLICT
+        );
+        let (status, moved) = api.json(Method::POST, "/api/files/move", mv("Show", "Series/Show")).await;
+        assert_eq!((status, moved["moved"].clone()), (StatusCode::OK, json!(2)));
+        let (_, listing) = api.get("/api/files?device=admin/docs&path=Series/Show/S1").await;
+        assert_eq!(listing["entries"].as_array().unwrap().len(), 2);
+        let (_, old) = api.get("/api/files?device=admin/docs&path=Show&deleted=1").await;
+        assert!(old["entries"].as_array().unwrap().is_empty(), "the old place is not a deleted folder");
+        assert_eq!(
+            api.json(Method::POST, "/api/files/move", mv("Series", "Series/inside")).await.0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(api.json(Method::POST, "/api/files/move", mv("missing", "x")).await.0, StatusCode::NOT_FOUND);
+
+        // The trash has nothing: a move is not a delete.
+        assert_eq!(api.get("/api/trash").await.1["total"], 0);
+        let (_, info) = api.get("/api/files/info?device=admin/docs&path=Series/Show/S1/a.txt").await;
+        assert_eq!(info["events"][0]["action"], "rename");
+        assert_eq!(info["events"][0]["detail"], "Show/S1/a.txt");
+
+        // A computer's files are not moved from the web app.
+        let (_, made) = api.json(Method::POST, "/api/devices", json!({"name": "laptop"})).await;
+        assert!(made["token"].is_string());
+        let (status, _) =
+            api.json(Method::POST, "/api/files/move", json!({"device": "admin/laptop", "from": "a", "to": "b"})).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+    });
+}

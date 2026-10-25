@@ -16,6 +16,7 @@ import type { QueueJob, QueueState } from '@/lib/types'
 /** What each kind of work is, in words a person knows. */
 const KIND: Record<string, string> = {
   meta: msg('Reading details'),
+  artwork: msg('Looking for artwork'),
   thumb: msg('Making pictures'),
   proxy: msg('Playable copies'),
   segment: msg('Video segments'),
@@ -24,6 +25,7 @@ const KIND: Record<string, string> = {
 
 const WHAT: Record<string, string> = {
   meta: msg('Size, date, place and camera data of photos and videos.'),
+  artwork: msg('The picture and the .nfo that sit next to a video, or the poster of its folder. Nothing is stored: it says what it found.'),
   thumb: msg('The small and large pictures of photos and videos, from the artwork next to a video or a frame of it.'),
   proxy: msg('Copies of videos that browsers cannot play as they are. Slow; they wait behind everything else.'),
 }
@@ -50,7 +52,7 @@ function Counts({ queued, running, failed, done }: { queued: number; running: nu
   )
 }
 
-function JobRow({ job, canControl, onCancel, onRetry }: { job: QueueJob; canControl: boolean; onCancel: (id: number) => void; onRetry: (id: number) => void }) {
+function JobRow({ job, canControl, onCancel, onRetry }: { job: QueueJob; canControl: boolean; onCancel: (id: string) => void; onRetry: (id: string) => void }) {
   const t = useT()
   const now = useNow()
   const when = job.status === 'running' ? job.started_at : job.status === 'queued' ? job.created_at : job.finished_at
@@ -61,6 +63,7 @@ function JobRow({ job, canControl, onCancel, onRetry }: { job: QueueJob; canCont
       <TableCell className="max-w-0 w-full">
         <p className="truncate" title={`${job.device}/${job.path}`}>{job.path || '—'}</p>
         {job.error && <p className="truncate text-xs text-destructive" title={job.error}>{job.error}</p>}
+        {job.note && <p className="truncate text-xs text-muted-foreground" title={job.note}>{job.note}</p>}
         {job.retry_at && <p className="text-xs text-muted-foreground">{t('Failed {n} time(s); tries again {when}', { n: job.attempts, when: dateTime(job.retry_at) })}</p>}
       </TableCell>
       <TableCell className="whitespace-nowrap text-muted-foreground">{ago(when, now)}</TableCell>
@@ -118,8 +121,8 @@ export default function Queue() {
     },
     onError: (e) => toast.error(e.message),
   })
-  const retry = (id?: number) => act.mutate({ url: '/api/queue/retry', body: { id }, message: (n) => t('{n} job(s) will run again', { n }) })
-  const cancel = (status: 'failed' | 'queued', id?: number) => act.mutate({ url: '/api/queue/cancel', body: { status, id } })
+  const retry = (id?: string) => act.mutate({ url: '/api/queue/retry', body: { id }, message: (n) => t('{n} job(s) will run again', { n }) })
+  const cancel = (status: 'failed' | 'queued', id?: string) => act.mutate({ url: '/api/queue/cancel', body: { status, id } })
   const failed = data?.summary.reduce((n, s) => n + s.failed, 0) ?? 0
   const waiting = data?.summary.reduce((n, s) => n + s.queued, 0) ?? 0
 
@@ -151,8 +154,8 @@ export default function Queue() {
         <>
           {data.paused && <p role="status" className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">{t('Paused: nothing new is started. What is running now finishes.')}</p>}
           {!data.ffmpeg && <p role="status" className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">{t('ffmpeg is not installed on the master, so videos get no details, pictures or playable copies.')}</p>}
-          <div className="grid gap-4 md:grid-cols-3">
-            {['meta', 'thumb', 'proxy'].map((kind) => {
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {['meta', 'artwork', 'thumb', 'proxy'].map((kind) => {
               const s = data.summary.find((x) => x.kind === kind) ?? { kind, queued: 0, running: 0, failed: 0, done: 0 }
               return (
                 <Card key={kind}>

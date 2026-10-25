@@ -21,9 +21,9 @@ export function FolderGrid({ assets, root, src, selected, onOpen, onToggle }: {
   /** The path of the album's folder inside its device. */
   root: string
   src: (a: Asset) => string
-  selected: Set<number>
+  selected: Set<string>
   onOpen: (a: Asset) => void
-  onToggle: (id: number) => void
+  onToggle: (id: string) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const { cols } = useGrid(ref)

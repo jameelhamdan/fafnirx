@@ -6,6 +6,7 @@
 
 use crate::library::photos::{nullable, Asset, MAX_ASSETS};
 use crate::platform::db;
+use crate::platform::id::{uuids, Id};
 use crate::repo::{albums, library};
 use crate::web::access::Access;
 use crate::web::{done, run, ApiError, Done, Res, Shared};
@@ -29,7 +30,7 @@ pub struct Folder {
 
 #[derive(Serialize)]
 pub struct AlbumInfo {
-    id: i64,
+    id: Id,
     name: String,
     description: String,
     created_at: i64,
@@ -38,7 +39,7 @@ pub struct AlbumInfo {
     count: i64,
     bytes: i64,
     /// The file shown for the album: the one chosen, else the newest.
-    cover: Option<i64>,
+    cover: Option<Id>,
     /// Set when the album shows a folder: its files are in it as they come and go.
     folder: Option<Folder>,
 }
@@ -46,35 +47,39 @@ pub struct AlbumInfo {
 impl From<albums::Album> for AlbumInfo {
     fn from(a: albums::Album) -> Self {
         AlbumInfo {
-            id: a.id,
+            id: Id(a.id),
             name: a.name,
             description: a.description,
             created_at: a.created_at,
             updated_at: a.updated_at,
             count: a.files,
             bytes: a.bytes,
-            cover: a.cover,
+            cover: a.cover.map(Id),
             folder: a.folder.map(|(device, prefix)| Folder { device, path: prefix.trim_end_matches('/').to_string() }),
         }
     }
 }
 
-/// The cover of an album that shows a folder and has none chosen: its first video as the names sort (episode 1 of season 1),
+/// The cover of an album that shows a folder, has none chosen and no poster picture: its first video as the names sort (episode 1 of season 1),
 /// or its first picture when there are no videos.
-fn first_of(media: Vec<(i64, String)>) -> Option<i64> {
+fn first_of(media: Vec<(uuid::Uuid, String)>) -> Option<uuid::Uuid> {
     let video = |path: &str| crate::library::meta::kind(path) == Some("video");
     media.into_iter().min_by(|(_, a), (_, b)| video(b).cmp(&video(a)).then_with(|| natural_cmp(a, b))).map(|(id, _)| id)
 }
 
 fn with_cover(c: &mut impl GenericClient, mut album: albums::Album) -> anyhow::Result<AlbumInfo> {
-    if album.folder.is_some() && album.cover.is_none() {
-        album.cover = first_of(albums::media(c, album.id)?);
+    if album.cover.is_none() {
+        album.cover = match albums::poster(c, album.id)? {
+            Some(poster) => Some(poster),
+            None if album.folder.is_some() => first_of(albums::media(c, album.id)?),
+            None => album.newest,
+        };
     }
     Ok(album.into())
 }
 
 /// The album, if it is this user's: someone else's album does not exist for them.
-fn load_album(c: &mut impl GenericClient, who: &Access, id: i64) -> anyhow::Result<AlbumInfo> {
+fn load_album(c: &mut impl GenericClient, who: &Access, id: uuid::Uuid) -> anyhow::Result<AlbumInfo> {
     match albums::find(c, who.user_id, id)? {
         Some(album) => with_cover(c, album),
         None => Err(ApiError::not_found("No such album").into()),
@@ -111,7 +116,7 @@ pub struct NewAlbum {
     description: String,
     /// Files to start with.
     #[serde(default)]
-    ids: Vec<i64>,
+    ids: Vec<Id>,
     /// Files (or folders: the photos and videos below them) to start with, by where they are.
     #[serde(default)]
     items: Vec<Folder>,
@@ -141,7 +146,7 @@ pub async fn create(
         let mut tx = c.transaction()?;
         let follows = folder.as_ref().map(|f| (f.device_id, f.prefix.as_str()));
         let id = albums::insert(&mut tx, who.user_id, &name, body.description.trim(), follows, unix_now())?;
-        add_files(&mut tx, &who, id, &body.ids)?;
+        add_files(&mut tx, &who, id, &uuids(&body.ids))?;
         add_items(&mut tx, &who, id, &body.items)?;
         db::notify(&mut tx, "library", "")?;
         let album = load_album(&mut tx, &who, id)?;
@@ -184,12 +189,17 @@ fn find_folder(c: &mut postgres::Client, who: &Access, folder: &Folder) -> anyho
 }
 
 /// Puts the files in the album: those the user can see.
-fn add_files(tx: &mut impl GenericClient, who: &Access, album: i64, ids: &[i64]) -> Result<u64, postgres::Error> {
+fn add_files(
+    tx: &mut impl GenericClient,
+    who: &Access,
+    album: uuid::Uuid,
+    ids: &[uuid::Uuid],
+) -> Result<u64, postgres::Error> {
     albums::add_files(tx, who.viewer(), album, ids, unix_now())
 }
 
 /// Puts the photos and videos at these places in the album: a file, or everything below a folder. Those the user can see.
-fn add_items(tx: &mut impl GenericClient, who: &Access, album: i64, items: &[Folder]) -> anyhow::Result<u64> {
+fn add_items(tx: &mut impl GenericClient, who: &Access, album: uuid::Uuid, items: &[Folder]) -> anyhow::Result<u64> {
     let mut added = 0;
     for item in items {
         let path = clean_folder_path(&item.path)?;
@@ -209,7 +219,7 @@ pub struct AlbumAssets {
 pub async fn detail(
     State(state): State<Shared>,
     Extension(who): Extension<Access>,
-    Path(id): Path<i64>,
+    Path(Id(id)): Path<Id>,
 ) -> Res<AlbumAssets> {
     let out = run(&state, move |c| {
         let album = load_album(c, &who, id)?;
@@ -226,7 +236,7 @@ pub async fn detail(
 }
 
 /// Compares names the way people sort them: runs of digits by their value, the rest without regard to case.
-fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+pub fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     let number = |it: &mut std::iter::Peekable<std::str::Chars>| {
         let mut digits = String::new();
@@ -267,13 +277,13 @@ pub struct AlbumEdit {
     description: Option<String>,
     /// A file of the album, or null to show the newest again.
     #[serde(default, deserialize_with = "nullable")]
-    cover: Option<Option<i64>>,
+    cover: Option<Option<Id>>,
 }
 
 pub async fn edit(
     State(state): State<Shared>,
     Extension(who): Extension<Access>,
-    Path(id): Path<i64>,
+    Path(Id(id)): Path<Id>,
     Json(body): Json<AlbumEdit>,
 ) -> Res<AlbumInfo> {
     let name = body.name.as_deref().map(clean_name).transpose()?.map(str::to_string);
@@ -288,11 +298,11 @@ pub async fn edit(
         }
         if let Some(cover) = body.cover {
             if let Some(file) = cover {
-                if !albums::contains(&mut tx, id, file)? {
+                if !albums::contains(&mut tx, id, file.0)? {
                     return Err(ApiError::bad("The cover must be a file of the album").into());
                 }
             }
-            albums::set_cover(&mut tx, id, cover)?;
+            albums::set_cover(&mut tx, id, cover.map(|c| c.0))?;
         }
         albums::touch(&mut tx, id, unix_now())?;
         db::notify(&mut tx, "library", "")?;
@@ -305,7 +315,11 @@ pub async fn edit(
 }
 
 /// Deletes the album. The photos stay where they are.
-pub async fn delete(State(state): State<Shared>, Extension(who): Extension<Access>, Path(id): Path<i64>) -> Res<Done> {
+pub async fn delete(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    Path(Id(id)): Path<Id>,
+) -> Res<Done> {
     run(&state, move |c| {
         if !albums::delete(c, who.user_id, id)? {
             return Err(ApiError::not_found("No such album").into());
@@ -320,7 +334,7 @@ pub async fn delete(State(state): State<Shared>, Extension(who): Extension<Acces
 #[derive(Deserialize)]
 pub struct Ids {
     #[serde(default)]
-    ids: Vec<i64>,
+    ids: Vec<Id>,
     /// Files, or folders (the photos and videos below them), by where they are: for the file browser, which has no ids.
     #[serde(default)]
     items: Vec<Folder>,
@@ -334,14 +348,14 @@ pub struct Count {
 pub async fn add(
     State(state): State<Shared>,
     Extension(who): Extension<Access>,
-    Path(id): Path<i64>,
+    Path(Id(id)): Path<Id>,
     Json(body): Json<Ids>,
 ) -> Res<Count> {
     clean_ids(body.ids.len() + body.items.len())?;
     let count = run(&state, move |c| {
         let mut tx = c.transaction()?;
         load_album(&mut tx, &who, id)?;
-        let count = add_files(&mut tx, &who, id, &body.ids)? + add_items(&mut tx, &who, id, &body.items)?;
+        let count = add_files(&mut tx, &who, id, &uuids(&body.ids))? + add_items(&mut tx, &who, id, &body.items)?;
         albums::touch(&mut tx, id, unix_now())?;
         db::notify(&mut tx, "library", "")?;
         tx.commit()?;
@@ -354,14 +368,14 @@ pub async fn add(
 pub async fn remove(
     State(state): State<Shared>,
     Extension(who): Extension<Access>,
-    Path(id): Path<i64>,
+    Path(Id(id)): Path<Id>,
     Json(body): Json<Ids>,
 ) -> Res<Count> {
     clean_ids(body.ids.len())?;
     let count = run(&state, move |c| {
         let mut tx = c.transaction()?;
         load_album(&mut tx, &who, id)?;
-        let count = albums::remove_files(&mut tx, id, &body.ids)?;
+        let count = albums::remove_files(&mut tx, id, &uuids(&body.ids))?;
         albums::touch(&mut tx, id, unix_now())?;
         db::notify(&mut tx, "library", "")?;
         tx.commit()?;
@@ -374,18 +388,23 @@ pub async fn remove(
 #[cfg(test)]
 mod tests {
     use super::{first_of, natural_cmp};
+    use uuid::Uuid;
+
+    fn id(n: u128) -> Uuid {
+        Uuid::from_u128(n)
+    }
     use std::cmp::Ordering;
 
     #[test]
     fn the_cover_of_a_folder_is_its_first_video() {
         let media = vec![
-            (1, "Show/Season 1/poster.jpg".to_string()),
-            (2, "Show/Season 2/E01.mkv".to_string()),
-            (3, "Show/Season 1/E10.mkv".to_string()),
-            (4, "Show/Season 1/E2.mkv".to_string()),
+            (id(1), "Show/Season 1/other.jpg".to_string()),
+            (id(2), "Show/Season 2/E01.mkv".to_string()),
+            (id(3), "Show/Season 1/E10.mkv".to_string()),
+            (id(4), "Show/Season 1/E2.mkv".to_string()),
         ];
-        assert_eq!(first_of(media), Some(4), "a video, and episode 2 before episode 10");
-        assert_eq!(first_of(vec![(7, "b.jpg".into()), (8, "a.jpg".into())]), Some(8));
+        assert_eq!(first_of(media), Some(id(4)), "a video, and episode 2 before episode 10");
+        assert_eq!(first_of(vec![(id(7), "b.jpg".into()), (id(8), "a.jpg".into())]), Some(id(8)));
         assert_eq!(first_of(Vec::new()), None);
     }
 

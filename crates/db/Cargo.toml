@@ -10,9 +10,10 @@ publish = false
 build = "build.rs"
 
 [dependencies]
-postgres = "0.19.13"
+postgres = { version = "0.19.13", features = ["with-uuid-1"] }
 postgres-protocol = "0.6.11"
-postgres-types = { version = "0.2.13", features = ["derive"] }
+postgres-types = { version = "0.2.13", features = ["derive", "with-uuid-1"] }
+uuid = "1"
 
 [build-dependencies]
 cornucopia = "1.0.1"
@@ -28,4 +29,4 @@ unused_imports = "allow"
 
 [package.metadata.cargo-machete]
 # Used by the generated code, which cargo-machete does not see.
-ignored = ["postgres", "postgres-protocol", "postgres-types"]
+ignored = ["postgres", "postgres-protocol", "postgres-types", "uuid"]

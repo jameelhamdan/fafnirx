@@ -43,7 +43,7 @@ function MonthSection({
   /** Room the pictures will take, kept free until they are there. */
   bodyHeight: number
   filters: TimelineFilters
-  selected: Map<number, Asset>
+  selected: Map<string, Asset>
   onOpen: (month: string, a: Asset) => void
   onToggle: (a: Asset) => void
   onToggleMany: (a: Asset[], on: boolean) => void
@@ -99,7 +99,7 @@ export default function Timeline({ scope }: { scope: Scope }) {
   const months = useMemo(() => buckets.data?.months ?? [], [buckets.data])
 
   // Selecting.
-  const [selected, setSelected] = useState<Map<number, Asset>>(new Map())
+  const [selected, setSelected] = useState<Map<string, Asset>>(new Map())
   const toggle = useCallback((a: Asset) => setSelected((s) => { const n = new Map(s); if (!n.delete(a.id)) n.set(a.id, a); return n }), [])
   const toggleMany = useCallback((list: Asset[], on: boolean) => setSelected((s) => { const n = new Map(s); list.forEach((a) => (on ? n.set(a.id, a) : n.delete(a.id))); return n }), [])
   const clear = useCallback(() => setSelected(new Map()), [])
@@ -130,7 +130,7 @@ export default function Timeline({ scope }: { scope: Scope }) {
   const starts = months.map((_, i) => (virtual.measurementsCache[i]?.start ?? margin) - margin)
 
   // The viewer: the months around the one that was opened, loaded as far as you page.
-  const [viewer, setViewer] = useState<{ months: string[]; id: number } | null>(null)
+  const [viewer, setViewer] = useState<{ months: string[]; id: string } | null>(null)
   const viewedAssets = useQueries({ queries: (viewer?.months ?? []).map((m) => monthQuery(filters, m)), combine: combineAssets })
   const extending = useRef(false)
   const extend = useCallback(

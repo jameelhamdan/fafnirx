@@ -1,337 +1,263 @@
 # Usage
 
-## The web app
+Log in at `http://<master>:8080`. A new master has the user `admin` with `FAFNIRX_ADMIN_PASSWORD`; change it with the key
+icon in the top bar. Pages update live.
 
-Log in at `http://<master>:8080` with your user name and password. A new master has one user, `admin`, whose password is
-`FAFNIRX_ADMIN_PASSWORD`; change it with the key icon in the top bar. The page title bar shows **Live** when changes are
-being pushed to you; pages refresh by themselves.
+| Page | Purpose |
+|---|---|
+| Dashboard | Alerts, totals (as of each device's last finished sync), disk, online devices, 2-week activity, recent changes |
+| Timeline, Favorites, Archive | Photos and videos by month and day |
+| Albums, Map, Trash | Group media; where it was taken; deleted files until retention ends |
+| Files | Browse, search, preview, download, upload, move, delete; open media in the viewer |
+| Processing | Background work ([details](#processing)) |
+| Devices, Sources, Mirrors | Computers that send; Google Drive folders; offsite copies |
+| Users, Settings | Administrators only |
 
 ## Users and roles
 
-Every device, album, tag and favorite belongs to a user, and each user has a folder of their own on the master. Files that
-belong to nobody are the **master files**; everybody can see those.
-
-| Role | Own devices, sources and files | Master files | Other users' files | Users, settings, mirrors |
+| Role | Own devices and files | Master files | Others' files | Users, settings, mirrors |
 |---|---|---|---|---|
-| **Administrator** | read and write | read and write | read and write | yes |
-| **Normal** | read and write | read and write | no | no |
-| **Read only** | none: no devices, sources, albums, tags or favorites | read | no | no |
+| Administrator | read, write | read, write | read, write | yes |
+| Normal | read, write | read, write | no | no |
+| Read only | none | read | no | no |
 
-An administrator adds users on the **Users** page (name, role, password), changes a role, sets a new password, or disables a
-user. A user can be neither deleted nor renamed: their name is their folder, and what they sent stays. Disabling ends their logins at once
-and their devices stop sending. The master keeps at least one administrator.
+- Master files belong to nobody; everyone sees them. Users are added on **Users** (name, role, password); they cannot be
+  deleted or renamed (the name is the folder). Disabling ends their logins and device uploads. One administrator always remains.
+- A device belongs to the user who adds it; names are unique per user (`bob/laptop`, `alice/laptop`).
+- Favorites, archive, ratings, descriptions, tags, albums, corrected dates and places are per user, also on master files.
+- A master path cannot start with a user's name, and a user cannot take a name a master path uses.
 
-* A device belongs to the user who adds it; the same device name can be used by two users (`bob/laptop` and `alice/laptop`).
-  An administrator can add a device for another user. Devices cannot be added without a user, and a read-only user has none.
-* In the file browser the master files are the first entry (**Master files**), then your devices. An administrator also sees
-  the devices of all users, named `user/device`. Uploads go to your local folders and to the master files.
-* Favorites, archive, ratings, descriptions, tags, albums and corrected dates and places are your own, also on master files:
-  what one user says about a master file is not seen by another.
-* The master files cannot be called like a user: a path in the master files that starts with a user's name is refused, and a
-  user whose name the master files already use cannot be added.
+## IDs and links
 
-| Page | Use it to |
+Files, albums, tags, jobs and alerts have UUIDs in the database and appear as 22 URL-safe Base64 characters
+(`B5v1k9yXQ2eQm0GmXH3xwg`) in the UI, API and URLs (the hyphenated UUID is accepted). Devices, users, sources and mirrors
+use their names.
+
+| URL | Opens |
 |---|---|
-| **Timeline**, **Favorites**, **Archive** | Look at every photo and video, by month and day, with a scrubber to jump through time ([Photos](#photos)) |
-| **Albums** | Group photos and videos |
-| **Map** | See where photos were taken |
-| **Trash** | Bring back what was deleted, until the retention period ends |
-| **Dashboard** | See alerts, what is stored (totals are brought up to date when a device finishes syncing), disk usage, who is online and uploading right now, changes of the last two weeks, recent activity, and the state of sources and mirrors |
-| **Files** | Browse, search, preview, download, upload and delete (below) |
-| **Devices** | Add a device, see its status and progress; open one to rotate its token, revoke it, or see its recent changes |
-| **Sources** | Collect your own Google Drive folders on a schedule (each user has their own; an administrator sees all) |
-| **Mirrors** | Copy everything offsite |
-| **Video streaming** | In the photo viewer, a video's menu offers adaptive quality streaming when the [streaming service](streaming.md) is on |
-| **Settings** | Versions kept per file and the retention period |
+| `/albums/<id>` | An album |
+| `/watch/<id>` | A photo or video in the viewer, with the media of its folder |
+| `/files?device=<user/device>&path=<folder>&file=<path>` | A file's details |
 
-### Photos
+Anyone who cannot see a file gets 404 for it.
 
-The **Timeline** shows the photos and videos of every device together, newest first, by month and day. Nothing is
-copied or moved: it is another view of the same files.
+## Files
 
-- **Move through time** by scrolling, or with the **scrubber** at the right edge: it shows the years, and dragging it (or
-  touching it on a phone) jumps to any month, with the month named beside your finger. With the scrubber focused, the up
-  and down arrow keys move a month at a time.
-- **Filter** by device, by photos or videos, and by tag, above the grid.
-- **Open** a picture to see it large. Arrow keys or a swipe move to the next one, `Esc` closes, `i` shows or hides the
-  info panel and `f` marks a favorite. Videos play in the browser; a video that browsers cannot play as it is gets a
-  converted copy made in the background, and says so until it is ready (the original is always kept and downloadable).
-- **Info** shows and edits: a description, a rating (one to five stars; click the same star again to clear it), tags,
-  the **date** and the **place**. Changing the date moves the photo in the timeline; changing the place moves it on the
-  map. Both are only corrections noted beside the file, and **Use the original** takes them back. Dates are read as UTC
-  because cameras do not record a time zone, so a photo shows the same time everywhere.
-- **Select** with the circle in a picture's corner (or the box next to a day, to take the whole day). The bar offers
-  **Favorite**, **Add to album**, **Add tags**, **Archive**, **Download** and **Delete**.
-- **Archive** hides pictures from the timeline without deleting them; they are on the Archive page. **Delete** moves them
-  to the **Trash**, where they stay until the [retention period](#settings-and-retention) ends and can be restored with
-  their albums, tags and favorite.
-- **Albums** group pictures without moving them. Select pictures, choose **Add to album**, and pick an album or type a new
-  name. On an album's page you can rename it, set a cover (select one picture), remove pictures from it, or delete it
-  (the pictures stay). An album shows the cover you chose; without one, a picked-files album shows its newest picture and
-  a folder album shows its first video (see below).
-  - In **Files**, select files or folders and choose **Add to album**: a folder adds the photos and videos below it.
-  - **Use folder as album** (in **Files**, for the folder you are in or one you selected) makes an album that *is* the
-    folder: whatever is in it, and below it, is in the album, and a new episode or photo that arrives later shows up by
-    itself. It is made for things like a TV show: the files come in the order of their names (`Episode 2` before
-    `Episode 10`), under a heading for each season folder, with the name under each one. There is one such album per
-    folder; asking again opens it. Files cannot be removed from it, only from the folder.
-  - **The cover of a folder album** is, unless you chose one, the picture of its **first video** in that same name order
-    (episode 1 of the first season), or its first photo when the folder has no video. It follows the folder: if an earlier
-    episode arrives, it becomes the cover. This is the only thing chosen automatically; nothing else about an album is.
-- **Artwork and episode details** next to a video are used when they exist, with the names Jellyfin, Kodi and Plex use, so
-  a library organised for them looks right here. Nothing has to be set up, and nothing is downloaded from the internet:
-  fafnirx only reads files that are in the folder. Without them a video's picture is a frame taken a second into it.
-  - *Picture of a video* (first match wins; `.jpg`, `.jpeg`, `.png` or `.webp`): `<video name>-thumb`,
-    `<video name>-landscape`, `<video name>-poster`, `<video name>`, all in the same folder as the video. A video that is
-    **alone in its folder** (a film in its own folder) also takes `poster`, `folder`, `cover` or `thumb` there. In a folder with
-    several videos those names belong to the show, so they are *not* used for an episode.
-  - *Details*: `<video name>.nfo` (or `movie.nfo` for a video alone in its folder), Kodi's XML. The `title`, `showtitle`,
-    `season`, `episode`, `aired` (or `premiered`, `year`) and `plot` are shown in the **Info** panel of the video. Nothing else
-    in the file is used, and the video's name and place in the library do not change.
-  - They are looked up when a picture is asked for, among the files the folder has *now*: a picture that arrives after the
-    video is used from then on. The picture is a file like any other (it is also in **Files**).
-- **Processing** (in the menu) shows the background work after files arrive, live: reading details, making the small and
-  large pictures, and making playable copies of videos, each with how many are running, waiting, failed and done in the last
-  day, and a list of the jobs with the file and, for a failure, why. When streaming is set up it also lists what the
-  streaming service is making now (video segments, subtitle tracks) and what failed lately. You see the jobs of the devices you
-  can see (a read-only user sees those of the master files). An administrator can also **Pause** the queue (what runs finishes, nothing new starts; it stays paused after a
-  restart until resumed), **Retry** or **Clear** failed jobs, **Cancel** waiting ones, and **Process missing**, which queues the
-  photos and videos that were never read. A job that fails is tried 3 times, a little later each time, before it shows as
-  failed. The same work is never queued twice.
-- The **Map** shows pictures that have a place, grouped in numbered bubbles that open as you zoom. The strip below lists what
-  is in view.
+The top level lists devices, local folders, sources and the master files. A badge shows **Changeable** (master files and
+local folders, if your role may write) or **Read-only** (computers and sources: browse, download, hide only).
 
-### Files
+- **Search** (current folder and below), **Type**, **Sort**, **Deleted** (also list deleted files with their removal date), list or grid.
+- **Select** → Download (zip for several), Add to album, Use folder as album, Move or rename, Delete.
+- **Details** of a file: preview, EXIF, content hash, **history** (each version downloadable and restorable; restoring adds a
+  new newest version and loses nothing).
+- **Photos and videos** also have **Open in viewer** (or the play icon in the list) and **In the library**: favorite, archive,
+  albums, rating, description, tags, date, place: the same data as the Timeline. Read-only users can view, not change.
+- **Move or rename** (one file or folder): local folders and master files only, to any path on the same device. A folder
+  moves with its contents; nothing moves if a name is in the way. One `rename` event, no Trash; albums showing the folder
+  follow it. Files a computer or source sent return 409: they are theirs to move.
+- **Still processing:** a photo or video whose details are unread shows a spinner (Timeline, albums, viewer, file list); its
+  details say waiting, running or failed, linking to Processing.
+- **Upload** into a local folder or the master files by drag and drop (8 MiB pieces, parallel, resumable). **New local folder** is on the top level.
 
-The top level lists every device, local folder and source as a folder. Open one and browse like in any file manager.
-Each has its own icon: a server for the **master files**, a monitor for a **computer** that sends its files, a drive for a
-**local folder** and a cloud for a **source**. A badge says whether the web app can change what is inside:
-**Changeable** (the master files and local folders, if your role may write) or **Read-only** (a computer's or a source's
-files, which nothing can be uploaded to or edited in; they can still be browsed, downloaded and hidden by deleting). The badge is also
-shown next to the path inside a folder.
-Every folder shows how many files it holds and how much space they take (the current versions, not the older ones).
+Delete in the web app moves a file to the Trash and keeps its data until retention ends. For a file a device sent, the
+device's own file is untouched and it is not asked for it again.
 
-- **Search** looks in the current folder and everything below it. **Type** filters by images, videos, audio, documents or
-  archives. **Sort** by name, modified, recorded, date taken (photos), size or type; the arrow flips the order.
-  **Deleted** also lists deleted files, struck through, with the date they will be removed for good.
-- **List or grid**: the grid shows photo thumbnails. Long folders load as you scroll and in pages of 1000 files.
-- **Select** files and folders with the checkboxes. The bar offers **Download** (a zip when it is more than one
-  file or a folder; it streams, so size is no limit), **Add to album** (a folder adds the photos and videos below it),
-  **Use folder as album** (for one selected folder; the toolbar has it for the folder you are in) and **Delete**.
-- **Open a file** to see a preview (photos, video, audio), its size, type, dimensions, when it was taken, the
-  photo's EXIF data (camera, lens, exposure, GPS), its content hash, and its **history**: every version with its date
-  and size, each downloadable and restorable. Restoring makes that content the newest version; nothing is lost. A video
-  there plays in the same player as in the photo viewer (click the picture to start it): qualities when
-  [streaming](streaming.md) is set up, subtitles from inside the file or next to it, and the subtitle look and delay in
-  the gear menu.
-- **Upload** into a **local folder**: drag files or folders onto the page, or use the buttons. Uploads run in
-  parallel in 8 MiB pieces, resume after a network hiccup, and appear in a panel in the corner. Create a local folder
-  from the top level with **New local folder**. Devices and sources are filled by their own sending, so they are
-  read-only for uploads (deleting is still possible).
+## Photos and videos
 
-A file deleted here that a device sent is hidden and goes to the Trash, and the device is not asked for it again: its own
-file is left exactly as it is. Restoring it from the Trash brings it back; a file a device sent cannot otherwise be
-changed here (download a version instead). A file deleted on the device is marked deleted too, and comes back if the
-device has it again.
+A view of the same files; originals are never changed.
 
-Deleting never erases at once: the file leaves the listing and its data stays, recoverable, until the
-[retention period](#settings-and-retention) has passed.
+- **Timeline:** by month and day; drag the scrubber at the right edge. Filter by device, kind and tag. Dates are read as UTC.
+- **Viewer:** arrows or swipe, `Esc` closes, `i` info, `f` favorite. A video browsers cannot play gets a converted copy in the background.
+- **Info:** description, rating (click a star again to clear), tags, date, place. Corrections are notes beside the file;
+  **Use the original** reverts.
+- **Select** (circle on a picture, box by a day): Favorite, Add to album, Add tags, Archive, Download, Delete.
+- **Archive** hides from the Timeline. **Delete** goes to the Trash, restorable with albums, tags and favorite.
+- **Map:** pictures with a place, grouped in bubbles.
 
-### Devices
+### Albums
 
-**Add device** gives a name and a token. The token is shown once, with the exact command to run on the device.
-**Rotate token** replaces the token (the old one stops working immediately) and re-enables a revoked device.
-**Revoke** stops a device from sending; its data stays.
-**Release** lets the next computer that connects with the token take the device over (see below).
+Files picked by hand, a folder, or both.
 
-**One computer per device.** A device is used by one computer at a time: the first to connect holds it, and a second
-computer that uses the same token (a copied config, a restored backup that is still running) is refused while the first is
-heard from. The second one waits, sends nothing and says so in `fafnirx status` and the tray, and the owner gets an alert
-(**Device used by two computers**) so that two views of the same folders can never be mixed up. If the first computer
-goes quiet for 90 seconds the second takes over by itself, as when a computer is replaced or reinstalled; **Release** does
-it at once, and **Rotate token** frees it too. The computer that lost the device is the one refused from then on.
+- **Folder album** (Use folder as album): everything in the folder and below is in the album, new files included, in natural
+  name order (`Episode 2` before `Episode 10`) with a heading per season folder. One per folder and user.
+- **It follows the folder:** when a folder is renamed in place (same parent) or moved, by a computer, a source, a local
+  folder or Move or rename, the album moves to the new path once the old folder is empty, and an album still named after the
+  folder takes the new name. A renamed album keeps its name. A folder emptied into an unrelated place, or whose new path
+  already has an album, is not followed.
+- **Cover**, first match: the file you chose; a poster image in the album (`poster`, `cover`, `folder`, `thumb` or
+  `thumbnail`; `.jpg .jpeg .png .webp`; nearest the top first); for a folder album its first video, else first photo; for a
+  picked album its newest file.
 
-A device that is uploading shows what it is doing, with a progress bar, speed and time left, on the Dashboard, the
-Devices list and its own page. Local folders and sources have no status; they are just folders.
+### Artwork and episode details
+
+Read from the files beside a video (Jellyfin/Kodi/Plex names); nothing is downloaded. Without them a video shows a frame from
+one second in.
+
+| Picture of a video, first match (`.jpg .jpeg .png .webp`) | |
+|---|---|
+| Its own | `<video>-thumb`, `-landscape`, `-poster`, or `<video>`, in the video's folder |
+| Its folder's | `poster`, `folder`, `cover`, `thumb`, `thumbnail` in the video's folder, else the folder above, else the one above that |
+
+Details come from `<video>.nfo` (or `movie.nfo` for a lone video): `title`, `showtitle`, `season`, `episode`, `aired`
+(`premiered`, `year`), `plot`, shown in the video's Info. Lookups happen on request, so a poster that arrives later is used.
+
+## Processing
+
+A live queue of the background work started after files arrive. It handles **photos and videos only** (by extension; images
+`jpg jpeg png gif webp bmp tif tiff heic heif avif`, videos `mp4 mov mkv avi webm m4v wmv mts 3gp mpg mpeg`). Other files are
+never read. Originals are not modified; nothing is sent outside.
+
+| Job | Does | Reads | Result |
+|---|---|---|---|
+| `meta` | Reads details | Image: size, EXIF (camera, exposure, date, GPS). Video: duration, size, codec (`ffprobe`) | One `file_meta` row per content |
+| `artwork` | Looks for the picture and `.nfo` beside a video | File names in its folder and two above | Nothing stored; the note says what was found |
+| `thumb` | Draws 320 px and 1600 px JPEGs | The photo, a video frame, or the artwork picture | `cache/thumbs/`, removed after 30 days unused |
+| `proxy` | Converts a video browsers cannot play to MP4 (`ffmpeg`) | The video | `cache/video/` |
+
+Order: `meta` → `artwork` (videos) → `thumb` → `proxy` (own slow lane). HEIC/AVIF get pictures only if ffmpeg can make them.
+
+**Logged per job:** kind, state (queued, running, failed, done), device and path, attempts, error, note, created, started
+and finished times. Counts per kind show waiting, running, failed and done in the last 24 h; done jobs stay a day. A job is
+tried 3 times, later each time, then fails. The same work is never queued twice. Streaming ([streaming](streaming.md)) adds
+the segments and subtitle tracks it is making and its recent failures.
+
+Users see the jobs of devices they can see. Uploads are not jobs: a file is received, verified and recorded first
+([change log](#the-change-log)). Administrators can **Pause** (survives restart), **Retry**/**Clear** failed, **Cancel**
+waiting, and **Process missing** (queue media never read).
+
+## The change log
+
+Dashboard and device pages list what happened to files. Nothing else is logged; events are kept 90 days.
+
+| Event | When | Detail |
+|---|---|---|
+| `add` | A path is recorded first (or again after deletion) | |
+| `update` | A live path gets new content | |
+| `rename` | A computer or source renames/moves a file; a file is moved in a local folder or the web app | Old path |
+| `delete` | A path is marked deleted: by a device, source, the web app, or its file leaving the store | |
+
+A rename is one event on the new path. The old path is not a delete: no event, no Trash, not counted as deleted or listed
+with **Deleted**; it is hidden until retention removes it with its old versions. The chart counts the four events separately.
+Metadata/picture work, retention and sign-ins are not events. Upgrading corrected old renames (wrong deletes removed from the log and Trash).
+
+## Devices
+
+**Add device** gives a name and a token (shown once). **Rotate token** replaces it and re-enables a revoked device.
+**Revoke** stops uploads, keeping data. **Release** lets the next computer with the token take over.
+
+One computer holds a device at a time. A second one with the same token is refused while the first is heard from, says so in
+`fafnirx status`/tray, and the owner gets an alert. After 90 s of silence it takes over; Release or Rotate does it at once.
+Progress, speed and time left show on the Dashboard, Devices and the device page.
 
 ## The client
 
 ```sh
-fafnirx enroll --server http://nas.lan:7443                    # asks for the token, connects, and runs in the background from now on
-fafnirx add-folder ~/Documents --name documents                # name inside the device folder (default: folder name)
-fafnirx remove-folder documents                                # stops collecting; what is on the master stays
-fafnirx folders                                                # list collected folders
-fafnirx status | pause | resume                                # talk to the running client
-fafnirx release-deletes                                        # send the deletions the delete guard holds back, now
-fafnirx sync                                                   # one cycle in the foreground, then exit
-fafnirx run                                                    # the client itself, in the foreground
-fafnirx update                                                 # check for a new release now and install it
-fafnirx install-service | uninstall-service                    # start at login, or stop doing that
-fafnirx tray                                                   # the tray icon (a separate process)
+fafnirx enroll --server http://nas.lan:7443     # asks for the token; runs in background and at login
+fafnirx add-folder ~/Documents --name documents
+fafnirx remove-folder documents                 # stops collecting; the master keeps its data
+fafnirx folders | status | pause | resume
+fafnirx sync                                    # one cycle in the foreground
+fafnirx run                                     # the client in the foreground
+fafnirx release-deletes                         # send held-back deletions now
+fafnirx update                                  # install the newest release now
+fafnirx install-service | uninstall-service | tray
 ```
 
-Use `--config <file>` to point at a different config file. `fafnirx --help` lists everything.
-
-### Configuration file
-
-TOML, created by `enroll`. Default: `%APPDATA%\fafnirx\config.toml` (Windows), `~/Library/Application Support/fafnirx/config.toml`
-(macOS), `~/.config/fafnirx/config.toml` (Linux).
+Config (TOML, made by `enroll`; `--config` selects another): `%APPDATA%\fafnirx\config.toml`, `~/Library/Application Support/fafnirx/config.toml`, `~/.config/fafnirx/config.toml`.
 
 ```toml
 server = "http://nas.lan:7443"  # https://... behind a TLS proxy
-bandwidth_limit_kbps = 0        # upload limit in KiB/s, 0 = unlimited
+bandwidth_limit_kbps = 0        # KiB/s, 0 = unlimited
 watch = true                    # react to file changes
-scan_interval_secs = 3600       # full scan interval, 0 disables periodic scans
-delete_hold_hours = 12          # how long a mass deletion is held back, see "When many files disappear"
-auto_update = true               # look for a new release now and then and install it, see Client updates
-update_public_key = "..."       # only for your own signed builds, see Client updates
-web_url = "http://nas.lan:8080" # opened from the tray menu (default: port 8080 on the master's host)
-
-[[folders]]
-# written by add-folder
+scan_interval_secs = 3600       # full scan, 0 disables
+delete_hold_hours = 12          # delete guard
+auto_update = true              # check GitHub releases every 6 hours
+update_public_key = "..."       # only for your own signed builds
+web_url = "http://nas.lan:8080" # tray link
+[[folders]]                     # written by add-folder
 ```
 
-The token is not in the file; it is in the OS keychain (`FAFNIRX_TOKEN_STORE=file` forces a `token` file next to it).
+The token is in the OS keychain (`FAFNIRX_TOKEN_STORE=file` uses a file beside the config).
 
-### What is collected
+**Collected:** everything under added folders except `.fafnirxignore` matches (gitignore syntax). Skipped and logged:
+symlinks, locked files, case-only name clashes; empty directories ignored. A vanished folder (unmounted drive) deletes
+nothing. The client never writes to collected folders. A file turning into a folder (or back) marks the old path deleted
+first. Kept: size, mtime, permission bits (best effort). Paths are UTF-8 NFC; only user, device and source names are limited
+to `a-z 0-9 . _ -`. Unstable files retry after 10 min, 1 h, 1 day. While the master is down, changes queue.
 
-- Everything under the folders you add, except what a `.fafnirxignore` file excludes. It sits in a collected folder and
-  uses gitignore syntax.
-- Skipped and logged: symlinks, locked files, names that conflict by case. Empty directories are ignored.
-- A collected folder that is gone (an unmounted drive, a mistake) is not believed: what the master holds from it stays,
-  and nothing is marked deleted.
-- The client only reads your files. It never writes, renames, moves or deletes anything in a collected folder, and it
-  does not collect its own state folder if that lies inside one.
-- A file that becomes a folder of the same name, or the other way round, is handled: the old path is marked deleted
-  first.
-- Kept: size and modification time always, permission bits best effort. No extended attributes.
-- The web app speaks English, Spanish, Chinese, Arabic, Russian and Japanese: pick one with the language icon in the top bar (the first visit follows the browser's language).
-- Files and folders can be named in any script (Arabic, Chinese, emoji...): paths are UTF-8, stored normalized (NFC) with `/` separators. Only the names of users, devices and sources are limited to lowercase letters, digits, `.`, `_` and `-`, because they are folders of their own.
-- A file that keeps changing during upload is retried after 10 minutes, then 1 hour, then 1 day.
-- While the master is unreachable, changes queue on the device and flow when it returns.
+### The delete guard
 
-### When many files disappear
-
-On the device, the client is the source of truth: a file it changes, renames or deletes is changed, renamed or marked
-deleted on the master too (the master keeps its data for the retention period). To protect against accidents, a **large**
-deletion is not passed on at once. When at least 10 files of a collected folder are gone and they are more than 20% of
-the files sent from that folder (a drive that is not mounted, a folder emptied by mistake, a runaway script), the client
-holds those deletions back, reports it as an alert in the web app and in `fafnirx status`, and keeps uploading everything
-else. Then:
-
-- If the files come back (the drive is mounted again), the hold ends and nothing was deleted.
-- If they stay gone for `delete_hold_hours` (default 12), it was meant, and the deletions are sent.
-- `fafnirx release-deletes` sends them now.
-
-Smaller deletions are never held. The master's copy of a file deleted in the web app is not touched by this.
+If at least 10 files of a folder are gone and they are over 20% of what was sent from it, the client holds the deletions,
+raises an alert and keeps uploading. If the files return, nothing is deleted; after `delete_hold_hours` they are sent;
+`fafnirx release-deletes` sends them now. Smaller deletions pass at once.
 
 ### The first sync
 
-When a device is set up with folders that already hold files, everything in them is collected, with no extra step:
+`add-folder` wakes the client. It lists folders, then hashes and uploads one file at a time in 4 MiB chunks over parallel
+streams within the bandwidth limit. A file is done once verified; after a stop the next cycle skips done files and resumes
+partial ones. Unreadable files are skipped, reported, and retried. The client's record of what it sent belongs to one
+master: if the master's database is replaced it notices (every cycle asks the master's id) and collects everything again.
 
-1. `enroll` starts the client, and `add-folder` wakes it at once, so the first cycle begins within a second or two (not
-   at the next scheduled scan).
-2. The client lists every folder, then takes the files one at a time: it **hashes a file and uploads it before moving to
-   the next**, so data starts flowing immediately instead of after the whole folder has been read.
-3. Each file goes in 4 MiB chunks over parallel streams, within the bandwidth limit (`bandwidth_limit_kbps`). Content the
-   master already has for this device is not sent again.
-4. A file is recorded as done once the master has verified it. If the client stops (a reboot, the network, `pause`, a
-   crash), the next cycle skips what is done, and a half-sent file continues with its missing chunks.
-5. Progress shows in the tray, in `fafnirx status`, and live on the Dashboard and the device page: file number, percent,
-   speed and time left for the whole cycle.
-6. Files that cannot be read (locked, changing, no permission) are skipped, reported as upload errors in the web app,
-   and retried at 10 minutes, then 1 hour, then 1 day. They never hold up the rest.
+### The tray
 
-The client keeps a local record of what it has sent, so an unchanged file is not offered again. That record belongs to one
-master: if you wipe the master's database, recreate it, or enroll the device with another master, the client notices
-(every cycle starts by asking the master for its id) and collects everything again. The tray's "On the server: N files"
-line comes from that record, so after such a change it drops to 0 and counts up as files go out.
-
-The master is never asked to send anything back; a device that was already full of data is a one-way copy.
-
-### The tray icon
-
-`fafnirx tray` shows a drive icon: green online, red error, amber paused, grey not running. The menu shows what the
-client is doing (scanning, hashing, uploading with percent, speed and time left), the last sync, totals and the last
-error, and has pause and resume, sync now, check for updates, start and stop, and an **open** submenu (config, log,
-collected folders, the web app). `enroll` and `install-service` start it at login too.
+`fafnirx tray`: green online, red error, amber paused, grey not running. The menu shows phase, last sync, totals, last error;
+pause/resume, sync now, **Check for updates** (GitHub releases, or the master if `update_public_key` is set), **Downloads on
+GitHub** (latest release page), config/log/folder/web links.
 
 ## Settings and retention
 
 | Setting | Default | Meaning |
 |---|---|---|
-| Versions kept per file | 5 | Older versions are marked expiring, then removed after the retention period |
-| Retention (days) | 30 | How long deleted files and expired versions stay before they are removed for good |
+| Versions kept per file | 5 | Older versions expire, then go after the retention period |
+| Retention (days) | 30 | How long deleted files and expired versions stay |
 
-Every version is a whole copy of the file, so a large file that changes often takes about *versions kept* times its size.
+A large file that changes often takes about *versions kept* times its size.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Live: first upload
-    Live --> Live: changed (a new version)
-    Live --> Deleted: deleted on the device or in the web app
-    Deleted --> Live: the file comes back on the device, or a version is restored
-    Deleted --> Removed: retention period over
-    Removed --> [*]: record, versions and their stored files deleted
+    Live --> Live: changed (new version)
+    Live --> Deleted: deleted on device or in the web app
+    Live --> Renamed: renamed (hidden)
+    Deleted --> Live: file returns, or version restored
+    Deleted --> Removed: retention over
+    Renamed --> Removed: retention over
+    Removed --> [*]: record, versions, stored files deleted
 ```
-
-The change log (the activity lists) is kept 90 days.
 
 ## Local folders and the network drive
 
-`data/files/` is a plain tree: `files/<user>/<device>/<path>` for the devices of every user, and the **master files** straight
-in `files/<path>`: whatever is in `files/` and is not the folder of a user. You can share it over SMB or NFS and use it like a drive;
-everything dropped into `files/` outside the folders of the users becomes a master file.
+`data/files/` is a plain tree: `files/<user>/<device>/<path>`, master files in `files/<path>`. Share it over SMB/NFS.
 
-- Write as the user the master runs as (`FAFNIRX_UID`), or it cannot move or delete what the share creates.
-- A **new folder** `files/<user>/<name>` with a valid name becomes a local folder (a device of that user) by itself. A new
-  folder directly under `files/` is just a folder of the master files.
-- The folders of the users hold their private files. Share them read-only (or not at all): anyone who can write to the share
-  as the user the master runs as can change them, and anyone who can read the share can read all of them. The share has its
-  own logins; they are not the users of fafnirx.
-- Only local folders are written to in place. The folder of a device or a source is the copy of theirs: share it read-only,
-  because what is written inside it directly is not recorded.
-- Files you add, change or delete in a local folder are recorded as versions of that folder's files within seconds (the master
-  watches the folder), or within 5 minutes on mounts that do not report changes.
-- A file overwritten in place has no previous copy to keep, so only versions replaced through a client or the web
-  app are kept as history. Deleting a file moves it to `versions/`, so it can be restored.
-- Files being copied in are recorded once they have been quiet for a few seconds.
-- To look right away instead of waiting, an administrator can press **Scan now** (on the Files page, and under **Settings → File
-  store**). It compares the whole of `files/` with the database in the background; a scan already running is not started twice.
-- Names that a Mac writes decomposed (accents as separate characters) are renamed to the composed form, which is how
-  every path is stored.
+- Write as `FAFNIRX_UID`. A new `files/<user>/<name>` becomes a local folder of that user; a new folder directly under
+  `files/` is master files.
+- Share user folders read-only or not at all (the share has its own logins). Only local folders are written in place; share
+  device and source folders read-only (writes there are not recorded).
+- Changes are recorded within seconds (the master watches), or 5 minutes on mounts without events. Administrators can press
+  **Scan now** (Files, Settings → File store).
+- A moved file is recorded as a `rename` if it keeps size and mtime and is the only vanished file that matches; otherwise
+  as `delete` + `add`.
+- A file overwritten in place has no previous copy; deleting moves it to `versions/`.
+- Decomposed (Mac) names are renamed to composed form.
 
 ## Sources: Google Drive
 
-1. In Google Cloud, create a **service account**, download its JSON key, and enable the Drive API for the project.
-2. Share each Drive folder you want with the service account's email address (viewer is enough).
-3. **Sources → Add Google Drive source**: a name, the folder ids or URLs (one per line), the key, and how often to collect.
+1. Create a Google Cloud **service account**, download its JSON key, enable the Drive API.
+2. Share each Drive folder with its email (viewer is enough).
+3. **Sources → Add Google Drive source:** name, folder ids or URLs, key, interval.
 
-A source belongs to the user who adds it (an administrator sees and manages all of them). Its name only has to be unique among
-your own sources, so two users can both have one called `photos`: the web app names it `<user>/<name>`. Files appear under
-the folder `<user>/source-<name>`, with the same versions and retention as any device's. The key is stored in the database and
-is never shown in the web app again.
+A source belongs to its user (`<user>/<name>`); files appear under `<user>/source-<name>` with the usual versions and
+retention. The key is never shown again.
 
-- A file you delete in the web app stays deleted, even after the retention period has removed it, until it changes on
-  Drive.
-- Only raw files are collected. Google Docs, Sheets, Slides, forms and shortcuts are skipped and counted in the run message.
-- File names are made safe for all platforms (`/ \ : * ? " < > |` become `_`); duplicates get a ` (<id prefix>)` suffix.
-- Renamed or moved files with the same content are not downloaded again.
-- A file you delete in the web app stays deleted until it changes on Drive.
-- Files that disappear from Drive are marked deleted. If listing Drive fails, the run fails and deletes nothing.
-- A failed or partial run raises an alert for the owner of the source (and the administrators); the next good run clears it.
+- Raw files only; Docs, Sheets, Slides, forms, shortcuts are skipped and counted.
+- Names are made safe (`/ \ : * ? " < > |` → `_`); duplicates get ` (<id prefix>)`.
+- A Drive rename/move is a `rename` without a download. A file deleted in the web app stays deleted until it changes on Drive.
+- Files gone from Drive are marked deleted; if listing fails nothing is deleted. Failed or partial runs raise an alert.
 
 ## Mirrors: offsite copies
 
-**Mirrors → Add mirror**: a name, an rclone backend type, its options, a path on the remote, the interval (default 72 hours)
-and how many runs of history to keep (default 3). Or, if you already have rclone remotes, the name of one (`remote`,
-as `name:path`, from the `rclone.conf` of the [config folder](#mirrors-that-use-an-rclone-remote)). Mirrors are for
-administrators only, and they push **all** the data (every user's files and the master files) offsite.
-
-> **Remember 3-2-1.** A mirror is the "offsite" copy of a good backup plan: keep **3** copies of your data, on **2** different
-> kinds of storage, with **1** copy offsite. The master is the first copy, a second storage (a snapshot or another disk, see
-> [Deployment](deployment.md#backups)) is the second, and a mirror is the offsite one. A mirror is not a backup of the database,
-> and a single mirror is one copy: add a second one on a different provider if the data matters.
+**Mirrors → Add mirror** (administrators): name, rclone backend type, options, remote path, interval (72 h), runs kept (3).
+A mirror pushes everything: all users' files and master files.
 
 ```text
 # type: s3
@@ -342,97 +268,57 @@ secret_access_key = ...
 # path: my-bucket/fafnirx
 ```
 
-Options are rclone's backend options as `key = value` lines (any backend from <https://rclone.org/overview/> works).
-Passwords for backends that need them (SFTP, WebDAV) must be in rclone's obscured form: `rclone obscure <password>`.
-Values are never displayed again; only the option names are.
-
-### Mirrors that use an rclone remote
-
-If you already have rclone remotes (an encrypted `crypt` remote, a `b2` bucket with an application key, an OAuth login that
-`rclone config` made), use them: put `rclone.conf` in the config folder (`./config`; `FAFNIRX_RCLONE_CONFIG` names another
-file) and give the remote's name in the **rclone remote** field of **Add mirror**.
-
-```ini
-# config/rclone.conf
-[b2]
-type = b2
-account = ...
-key = ...
-
-[b2crypt]
-type = crypt
-remote = b2:my-bucket/fafnirx
-password = ...      # from: rclone obscure
-```
-
-`remote` is `name:path` (here `b2crypt:`). Keep `rclone.conf` writable by the master: rclone refreshes tokens in it. It holds
-credentials, so keep it readable by its owner only.
-
-### What a mirror holds
-
-In the same layout as the master:
+Options are rclone `key = value` lines, never shown again; SFTP/WebDAV passwords must be obscured (`rclone obscure`). To use
+existing remotes (`crypt`, `b2`, OAuth), put `rclone.conf` in `./config` (or `FAFNIRX_RCLONE_CONFIG`; writable by the
+master, readable by its owner only) and enter `name:path` as **rclone remote**.
 
 ```text
-files/<user>/<device>/...       the current tree of each device, local folder and source
-files/<path>                    the master files
-versions/<UTC time>/...         what that run replaced or removed (same relative paths)
-meta/stats.json                 run statistics
-meta/<user>_<device>.json       file list (path, size, mtime, root hash) per device
-meta/_master.json               the same for the master files
+files/<user>/<device>/...       current tree per device, local folder, source
+files/<path>                    master files
+versions/<UTC time>/...         what that run replaced or removed
+meta/stats.json, meta/<user>_<device>.json, meta/_master.json   run stats; file lists (path, size, mtime, root hash)
 meta/library.json               albums, tags, favorites, ratings, descriptions, corrected dates and places
 ```
 
-Each run uploads only files whose content changed. Every file is hashed again before it is staged, so a corrupt stored
-file makes the run **partial** (and raises an alert) instead of being mirrored. The newest `keep` version directories
-are kept; older ones are purged. **Run now** starts a run; the circular arrow forgets what was uploaded so the next run
-sends everything (use it after emptying the remote).
+Each run uploads only changed files, re-hashing each; a corrupt file makes the run **partial** (alert) instead of being
+mirrored. The newest `keep` runs are kept. **Run now** starts one; the circular arrow forgets what was uploaded. A mirror is
+the offsite copy of 3-2-1 and does not contain the database ([backups](deployment.md#backups)).
 
 ## Alerts
 
 | Alert | Raised when | Clears |
 |---|---|---|
-| Device offline | No heartbeat for 60 s | The device is seen again |
-| Upload error | A client reports an error | 48 h after the client last reported it |
-| Disk usage | The data disk is over 80% full | Usage drops |
-| Source failed | A source run fails or is partial | A good run |
-| Mirror failed | A mirror run fails or is partial | A good run |
+| Device offline | No heartbeat for 60 s | Seen again |
+| Upload error | A client reports one | 48 h after the last report |
+| Disk usage | Data disk over 80% | Usage drops |
+| Source / Mirror failed | Run fails or is partial | A good run |
+| Device used by two computers | A second computer uses the token | It stops |
 
-Any alert can be dismissed by hand. Collection is never paused automatically. There are no email or webhook alerts.
+Dismiss by hand. Collection never pauses automatically. No email or webhook.
 
 ## Restoring data
 
-Use the web app: open the file, pick a version, **Download** it or **Restore** it. Or take it from disk: the current
-version of a path is `<data>/files/<user>/<device>/<path>` (`<data>/files/<path>` for a master file); a replaced or deleted
-version is `<data>/versions/<version id>/<user>/<device>/<path>` (the version ids are in the web app and in the database). Or copy from a
-[mirror's `files/` tree](#mirrors-offsite-copies), which needs nothing from fafnirx.
+Web app: open the file, pick a version, **Download** or **Restore**. Disk: current version
+`<data>/files/<user>/<device>/<path>` (`<data>/files/<path>` for master files); replaced or deleted version
+`<data>/versions/<version id>/<user>/<device>/<path>`. Or copy from a mirror's `files/` tree.
 
 ## Client updates
 
-A client updates itself from this project's **GitHub releases**. Every 6 hours (and on `fafnirx update`, or **Check for
-updates** in the tray) it asks GitHub for the latest release, and when that is newer than the running client it downloads
-the plain executable for its platform (`fafnirx-<version>-<os>-<arch>`, `.exe` on Windows), checks it against the `.sha256`
-published beside it, replaces its own program file and restarts. A damaged or incomplete download is refused and the old
-client keeps running. Set `auto_update = false` in the config to stop the automatic checks; `fafnirx update` still works.
+Every 6 hours, on `fafnirx update`, or from the tray, the client asks the project's GitHub releases for the latest version; if
+newer it downloads `fafnirx-<version>-<os>-<arch>` (`.exe` on Windows), checks the `.sha256` beside it, replaces its own file
+and restarts. A bad download is refused. `auto_update = false` stops the automatic checks. Config, token and state directory
+are untouched, so the device stays the same and nothing is resent or missed (also after a new installer or a reinstall).
 
-**The device stays the same.** Only the program file is replaced. The config, the token (in the OS keychain) and the state
-directory (the installation id and the list of what was sent) are not touched, so the updated client is the same device, with
-the same folders, and carries on from where the old one stopped: nothing is sent twice and nothing is missed, and the master
-sees no new device or "device in use" conflict. The same holds when you install a newer installer over an old one, and when
-you uninstall and install again on the same computer; only enrolling with *another* device's token makes it another device.
-
-The checksum comes from the same release, so it protects against a bad download, not against someone who can publish releases
-of the project. If you run your own builds, or want updates only you can sign, sign them and let the master offer them:
+The checksum comes from the same release: it guards against bad downloads, not against someone who can publish releases. For
+your own signed builds:
 
 ```sh
-fafnirx-sign keygen --out update.key        # once. Keep update.key off the master.
+fafnirx-sign keygen --out update.key        # keep off the master
 # put the printed  update_public_key = "..."  in each client's config.toml
-
 cargo build --profile client -p fafnirx
 fafnirx-sign publish --key update.key --platform linux-x86_64 --version <version> \
     --bin target/client/fafnirx --out /path/to/data/updates
 ```
 
-A client with `update_public_key` no longer looks at GitHub: it takes updates from the master, only if the signature verifies
-and the version is higher than its own. The signing key never leaves your machine, so a compromised master cannot ship a
-client update, and that channel needs no TLS. The platform is `<os>-<arch>` as Rust reports it: `windows-x86_64`,
-`linux-x86_64`, `linux-aarch64`, `macos-aarch64`, `macos-x86_64`.
+A client with `update_public_key` takes updates only from the master, only with a valid signature and a higher version.
+Platforms: `windows-x86_64`, `linux-x86_64`, `linux-aarch64`, `macos-aarch64`, `macos-x86_64`.

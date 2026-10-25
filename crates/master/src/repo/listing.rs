@@ -54,6 +54,7 @@ pub struct Page<'a> {
 
 /// A file of the listing.
 pub struct Listed {
+    pub id: uuid::Uuid,
     pub path: String,
     pub size: i64,
     pub mtime: i64,
@@ -73,15 +74,17 @@ pub struct Found {
 }
 
 const COLUMNS: &str = "f.path, v.size, v.mtime, v.created_at, f.deleted_at, m.mime, m.width, m.height, m.taken_at,
-    (SELECT COUNT(*) FROM versions x WHERE x.file_id = f.id), COUNT(*) OVER ()";
+    (SELECT COUNT(*) FROM versions x WHERE x.file_id = f.id), COUNT(*) OVER (), f.id";
 
-const SCOPE: &str = "f.device_id = $1 AND f.path LIKE $2 AND ($3 OR f.deleted_at IS NULL)";
+const SCOPE: &str =
+    "f.device_id = $1 AND f.path LIKE $2 AND (f.deleted_at IS NULL OR ($3 AND f.deleted_by IS DISTINCT FROM 'rename'))";
 
 fn found(rows: &[postgres::Row]) -> Found {
     let total = rows.first().map_or(0, |r| r.get(10));
     let files = rows
         .iter()
         .map(|r| Listed {
+            id: r.get(11),
             path: r.get(0),
             size: r.get(1),
             mtime: r.get(2),

@@ -53,6 +53,8 @@ pub struct ListQuery {
 pub struct Entry {
     /// device, dir or file
     kind: &'static str,
+    /// For a file: its id in the library (the address of its viewer, favorites and albums).
+    id: Option<crate::platform::id::Id>,
     name: String,
     device: String,
     path: String,
@@ -73,6 +75,8 @@ pub struct Entry {
     taken_at: Option<i64>,
     /// For a device entry: master, device, local or source.
     device_kind: Option<String>,
+    /// For a photo or video: its details have not been read yet, so it is still being processed.
+    processing: bool,
     /// For a device entry: whether the web app may add, change or delete files there.
     writable: bool,
 }
@@ -212,6 +216,7 @@ fn file_entry(f: Listed, strip: usize, device: &str, retention_days: i64) -> Ent
     let full = f.path;
     Entry {
         kind: "file",
+        id: Some(crate::platform::id::Id(f.id)),
         name: full[strip..].to_string(),
         device: device.to_string(),
         mtime: Some(secs_of_ns(f.mtime)),
@@ -219,6 +224,7 @@ fn file_entry(f: Listed, strip: usize, device: &str, retention_days: i64) -> Ent
         changed: Some(f.created_at),
         deleted_at: f.deleted_at,
         purge_at: f.deleted_at.map(|t| t + retention_days * DAY_SECS),
+        processing: f.deleted_at.is_none() && meta::wants(&full) && f.mime.is_none(),
         preview: meta::can_preview(&full),
         mime: Some(f.mime.unwrap_or_else(|| meta::mime(&full))),
         width: f.width,
@@ -330,7 +336,7 @@ pub struct VersionInfo {
 #[derive(Serialize)]
 pub struct Info {
     /// The id of the file, which is also its address for streaming (`/api/stream/<id>/...`).
-    id: i64,
+    id: crate::platform::id::Id,
     device: String,
     path: String,
     name: String,
@@ -342,6 +348,8 @@ pub struct Info {
     hash: String,
     mime: String,
     preview: bool,
+    /// Work still to do on a photo or video: waiting, running or failed.
+    work: Option<String>,
     width: Option<i64>,
     height: Option<i64>,
     taken_at: Option<i64>,
@@ -397,9 +405,14 @@ pub async fn info(
             })
             .collect();
         let events = events::of_file(c, dev.id, &path, 30)?.into_iter().map(Recent::from).collect();
+        let work = if deleted_at.is_none() && meta::wants(&path) {
+            crate::library::photos::work_state(c, &dev.name, &path, row.mime.is_none())?
+        } else {
+            None
+        };
         let exif = row.exif;
         Ok(Info {
-            id: file_id,
+            id: crate::platform::id::Id(file_id),
             device: dev.name,
             name: base_name(&path).to_string(),
             deleted_at,
@@ -410,6 +423,7 @@ pub async fn info(
             hash: hex::encode(row.root_hash),
             mime: row.mime.unwrap_or_else(|| meta::mime(&path)),
             preview: meta::can_preview(&path),
+            work,
             width: row.width,
             height: row.height,
             taken_at: row.taken_at,
@@ -530,4 +544,59 @@ pub async fn restore(
     })
     .await?;
     done()
+}
+
+#[derive(Deserialize)]
+pub struct MoveBody {
+    device: String,
+    /// A file or a folder of the device.
+    from: String,
+    /// Its new path on the same device.
+    to: String,
+}
+
+#[derive(Serialize)]
+pub struct Moved {
+    moved: usize,
+}
+
+/// Renames or moves a file, or a folder with everything below it, within a device the master owns: a local folder or the
+/// master files. What a device or a source sent is theirs to move, so it answers 409 there.
+pub async fn move_files(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    Json(b): Json<MoveBody>,
+) -> Res<Moved> {
+    let store = state.store.clone();
+    let moved = run(&state, move |c| {
+        let dev = find_device_to_change(c, &who, &b.device)?;
+        if !editable_kind(&devices::kind_of(c, dev.id)?) {
+            return Err(ApiError::conflict("Files sent by a device or a source cannot be moved here").into());
+        }
+        let clean = |p: &str| clean_remote_path(p.trim_matches('/')).map_err(|e| ApiError::bad(e.to_string()));
+        let (from, to) = (clean(&b.from)?, clean(&b.to)?);
+        if to == from || to.starts_with(&format!("{from}/")) {
+            return Err(ApiError::bad("Choose a different place, not inside the folder itself").into());
+        }
+        let paths = expand(c, &dev, &from, false)?;
+        if paths.is_empty() {
+            return Err(ApiError::not_found("No such file or folder").into());
+        }
+        let targets: Vec<(String, String)> =
+            paths.into_iter().map(|p| (format!("{to}{}", &p[from.len()..]), p)).collect();
+        // Nothing moves if something is in the way.
+        for (new, _) in &targets {
+            let parents = new.match_indices('/').map(|(i, _)| &new[..i]);
+            if parents.chain([new.as_str()]).any(|p| files::live_content(c, dev.id, p).ok().flatten().is_some()) {
+                return Err(ApiError::conflict(format!("{new} exists already")).into());
+            }
+        }
+        for (new, old) in &targets {
+            ingest::move_path(c, &store, &dev, old, new)?;
+        }
+        db::notify(c, "files", &dev.name)?;
+        Ok(targets.len())
+    })
+    .await?;
+    Ok(Json(Moved { moved }))
 }

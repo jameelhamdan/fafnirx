@@ -1,0 +1,98 @@
+-- 0010: the things people see and link to (files, albums, tags, jobs, alerts) are named by random UUIDs instead of
+-- counters, so that an address says nothing about how many there are and cannot be guessed from the one before.
+-- (Devices, users, sources and mirrors are named by their slug everywhere; versions, events and sessions are never shown.)
+-- Every existing row gets a new random id, and every column that points at one is rewritten to match.
+
+-- files ---------------------------------------------------------------------------------------------------------
+ALTER TABLE files ADD COLUMN uid UUID NOT NULL DEFAULT gen_random_uuid();
+
+ALTER TABLE versions ADD COLUMN file_uid UUID;
+UPDATE versions x SET file_uid = f.uid FROM files f WHERE f.id = x.file_id;
+ALTER TABLE versions DROP COLUMN file_id;
+ALTER TABLE versions RENAME COLUMN file_uid TO file_id;
+ALTER TABLE versions ALTER COLUMN file_id SET NOT NULL;
+
+ALTER TABLE file_state ADD COLUMN file_uid UUID;
+UPDATE file_state x SET file_uid = f.uid FROM files f WHERE f.id = x.file_id;
+ALTER TABLE file_state DROP COLUMN file_id;  -- also drops its primary key and indexes
+ALTER TABLE file_state RENAME COLUMN file_uid TO file_id;
+ALTER TABLE file_state ALTER COLUMN file_id SET NOT NULL;
+
+ALTER TABLE file_tags ADD COLUMN file_uid UUID;
+UPDATE file_tags x SET file_uid = f.uid FROM files f WHERE f.id = x.file_id;
+ALTER TABLE file_tags DROP COLUMN file_id;
+ALTER TABLE file_tags RENAME COLUMN file_uid TO file_id;
+ALTER TABLE file_tags ALTER COLUMN file_id SET NOT NULL;
+
+ALTER TABLE album_files ADD COLUMN file_uid UUID;
+UPDATE album_files x SET file_uid = f.uid FROM files f WHERE f.id = x.file_id;
+ALTER TABLE album_files DROP COLUMN file_id;
+ALTER TABLE album_files RENAME COLUMN file_uid TO file_id;
+ALTER TABLE album_files ALTER COLUMN file_id SET NOT NULL;
+
+ALTER TABLE albums ADD COLUMN cover_uid UUID;
+UPDATE albums x SET cover_uid = f.uid FROM files f WHERE f.id = x.cover_file_id;
+ALTER TABLE albums DROP COLUMN cover_file_id;
+ALTER TABLE albums RENAME COLUMN cover_uid TO cover_file_id;
+
+-- The old key goes (with the indexes on it) and the new one takes its name.
+ALTER TABLE files DROP COLUMN id;
+ALTER TABLE files RENAME COLUMN uid TO id;
+ALTER TABLE files ADD PRIMARY KEY (id);
+
+ALTER TABLE versions ADD FOREIGN KEY (file_id) REFERENCES files(id);
+CREATE INDEX versions_file ON versions (file_id, id);
+ALTER TABLE file_state ADD PRIMARY KEY (user_id, file_id);
+ALTER TABLE file_state ADD FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE;
+CREATE INDEX file_state_file ON file_state (file_id);
+CREATE INDEX file_state_favorite ON file_state (file_id) WHERE favorite;
+CREATE INDEX file_state_archived ON file_state (file_id) WHERE archived;
+CREATE INDEX file_state_placed ON file_state (file_id) WHERE lat IS NOT NULL;
+ALTER TABLE albums ADD FOREIGN KEY (cover_file_id) REFERENCES files(id) ON DELETE SET NULL;
+CREATE INDEX files_deleted ON files (deleted_at DESC) WHERE deleted_at IS NOT NULL;
+CREATE INDEX files_library ON files (id) WHERE deleted_at IS NULL AND media IS NOT NULL;
+
+-- albums and tags -----------------------------------------------------------------------------------------------
+ALTER TABLE albums ADD COLUMN uid UUID NOT NULL DEFAULT gen_random_uuid();
+ALTER TABLE album_files ADD COLUMN album_uid UUID;
+UPDATE album_files x SET album_uid = a.uid FROM albums a WHERE a.id = x.album_id;
+ALTER TABLE album_files DROP COLUMN album_id;
+ALTER TABLE album_files RENAME COLUMN album_uid TO album_id;
+ALTER TABLE album_files ALTER COLUMN album_id SET NOT NULL;
+ALTER TABLE albums DROP COLUMN id;
+ALTER TABLE albums RENAME COLUMN uid TO id;
+ALTER TABLE albums ADD PRIMARY KEY (id);
+ALTER TABLE album_files ADD PRIMARY KEY (album_id, file_id);
+ALTER TABLE album_files ADD FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE CASCADE;
+ALTER TABLE album_files ADD FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE;
+CREATE INDEX album_files_file ON album_files (file_id);
+
+ALTER TABLE tags ADD COLUMN uid UUID NOT NULL DEFAULT gen_random_uuid();
+ALTER TABLE file_tags ADD COLUMN tag_uid UUID;
+UPDATE file_tags x SET tag_uid = t.uid FROM tags t WHERE t.id = x.tag_id;
+ALTER TABLE file_tags DROP COLUMN tag_id;
+ALTER TABLE file_tags RENAME COLUMN tag_uid TO tag_id;
+ALTER TABLE file_tags ALTER COLUMN tag_id SET NOT NULL;
+ALTER TABLE tags DROP COLUMN id;
+ALTER TABLE tags RENAME COLUMN uid TO id;
+ALTER TABLE tags ADD PRIMARY KEY (id);
+ALTER TABLE file_tags ADD PRIMARY KEY (file_id, tag_id);
+ALTER TABLE file_tags ADD FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE;
+ALTER TABLE file_tags ADD FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE;
+CREATE INDEX file_tags_tag ON file_tags (tag_id);
+
+-- jobs and alerts -----------------------------------------------------------------------------------------------
+-- A job keeps its place in the line in `seq`: a random id says nothing about which came first.
+ALTER TABLE jobs ADD COLUMN seq BIGINT GENERATED BY DEFAULT AS IDENTITY;
+UPDATE jobs SET seq = id;
+SELECT setval(pg_get_serial_sequence('jobs', 'seq'), COALESCE((SELECT MAX(seq) FROM jobs), 0) + 1, false);
+ALTER TABLE jobs ADD COLUMN uid UUID NOT NULL DEFAULT gen_random_uuid();
+ALTER TABLE jobs DROP COLUMN id;
+ALTER TABLE jobs RENAME COLUMN uid TO id;
+ALTER TABLE jobs ADD PRIMARY KEY (id);
+CREATE INDEX jobs_queue ON jobs ((kind = 'proxy'), seq) WHERE status = 'queued';
+
+ALTER TABLE alerts ADD COLUMN uid UUID NOT NULL DEFAULT gen_random_uuid();
+ALTER TABLE alerts DROP COLUMN id;
+ALTER TABLE alerts RENAME COLUMN uid TO id;
+ALTER TABLE alerts ADD PRIMARY KEY (id);

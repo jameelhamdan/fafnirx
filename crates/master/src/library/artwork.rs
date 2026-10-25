@@ -4,8 +4,8 @@
 //!
 //! * An episode or a film: `<name>-thumb.jpg`, `<name>-landscape.jpg`, `<name>-poster.jpg` or `<name>.jpg` next to
 //!   `<name>.mkv` (also `.jpeg`, `.png`, `.webp`).
-//! * A video that is alone in its folder (a film in its own folder): `poster`, `folder`, `cover` or `thumb` there. In a folder
-//!   with several videos those belong to the show, not to one episode, so they are not used for an episode.
+//! * A video without a picture of its own takes the folder's: `poster`, `folder`, `cover`, `thumb` or `thumbnail` in its folder, else in
+//!   the folder above (a season under a show), up to [`FOLDERS_UP`] levels. A film alone in its folder is the same case.
 //! * Descriptions: `<name>.nfo` (Kodi's XML: `title`, `plot`, `season`, `episode`, `aired`, `showtitle`), or `movie.nfo`
 //!   for a video that is alone in its folder.
 //!
@@ -13,13 +13,18 @@
 //! is used from then on and nothing has to be scanned again.
 
 use crate::library::meta;
+use crate::platform::store::Store;
+use crate::repo::files;
 use serde::Serialize;
+use std::path::PathBuf;
 
 const IMAGE_EXTENSIONS: [&str; 4] = ["jpg", "jpeg", "png", "webp"];
 /// Per episode: the file name's own suffixes, best first.
 const EPISODE_SUFFIXES: [&str; 4] = ["-thumb", "-landscape", "-poster", ""];
-/// For a video that is alone in its folder.
-const FOLDER_NAMES: [&str; 4] = ["poster", "folder", "cover", "thumb"];
+/// A picture for a whole folder.
+const FOLDER_NAMES: [&str; 5] = ["poster", "folder", "cover", "thumb", "thumbnail"];
+/// How many folders above a video are looked in for a picture that stands for the folder.
+pub const FOLDERS_UP: usize = 2;
 /// An .nfo is a few kilobytes; a larger file is not one.
 pub const NFO_MAX_BYTES: u64 = 256 * 1024;
 
@@ -47,19 +52,71 @@ fn find<'a>(neighbours: &'a [Neighbour], dir: &str, wanted: &str, extensions: &[
     })
 }
 
-/// The picture to show for a video instead of a frame of it: its path and content, out of the files next to it.
+/// The picture of a video itself, out of the files next to it: `<name>-thumb.jpg`, `<name>.png` ...
 pub fn picture<'a>(video: &str, neighbours: &'a [Neighbour]) -> Option<&'a Neighbour> {
     let (dir, name) = split(video);
     let stem = stem(name);
-    for suffix in EPISODE_SUFFIXES {
-        if let Some(found) = find(neighbours, dir, &format!("{stem}{suffix}"), &IMAGE_EXTENSIONS) {
-            return Some(found);
+    EPISODE_SUFFIXES.iter().find_map(|suffix| find(neighbours, dir, &format!("{stem}{suffix}"), &IMAGE_EXTENSIONS))
+}
+
+/// The picture that stands for a folder (`poster.jpg`, `folder.png` ...) among the files that are directly in it.
+pub fn folder_picture<'a>(dir: &str, neighbours: &'a [Neighbour]) -> Option<&'a Neighbour> {
+    FOLDER_NAMES.iter().find_map(|n| find(neighbours, dir, n, &IMAGE_EXTENSIONS))
+}
+
+/// The folders above a path, nearest first, as the paths the pictures in them would have (`a/b/c.mkv` gives `a/b`, `a`, ``).
+pub fn folders_above(path: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut dir = split(path).0;
+    loop {
+        out.push(dir.to_string());
+        if dir.is_empty() {
+            return out;
+        }
+        dir = split(dir).0;
+    }
+}
+
+/// Where a video's picture comes from.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Source {
+    /// A picture named after the video.
+    Own,
+    /// The poster of its folder or of a folder above it.
+    Folder,
+}
+
+/// The picture that stands for a video, if there is one: its own (`<name>-thumb.jpg`), else the poster of its folder or of a
+/// folder above it (`poster.jpg`, `cover.png` ...). Returns its path in the device, its content and which of the two it is.
+/// Not finding one is the usual case, and a failed lookup only means the frame of the video is used.
+pub fn find_picture(c: &mut postgres::Client, device: &str, path: &str) -> Option<(String, Vec<u8>, Source)> {
+    if meta::kind(path) != Some("video") {
+        return None;
+    }
+    let near = files::neighbours(c, device, path).ok()?;
+    if let Some((art, root)) = picture(path, &near) {
+        return Some((art.clone(), root.clone(), Source::Own));
+    }
+    for (level, dir) in folders_above(path).into_iter().take(FOLDERS_UP + 1).enumerate() {
+        let found = if level == 0 {
+            folder_picture(&dir, &near).cloned()
+        } else {
+            // The neighbours of a file named in that folder are the files directly in it.
+            let probe = if dir.is_empty() { "x".to_string() } else { format!("{dir}/x") };
+            let up = files::neighbours(c, device, &probe).ok()?;
+            folder_picture(&dir, &up).cloned()
+        };
+        if let Some((art, root)) = found {
+            return Some((art, root, Source::Folder));
         }
     }
-    if is_alone(video, neighbours) {
-        return FOLDER_NAMES.iter().find_map(|n| find(neighbours, dir, n, &IMAGE_EXTENSIONS));
-    }
     None
+}
+
+/// [`find_picture`] with the picture's place in the file store.
+pub fn lookup(c: &mut postgres::Client, store: &Store, device: &str, path: &str) -> Option<(PathBuf, Vec<u8>)> {
+    let (art, root, _) = find_picture(c, device, path)?;
+    Some((store.live_path(device, &art).ok()?, root))
 }
 
 /// The .nfo that describes a video.
@@ -147,16 +204,20 @@ mod tests {
     }
 
     #[test]
-    fn the_poster_of_a_show_is_not_the_picture_of_an_episode() {
+    fn a_folder_picture_stands_for_a_video_that_has_none_of_its_own() {
         let n = files(&["Show/S01E01.mkv", "Show/S01E02.mkv", "Show/poster.jpg"]);
-        assert!(picture("Show/S01E01.mkv", &n).is_none(), "the frame of the video is used");
+        assert!(picture("Show/S01E01.mkv", &n).is_none(), "no picture of its own");
+        assert_eq!(folder_picture("Show", &n).unwrap().0, "Show/poster.jpg");
+        let film = files(&["Film (2020)/Film.mkv", "Film (2020)/Folder.JPG", "Film (2020)/fanart.jpg"]);
+        assert_eq!(folder_picture("Film (2020)", &film).unwrap().0, "Film (2020)/Folder.JPG");
+        assert!(folder_picture("Film (2020)", &files(&["Film (2020)/Film.mkv"])).is_none());
+        assert_eq!(folder_picture("", &files(&["cover.PNG"])).unwrap().0, "cover.PNG");
     }
 
     #[test]
-    fn a_film_alone_in_its_folder_uses_the_folder_pictures() {
-        let n = files(&["Film (2020)/Film.mkv", "Film (2020)/Folder.JPG", "Film (2020)/fanart.jpg"]);
-        assert_eq!(picture("Film (2020)/Film.mkv", &n).unwrap().0, "Film (2020)/Folder.JPG");
-        assert!(picture("Film (2020)/Film.mkv", &files(&["Film (2020)/Film.mkv"])).is_none());
+    fn the_folders_above_a_path_are_nearest_first() {
+        assert_eq!(folders_above("a/b/c.mkv"), ["a/b", "a", ""]);
+        assert_eq!(folders_above("c.mkv"), [""]);
     }
 
     #[test]

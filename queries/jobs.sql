@@ -20,11 +20,11 @@ UPDATE jobs SET status = 'queued' WHERE status = 'running';
 UPDATE jobs SET status = 'running', attempts = attempts + 1, started_at = :now
 WHERE id = (SELECT id FROM jobs
             WHERE status = 'queued' AND run_after <= :now AND (:with_proxies::boolean OR kind <> 'proxy')
-            ORDER BY (kind = 'proxy'), id LIMIT 1 FOR UPDATE SKIP LOCKED)
+            ORDER BY (kind = 'proxy'), seq LIMIT 1 FOR UPDATE SKIP LOCKED)
 RETURNING id, kind, payload, attempts;
 
---! complete_job
-UPDATE jobs SET status = 'done', finished_at = :now, error = NULL WHERE id = :id;
+--! complete_job (note?)
+UPDATE jobs SET status = 'done', finished_at = :now, error = NULL, note = :note WHERE id = :id;
 
 --! retry_job
 -- A job that failed: queued again after `run_after`, or failed for good.
@@ -41,25 +41,25 @@ WHERE (j.status <> 'done' OR j.finished_at >= :since)
        (SELECT d.folder FROM devices d WHERE d.kind = 'master' OR d.user_id = :scope_user::bigint))
 GROUP BY j.kind, j.status;
 
---! queue_items : (started_at?, finished_at?, error?)
+--! queue_items : (started_at?, finished_at?, error?, note?)
 -- What is running, failed and waiting, then what was done lately; at most `limit` jobs.
-SELECT j.id, j.kind, j.status, j.attempts, j.run_after, j.created_at, j.started_at, j.finished_at, j.error, j.payload
+SELECT j.id, j.kind, j.status, j.attempts, j.run_after, j.created_at, j.started_at, j.finished_at, j.error, j.note, j.payload
 FROM jobs j
 WHERE (j.status <> 'done' OR j.finished_at >= :since)
   AND (:all::boolean OR (j.payload::jsonb ->> 'device') IN
        (SELECT d.folder FROM devices d WHERE d.kind = 'master' OR d.user_id = :scope_user::bigint))
 ORDER BY CASE j.status WHEN 'running' THEN 0 WHEN 'failed' THEN 1 WHEN 'queued' THEN 2 ELSE 3 END,
-         CASE WHEN j.status = 'done' THEN -j.finished_at ELSE j.id END
+         CASE WHEN j.status = 'done' THEN -j.finished_at ELSE j.seq END
 LIMIT :limit;
 
 --! retry_failed_jobs (id?)
 -- Failed jobs run again from the start: one, or all of them.
 UPDATE jobs SET status = 'queued', attempts = 0, run_after = 0, error = NULL
-WHERE status = 'failed' AND (:id::bigint IS NULL OR id = :id);
+WHERE status = 'failed' AND (:id::uuid IS NULL OR id = :id);
 
 --! drop_jobs (id?)
 -- Jobs of one state (failed, or queued and not started) are forgotten: one, or all of them.
-DELETE FROM jobs WHERE status = :status AND (:id::bigint IS NULL OR id = :id);
+DELETE FROM jobs WHERE status = :status AND (:id::uuid IS NULL OR id = :id);
 
 --! media_to_read
 -- The live photos and videos to read again: those never read, or all of them. Newest first.
@@ -68,3 +68,9 @@ JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version
 LEFT JOIN file_meta m ON m.root_hash = v.root_hash
 WHERE f.deleted_at IS NULL AND f.media IS NOT NULL AND (:everything::boolean OR m.root_hash IS NULL)
 ORDER BY f.id DESC LIMIT :limit;
+
+--! pending_jobs_of_file
+-- The work not finished for a file (queued, running or failed), to tell someone who opens it that it is still being processed.
+SELECT j.kind, j.status FROM jobs j
+WHERE j.status IN ('queued', 'running', 'failed')
+  AND j.payload::jsonb ->> 'device' = :device AND j.payload::jsonb ->> 'path' = :path;

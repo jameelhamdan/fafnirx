@@ -254,7 +254,7 @@ fn what_people_say_about_a_master_file_is_their_own() {
         assert_eq!(api.json(Method::PATCH, &format!("/api/library/{id}"), edit).await.0, StatusCode::OK);
         let (status, album) = api.json(Method::POST, "/api/albums", json!({"name": "Bob's", "ids": [id]})).await;
         assert_eq!((status, album["count"].clone()), (StatusCode::OK, json!(1)));
-        let album_id = album["id"].as_i64().unwrap();
+        let album_id = album["id"].as_str().unwrap().to_string();
         assert_eq!(api.get("/api/timeline/buckets?scope=favorites").await.1["total"], 1);
 
         // Alice sees the same photo with nothing said about it, and none of Bob's albums or tags.

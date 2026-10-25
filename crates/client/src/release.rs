@@ -23,6 +23,11 @@ fn api_url() -> String {
     format!("https://api.github.com/repos/{path}/releases/latest")
 }
 
+/// The page of the project's newest release, where the installers and the plain executables are (the tray links to it).
+pub fn releases_page() -> String {
+    format!("{}/releases/latest", env!("CARGO_PKG_REPOSITORY").trim_end_matches('/'))
+}
+
 /// The most that is downloaded, whatever the release says it weighs.
 const MAX_BYTES: u64 = 200 * 1024 * 1024;
 

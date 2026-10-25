@@ -66,7 +66,7 @@ export interface JobState {
 }
 
 export interface Alert {
-  id: number
+  id: string
   kind: string
   key: string
   message: string
@@ -78,7 +78,7 @@ export interface Dashboard {
   devices: DeviceSummary[]
   online: number
   totals: { files: number; bytes: number; marked_deleted: number }
-  activity: { day: number; added: number; updated: number; deleted: number }[]
+  activity: { day: number; added: number; updated: number; renamed: number; deleted: number }[]
   recent: Recent[]
   sources: JobState[]
   mirrors: JobState[]
@@ -87,7 +87,11 @@ export interface Dashboard {
 }
 
 export interface Entry {
+  /** A photo or video whose details are not read yet: it is still being processed. */
+  processing: boolean
   kind: 'device' | 'dir' | 'file'
+  /** For a file: its id in the library (the address of its viewer). */
+  id: string | null
   name: string
   device: string
   path: string
@@ -133,8 +137,10 @@ export interface VersionInfo {
 }
 
 export interface FileInfo {
+  /** Work still to do on a photo or video: waiting, running or failed. */
+  work: 'waiting' | 'running' | 'failed' | null
   /** The id of the file, also its address for streaming. */
-  id: number
+  id: string
   device: string
   path: string
   name: string
@@ -182,7 +188,9 @@ export interface Session {
 
 /** A photo or video of the library. */
 export interface Asset {
-  id: number
+  /** Its details are not read yet (see Processing). */
+  processing: boolean
+  id: string
   device: string
   path: string
   name: string
@@ -211,6 +219,7 @@ export interface Buckets {
 }
 
 export interface AssetDetail extends Asset {
+  work: 'waiting' | 'running' | 'failed' | null
   mime: string
   description: string
   camera_when: number | null
@@ -220,8 +229,8 @@ export interface AssetDetail extends Asset {
   place_edited: boolean
   exif: Record<string, string> | null
   codec: string | null
-  tags: { id: number; name: string }[]
-  albums: { id: number; name: string }[]
+  tags: { id: string; name: string }[]
+  albums: { id: string; name: string }[]
   changed: number
   preview: boolean
   /** What the .nfo next to a video says (Kodi/Jellyfin naming). */
@@ -238,7 +247,9 @@ export interface Described {
 }
 
 export interface QueueJob {
-  id: number
+  /** What a finished job found, such as the picture a lookup chose. */
+  note: string | null
+  id: string
   kind: string
   status: 'queued' | 'running' | 'failed' | 'done'
   device: string
@@ -266,26 +277,26 @@ export interface QueueState {
 }
 
 export interface TagInfo {
-  id: number
+  id: string
   name: string
   count: number
 }
 
 export interface AlbumInfo {
-  id: number
+  id: string
   name: string
   description: string
   created_at: number
   updated_at: number
   count: number
   bytes: number
-  cover: number | null
+  cover: string | null
   /** Set when the album shows a folder of a device: what is in the folder is in the album. */
   folder: { device: string; path: string } | null
 }
 
 export interface TrashEntry {
-  id: number
+  id: string
   device: string
   path: string
   name: string
@@ -305,6 +316,6 @@ export interface Trash {
 
 export interface MapData {
   /** [id, latitude, longitude, when] */
-  points: [number, number, number, number][]
+  points: [string, number, number, number][]
   truncated: boolean
 }

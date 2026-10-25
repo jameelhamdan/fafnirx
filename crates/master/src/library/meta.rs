@@ -329,9 +329,10 @@ fn work(db: &Db, store: &Store, cache_root: &Path, with_proxies: bool) {
         match claim(db, with_proxies) {
             Ok(Some(jobs::Claimed { id, kind, payload, attempts })) => {
                 let result = match kind.as_str() {
-                    "meta" => read_job(db, store, &payload),
-                    "thumb" => thumb_job(db, store, cache_root, &payload),
-                    "proxy" => proxy_job(db, store, cache_root, &payload),
+                    "meta" => read_job(db, store, &payload).map(|()| None),
+                    "artwork" => artwork_job(db, &payload),
+                    "thumb" => thumb_job(db, store, cache_root, &payload).map(|()| None),
+                    "proxy" => proxy_job(db, store, cache_root, &payload).map(|()| None),
                     other => Err(anyhow::anyhow!("unknown job kind {other:?}")),
                 };
                 finish(db, id, attempts, result);
@@ -349,10 +350,10 @@ fn claim(db: &Db, with_proxies: bool) -> Result<Option<jobs::Claimed>> {
     Ok(jobs::claim(&mut *db.get()?, unix_now(), with_proxies)?)
 }
 
-fn finish(db: &Db, id: i64, attempts: i64, result: Result<()>) {
+fn finish(db: &Db, id: uuid::Uuid, attempts: i64, result: Result<Option<String>>) {
     let Ok(mut c) = db.get() else { return };
     let done = match result {
-        Ok(()) => jobs::complete(&mut *c, id),
+        Ok(note) => jobs::complete(&mut *c, id, note.as_deref()),
         Err(e) => {
             tracing::warn!("job {id} failed (attempt {attempts}): {e:#}");
             let give_up = attempts >= MAX_ATTEMPTS;
@@ -406,9 +407,34 @@ fn read_job(db: &Db, store: &Store, payload: &str) -> Result<()> {
         unix_now(),
     )?;
     db::notify(&mut *c, "files", &p.device)?;
-    // The pictures are a job of their own, so that the queue shows them (and what went wrong with them).
-    jobs::enqueue(&mut *c, "thumb", &serde_json::json!({ "device": p.device, "path": p.path, "root": p.root }))?;
+    // Each step is a job of its own, so that the queue shows it (and what went wrong with it): looking for the picture
+    // and description that sit next to a video, then drawing the pictures.
+    let next = if kind(&p.path) == Some("video") { "artwork" } else { "thumb" };
+    jobs::enqueue(&mut *c, next, &serde_json::json!({ "device": p.device, "path": p.path, "root": p.root }))?;
     Ok(())
+}
+
+/// Looks for the picture and the .nfo next to a video, and says what it found. Nothing is stored: the pictures are looked
+/// up again whenever they are asked for, so one that arrives later is used.
+fn artwork_job(db: &Db, payload: &str) -> Result<Option<String>> {
+    let p: JobFile = serde_json::from_str(payload)?;
+    let mut c = db.get()?;
+    if current_file(&mut c, &p)?.is_none() {
+        return Ok(Some("replaced or deleted since".into()));
+    }
+    let picture = match artwork::find_picture(&mut c, &p.device, &p.path) {
+        Some((art, _, artwork::Source::Own)) => format!("picture: {art}"),
+        Some((art, _, artwork::Source::Folder)) => format!("picture of its folder: {art}"),
+        None => "no picture next to it: a frame of the video is used".to_string(),
+    };
+    let near = files::neighbours(&mut *c, &p.device, &p.path)?;
+    let details = match artwork::description(&p.path, &near) {
+        Some((nfo, _)) => format!("details: {nfo}"),
+        None => "no .nfo".to_string(),
+    };
+    jobs::enqueue(&mut *c, "thumb", &serde_json::json!({ "device": p.device, "path": p.path, "root": p.root }))?;
+    db::notify(&mut *c, "files", &p.device)?;
+    Ok(Some(format!("{picture}; {details}")))
 }
 
 /// Makes the pictures of the file a `thumb` job names, so that opening the timeline finds them ready, and queues the
@@ -421,10 +447,8 @@ fn thumb_job(db: &Db, store: &Store, cache_root: &Path, payload: &str) -> Result
         return Ok(()); // replaced or deleted since; the newer content has its own job
     };
     let own = store.live_path(&p.device, &p.path)?;
-    let near =
-        if kind(&p.path) == Some("video") { files::neighbours(&mut *c, &p.device, &p.path)? } else { Vec::new() };
-    let (source, root_hex) = match artwork::picture(&p.path, &near) {
-        Some((art, art_root)) => (store.live_path(&p.device, art)?, hex::encode(art_root)),
+    let (source, root_hex) = match artwork::lookup(&mut c, store, &p.device, &p.path) {
+        Some((art, art_root)) => (art, hex::encode(art_root)),
         None => (own.clone(), hex::encode(&root)),
     };
     let thumbs = cache_root.join("thumbs");
@@ -444,6 +468,7 @@ fn thumb_job(db: &Db, store: &Store, cache_root: &Path, payload: &str) -> Result
             )?;
         }
     }
+    db::notify(&mut *c, "files", &p.device)?;
     Ok(())
 }
 

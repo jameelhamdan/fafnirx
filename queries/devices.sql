@@ -59,7 +59,7 @@ SELECT folder FROM devices WHERE id = :id FOR UPDATE;
 UPDATE devices d SET file_count = t.live, total_bytes = t.bytes, deleted_files = t.gone, totals_stale = FALSE, totals_at = :now
 FROM (SELECT COUNT(*) FILTER (WHERE f.deleted_at IS NULL) AS live,
              COALESCE(SUM(v.size) FILTER (WHERE f.deleted_at IS NULL), 0)::BIGINT AS bytes,
-             COUNT(*) FILTER (WHERE f.deleted_at IS NOT NULL) AS gone
+             COUNT(*) FILTER (WHERE f.deleted_at IS NOT NULL AND f.deleted_by IS DISTINCT FROM 'rename') AS gone
       FROM files f LEFT JOIN versions v ON v.id = f.current_version_id
       WHERE f.device_id = :id) t
 WHERE d.id = :id;

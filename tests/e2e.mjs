@@ -124,6 +124,10 @@ try {
   check(renamed.includes('1 renamed') && renamed.includes('0 bytes sent'), `a rename is detected without re-uploading (${renamed.trim()})`)
   const [ev] = await schema.rows("SELECT action, detail FROM events WHERE path = 'docs/sub/renamed.txt'")
   check(ev?.[0] === 'rename' && ev?.[1] === 'docs/sub/a.txt', 'the rename is recorded in the change log')
+  const oldDeletes = await schema.rows("SELECT action FROM events WHERE path = 'docs/sub/a.txt' AND action = 'delete'")
+  check(oldDeletes.length === 0, 'the old path of a rename is not logged as a delete')
+  const [vacated] = await schema.rows("SELECT f.deleted_by FROM files f JOIN devices d ON d.id = f.device_id WHERE d.folder = 'admin/laptop' AND f.path = 'docs/sub/a.txt'")
+  check(vacated?.[0] === 'rename', 'and it is kept as renamed (hidden from the trash), not as deleted')
 
   // --- a file becomes a folder of the same name: the old path is deleted first, so the new files can be stored ----
   fs.writeFileSync(path.join(src, 'swap'), 'a file')

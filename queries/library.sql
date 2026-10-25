@@ -29,7 +29,7 @@ WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
       END
   AND (:device::text IS NULL OR d.folder = :device)
   AND (:kind::text IS NULL OR f.media = :kind)
-  AND (:tag::bigint IS NULL OR EXISTS (SELECT 1 FROM file_tags t WHERE t.file_id = f.id AND t.tag_id = :tag))
+  AND (:tag::uuid IS NULL OR EXISTS (SELECT 1 FROM file_tags t WHERE t.file_id = f.id AND t.tag_id = :tag))
   AND (:month::text IS NULL
        OR to_char(to_timestamp(COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000)) AT TIME ZONE 'UTC', 'YYYY-MM') = :month)
 GROUP BY 1 ORDER BY 1 DESC;
@@ -39,7 +39,7 @@ GROUP BY 1 ORDER BY 1 DESC;
 SELECT f.id, d.folder, f.path, v.size, v.root_hash, m.width, m.height, m.duration_ms,
        COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000) AS shown_at,
        COALESCE(s.favorite, false) AS favorite, COALESCE(s.archived, false) AS archived, s.rating,
-       COALESCE(s.lat, m.lat) AS lat, COALESCE(s.lon, m.lon) AS lon
+       COALESCE(s.lat, m.lat) AS lat, COALESCE(s.lon, m.lon) AS lon, (m.root_hash IS NULL) AS processing
 FROM files f
 JOIN devices d ON d.id = f.device_id
 JOIN versions v ON v.id = f.current_version_id
@@ -54,7 +54,7 @@ WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
       END
   AND (:device::text IS NULL OR d.folder = :device)
   AND (:kind::text IS NULL OR f.media = :kind)
-  AND (:tag::bigint IS NULL OR EXISTS (SELECT 1 FROM file_tags t WHERE t.file_id = f.id AND t.tag_id = :tag))
+  AND (:tag::uuid IS NULL OR EXISTS (SELECT 1 FROM file_tags t WHERE t.file_id = f.id AND t.tag_id = :tag))
   AND (:month::text IS NULL
        OR to_char(to_timestamp(COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000)) AT TIME ZONE 'UTC', 'YYYY-MM') = :month)
 ORDER BY shown_at DESC, f.id DESC LIMIT :limit;
@@ -77,7 +77,7 @@ WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
       END
   AND (:device::text IS NULL OR d.folder = :device)
   AND (:kind::text IS NULL OR f.media = :kind)
-  AND (:tag::bigint IS NULL OR EXISTS (SELECT 1 FROM file_tags t WHERE t.file_id = f.id AND t.tag_id = :tag))
+  AND (:tag::uuid IS NULL OR EXISTS (SELECT 1 FROM file_tags t WHERE t.file_id = f.id AND t.tag_id = :tag))
   AND (:month::text IS NULL
        OR to_char(to_timestamp(COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000)) AT TIME ZONE 'UTC', 'YYYY-MM') = :month)
   AND COALESCE(s.lat, m.lat) IS NOT NULL
@@ -88,7 +88,7 @@ ORDER BY shown_at DESC LIMIT :limit;
 SELECT f.id, d.folder, f.path, v.size, v.root_hash, m.width, m.height, m.duration_ms,
        COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000) AS shown_at,
        COALESCE(s.favorite, false) AS favorite, COALESCE(s.archived, false) AS archived, s.rating,
-       COALESCE(s.lat, m.lat) AS lat, COALESCE(s.lon, m.lon) AS lon
+       COALESCE(s.lat, m.lat) AS lat, COALESCE(s.lon, m.lon) AS lon, (m.root_hash IS NULL) AS processing
 FROM files f
 JOIN devices d ON d.id = f.device_id
 JOIN versions v ON v.id = f.current_version_id
@@ -103,7 +103,7 @@ ORDER BY shown_at DESC, f.id DESC;
 SELECT f.id, d.folder, f.path, v.size, v.root_hash, m.width, m.height, m.duration_ms,
        COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000) AS shown_at,
        COALESCE(s.favorite, false) AS favorite, COALESCE(s.archived, false) AS archived, s.rating,
-       COALESCE(s.lat, m.lat) AS lat, COALESCE(s.lon, m.lon) AS lon
+       COALESCE(s.lat, m.lat) AS lat, COALESCE(s.lon, m.lon) AS lon, (m.root_hash IS NULL) AS processing
 FROM files f
 JOIN devices d ON d.id = f.device_id
 JOIN versions v ON v.id = f.current_version_id
@@ -135,7 +135,7 @@ SELECT f.id, d.folder, f.path, v.size, f.deleted_at AS deleted_at, v.id AS versi
 FROM files f
 JOIN devices d ON d.id = f.device_id
 JOIN versions v ON v.id = f.current_version_id
-WHERE f.deleted_at IS NOT NULL AND (:all::boolean OR d.kind = 'master' OR d.user_id = :scope_user::bigint)
+WHERE f.deleted_at IS NOT NULL AND f.deleted_by IS DISTINCT FROM 'rename' AND (:all::boolean OR d.kind = 'master' OR d.user_id = :scope_user::bigint)
 ORDER BY f.deleted_at DESC, f.id DESC LIMIT :limit OFFSET :offset;
 
 --! visible_file_exists
@@ -185,7 +185,7 @@ ON CONFLICT (user_id, file_id) DO UPDATE SET archived = excluded.archived, updat
 
 --! bulk_add_tags
 INSERT INTO file_tags (file_id, tag_id)
-SELECT f.id, t FROM files f JOIN devices d ON d.id = f.device_id CROSS JOIN unnest(:tag_ids::bigint[]) t
+SELECT f.id, t FROM files f JOIN devices d ON d.id = f.device_id CROSS JOIN unnest(:tag_ids::uuid[]) t
 WHERE f.id = ANY(:ids) AND f.deleted_at IS NULL AND (:all::boolean OR d.kind = 'master' OR d.user_id = :scope_user::bigint)
 ON CONFLICT DO NOTHING;
 
@@ -205,7 +205,7 @@ DELETE FROM file_tags WHERE file_id = :file_id AND NOT (tag_id = ANY(:tag_ids))
   AND tag_id IN (SELECT id FROM tags WHERE user_id = :uid);
 
 --! tag_file
-INSERT INTO file_tags (file_id, tag_id) SELECT :file_id, unnest(:tag_ids::bigint[]) ON CONFLICT DO NOTHING;
+INSERT INTO file_tags (file_id, tag_id) SELECT :file_id, unnest(:tag_ids::uuid[]) ON CONFLICT DO NOTHING;
 
 --! drop_unused_tags
 DELETE FROM tags t WHERE NOT EXISTS (SELECT 1 FROM file_tags ft WHERE ft.tag_id = t.id);
@@ -225,14 +225,14 @@ DELETE FROM tags WHERE id = :id AND user_id = :uid;
 
 --! snapshot_albums
 SELECT a.id, a.name, a.description, a.created_at, u.name AS owner
-FROM albums a JOIN users u ON u.id = a.user_id ORDER BY a.id;
+FROM albums a JOIN users u ON u.id = a.user_id ORDER BY a.created_at, a.id;
 
 --! snapshot_album_files
 SELECT af.album_id, d.folder, f.path FROM album_files af
 JOIN files f ON f.id = af.file_id JOIN devices d ON d.id = f.device_id ORDER BY af.album_id, f.path;
 
 --! snapshot_tags
-SELECT t.id, t.name, u.name AS owner FROM tags t JOIN users u ON u.id = t.user_id ORDER BY t.id;
+SELECT t.id, t.name, u.name AS owner FROM tags t JOIN users u ON u.id = t.user_id ORDER BY lower(t.name), t.id;
 
 --! snapshot_tag_files
 SELECT ft.tag_id, d.folder, f.path FROM file_tags ft
@@ -243,3 +243,22 @@ SELECT d.folder, f.path, s.favorite, s.archived, s.rating, s.description, s.take
 FROM file_state s JOIN files f ON f.id = s.file_id JOIN devices d ON d.id = f.device_id JOIN users u ON u.id = s.user_id
 WHERE s.favorite OR s.archived OR s.rating IS NOT NULL OR s.description <> '' OR s.taken_at IS NOT NULL OR s.lat IS NOT NULL
 ORDER BY d.folder, f.path, u.name;
+
+--! folder_assets : Asset(width?, height?, duration_ms?, rating?, lat?, lon?)
+-- The photos and videos directly in the folder of a file, by path: what the viewer opened from the file browser steps through.
+WITH me AS (SELECT device_id, regexp_replace(path, '[^/]*$', '') AS dir FROM files WHERE id = :id)
+SELECT f.id, d.folder, f.path, v.size, v.root_hash, m.width, m.height, m.duration_ms,
+       COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000) AS shown_at,
+       COALESCE(s.favorite, false) AS favorite, COALESCE(s.archived, false) AS archived, s.rating,
+       COALESCE(s.lat, m.lat) AS lat, COALESCE(s.lon, m.lon) AS lon, (m.root_hash IS NULL) AS processing
+FROM me
+JOIN files f ON f.device_id = me.device_id
+            AND f.path LIKE replace(replace(replace(me.dir, '!', '!!'), '%', '!%'), '_', '!_') || '%' ESCAPE '!'
+            AND position('/' IN substr(f.path, length(me.dir) + 1)) = 0
+JOIN devices d ON d.id = f.device_id
+JOIN versions v ON v.id = f.current_version_id
+LEFT JOIN file_meta m ON m.root_hash = v.root_hash
+LEFT JOIN file_state s ON s.file_id = f.id AND s.user_id = :uid
+WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
+  AND (:all::boolean OR d.kind = 'master' OR d.user_id = :scope_user::bigint)
+ORDER BY f.path LIMIT :limit;

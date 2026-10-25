@@ -6,6 +6,7 @@ use fafnirx_common::unix_now;
 use fafnirx_db::client::Params;
 use fafnirx_db::queries::jobs as q;
 use postgres::{Error, GenericClient};
+use uuid::Uuid;
 
 /// How long a job that worked stays in the list.
 pub const DONE_KEEP_SECS: i64 = 24 * 3600;
@@ -18,7 +19,7 @@ pub fn enqueue(c: &mut impl GenericClient, kind: &str, payload: &serde_json::Val
 
 /// A job taken from the queue.
 pub struct Claimed {
-    pub id: i64,
+    pub id: Uuid,
     pub kind: String,
     pub payload: String,
     /// How many times it has been started, this time included.
@@ -44,13 +45,13 @@ pub fn claim(c: &mut impl GenericClient, now: i64, with_proxies: bool) -> Result
 }
 
 /// A job that worked is done; it stays in the list for a day.
-pub fn complete(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
-    q::complete_job().bind(&mut Pg(c), &unix_now(), &id)?;
+pub fn complete(c: &mut impl GenericClient, id: Uuid, note: Option<&str>) -> Result<(), Error> {
+    q::complete_job().bind(&mut Pg(c), &unix_now(), &note, &id)?;
     Ok(())
 }
 
 /// A job that failed: queued again after `run_after`, or failed for good, with what went wrong.
-pub fn fail(c: &mut impl GenericClient, id: i64, give_up: bool, run_after: i64, error: &str) -> Result<(), Error> {
+pub fn fail(c: &mut impl GenericClient, id: Uuid, give_up: bool, run_after: i64, error: &str) -> Result<(), Error> {
     let status = if give_up { "failed" } else { "queued" };
     q::retry_job().params(&mut Pg(c), &q::RetryJobParams { id, status, run_after, error, now: unix_now() })?;
     Ok(())
@@ -70,7 +71,7 @@ pub struct Count {
 
 /// A job as the list shows it.
 pub struct Item {
-    pub id: i64,
+    pub id: Uuid,
     pub kind: String,
     pub status: String,
     pub attempts: i64,
@@ -79,6 +80,7 @@ pub struct Item {
     pub started_at: Option<i64>,
     pub finished_at: Option<i64>,
     pub error: Option<String>,
+    pub note: Option<String>,
     pub payload: String,
 }
 
@@ -110,18 +112,19 @@ pub fn items(c: &mut impl GenericClient, all: bool, user: i64, limit: i64) -> Re
             started_at: j.started_at,
             finished_at: j.finished_at,
             error: j.error,
+            note: j.note,
             payload: j.payload,
         })
         .collect())
 }
 
 /// Failed jobs run again: this one, or all of them. Returns how many.
-pub fn retry_failed(c: &mut impl GenericClient, id: Option<i64>) -> Result<u64, Error> {
+pub fn retry_failed(c: &mut impl GenericClient, id: Option<Uuid>) -> Result<u64, Error> {
     q::retry_failed_jobs().bind(&mut Pg(c), &id)
 }
 
 /// Forgets jobs that have the state `status` (`failed` or `queued`): this one, or all of them. Returns how many.
-pub fn drop_where(c: &mut impl GenericClient, status: &str, id: Option<i64>) -> Result<u64, Error> {
+pub fn drop_where(c: &mut impl GenericClient, status: &str, id: Option<Uuid>) -> Result<u64, Error> {
     q::drop_jobs().bind(&mut Pg(c), &status, &id)
 }
 
@@ -136,5 +139,15 @@ pub fn media_to_read(
         .all()?
         .into_iter()
         .map(|r| (r.folder, r.path, r.root_hash))
+        .collect())
+}
+
+/// The unfinished work of a file as (kind, status): queued, running or failed.
+pub fn pending_of(c: &mut impl GenericClient, device: &str, path: &str) -> Result<Vec<(String, String)>, Error> {
+    Ok(q::pending_jobs_of_file()
+        .bind(&mut Pg(c), &device, &path)
+        .all()?
+        .into_iter()
+        .map(|j| (j.kind, j.status))
         .collect())
 }

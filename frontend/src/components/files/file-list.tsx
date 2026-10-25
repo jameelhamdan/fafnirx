@@ -1,6 +1,7 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ArrowDown, ArrowUp } from 'lucide-react'
+import { ArrowDown, ArrowUp, Loader2, Play } from 'lucide-react'
 import { useRef } from 'react'
+import { Link } from 'react-router-dom'
 import { ago, bytes, plural } from '@/lib/format'
 import type { Entry } from '@/lib/types'
 import { entryKey } from '@/lib/entries'
@@ -74,13 +75,19 @@ export function FileList({
                 style={{ height: row.size, transform: `translateY(${row.start}px)` }}
               >
                 <Checkbox checked={on} onCheckedChange={() => onToggle(key)} aria-label={t('Select {name}', { name: e.name })} />
-                <button type="button" onClick={() => onOpen(e)} className="flex min-w-0 items-center gap-2.5 text-left" title={e.name}>
-                  <FileIcon entry={e} />
-                  <span className={cn('truncate', e.kind !== 'file' && 'font-medium', gone && 'text-muted-foreground line-through')}>{e.name}</span>
-                  {gone && e.kind === 'file' && <span className="shrink-0 text-xs text-destructive">{t('deleted')}</span>}
-                  {e.kind !== 'file' && <span className="shrink-0 text-xs text-muted-foreground">{plural(e.files ?? 0, 'file')}</span>}
-                  {e.kind === 'device' && <AccessBadge writable={e.writable} kind={e.device_kind} />}
-                </button>
+                <div className="flex min-w-0 items-center gap-1">
+                  <button type="button" onClick={() => onOpen(e)} className="flex min-w-0 flex-1 items-center gap-2.5 text-left" title={e.name}>
+                    <FileIcon entry={e} />
+                    <span className={cn('truncate', e.kind !== 'file' && 'font-medium', gone && 'text-muted-foreground line-through')}>{e.name}</span>
+                    {e.processing && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-label={t('Still being processed')} />}
+                    {gone && e.kind === 'file' && <span className="shrink-0 text-xs text-destructive">{t('deleted')}</span>}
+                    {e.kind !== 'file' && <span className="shrink-0 text-xs text-muted-foreground">{plural(e.files ?? 0, 'file')}</span>}
+                    {e.kind === 'device' && <AccessBadge writable={e.writable} kind={e.device_kind} />}
+                  </button>
+                  {e.kind === 'file' && e.id && !gone && e.mime?.startsWith('video/') && (
+                    <Link to={`/watch/${e.id}`} className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={t('Open in viewer')} title={t('Open in viewer')}><Play className="size-4" /></Link>
+                  )}
+                </div>
                 <span className="text-right text-muted-foreground tabular-nums" title={e.size === null ? undefined : t('{n} bytes', { n: e.size.toLocaleString() })}>
                   {bytes(e.size)}
                 </span>

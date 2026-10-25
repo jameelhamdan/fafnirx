@@ -156,14 +156,14 @@ fn png(width: u32, height: u32, rgb: [u8; 3]) -> Vec<u8> {
 }
 
 /// The id of the library file with this name (in the timeline or the archive).
-async fn photo_id(api: &Api, name: &str) -> i64 {
+async fn photo_id(api: &Api, name: &str) -> String {
     for scope in ["timeline", "archive"] {
         let (_, buckets) = api.get(&format!("/api/timeline/buckets?scope={scope}")).await;
         for m in buckets["months"].as_array().unwrap() {
             let month = m["month"].as_str().unwrap();
             let (_, list) = api.get(&format!("/api/timeline?month={month}&scope={scope}")).await;
             if let Some(a) = list["assets"].as_array().unwrap().iter().find(|a| a["name"] == name) {
-                return a["id"].as_i64().unwrap();
+                return a["id"].as_str().unwrap().to_string();
             }
         }
     }

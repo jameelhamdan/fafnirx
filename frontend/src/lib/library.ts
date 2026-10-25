@@ -6,7 +6,7 @@ import type { AlbumInfo, Asset, Scope, TagInfo } from './types'
 import { useT } from '@/lib/i18n'
 
 /** Everything that shows library data: refreshed after any change. */
-const LIBRARY_KEYS = ['timeline', 'asset', 'map', 'albums', 'album', 'tags', 'trash', 'files', 'info']
+const LIBRARY_KEYS = ['timeline', 'asset', 'folder', 'map', 'albums', 'album', 'tags', 'trash', 'files', 'info']
 
 export function useRefreshLibrary() {
   const client = useQueryClient()
@@ -31,12 +31,12 @@ export function useLibraryActions() {
   const failed = (e: Error) => toast.error(e.message)
 
   const edit = useMutation({
-    mutationFn: ({ id, ...body }: Edit & { id: number }) => api.patch(`/api/library/${id}`, body),
+    mutationFn: ({ id, ...body }: Edit & { id: string }) => api.patch(`/api/library/${id}`, body),
     onSuccess: () => void refresh(),
     onError: failed,
   })
   const bulk = useMutation({
-    mutationFn: (body: { ids: number[]; favorite?: boolean; archived?: boolean; add_tags?: string[] }) =>
+    mutationFn: (body: { ids: string[]; favorite?: boolean; archived?: boolean; add_tags?: string[] }) =>
       api.post<{ changed: number }>('/api/library/bulk', body),
     onSuccess: () => void refresh(),
     onError: failed,

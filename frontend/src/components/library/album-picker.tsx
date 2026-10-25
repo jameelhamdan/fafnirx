@@ -19,7 +19,7 @@ import { useT } from '@/lib/i18n'
  */
 export function AlbumPicker({ open, ids = [], items = [], onClose, onDone }: {
   open: boolean
-  ids?: number[]
+  ids?: string[]
   items?: { device: string; path: string }[]
   onClose: () => void
   onDone?: () => void

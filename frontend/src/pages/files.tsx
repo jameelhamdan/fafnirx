@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowDownUp, ChevronRight, Download, FolderPlus, Grid2x2, Images, List, Search, Trash2, Upload, X } from 'lucide-react'
+import { ArrowDownUp, ChevronRight, Download, FolderInput, FolderPlus, Grid2x2, Images, List, Search, Trash2, Upload, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -8,6 +8,7 @@ import { Confirm } from '@/components/confirm'
 import { DetailsSheet } from '@/components/files/details-sheet'
 import { FileGrid } from '@/components/files/file-grid'
 import { FileList } from '@/components/files/file-list'
+import { MoveDialog } from '@/components/files/move-dialog'
 import { entryKey } from '@/lib/entries'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -120,6 +121,7 @@ export default function Files() {
   }, [search])
 
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [moving, setMoving] = useState<Entry | null>(null)
   useEffect(() => setSelected(new Set()), [device, path, q, type, showDeleted])
   const [newFolder, setNewFolder] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -305,6 +307,9 @@ export default function Files() {
                 <Images className="size-4" />{t('Use folder as album')}
               </Button>
             )}
+            {hasWorkspace(role) && canUpload && !showDeleted && chosen.length === 1 && chosen[0].kind !== 'device' && (
+              <Button size="sm" variant="outline" onClick={() => setMoving(chosen[0])}><FolderInput className="size-4" />{t('Move or rename')}</Button>
+            )}
             <Button size="sm" variant="outline" disabled={chosen.some((e) => e.kind === 'device')} onClick={() => setConfirmDelete(true)}><Trash2 className="size-4" />{t('Delete')}</Button>
           </div>
         </div>
@@ -342,6 +347,7 @@ export default function Files() {
       )}
 
       <DetailsSheet device={device} path={openFile} onClose={() => go({ file: null }, true)} onDeleted={() => { go({ file: null }, true); void client.invalidateQueries({ queryKey: ['files'] }) }} />
+      {moving && <MoveDialog device={moving.device} path={moving.path} onClose={() => setMoving(null)} onMoved={() => { setMoving(null); setSelected(new Set()) }} />}
       <AlbumPicker
         open={albumPicker}
         items={chosen.map((e) => ({ device: e.device, path: e.kind === 'device' ? '' : e.path }))}

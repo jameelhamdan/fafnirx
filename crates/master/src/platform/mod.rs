@@ -2,6 +2,7 @@
 //! file store on disk (`store`).
 
 pub mod db;
+pub mod id;
 pub mod migrations;
 pub mod pg;
 pub mod proxy;

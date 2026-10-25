@@ -5,6 +5,7 @@ use crate::files::browse::{expand, find_device, find_device_to_change, version_f
 use crate::files::ingest::{self, NewVersion};
 use crate::library::{artwork, meta};
 use crate::platform::db;
+use crate::platform::id::Id;
 use crate::repo::{devices, files};
 use crate::web::access::Access;
 use crate::web::{run, ApiError, Res, Shared};
@@ -75,8 +76,11 @@ fn stored_version(
         let (root, size) =
             files::version_content(c, file_id, version)?.ok_or_else(|| ApiError::not_found("No such version"))?;
         let disk = version_file(&store, &dev.name, &path, version, current, deleted.is_some())?;
-        let art =
-            if deleted.is_none() && Some(version) == current { artwork_of(c, &store, &dev.name, &path) } else { None };
+        let art = if deleted.is_none() && Some(version) == current {
+            artwork::lookup(c, &store, &dev.name, &path)
+        } else {
+            None
+        };
         Ok(Stored { disk, root, size: size as u64, name: base_name(&path).to_string(), codec: None, art })
     }
 }
@@ -219,7 +223,11 @@ pub async fn thumbnail(
 }
 
 /// The file with this id as the library knows it: its current content, deleted or not.
-fn stored_by_id(state: &Shared, who: Access, id: i64) -> impl FnOnce(&mut postgres::Client) -> anyhow::Result<Stored> {
+fn stored_by_id(
+    state: &Shared,
+    who: Access,
+    id: uuid::Uuid,
+) -> impl FnOnce(&mut postgres::Client) -> anyhow::Result<Stored> {
     let store = state.store.clone();
     move |c| {
         let row = files::by_id(c, id)?.ok_or_else(|| ApiError::not_found("No such file"))?;
@@ -232,25 +240,9 @@ fn stored_by_id(state: &Shared, who: Access, id: i64) -> impl FnOnce(&mut postgr
             size: row.size as u64,
             name: base_name(&path).to_string(),
             codec: row.codec,
-            art: if deleted_at.is_none() { artwork_of(c, &store, &device, &path) } else { None },
+            art: if deleted_at.is_none() { artwork::lookup(c, &store, &device, &path) } else { None },
         })
     }
-}
-
-/// The picture next to a video that stands for it, if there is one. Not finding one is the usual case, and a failed
-/// lookup only means the frame of the video is used.
-fn artwork_of(
-    c: &mut postgres::Client,
-    store: &crate::platform::store::Store,
-    device: &str,
-    path: &str,
-) -> Option<(PathBuf, Vec<u8>)> {
-    if meta::kind(path) != Some("video") {
-        return None;
-    }
-    let near = files::neighbours(c, device, path).ok()?;
-    let (art, root) = artwork::picture(path, &near)?;
-    Some((store.live_path(device, art).ok()?, root.clone()))
 }
 
 /// What the library shows of a file: a small or large picture, the video as played in a browser, the
@@ -287,7 +279,7 @@ pub struct MediaQuery {
 pub async fn media(
     State(state): State<Shared>,
     Extension(who): Extension<Access>,
-    Path((id, variant)): Path<(i64, String)>,
+    Path((Id(id), variant)): Path<(Id, String)>,
     Query(q): Query<MediaQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {

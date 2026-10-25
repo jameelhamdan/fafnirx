@@ -12,7 +12,8 @@ anyhow.workspace = true
 base64.workspace = true
 hex.workspace = true
 notify = "6"
-postgres = "0.19"
+postgres = { version = "0.19", features = ["with-uuid-1"] }
+uuid = { version = "1", features = ["serde"] }
 r2d2 = "0.8"
 r2d2_postgres = "0.18"
 sha2.workspace = true
