@@ -1,0 +1,8 @@
+# For development: builds the image from this checkout instead of pulling the release.
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+services:
+  master:
+    image: fafnirx-master:local
+    build: .
+  stream:
+    image: fafnirx-master:local

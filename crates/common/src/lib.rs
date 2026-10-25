@@ -183,6 +183,36 @@ pub fn clean_remote_path(path: &str) -> Result<String> {
 mod tests {
     use super::*;
 
+    /// The one-way rule: a device can put data on the master and say what it deleted, and the master can answer with
+    /// nothing but its identity, the signed client update and a name. There is no call that reads or lists the master's
+    /// files, so a new call in the contract has to be added here on purpose.
+    #[test]
+    fn the_device_protocol_only_lets_devices_send() {
+        let proto = include_str!("../../../proto/fafnirx.proto");
+        let rpcs: Vec<&str> =
+            proto.lines().filter_map(|l| l.trim().strip_prefix("rpc ")).map(|l| l.split('(').next().unwrap()).collect();
+        assert_eq!(
+            rpcs,
+            [
+                "Heartbeat",
+                "Identify",
+                "Negotiate",
+                "UploadChunks",
+                "Commit",
+                "MarkDeleted",
+                "GetUpdateInfo",
+                "DownloadUpdate"
+            ]
+        );
+        // The only streams from the master to a device carry the client update.
+        let returning_streams: Vec<&str> = proto
+            .lines()
+            .filter(|l| l.contains("returns (stream"))
+            .map(|l| l.trim().strip_prefix("rpc ").unwrap().split('(').next().unwrap())
+            .collect();
+        assert_eq!(returning_streams, ["DownloadUpdate"]);
+    }
+
     #[test]
     fn root_hash_depends_on_size_and_chunks() {
         let a = chunk_hash(b"a");

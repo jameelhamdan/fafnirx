@@ -17,6 +17,18 @@ cargo build --workspace
 A fresh checkout builds without the web app: `crates/master/build.rs` writes a placeholder page into
 `frontend/dist` when there is none. Build the app (`npm run build` in `frontend/`) before building the master you will use.
 
+## Building the client and the installers
+
+```sh
+cargo build --release -p fafnirx                 # target/release/fafnirx
+sh installer/install.sh --server http://nas.lan:7443 --folder ~/Documents      # Linux, macOS: uses that binary
+installer\build.ps1                              # Windows: dist\fafnirx-setup-<version>.exe (needs Inno Setup)
+```
+
+On Linux the tray icon needs the GTK and appindicator development packages (`libgtk-3-dev libayatana-appindicator3-dev
+libxdo-dev`); build with `--no-default-features` to leave it out. To build the master image from a checkout:
+`docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`.
+
 ## Run the pieces by hand
 
 ```sh
@@ -117,8 +129,7 @@ database gets all of them; an existing one only the new ones. To change the sche
 
 1. Add the next numbered `.sql` file and an entry at the end of `ALL`. A migration runs once, so it can be plain
    `ALTER TABLE ...`; it should not take long locks on big tables, because the master waits for it before it starts.
-2. Never edit a migration that has been released: the checksum no longer matches and the master refuses to start. (Before the first release the schema is changed in place and the development database is reset.)
-3. A database that is newer than the master (a downgrade) is refused with a message.
+2. Never edit a migration that has been released: the checksum no longer matches and the master refuses to start.3. A database that is newer than the master (a downgrade) is refused with a message.
 4. Update [the database diagram](architecture.md#database-structure) and the web API types in `frontend/src/lib/types.ts`.
 
 ## Changing the API

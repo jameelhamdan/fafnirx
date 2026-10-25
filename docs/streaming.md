@@ -65,7 +65,7 @@ FAFNIRX_STREAM_TOKEN=<a long secret: openssl rand -hex 24>
 
 ```sh
 mkdir stream-cache && chown 1000:1000 stream-cache      # FAFNIRX_STREAM_CACHE_DIR; must be writable by FAFNIRX_UID
-docker compose --profile stream up -d --build
+docker compose --profile stream up -d
 ```
 
 To have `docker compose up` start it every time, add `COMPOSE_PROFILES=stream` to `.env` (the development setup does).
