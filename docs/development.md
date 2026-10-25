@@ -20,7 +20,7 @@ A fresh checkout builds without the web app: `crates/master/build.rs` writes a p
 ## Building the client and the installers
 
 ```sh
-cargo build --release -p fafnirx                 # target/release/fafnirx
+cargo build --profile client -p fafnirx              # target/client/fafnirx (the profile the releases use)
 sh installer/install.sh --server http://nas.lan:7443 --folder ~/Documents      # Linux, macOS: uses that binary
 installer\build.ps1                              # Windows: dist\fafnirx-setup-<version>.exe (needs Inno Setup)
 ```

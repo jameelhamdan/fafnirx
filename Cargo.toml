@@ -22,12 +22,11 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-sysinfo = "0.32"
 tempfile = "3"
 time = { version = "0.3", features = ["parsing", "formatting"] }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
-tonic = { version = "0.12", features = ["tls", "tls-roots", "gzip"] }
+tonic = { version = "0.12", features = ["tls", "tls-roots"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-normalization = "0.1"
@@ -35,3 +34,13 @@ unicode-normalization = "0.1"
 [profile.release]
 lto = "thin"
 strip = true
+
+# The client shipped to devices: small matters more than fast (it mostly waits for the disk and the network), and
+# panic = "abort" is fine because it is a plain process. The master keeps the `release` profile.
+# Build it with `--profile client`; the binary is in target/client/.
+[profile.client]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "abort"

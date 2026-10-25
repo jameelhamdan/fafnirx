@@ -7,8 +7,8 @@ if (-not $version) { throw 'version not found in Cargo.toml' }
 
 $target = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "$root\target" }
 Push-Location $root
-try { cargo build --release --bin fafnirx; if ($LASTEXITCODE) { throw 'cargo build failed' } } finally { Pop-Location }
-$exe = "$target\release\fafnirx.exe"
+try { cargo build --profile client --bin fafnirx; if ($LASTEXITCODE) { throw 'cargo build failed' } } finally { Pop-Location }
+$exe = "$target\client\fafnirx.exe"
 
 $built = (& $exe --version) -replace '^fafnirx\s+', ''
 if ($built -ne $version) { throw "binary reports $built, Cargo.toml says $version" }

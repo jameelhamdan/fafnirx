@@ -175,12 +175,12 @@ jobs:
       - name: Build (Linux, macOS)
         if: ${{ !startsWith(matrix.name, 'windows') }}
         run: |
-          cargo build --release --locked -p fafnirx
-          test "$(target/release/fafnirx --version)" = "fafnirx $VERSION"
+          cargo build --profile client --locked -p fafnirx
+          test "$(target/client/fafnirx --version)" = "fafnirx $VERSION"
           mkdir out
           stage=fafnirx-$VERSION-${{ matrix.name }}
           mkdir "$stage"
-          cp target/release/fafnirx installer/install.sh "$stage/"
+          cp target/client/fafnirx installer/install.sh "$stage/"
           tar czf "out/$stage.tar.gz" "$stage"
 
       - name: Debian package

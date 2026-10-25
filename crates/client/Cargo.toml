@@ -13,7 +13,7 @@ section = "utils"
 priority = "optional"
 depends = "$auto"
 recommends = "libayatana-appindicator3-1"
-assets = [["../../target/release/fafnirx", "usr/bin/", "755"]]
+assets = [["../../target/client/fafnirx", "usr/bin/", "755"]]
 
 [features]
 default = ["tray"]
@@ -36,8 +36,8 @@ self-replace = "1"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-sysinfo.workspace = true
-tokio.workspace = true
+gethostname = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "time"] }
 tokio-stream.workspace = true
 toml = "0.8"
 toml_edit = "0.22"

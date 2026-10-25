@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-sysinfo.workspace = true
+fs4 = { version = "1", default-features = false, features = ["sync"] }
 anyhow.workspace = true
 blake3.workspace = true
 prost.workspace = true

@@ -133,17 +133,7 @@ pub fn plain_path(path: &Path) -> PathBuf {
 
 /// (total, available) bytes of the disk that holds `path`.
 pub fn disk_usage(path: &Path) -> Option<(u64, u64)> {
-    // Windows paths are case-insensitive.
-    let norm =
-        |p: &Path| if cfg!(windows) { PathBuf::from(p.to_string_lossy().to_lowercase()) } else { p.to_path_buf() };
-    let abs = norm(&plain_path(&std::fs::canonicalize(path).ok()?));
-    let disks = sysinfo::Disks::new_with_refreshed_list();
-    disks
-        .list()
-        .iter()
-        .filter(|d| abs.starts_with(norm(d.mount_point())))
-        .max_by_key(|d| d.mount_point().as_os_str().len())
-        .map(|d| (d.total_space(), d.available_space()))
+    Some((fs4::total_space(path).ok()?, fs4::available_space(path).ok()?))
 }
 
 /// Expected number of chunks for a file of `size` bytes.

@@ -160,7 +160,7 @@ pub async fn send_heartbeat(
     let drained: Vec<String> = errors.lock().map(|mut e| std::mem::take(&mut *e)).unwrap_or_default();
     let (total, free) = cfg.folders.first().and_then(|f| fafnirx_common::disk_usage(&f.path)).unwrap_or((0, 0));
     let req = pb::HeartbeatRequest {
-        hostname: sysinfo::System::host_name().unwrap_or_default(),
+        hostname: gethostname::gethostname().to_string_lossy().into_owned(),
         os: std::env::consts::OS.to_string(),
         client_version: update::VERSION.to_string(),
         disk_total: total,
