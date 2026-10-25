@@ -943,3 +943,19 @@ impl DeviceFoldersStmt {
         }
     }
 }
+pub struct FailInterruptedMirrorsStmt(&'static str, Option<postgres::Statement>);
+pub fn fail_interrupted_mirrors() -> FailInterruptedMirrorsStmt {
+    FailInterruptedMirrorsStmt(
+        "UPDATE mirrors SET last_status = 'failed', last_message = 'interrupted by a restart' WHERE last_status = 'running'",
+        None,
+    )
+}
+impl FailInterruptedMirrorsStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient>(&'s self, client: &'c mut C) -> Result<u64, postgres::Error> {
+        client.execute(self.0, &[])
+    }
+}

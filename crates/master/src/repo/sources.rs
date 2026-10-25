@@ -122,3 +122,9 @@ pub fn forget_item(c: &mut impl GenericClient, source_id: i64, remote_id: &str) 
     q::delete_source_item().bind(&mut Pg(c), &source_id, &remote_id)?;
     Ok(())
 }
+
+/// Marks the sources that were running when the master stopped as failed.
+pub fn fail_interrupted(c: &mut impl GenericClient) -> Result<(), Error> {
+    q::fail_interrupted_sources().bind(&mut Pg(c))?;
+    Ok(())
+}

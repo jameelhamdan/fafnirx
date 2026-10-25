@@ -5,7 +5,7 @@
 use crate::library::media;
 use crate::platform::db::{self, Db};
 use crate::platform::store::Store;
-use crate::repo::jobs;
+use crate::repo::{file_meta, jobs};
 use anyhow::{Context, Result};
 use fafnirx_common::unix_now;
 use image::ImageDecoder;
@@ -237,9 +237,7 @@ pub fn clean_cache(db: &Db, cache_root: &Path) -> Result<()> {
     for e in std::fs::read_dir(cache_root.join("video")).into_iter().flatten().flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
         let (stem, partial) = (name.split('.').next().unwrap_or("").to_string(), name.contains(".tmp"));
-        let used = hex::decode(&stem).is_ok_and(|root| {
-            c.query_one("SELECT EXISTS (SELECT 1 FROM versions WHERE root_hash = $1)", &[&root]).is_ok_and(|r| r.get(0))
-        });
+        let used = hex::decode(&stem).is_ok_and(|root| file_meta::content_is_stored(&mut *c, &root).unwrap_or(false));
         if if partial { age(&e) > PARTIAL_KEEP } else { !used } {
             let _ = std::fs::remove_file(e.path());
         }
@@ -309,7 +307,7 @@ pub fn run_queue(db: Db, store: std::sync::Arc<Store>, cache_root: PathBuf) {
     std::thread::spawn(move || {
         // A restart interrupts whatever was running.
         if let Ok(mut c) = db.get() {
-            let _ = c.execute("UPDATE jobs SET status = 'queued' WHERE status = 'running'", &[]);
+            let _ = jobs::requeue_running(&mut *c);
         }
         for lane_with_proxies in [true, false] {
             let (db, store, cache_root) = (db.clone(), store.clone(), cache_root.clone());
@@ -322,7 +320,7 @@ pub fn run_queue(db: Db, store: std::sync::Arc<Store>, cache_root: PathBuf) {
 fn work(db: &Db, store: &Store, cache_root: &Path, with_proxies: bool) {
     loop {
         match claim(db, with_proxies) {
-            Ok(Some((id, kind, payload, attempts))) => {
+            Ok(Some(jobs::Claimed { id, kind, payload, attempts })) => {
                 let result = match kind.as_str() {
                     "meta" => read_job(db, store, cache_root, &payload),
                     "proxy" => proxy_job(db, store, cache_root, &payload),
@@ -339,31 +337,19 @@ fn work(db: &Db, store: &Store, cache_root: &Path, with_proxies: bool) {
     }
 }
 
-type Claimed = (i64, String, String, i64);
-
-fn claim(db: &Db, with_proxies: bool) -> Result<Option<Claimed>> {
-    let mut c = db.get()?;
-    let row = c.query_opt(
-        "UPDATE jobs SET status = 'running', attempts = attempts + 1
-         WHERE id = (SELECT id FROM jobs WHERE status = 'queued' AND run_after <= $1 AND ($2 OR kind <> 'proxy')
-                     ORDER BY (kind = 'proxy'), id LIMIT 1 FOR UPDATE SKIP LOCKED)
-         RETURNING id, kind, payload, attempts",
-        &[&unix_now(), &with_proxies],
-    )?;
-    Ok(row.map(|r| (r.get(0), r.get(1), r.get(2), r.get(3))))
+fn claim(db: &Db, with_proxies: bool) -> Result<Option<jobs::Claimed>> {
+    Ok(jobs::claim(&mut *db.get()?, unix_now(), with_proxies)?)
 }
 
 fn finish(db: &Db, id: i64, attempts: i64, result: Result<()>) {
     let Ok(mut c) = db.get() else { return };
     let done = match result {
-        Ok(()) => c.execute("DELETE FROM jobs WHERE id = $1", &[&id]),
+        Ok(()) => jobs::complete(&mut *c, id),
         Err(e) => {
             tracing::warn!("job {id} failed (attempt {attempts}): {e:#}");
-            let (status, wait) = if attempts >= MAX_ATTEMPTS { ("failed", 0) } else { ("queued", 30 * attempts) };
-            c.execute(
-                "UPDATE jobs SET status = $2, run_after = $3, error = $4 WHERE id = $1",
-                &[&id, &status, &(unix_now() + wait), &format!("{e:#}")],
-            )
+            let give_up = attempts >= MAX_ATTEMPTS;
+            let wait = if give_up { 0 } else { 30 * attempts };
+            jobs::fail(&mut *c, id, give_up, unix_now() + wait, &format!("{e:#}"))
         }
     };
     if let Err(e) = done {
@@ -381,14 +367,7 @@ struct JobFile {
 /// The job's file, if it still holds the content the job was made for.
 fn current_file(c: &mut postgres::Client, p: &JobFile) -> Result<Option<Vec<u8>>> {
     let root = hex::decode(&p.root)?;
-    let current: bool = c
-        .query_one(
-            "SELECT EXISTS (SELECT 1 FROM files f JOIN devices d ON d.id = f.device_id
-                            JOIN versions v ON v.id = f.current_version_id
-                            WHERE d.folder = $1 AND f.path = $2 AND v.root_hash = $3)",
-            &[&p.device, &p.path, &root],
-        )?
-        .get(0);
+    let current = file_meta::path_holds(c, &p.device, &p.path, &root)?;
     Ok(current.then_some(root))
 }
 
@@ -401,27 +380,22 @@ fn read_job(db: &Db, store: &Store, cache_root: &Path, payload: &str) -> Result<
     };
     let disk = store.live_path(&p.device, &p.path)?;
     let meta = read_any(&p.path, &disk)?;
-    let (lat, lon) = meta.position.unzip();
-    c.execute(
-        "INSERT INTO file_meta (root_hash, mime, width, height, taken_at, exif, read_at, kind, duration_ms, codec, lat, lon)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-         ON CONFLICT (root_hash) DO UPDATE SET mime = excluded.mime, width = excluded.width, height = excluded.height,
-             taken_at = excluded.taken_at, exif = excluded.exif, read_at = excluded.read_at, kind = excluded.kind,
-             duration_ms = excluded.duration_ms, codec = excluded.codec, lat = excluded.lat, lon = excluded.lon",
-        &[
-            &root,
-            &mime(&p.path),
-            &meta.width,
-            &meta.height,
-            &meta.taken_at,
-            &serde_json::Value::Object(meta.exif).to_string(),
-            &unix_now(),
-            &meta.kind,
-            &meta.duration_ms,
-            &meta.codec,
-            &lat,
-            &lon,
-        ],
+    let exif = serde_json::Value::Object(meta.exif).to_string();
+    file_meta::save(
+        &mut *c,
+        &root,
+        &file_meta::Meta {
+            mime: &mime(&p.path),
+            kind: meta.kind,
+            width: meta.width,
+            height: meta.height,
+            taken_at: meta.taken_at,
+            exif: &exif,
+            duration_ms: meta.duration_ms,
+            codec: meta.codec.as_deref(),
+            place: meta.position,
+        },
+        unix_now(),
     )?;
     db::notify(&mut *c, "files", &p.device)?;
     drop(c);
@@ -579,7 +553,7 @@ mod tests {
         let jobs = |db: &Db| -> i64 { db.get().unwrap().query_one("SELECT COUNT(*) FROM jobs", &[]).unwrap().get(0) };
         assert_eq!(jobs(&db), 1);
 
-        let (_, kind, payload, _) = claim(&db, false).unwrap().unwrap();
+        let jobs::Claimed { kind, payload, .. } = claim(&db, false).unwrap().unwrap();
         assert_eq!(kind, "meta");
         let cache = dir.path().join("cache");
         read_job(&db, &store, &cache, &payload).unwrap();
@@ -616,7 +590,7 @@ mod tests {
             jobs::enqueue(&mut *c, "proxy", &serde_json::json!({})).unwrap();
             jobs::enqueue(&mut *c, "meta", &serde_json::json!({})).unwrap();
         }
-        let kinds = |lane: bool| claim(&db, lane).unwrap().map(|c| c.1);
+        let kinds = |lane: bool| claim(&db, lane).unwrap().map(|c| c.kind);
         assert_eq!(kinds(false).as_deref(), Some("meta"));
         assert_eq!(kinds(false), None, "the fast lane leaves proxies alone");
         assert_eq!(kinds(true).as_deref(), Some("proxy"));

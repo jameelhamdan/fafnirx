@@ -125,3 +125,9 @@ pub fn forget_item(c: &mut impl GenericClient, mirror_id: i64, device_id: i64, p
 pub fn device_folders(c: &mut impl GenericClient) -> Result<Vec<(i64, String)>, Error> {
     Ok(q::device_folders().bind(&mut Pg(c)).all()?.into_iter().map(|d| (d.id, d.folder)).collect())
 }
+
+/// Marks the mirrors that were running when the master stopped as failed.
+pub fn fail_interrupted(c: &mut impl GenericClient) -> Result<(), Error> {
+    q::fail_interrupted_mirrors().bind(&mut Pg(c))?;
+    Ok(())
+}

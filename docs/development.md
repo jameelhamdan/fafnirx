@@ -91,7 +91,7 @@ holds its API handlers next to its logic, instead of one folder per kind of file
 | App | Owns | Files |
 |---|---|---|
 | `platform` | What every app builds on | `db.rs` (pool, schema, locks, `NOTIFY`), `pg.rs` (runs typed queries on any client), `store.rs` (the file store on disk) |
-| `repo` | Where the data is stored | One module per aggregate (`devices`, `files`, `users`, `sessions`, `alerts`, `events`, `sources`, `mirrors`, `retention`, `settings`, `jobs`) and `listing` (the one query built at run time). The only code that knows tables and columns |
+| `repo` | Where the data is stored | One module per aggregate (`devices`, `files`, `file_meta`, `users`, `sessions`, `alerts`, `events`, `sources`, `mirrors`, `retention`, `settings`, `jobs`; for the library `library`, `file_state`, `tags`, `albums`, `snapshot`) and `listing` (the one query built at run time, because the user chooses the sort order). The only code that knows tables and columns |
 | `devices` | Clients and their tokens | `grpc.rs` (the device-facing API, upload only), `api.rs` (list, add, rotate, revoke, settings) |
 | `web` (users) | Logins, roles and what each reaches | `auth.rs` (login, sessions, passwords), `access.rs` (the rules: which devices a role can see and change), `users.rs` (the users API) |
 | `files` | Content going in and coming out | `ingest.rs` (commit versions), `livetree.rs` (watcher), `browse.rs` (file browser), `transfer.rs` (downloads, uploads), `zip.rs` |
@@ -104,7 +104,6 @@ Rules of thumb: a new endpoint goes in the `api.rs` of its app and is registered
 `platform` freely and each other's public functions, but `platform` knows nothing of the apps. SQL lives only in `queries/*.sql` (typed, generated) and in `repo/`: handlers, the gRPC service and the jobs call
 repository functions and contain none. The rules (who may do what, what a rename means, which things happen in one
 transaction) stay in the app that owns them. There is no ORM (see [Typed queries](#typed-queries-cornucopia)).
-The photo library (`library/`) is the exception that is still to be moved: it builds its queries as text.
 
 ## Typed queries (Cornucopia)
 

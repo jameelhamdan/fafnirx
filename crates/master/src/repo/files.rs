@@ -230,3 +230,8 @@ pub fn live_below(c: &mut impl GenericClient, device_id: i64, path: &str) -> Res
         .map(|f| (f.path, f.size, f.mtime))
         .collect())
 }
+
+/// Where a live file is and which content it holds: (device folder, path, root hash).
+pub fn location(c: &mut impl GenericClient, id: i64) -> Result<Option<(String, String, Vec<u8>)>, Error> {
+    Ok(q::file_location().bind(&mut Pg(c), &id).opt()?.map(|f| (f.folder, f.path, f.root_hash)))
+}

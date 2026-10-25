@@ -59,3 +59,7 @@ UNION SELECT path FROM source_items WHERE source_id = :source_id AND removed_in_
 
 --! delete_source_item
 DELETE FROM source_items WHERE source_id = :source_id AND remote_id = :remote_id;
+
+--! fail_interrupted_sources
+-- A restart interrupts whatever was running: it is shown as failed until it runs again.
+UPDATE sources SET last_status = 'failed', last_message = 'interrupted by a restart' WHERE last_status = 'running';

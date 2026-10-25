@@ -53,3 +53,7 @@ DELETE FROM mirror_items WHERE mirror_id = :mirror_id AND device_id = :device_id
 
 --! device_folders
 SELECT id, folder FROM devices;
+
+--! fail_interrupted_mirrors
+-- A restart interrupts whatever was running: it is shown as failed until it runs again.
+UPDATE mirrors SET last_status = 'failed', last_message = 'interrupted by a restart' WHERE last_status = 'running';
