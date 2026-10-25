@@ -103,6 +103,23 @@ Rules of thumb: a new endpoint goes in the `api.rs` of its app and is registered
 `platform` freely and each other's public functions, but `platform` knows nothing of the apps. The SQL is written
 next to the code that uses it with the `postgres` crate; there is no ORM (see [Database access](#database-access-in-the-master)).
 
+## Typed queries (Cornucopia)
+
+SQL lives in `queries/*.sql`, one file per area, written as [Cornucopia](https://github.com/cornucopia-rs/cornucopia)
+queries (`--! name`, named `:parameters`). `scripts/codegen.sh` (or `codegen.ps1`) turns them into the crate
+`crates/db` (`fafnirx-db`): a typed function and row struct per query, checked against the real schema, which is the
+migrations in `crates/master/migrations`. The generated crate is committed, so building needs no database; CI
+regenerates it and fails on a difference. To add or change a query:
+
+1. Edit or add the `.sql` file in `queries/`.
+2. Start a PostgreSQL (the test one will do) and run `DATABASE_URL=postgresql://postgres:test@localhost:55432
+   scripts/codegen.sh`. Install the CLI once with `cargo install cornucopia --locked`.
+3. Call it from a repository function: `fafnirx_db::queries::alerts::resolve_alert().bind(&mut Pg(conn), &now, &kind, &key)`.
+   `platform::pg::Pg` lets generated queries run on any `postgres` client or transaction.
+
+New SQL goes here, not inline in handlers. Queries that are built at run time (for example the folder listing with its
+sort and filter) stay as explicit SQL in a repository function until they can be expressed as fixed queries.
+
 ## Database access in the master
 
 The master uses the synchronous `postgres` crate behind an `r2d2` pool (`crates/master/src/platform/db.rs`). Rules that follow:

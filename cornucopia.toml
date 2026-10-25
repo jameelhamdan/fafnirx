@@ -1,0 +1,12 @@
+queries = "queries"
+destination = "crates/db"
+sync = true
+async = false
+
+[manifest.package]
+name = "fafnirx-db"
+
+
+[manifest.lints.rust]
+unused_imports = "allow"
+dead_code = "allow"
