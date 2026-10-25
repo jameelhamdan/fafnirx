@@ -10,7 +10,7 @@ use crate::integrations::spec::MirrorSpec;
 use crate::integrations::Table;
 use crate::platform::db;
 use crate::platform::store::Store;
-use crate::repo::alerts;
+use crate::repo::{alerts, mirrors, sources};
 use crate::web::access::Access;
 use crate::web::{done, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, State};
@@ -41,19 +41,29 @@ pub struct JobState {
     detail: Value,
 }
 
-fn state_of(r: &postgres::Row, owner: Option<String>, detail: Value) -> JobState {
-    let status: Option<String> = r.get("last_status");
-    let name: String = r.get("name");
+/// What the list of sources and the list of mirrors have in common.
+struct Schedule {
+    name: String,
+    key: String,
+    status: Option<String>,
+    enabled: i64,
+    interval_secs: i64,
+    last_run_at: Option<i64>,
+    last_ok_at: Option<i64>,
+    message: Option<String>,
+}
+
+fn state_of(s: Schedule, detail: Value) -> JobState {
     JobState {
-        key: owner.map_or_else(|| name.clone(), |u| format!("{u}/{name}")),
-        name,
-        running: status.as_deref() == Some("running"),
-        status: status.unwrap_or_else(|| "never run".into()),
-        enabled: r.get::<_, i64>("enabled") != 0,
-        interval_secs: r.get("interval_secs"),
-        last_run_at: r.get("last_run_at"),
-        last_ok_at: r.get("last_ok_at"),
-        message: r.get::<_, Option<String>>("last_message").unwrap_or_default(),
+        key: s.key,
+        name: s.name,
+        running: s.status.as_deref() == Some("running"),
+        status: s.status.unwrap_or_else(|| "never run".into()),
+        enabled: s.enabled != 0,
+        interval_secs: s.interval_secs,
+        last_run_at: s.last_run_at,
+        last_ok_at: s.last_ok_at,
+        message: s.message.unwrap_or_default(),
         detail,
     }
 }
@@ -61,51 +71,65 @@ fn state_of(r: &postgres::Row, owner: Option<String>, detail: Value) -> JobState
 /// The sources `who` may see: their own, or all of them for an administrator.
 fn source_states(c: &mut Client, who: &Access) -> Result<Vec<JobState>, postgres::Error> {
     let (all, user) = who.scope_args();
-    let rows = c.query(
-        "SELECT s.name, u.name AS owner, s.config, s.interval_secs, s.enabled, s.last_run_at, s.last_ok_at, s.last_status, s.last_message,
-                d.total_bytes AS bytes, d.file_count AS files, s.device_id, d.folder
-         FROM sources s JOIN devices d ON d.id = s.device_id JOIN users u ON u.id = d.user_id
-         WHERE $1::boolean OR d.user_id = $2::bigint ORDER BY u.name, s.name",
-        &[&all, &user],
-    )?;
+    let rows = sources::list(c, all, user)?;
     Ok(rows
-        .iter()
+        .into_iter()
         .map(|r| {
-            let config: Value = serde_json::from_str(&r.get::<_, String>("config")).unwrap_or(Value::Null);
+            let config: Value = serde_json::from_str(&r.config).unwrap_or(Value::Null);
             let detail = json!({
-                "bytes": r.get::<_, i64>("bytes"),
-                "files": r.get::<_, i64>("files"),
+                "bytes": r.bytes,
+                "files": r.files,
                 "folders": config["folders"].as_array().map_or(0, Vec::len),
                 "account": config["service_account"]["client_email"],
-                "device": r.get::<_, String>("folder"),
+                "device": r.folder,
             });
-            state_of(r, Some(r.get("owner")), detail)
+            let key = format!("{}/{}", r.owner, r.name);
+            state_of(
+                Schedule {
+                    name: r.name,
+                    key,
+                    status: r.last_status,
+                    enabled: r.enabled,
+                    interval_secs: r.interval_secs,
+                    last_run_at: r.last_run_at,
+                    last_ok_at: r.last_ok_at,
+                    message: r.last_message,
+                },
+                detail,
+            )
         })
         .collect())
 }
 
 fn mirror_states(c: &mut Client) -> Result<Vec<JobState>, postgres::Error> {
-    let rows = c.query(
-        "SELECT name, remote, remote_type, options, remote_path, interval_secs, keep_runs, enabled, last_run_at, last_ok_at,
-                last_status, last_message, last_files, last_bytes FROM mirrors ORDER BY name",
-        &[],
-    )?;
-    Ok(rows
-        .iter()
+    Ok(mirrors::list(c)?
+        .into_iter()
         .map(|r| {
-            let options: Value = serde_json::from_str(&r.get::<_, String>("options")).unwrap_or(Value::Null);
+            let options: Value = serde_json::from_str(&r.options).unwrap_or(Value::Null);
             let mut keys: Vec<&String> = options.as_object().map_or_else(Vec::new, |o| o.keys().collect());
             keys.sort();
             let detail = json!({
-                "remote": r.get::<_, String>("remote"),
-                "remote_type": r.get::<_, String>("remote_type"),
-                "remote_path": r.get::<_, String>("remote_path"),
-                "keep_runs": r.get::<_, i64>("keep_runs"),
+                "remote": r.remote,
+                "remote_type": r.remote_type,
+                "remote_path": r.remote_path,
+                "keep_runs": r.keep_runs,
                 "option_keys": keys,
-                "files": r.get::<_, Option<i64>>("last_files"),
-                "bytes": r.get::<_, Option<i64>>("last_bytes"),
+                "files": r.last_files,
+                "bytes": r.last_bytes,
             });
-            state_of(r, None, detail)
+            state_of(
+                Schedule {
+                    key: r.name.clone(),
+                    name: r.name,
+                    status: r.last_status,
+                    enabled: r.enabled,
+                    interval_secs: r.interval_secs,
+                    last_run_at: r.last_run_at,
+                    last_ok_at: r.last_ok_at,
+                    message: r.last_message,
+                },
+                detail,
+            )
         })
         .collect())
 }
@@ -119,21 +143,13 @@ pub fn job_states(c: &mut Client, who: &Access) -> Result<(Vec<JobState>, Vec<Jo
 /// The id and the device folder of the source `name` of `user`, unless it is missing or `who` may not manage it (an
 /// administrator manages all). Someone else's source does not exist.
 fn find_source(c: &mut Client, who: &Access, user: &str, name: &str) -> anyhow::Result<(i64, String)> {
-    let row = c
-        .query_opt(
-            "SELECT s.id, d.folder FROM sources s JOIN devices d ON d.id = s.device_id JOIN users u ON u.id = d.user_id
-             WHERE u.name = $1 AND s.name = $2",
-            &[&user, &name],
-        )?
+    sources::by_owner(c, user, name)?
         .filter(|_| who.is_admin() || who.name == user)
-        .ok_or_else(|| ApiError::not_found("No such source"))?;
-    Ok((row.get(0), row.get(1)))
+        .ok_or_else(|| ApiError::not_found("No such source").into())
 }
 
 fn mirror_id(c: &mut Client, name: &str) -> anyhow::Result<i64> {
-    Ok(c.query_opt("SELECT id FROM mirrors WHERE name = $1", &[&name])?
-        .ok_or_else(|| ApiError::not_found("No such mirror"))?
-        .get(0))
+    Ok(mirrors::id_of(c, name)?.ok_or_else(|| ApiError::not_found("No such mirror"))?)
 }
 
 pub async fn sources(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Vec<JobState>> {
@@ -260,18 +276,9 @@ pub async fn create_source(
         let mut tx = c.transaction()?;
         // The source owns a device row (in the workspace of the user who added it), so its files use the
         // same tables as a device's. '!' can never equal a SHA-256 hex digest, so nothing can authenticate as a source.
-        let (device_id, folder): (i64, String) = tx
-            .query_opt(
-                "INSERT INTO devices (name, kind, token_hash, created_at, user_id) VALUES ($1, 'source', '!', $2, $3)
-                 ON CONFLICT (user_id, name) DO NOTHING RETURNING id, folder",
-                &[&device, &unix_now(), &who.user_id],
-            )?
-            .map(|r| (r.get(0), r.get(1)))
+        let (device_id, folder) = sources::insert_device(&mut tx, who.user_id, &device, unix_now())?
             .ok_or_else(|| ApiError::conflict(format!("You already have a source named {name}")))?;
-        tx.execute(
-            "INSERT INTO sources (name, kind, config, interval_secs, device_id, created_at) VALUES ($1, 'gdrive', $2, $3, $4, $5)",
-            &[&name, &config.to_string(), &secs, &device_id, &unix_now()],
-        )?;
+        sources::insert(&mut tx, device_id, &name, &config.to_string(), secs, unix_now())?;
         db::notify(&mut tx, "jobs", &folder)?;
         tx.commit()?;
         let _ = std::fs::create_dir_all(store.live_dir(&folder));
@@ -283,18 +290,12 @@ pub async fn create_source(
 
 /// Removes a source. Its collected files follow the normal delete rule: kept for the retention period, then removed.
 pub fn remove_source(c: &mut Client, store: &Store, id: i64) -> anyhow::Result<()> {
-    let row = c
-        .query_opt(
-            "SELECT s.device_id, d.folder FROM sources s JOIN devices d ON d.id = s.device_id WHERE s.id = $1",
-            &[&id],
-        )?
-        .ok_or_else(|| ApiError::not_found("No such source"))?;
-    let device = db::Device { id: row.get(0), name: row.get(1) };
+    let (device_id, folder) = sources::device_of(c, id)?.ok_or_else(|| ApiError::not_found("No such source"))?;
+    let device = db::Device { id: device_id, name: folder };
     for path in expand(c, &device, "", false)? {
         ingest::mark_deleted(c, store, &device, &path, true)?;
     }
-    c.execute("DELETE FROM source_items WHERE source_id = $1", &[&id])?;
-    c.execute("DELETE FROM sources WHERE id = $1", &[&id])?;
+    sources::delete(c, id)?;
     alerts::resolve(c, "source_failed", &device.name)?;
     db::notify(c, "jobs", &device.name)?;
     Ok(())
@@ -315,26 +316,22 @@ pub async fn delete_source(
     done()
 }
 
-/// What `touch` does to a row.
+/// What `touch` does to a source or a mirror.
 #[derive(Clone, Copy)]
 enum Touch {
     RunNow,
     ToggleEnabled,
 }
 
-impl Touch {
-    fn set(self) -> &'static str {
-        match self {
-            Touch::RunNow => "run_requested = 1",
-            Touch::ToggleEnabled => "enabled = 1 - enabled",
-        }
-    }
-}
-
 /// Flips or requests something on a row of a source or a mirror. `key` tells who to announce it to: the device folder of
 /// a source, `mirrors` for a mirror.
 fn touch(c: &mut Client, table: Table, id: i64, key: &str, what: Touch) -> anyhow::Result<()> {
-    c.execute(&format!("UPDATE {table} SET {} WHERE id = $1", what.set()), &[&id])?;
+    match (table, what) {
+        (Table::Sources, Touch::RunNow) => sources::request_run(c, id)?,
+        (Table::Sources, Touch::ToggleEnabled) => sources::toggle(c, id)?,
+        (Table::Mirrors, Touch::RunNow) => mirrors::request_run(c, id)?,
+        (Table::Mirrors, Touch::ToggleEnabled) => mirrors::toggle(c, id)?,
+    }
     db::notify(c, "jobs", key)?;
     Ok(())
 }
@@ -439,12 +436,16 @@ pub async fn create_mirror(
     let secs = hours_to_secs(mirror.interval_hours)?;
     let options = Value::Object(mirror.options.into_iter().collect()).to_string();
     run(&state, move |c| {
-        let inserted = c.execute(
-            "INSERT INTO mirrors (name, remote, remote_type, options, remote_path, interval_secs, keep_runs, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (name) DO NOTHING",
-            &[&mirror.name, &mirror.remote, &mirror.remote_type, &options, &mirror.remote_path, &secs, &mirror.keep_runs, &unix_now()],
-        )?;
-        if inserted == 0 {
+        let new = mirrors::New {
+            name: &mirror.name,
+            remote: &mirror.remote,
+            remote_type: &mirror.remote_type,
+            options: &options,
+            remote_path: &mirror.remote_path,
+            interval_secs: secs,
+            keep_runs: mirror.keep_runs,
+        };
+        if !mirrors::insert(c, &new, unix_now())? {
             return Err(ApiError::conflict(format!("A mirror named {} already exists", mirror.name)).into());
         }
         db::notify(c, "jobs", "mirrors")?;
@@ -463,7 +464,7 @@ pub async fn resync_mirror(
     who.require_admin()?;
     run(&state, move |c| {
         let id = mirror_id(c, &name)?;
-        c.execute("DELETE FROM mirror_items WHERE mirror_id = $1", &[&id])?;
+        mirrors::forget_items(c, id)?;
         touch(c, Table::Mirrors, id, "mirrors", Touch::RunNow)
     })
     .await?;
@@ -478,8 +479,7 @@ pub async fn delete_mirror(
     who.require_admin()?;
     run(&state, move |c| {
         let id = mirror_id(c, &name)?;
-        c.execute("DELETE FROM mirror_items WHERE mirror_id = $1", &[&id])?;
-        c.execute("DELETE FROM mirrors WHERE id = $1", &[&id])?;
+        mirrors::delete(c, id)?;
         alerts::resolve(c, "mirror_failed", &name)?;
         db::notify(c, "jobs", "mirrors")?;
         Ok(())
