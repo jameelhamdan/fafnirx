@@ -186,8 +186,8 @@ impl Engine {
         self.limiter.set(cfg.bandwidth_limit_kbps);
         self.sent.store(0, Ordering::Relaxed);
         self.set_activity("scanning", "", 0, 0, 0);
-        let (entries, scanned) = self.scan(cfg).await;
-        let (changed, mut vanished) = self.detect_changes(&entries, &scanned)?;
+        let (entries, scanned, unreadable) = self.scan(cfg).await;
+        let (changed, mut vanished) = self.detect_changes(&entries, &scanned, &unreadable)?;
         let every_folder_read = !cfg.folders.is_empty() && scanned.len() == cfg.folders.len();
         if vanished.is_empty() {
             // Nothing can be a rename, so a file goes out as soon as it is hashed. The first sync of a big
@@ -208,10 +208,12 @@ impl Engine {
         Ok(report)
     }
 
-    /// Walks every folder. Returns the files found and the names of the folders that could be read.
-    async fn scan(&mut self, cfg: &Config) -> (Vec<Entry>, HashSet<String>) {
+    /// Walks every folder. Returns the files found, the names of the folders that were read completely, and the
+    /// files that exist but could not be read (locked, no permission), which are not deleted.
+    async fn scan(&mut self, cfg: &Config) -> (Vec<Entry>, HashSet<String>, HashSet<String>) {
         let mut entries = Vec::new();
         let mut scanned = HashSet::new();
+        let mut unreadable = HashSet::new();
         for folder in &cfg.folders {
             let (f, exclude): (Folder, Option<PathBuf>) = (folder.clone(), self.exclude.clone());
             match tokio::task::spawn_blocking(move || scan_folder(&f, exclude.as_deref())).await {
@@ -221,14 +223,18 @@ impl Engine {
                             tracing::warn!("skipped {note}");
                         }
                     }
-                    scanned.insert(folder.name.clone());
+                    // A folder that could not be walked completely proves nothing about what is missing from it.
+                    if scan.complete {
+                        scanned.insert(folder.name.clone());
+                    }
+                    unreadable.extend(scan.unreadable);
                     entries.extend(scan.entries);
                 }
                 Ok(Err(e)) => self.report_error(format!("{}: {e:#}", folder.name)),
                 Err(e) => self.report_error(format!("{}: scan failed: {e}", folder.name)),
             }
         }
-        (entries, scanned)
+        (entries, scanned, unreadable)
     }
 
     /// Returns the files to hash (with whether they are new) and the synced paths that vanished from
@@ -237,6 +243,7 @@ impl Engine {
         &self,
         entries: &[Entry],
         scanned: &HashSet<String>,
+        unreadable: &HashSet<String>,
     ) -> Result<(Vec<Changed>, Vec<Synced>), SyncError> {
         let t = unix_now();
         let mut changed = Vec::new();
@@ -255,7 +262,9 @@ impl Engine {
             .state
             .all_synced()?
             .into_iter()
-            .filter(|s| scanned.contains(folder_of(&s.path)) && !seen.contains(s.path.as_str()))
+            .filter(|s| {
+                scanned.contains(folder_of(&s.path)) && !seen.contains(s.path.as_str()) && !unreadable.contains(&s.path)
+            })
             .collect();
         Ok((changed, vanished))
     }

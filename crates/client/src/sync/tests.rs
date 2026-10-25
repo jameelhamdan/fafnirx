@@ -257,3 +257,62 @@ async fn nothing_is_sent_while_paused() {
     assert!(matches!(rig.engine.cycle(&rig.cfg).await, Err(SyncError::Paused)));
     assert!(rig.calls.lock().unwrap().commits.is_empty());
 }
+
+/// Makes `path` unreadable for the length of the returned guard (a file another program holds open on Windows, no
+/// permission elsewhere). Nothing to do for a user who can read everything (root).
+#[cfg(windows)]
+fn lock(path: &Path) -> Option<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    fs::OpenOptions::new().read(true).share_mode(0).open(path).ok()
+}
+
+#[cfg(unix)]
+fn lock(path: &Path) -> Option<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o000)).ok()?;
+    fs::File::open(path).is_err().then_some(())
+}
+
+#[tokio::test]
+async fn a_file_that_is_locked_or_unreadable_is_not_taken_for_deleted() {
+    let mut rig = Rig::new().await;
+    rig.files(3);
+    rig.cycle().await;
+    let guard = lock(&rig.folder.path().join("f0.txt"));
+    #[cfg(windows)]
+    assert!(guard.is_some(), "a file can be locked on Windows");
+    if guard.is_none() {
+        return; // this user can read everything
+    }
+    let report = rig.cycle().await;
+    assert_eq!(report.deleted, 0);
+    assert!(rig.deleted().is_empty(), "it is there, only not readable now");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(rig.folder.path().join("f0.txt"), fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    drop(guard);
+    assert_eq!(rig.cycle().await, Report::default(), "and when it can be read again nothing changed");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_directory_that_cannot_be_walked_deletes_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut rig = Rig::new().await;
+    fs::create_dir(rig.folder.path().join("sub")).unwrap();
+    rig.put("sub/a.txt", "a");
+    rig.put("top.txt", "t");
+    rig.cycle().await;
+    let sub = rig.folder.path().join("sub");
+    fs::set_permissions(&sub, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read_dir(&sub).is_ok() {
+        fs::set_permissions(&sub, fs::Permissions::from_mode(0o755)).unwrap();
+        return; // root
+    }
+    fs::remove_file(rig.folder.path().join("top.txt")).unwrap();
+    rig.cycle().await;
+    fs::set_permissions(&sub, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(rig.deleted().is_empty(), "nothing is deleted from a folder that could not be read completely");
+}
