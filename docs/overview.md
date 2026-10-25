@@ -89,9 +89,9 @@ and use it as a **network drive**. Files you add or change there are noticed and
 
 | Piece | What it is |
 |---|---|
-| `fafnirx` | The client: watcher, resumable upload, offline queue, tray icon, signed self-update |
+| `fafnirx` | The client: watcher, resumable upload, offline queue, tray icon, self-update |
 | `fafnirx-master` | The master: device API, web API and web app, users, file store, background work |
-| `fafnirx-sign` | Creates the update signing key and publishes signed client builds |
+| `fafnirx-sign` | Optional: creates an update signing key and publishes your own signed client builds |
 | `fafnirx-stream` | Optional: streams videos in several qualities to the web app ([Video streaming](streaming.md)) |
 | PostgreSQL | All metadata: users, devices, files, versions, events, settings, jobs |
 | rclone | Performs mirror uploads (installed in the Docker image) |

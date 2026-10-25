@@ -231,6 +231,18 @@ export default function InfoPanel({ id, onClose }: { id: number; onClose: () => 
             </p>
           </Row>
 
+          {d.described && (
+            <section className="space-y-1">
+              <h3 className="text-xs text-muted-foreground">{d.described.show ?? t('Description')}</h3>
+              <p className="text-sm font-medium">
+                {d.described.season !== null && d.described.episode !== null && <span className="mr-1.5 tabular-nums text-muted-foreground">S{String(d.described.season).padStart(2, '0')}E{String(d.described.episode).padStart(2, '0')}</span>}
+                {d.described.title}
+              </p>
+              {d.described.aired && <p className="text-xs text-muted-foreground">{d.described.aired}</p>}
+              {d.described.plot && <p className="text-sm text-muted-foreground">{d.described.plot}</p>}
+            </section>
+          )}
+
           {d.albums.length > 0 && (
             <section>
               <h3 className="mb-1.5 text-xs text-muted-foreground">{t('In albums')}</h3>

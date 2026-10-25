@@ -16,20 +16,30 @@ SELECT a.id, a.name, a.description, a.created_at, a.updated_at,
         WHERE (EXISTS (SELECT 1 FROM album_files af WHERE af.album_id = a.id AND af.file_id = f.id)
                OR (a.folder_device_id = f.device_id AND starts_with(f.path, a.folder_prefix)))
           AND f.deleted_at IS NULL AND f.media IS NOT NULL) AS bytes,
-       -- The cover: the file chosen, else the newest of the album.
+       -- The cover: the file chosen, else the newest of the album. An album that shows a folder has no answer here: its
+       -- first video is found in code (names sort "naturally" there, see `media_of_album`).
        COALESCE((SELECT f.id FROM files f WHERE f.id = a.cover_file_id AND f.deleted_at IS NULL),
+                CASE WHEN a.folder_device_id IS NULL THEN
                 (SELECT f.id FROM files f JOIN versions v ON v.id = f.current_version_id
                  LEFT JOIN file_meta m ON m.root_hash = v.root_hash
                  LEFT JOIN file_state s ON s.file_id = f.id AND s.user_id = a.user_id
                  WHERE (EXISTS (SELECT 1 FROM album_files af WHERE af.album_id = a.id AND af.file_id = f.id)
                         OR (a.folder_device_id = f.device_id AND starts_with(f.path, a.folder_prefix)))
                    AND f.deleted_at IS NULL AND f.media IS NOT NULL
-                 ORDER BY COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000) DESC, f.id DESC LIMIT 1)) AS cover,
+                 ORDER BY COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000) DESC, f.id DESC LIMIT 1)
+                END) AS cover,
        (SELECT d.folder FROM devices d WHERE d.id = a.folder_device_id) AS folder_device,
        a.folder_prefix
 FROM albums a
 WHERE a.user_id = :user_id AND (:id::bigint IS NULL OR a.id = :id)
 ORDER BY a.updated_at DESC, a.id DESC;
+
+--! media_of_album
+-- The live photos and videos of an album as (id, path), to choose its cover among.
+SELECT f.id, f.path FROM files f JOIN albums a ON a.id = :album_id
+WHERE (EXISTS (SELECT 1 FROM album_files af WHERE af.album_id = a.id AND af.file_id = f.id)
+       OR (a.folder_device_id = f.device_id AND starts_with(f.path, a.folder_prefix)))
+  AND f.deleted_at IS NULL AND f.media IS NOT NULL;
 
 --! album_of_folder
 SELECT id FROM albums WHERE user_id = :user_id AND folder_device_id = :device_id AND folder_prefix = :prefix;

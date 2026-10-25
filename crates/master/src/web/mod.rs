@@ -202,6 +202,11 @@ fn heavy() -> Router<Shared> {
         .route("/api/files/thumb", get(files::transfer::thumbnail))
         .route("/api/media/:id/:variant", get(files::transfer::media))
         .route("/api/stream/:id/*rest", get(library::stream::proxy))
+        .route("/api/queue", get(monitoring::queue::show))
+        .route("/api/queue/pause", post(monitoring::queue::pause))
+        .route("/api/queue/retry", post(monitoring::queue::retry))
+        .route("/api/queue/cancel", post(monitoring::queue::cancel))
+        .route("/api/queue/rebuild", post(monitoring::queue::rebuild))
         .route("/api/files/zip", post(files::transfer::zip))
         .route("/api/uploads", post(files::transfer::start_upload))
         .route(

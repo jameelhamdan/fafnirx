@@ -2,10 +2,10 @@
 //! video, the EXIF data and GPS position of a photo, and previews. Read by the background queue, shown by the
 //! web API.
 
-use crate::library::media;
+use crate::library::{artwork, media};
 use crate::platform::db::{self, Db};
 use crate::platform::store::Store;
-use crate::repo::{file_meta, jobs};
+use crate::repo::{file_meta, files, jobs, settings};
 use anyhow::{Context, Result};
 use fafnirx_common::unix_now;
 use image::ImageDecoder;
@@ -316,13 +316,21 @@ pub fn run_queue(db: Db, store: std::sync::Arc<Store>, cache_root: PathBuf) {
     });
 }
 
+/// The setting that holds the queue back while it is `1` (see `monitoring::queue`). Jobs already running finish.
+pub const PAUSED: &str = "jobs_paused";
+
 /// One lane of the queue, forever.
 fn work(db: &Db, store: &Store, cache_root: &Path, with_proxies: bool) {
     loop {
+        if db.get().is_ok_and(|mut c| settings::get_i64(&mut *c, PAUSED, 0) == 1) {
+            std::thread::sleep(Duration::from_secs(5));
+            continue;
+        }
         match claim(db, with_proxies) {
             Ok(Some(jobs::Claimed { id, kind, payload, attempts })) => {
                 let result = match kind.as_str() {
-                    "meta" => read_job(db, store, cache_root, &payload),
+                    "meta" => read_job(db, store, &payload),
+                    "thumb" => thumb_job(db, store, cache_root, &payload),
                     "proxy" => proxy_job(db, store, cache_root, &payload),
                     other => Err(anyhow::anyhow!("unknown job kind {other:?}")),
                 };
@@ -371,8 +379,8 @@ fn current_file(c: &mut postgres::Client, p: &JobFile) -> Result<Option<Vec<u8>>
     Ok(current.then_some(root))
 }
 
-/// Reads the metadata of the file a `meta` job names, if it still holds that content, and makes its pictures.
-fn read_job(db: &Db, store: &Store, cache_root: &Path, payload: &str) -> Result<()> {
+/// Reads the metadata of the file a `meta` job names, if it still holds that content, and queues its pictures.
+fn read_job(db: &Db, store: &Store, payload: &str) -> Result<()> {
     let p: JobFile = serde_json::from_str(payload)?;
     let mut c = db.get()?;
     let Some(root) = current_file(&mut c, &p)? else {
@@ -398,28 +406,43 @@ fn read_job(db: &Db, store: &Store, cache_root: &Path, payload: &str) -> Result<
         unix_now(),
     )?;
     db::notify(&mut *c, "files", &p.device)?;
-    drop(c);
+    // The pictures are a job of their own, so that the queue shows them (and what went wrong with them).
+    jobs::enqueue(&mut *c, "thumb", &serde_json::json!({ "device": p.device, "path": p.path, "root": p.root }))?;
+    Ok(())
+}
 
-    // Pictures are made now so that opening the timeline finds them ready. A file that cannot be
-    // decoded is not worth retrying: it is shown with an icon instead.
+/// Makes the pictures of the file a `thumb` job names, so that opening the timeline finds them ready, and queues the
+/// playable copy of a video that browsers cannot play as it is. A video with a picture next to it (see `artwork`) gets
+/// its pictures from that.
+fn thumb_job(db: &Db, store: &Store, cache_root: &Path, payload: &str) -> Result<()> {
+    let p: JobFile = serde_json::from_str(payload)?;
+    let mut c = db.get()?;
+    let Some(root) = current_file(&mut c, &p)? else {
+        return Ok(()); // replaced or deleted since; the newer content has its own job
+    };
+    let own = store.live_path(&p.device, &p.path)?;
+    let near =
+        if kind(&p.path) == Some("video") { files::neighbours(&mut *c, &p.device, &p.path)? } else { Vec::new() };
+    let (source, root_hex) = match artwork::picture(&p.path, &near) {
+        Some((art, art_root)) => (store.live_path(&p.device, art)?, hex::encode(art_root)),
+        None => (own.clone(), hex::encode(&root)),
+    };
     let thumbs = cache_root.join("thumbs");
-    let root_hex = hex::encode(&root);
     for size in [THUMB, PREVIEW] {
-        if let Err(e) = thumbnail(&disk, &root_hex, size, &thumbs) {
-            tracing::warn!("no {size}px preview for {}/{}: {e:#}", p.device, p.path);
-            break;
-        }
+        thumbnail(&source, &root_hex, size, &thumbs).with_context(|| format!("the {size}px picture of {}", p.path))?;
     }
-    if meta.kind == "video"
-        && media::available()
-        && !media::plays_everywhere(&extension(&p.path), meta.codec.as_deref())
-        && !proxy_path(cache_root, &root_hex).is_file()
-    {
-        jobs::enqueue(
-            &mut *db.get()?,
-            "proxy",
-            &serde_json::json!({ "device": p.device, "path": p.path, "root": p.root }),
-        )?;
+    if kind(&p.path) == Some("video") && media::available() {
+        let codec = file_meta::codec(&mut *c, &root)?;
+        let own_hex = hex::encode(&root);
+        if !media::plays_everywhere(&extension(&p.path), codec.as_deref())
+            && !proxy_path(cache_root, &own_hex).is_file()
+        {
+            jobs::enqueue(
+                &mut *c,
+                "proxy",
+                &serde_json::json!({ "device": p.device, "path": p.path, "root": p.root }),
+            )?;
+        }
     }
     Ok(())
 }
@@ -556,7 +579,10 @@ mod tests {
         let jobs::Claimed { kind, payload, .. } = claim(&db, false).unwrap().unwrap();
         assert_eq!(kind, "meta");
         let cache = dir.path().join("cache");
-        read_job(&db, &store, &cache, &payload).unwrap();
+        read_job(&db, &store, &payload).unwrap();
+        let jobs::Claimed { kind, payload, .. } = claim(&db, false).unwrap().unwrap();
+        assert_eq!(kind, "thumb", "the pictures are a job of their own");
+        thumb_job(&db, &store, &cache, &payload).unwrap();
         let row = db.get().unwrap().query_one("SELECT kind, width, height, lat FROM file_meta", &[]).unwrap();
         assert_eq!((row.get::<_, String>(0), row.get::<_, i64>(1), row.get::<_, i64>(2)), ("image".into(), 8, 4));
         assert_eq!(row.get::<_, Option<f64>>(3), None);

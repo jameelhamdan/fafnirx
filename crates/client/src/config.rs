@@ -20,7 +20,11 @@ pub struct Config {
     /// Device token. Normally absent: `enroll` keeps it in the OS keychain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
-    /// Base64 ed25519 public key that update signatures must verify against.
+    /// The client looks for new releases now and then and installs them. Off: it stays on its version until `fafnirx update`
+    /// is run by hand.
+    #[serde(default = "yes")]
+    pub auto_update: bool,
+    /// Base64 ed25519 public key. With it the client updates from the master, to builds signed with the matching key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update_public_key: Option<String>,
     /// Upload limit in KiB/s, 0 for unlimited.
@@ -60,6 +64,7 @@ impl Config {
         Self {
             server: server.into(),
             token: None,
+            auto_update: true,
             update_public_key: None,
             bandwidth_limit_kbps: 0,
             watch: true,

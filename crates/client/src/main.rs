@@ -8,6 +8,7 @@ mod guard;
 mod hash;
 mod instance;
 mod net;
+mod release;
 mod scan;
 mod service;
 mod state;
@@ -84,7 +85,7 @@ enum Cmd {
     /// Stop uploading until `resume`
     Pause,
     Resume,
-    /// Check for a signed update and install it
+    /// Check for a new release and install it
     Update,
     /// Start automatically at login
     InstallService {

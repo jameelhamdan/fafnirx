@@ -16,7 +16,8 @@ pub struct Album {
     /// Live photos and videos in it.
     pub files: i64,
     pub bytes: i64,
-    /// The file shown for the album: the one chosen, else the newest.
+    /// The file shown for the album: the one chosen, else the newest. Not set for an album that follows a folder, unless
+    /// one was chosen (`library::albums` takes its first video).
     pub cover: Option<i64>,
     /// The folder the album follows, as (device folder name, prefix of the paths below it).
     pub folder: Option<(String, String)>,
@@ -48,6 +49,11 @@ pub fn of_user(c: &mut impl GenericClient, user_id: i64) -> Result<Vec<Album>, E
 pub fn find(c: &mut impl GenericClient, user_id: i64, id: i64) -> Result<Option<Album>, Error> {
     let params = q::FindAlbumsParams { user_id, id: Some(id) };
     Ok(q::find_albums().params(&mut Pg(c), &params).opt()?.map(Album::from))
+}
+
+/// The live photos and videos of an album as (file id, path).
+pub fn media(c: &mut impl GenericClient, album_id: i64) -> Result<Vec<(i64, String)>, Error> {
+    Ok(q::media_of_album().bind(&mut Pg(c), &album_id).all()?.into_iter().map(|f| (f.id, f.path)).collect())
 }
 
 /// The id of the user's album that follows this folder (`prefix` is what the paths below it start with).

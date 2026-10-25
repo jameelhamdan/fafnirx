@@ -147,9 +147,14 @@ pub async fn track(
     let key = hex::encode(&Sha256::digest(format!("{}\0{}\0{mtime}", track.file, meta.len()).as_bytes())[..8]);
     let out = video.dir.join(format!("sub-{key}.vtt"));
     let (app_ref, language) = (&*app, &track.language);
-    app.make_once(&out, |tmp| async move { convert_subtitles(app_ref, &path, &tmp, language).await })
-        .await
-        .map_err(|e| fail(StatusCode::UNSUPPORTED_MEDIA_TYPE, format!("that subtitle file cannot be read: {e:#}")))?;
+    app.make_once(
+        &video,
+        "subtitles",
+        &out,
+        |tmp| async move { convert_subtitles(app_ref, &path, &tmp, language).await },
+    )
+    .await
+    .map_err(|e| fail(StatusCode::UNSUPPORTED_MEDIA_TYPE, format!("that subtitle file cannot be read: {e:#}")))?;
     let bytes = std::fs::read(&out).map_err(|e| internal("reading the track", e.into()))?;
     Ok(reply("text/vtt; charset=utf-8", "private, max-age=3600", bytes))
 }
@@ -157,7 +162,7 @@ pub async fn track(
 /// A track inside the video as WebVTT, taken out with ffmpeg once per version of the video.
 async fn embedded_track(app: &App, video: &Video, stream: usize) -> Result<Response, Failure> {
     let out = video.dir.join(format!("sub-s{stream}.vtt"));
-    app.make_once(&out, |tmp| async move {
+    app.make_once(video, "subtitles", &out, |tmp| async move {
         let args = ffmpeg::embedded_subtitle_args(&video.source, stream, &tmp);
         ffmpeg::run(&app.cfg.ffmpeg, &args).await
     })
@@ -198,7 +203,11 @@ mod tests {
         std::fs::write(dir.path().join("Show - 01.eng.srt"), b"").unwrap();
         std::fs::create_dir(dir.path().join("Subs")).unwrap();
         std::fs::write(dir.path().join("Subs").join("Show - 01.jpn.ass"), b"").unwrap();
-        let video = crate::service::Video { source: dir.path().join("Show - 01.mkv"), dir: dir.path().join("cache") };
+        let video = crate::service::Video {
+            name: "Show - 01.mkv".into(),
+            source: dir.path().join("Show - 01.mkv"),
+            dir: dir.path().join("cache"),
+        };
         let found: Vec<String> = sidecar_subtitles(&video).into_iter().map(|s| s.file).collect();
         assert_eq!(found, ["Show - 01.eng.srt", "Subs/Show - 01.jpn.ass"]);
     }

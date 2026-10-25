@@ -41,6 +41,22 @@ impl Backend {
     }
 }
 
+impl Backend {
+    /// What the service is making and what failed lately (its `GET /tasks`). `None` when it does not answer: the queue is
+    /// shown without it.
+    pub async fn tasks(&self) -> Option<serde_json::Value> {
+        let reply = self
+            .client
+            .get(format!("{}/tasks", self.url))
+            .bearer_auth(&self.token)
+            .timeout(Duration::from_secs(3))
+            .send()
+            .await
+            .ok()?;
+        reply.error_for_status().ok()?.json().await.ok()
+    }
+}
+
 /// `master.m3u8`, `720p/index.m3u8`, `720p/seg3.ts`, `subtitles.json` or `subtitles/2.vtt`: the only things the service
 /// serves, and nothing else is passed on. The parts are short names, so the address cannot lead anywhere else.
 pub fn valid_resource(rest: &str) -> bool {

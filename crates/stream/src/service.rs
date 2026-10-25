@@ -7,6 +7,7 @@
 
 use crate::ffmpeg;
 use crate::hls::{self, Source, Variant};
+use crate::tasks::Tasks;
 use axum::extract::{Path as UrlPath, Query, Request, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
@@ -38,6 +39,8 @@ pub struct Config {
 pub struct App {
     pub(crate) cfg: Config,
     pub(crate) jobs: Semaphore,
+    /// What is being made, and what failed lately (see `GET /tasks`).
+    pub(crate) tasks: Tasks,
     /// One lock per file being made, so that two requests for the same segment make it once.
     locks: Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
 }
@@ -45,7 +48,7 @@ pub struct App {
 impl App {
     pub fn new(cfg: Config) -> Arc<Self> {
         let jobs = Semaphore::new(cfg.jobs.max(1));
-        Arc::new(Self { cfg, jobs, locks: Mutex::default() })
+        Arc::new(Self { cfg, jobs, tasks: Tasks::default(), locks: Mutex::default() })
     }
 
     pub(crate) fn lock_for(&self, path: &Path) -> Arc<tokio::sync::Mutex<()>> {
@@ -59,7 +62,13 @@ impl App {
     /// Makes the cached file `out` unless it is there: `make` writes it to the path it is given (`out` with the extension
     /// `tmp`), which is moved to `out` once it worked, so nobody reads half a file and a failure leaves nothing behind.
     /// One request makes a file while the others for it wait, and at most `jobs` files are made at once.
-    pub(crate) async fn make_once<F, Fut>(&self, out: &Path, make: F) -> anyhow::Result<()>
+    pub(crate) async fn make_once<F, Fut>(
+        &self,
+        video: &Video,
+        kind: &'static str,
+        out: &Path,
+        make: F,
+    ) -> anyhow::Result<()>
     where
         F: FnOnce(PathBuf) -> Fut,
         Fut: std::future::Future<Output = anyhow::Result<()>>,
@@ -73,15 +82,19 @@ impl App {
             if out.is_file() {
                 Ok(())
             } else {
+                let task = self.tasks.begin(kind, &video.name);
                 let _permit = self.jobs.acquire().await.expect("the semaphore is never closed");
+                task.started();
                 let tmp = out.with_extension("tmp");
-                match make(tmp.clone()).await {
+                let result = match make(tmp.clone()).await {
                     Ok(()) => std::fs::rename(&tmp, out).map_err(Into::into),
                     Err(e) => {
                         let _ = std::fs::remove_file(&tmp);
                         Err(e)
                     }
-                }
+                };
+                task.finish(result.as_ref().err().map(|e| format!("{e:#}")));
+                result
             }
         };
         self.done_with(out);
@@ -113,6 +126,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/hls/subtitles/:file", get(crate::subtitles::track))
         .route("/hls/:variant/index.m3u8", get(media))
         .route("/hls/:variant/:segment", get(segment))
+        .route("/tasks", get(tasks))
         .layer(middleware::from_fn_with_state(app.clone(), guard));
     Router::new().route("/health", get(|| async { "ok" })).merge(hls).with_state(app)
 }
@@ -141,6 +155,8 @@ pub(crate) struct Which {
 
 /// Where a video is kept, and where its playlists and segments are.
 pub(crate) struct Video {
+    /// Its place in the file tree, as the master named it (`p`).
+    pub(crate) name: String,
     pub(crate) source: PathBuf,
     pub(crate) dir: PathBuf,
 }
@@ -171,7 +187,7 @@ pub(crate) fn locate(app: &App, q: &Which) -> Result<Video, Failure> {
     std::fs::create_dir_all(&dir).map_err(|e| internal("cache", e.into()))?;
     // The folder is used: it is not swept for a while.
     let _ = std::fs::write(dir.join(".used"), b"");
-    Ok(Video { source, dir })
+    Ok(Video { name: q.p.clone(), source, dir })
 }
 
 fn source_text(s: &Source) -> String {
@@ -258,14 +274,21 @@ async fn segment(
 
     let out = video.dir.join(format!("{}-seg{n}.ts", v.name));
     let cfg = &app.cfg;
-    app.make_once(&out, |tmp| async move {
-        let args = ffmpeg::segment_args(&video.source, &tmp, &v, start, len, source.has_audio, &cfg.vcodec);
+    let source_file = &video.source;
+    app.make_once(&video, "segment", &out, |tmp| async move {
+        let args = ffmpeg::segment_args(source_file, &tmp, &v, start, len, source.has_audio, &cfg.vcodec);
         ffmpeg::run(&cfg.ffmpeg, &args).await
     })
     .await
     .map_err(|e| internal("making the segment", e))?;
     let bytes = std::fs::read(&out).map_err(|e| internal("reading the segment", e.into()))?;
     Ok(reply("video/mp2t", "private, max-age=86400", bytes))
+}
+
+/// What the service is making and what failed lately, for whoever runs it (the master shows it next to its own queue).
+async fn tasks(State(app): State<Arc<App>>) -> Response {
+    let body = serde_json::to_vec(&app.tasks.report(app.cfg.jobs.max(1))).unwrap_or_default();
+    reply("application/json", "no-store", body)
 }
 
 /// Removes the cache folders that have not been used for `keep`.

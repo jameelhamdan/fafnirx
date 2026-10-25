@@ -99,9 +99,9 @@ holds its API handlers next to its logic, instead of one folder per kind of file
 | `devices` | Clients and their tokens | `grpc.rs` (the device-facing API, upload only), `api.rs` (list, add, rotate, revoke, settings) |
 | `web` (users) | Logins, roles and what each reaches | `auth.rs` (login, sessions, passwords), `access.rs` (the rules: which devices a role can see and change), `users.rs` (the users API) |
 | `files` | Content going in and coming out | `ingest.rs` (commit versions), `livetree.rs` (watcher), `browse.rs` (file browser), `transfer.rs` (downloads, uploads), `zip.rs` |
-| `library` | Photos and videos | `meta.rs` (metadata, previews, job queue), `media.rs` (ffmpeg), `photos.rs` (timeline, map, trash, edits), `albums.rs` |
+| `library` | Photos and videos | `meta.rs` (metadata, previews, job workers), `media.rs` (ffmpeg), `artwork.rs` (pictures and .nfo next to a video), `photos.rs` (timeline, map, trash, edits), `albums.rs` |
 | `integrations` | Sources and mirrors | `mod.rs` (scheduler), `gdrive.rs`, `mirror.rs`, `api.rs` |
-| `monitoring` | Watching the system | `api.rs` (dashboard, alerts), `jobs.rs` (scheduled alerts, retention) |
+| `monitoring` | Watching the system | `api.rs` (dashboard, alerts), `jobs.rs` (scheduled alerts, retention), `queue.rs` (the background queue's view and controls) |
 | `web` | The HTTP shell | `mod.rs` (state, errors, the route table), `events.rs` (live updates), `assets.rs` (the embedded web app), `tests/` |
 
 Rules of thumb: a new endpoint goes in the `api.rs` of its app and is registered in `web/mod.rs`; apps may use
@@ -201,7 +201,7 @@ for administrators, `require_workspace()` for what read-only users do not have. 
 ## Changing the device gRPC contract
 
 Edit `proto/fafnirx.proto`; `crates/common/build.rs` regenerates the Rust types. Keep it additive: old clients stay in
-the field for a long time because they update themselves only to signed builds. Preserve the one-way rule: do not add
+the field for a long time because they update themselves, from releases or from builds you signed. Preserve the one-way rule: do not add
 any call that reads, lists or deletes stored data.
 
 ## Adding a source
@@ -249,7 +249,7 @@ What it does, in order:
    and for the workspace's crates in `Cargo.lock`, commits it as "Release X.Y.Z" by the `github-actions[bot]`, and pushes it
    to the temporary branch `release/X.Y.Z`. From here on every job builds and tests *that exact commit*, so what is tested is
    what is released. If `Cargo.toml` already says that version, there is nothing to commit.
-3. **Checks everything:** CI, the client for Windows, macOS and Linux (`.exe`, tarballs, `.deb`, each with a `.sha256`), and
+3. **Checks everything:** CI, the client for Windows, macOS and Linux (the `.exe` installer, tarballs, `.deb` and the plain executable `fafnirx-X.Y.Z-<os>-<arch>` that installed clients update from, each with a `.sha256`), and
    the Docker image built and started on amd64 and arm64.
 4. **Publishes, only when all of that has passed:** the version commit becomes the head of `master` (a fast-forward), the image
    goes to Docker Hub (`<version>`, `<major>.<minor>`, `latest`), then the tag and the GitHub Release with the client files,

@@ -30,7 +30,7 @@ flowchart LR
   and restore. Folders show their size. It updates live as devices upload.
 - **A photo library** on the same files, without moving them: a timeline by month and day with a scrubber (on a phone
   too), thumbnails and previews of photos and videos, favorites, archive, trash, albums (a folder can be an album: a
-  TV show with its seasons), a map of where pictures were taken, and tags, ratings, descriptions and corrected dates and
+  TV show with its seasons, with its first video as the cover; Jellyfin/Kodi-style artwork and `.nfo` next to a video are used), a map of where pictures were taken, and tags, ratings, descriptions and corrected dates and
   places. Originals are never changed.
 - **Sources and mirrors**: every user can collect their own Google Drive folders on a schedule; administrators copy
   everything offsite to any storage rclone supports (spelled out in the web app or taken from your own `rclone.conf`).
@@ -84,11 +84,11 @@ Per-platform steps, upgrades and settings: [Installation](docs/installation.md).
 | Path | What |
 | --- | --- |
 | `crates/master` | `fafnirx-master`, organized in apps (`devices`, `files`, `library`, `integrations`, `monitoring`, `web`, `platform`), with its database `migrations` |
-| `crates/client` | `fafnirx`: the client, tray and self-update |
+| `crates/client` | `fafnirx`: the client, tray and self-update (from GitHub releases) |
 | `crates/db` | `fafnirx-db`: the typed queries, made at build time from `queries/*.sql` (not stored in the repository) |
 | `crates/common` | Shared hashing, chunking, path rules and the generated gRPC types |
 | `crates/stream` | `fafnirx-stream`: the optional video streaming service (HLS, made with ffmpeg as it is watched) |
-| `crates/sign` | `fafnirx-sign`: creates the update key and publishes signed client builds |
+| `crates/sign` | `fafnirx-sign`: creates the update key and publishes your own signed client builds (optional) |
 | `frontend` | The web app (React, shadcn/ui), built into the master |
 | `proto` | The device gRPC contract |
 | `installer` | Windows installer and the Linux/macOS install script |

@@ -167,7 +167,7 @@ The device shows as online in the web app within a minute and its files appear u
 | `fafnirx status`, `folders` | What it is doing; what it collects. |
 | `fafnirx pause`, `resume`, `sync` | Stop uploading, continue, run one cycle now. |
 | `fafnirx release-deletes` | Send now the deletions held back by the [delete guard](usage.md#when-many-files-disappear). |
-| `fafnirx update` | Install a signed update now (the client also checks by itself). |
+| `fafnirx update` | Install the newest release now (the client also checks by itself every 6 hours; [Client updates](usage.md#client-updates)). The device stays the same. |
 
 A folder is stored on the master under its name, as `<you>/<device>/<name>/`. By default the name is the folder's own
 name, and a second folder with the same name (`~/photos` and `/mnt/photos`) is named `photos-2`. Choose another with

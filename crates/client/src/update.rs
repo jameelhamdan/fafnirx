@@ -1,6 +1,11 @@
-//! Signed self-update. The master hosts the binaries but the signing key
-//! never lives there: an update is only installed if its ed25519 signature
-//! verifies against `update_public_key` from the config.
+//! Self-update, from one of two places:
+//!
+//! * By default the project's GitHub releases (`release`): the newest version, checked against the checksum published with it.
+//! * With `update_public_key` in the config, the master: it hosts builds you signed with `fafnirx-sign`, and the signing key
+//!   never lives there, so an update is only installed if its ed25519 signature verifies. For private or modified builds.
+//!
+//! Only the program file is replaced. The config, the token in the keychain and the state directory (with the
+//! installation id) stay, so the updated client is the same device and goes on where the old one stopped.
 
 use crate::config::Config;
 use crate::net::Client;
@@ -49,10 +54,36 @@ pub fn verify(public_key_b64: &str, message: &str, signature: &[u8]) -> Result<(
 /// Downloads and installs an update if one is available. Returns true when
 /// the executable was replaced (the caller should exit so it gets restarted).
 pub async fn check_and_apply(client: &mut Client, cfg: &Config, work_dir: &Path) -> Result<bool> {
-    let Some(public_key) = cfg.update_public_key.as_deref() else {
-        tracing::debug!("no update_public_key configured, updates disabled");
-        return Ok(false);
-    };
+    if let Some(public_key) = cfg.update_public_key.as_deref() {
+        return from_master(client, public_key, work_dir).await;
+    }
+    std::fs::create_dir_all(work_dir)?;
+    let tmp = work_dir.join("update.new");
+    let (platform, work) = (platform(), tmp.clone());
+    let version = tokio::task::spawn_blocking(move || crate::release::download(&platform, VERSION, &work))
+        .await
+        .context("the download stopped")??;
+    let Some(version) = version else { return Ok(false) };
+    install(&tmp, &version)?;
+    Ok(true)
+}
+
+/// Puts the downloaded program in the place of the running one.
+fn install(tmp: &Path, version: &str) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(tmp, std::fs::Permissions::from_mode(0o755))?;
+    }
+    let replaced = self_replace::self_replace(tmp).context("replace the running executable");
+    let _ = std::fs::remove_file(tmp);
+    replaced?;
+    tracing::info!("updated {VERSION} -> {version}");
+    Ok(())
+}
+
+/// The update the master offers, if its signature verifies.
+async fn from_master(client: &mut Client, public_key: &str, work_dir: &Path) -> Result<bool> {
     let platform = platform();
     let req = UpdateInfoRequest { platform: platform.clone() };
     let info = client.get_update_info(req.clone()).await?.into_inner();
@@ -84,14 +115,7 @@ pub async fn check_and_apply(client: &mut Client, cfg: &Config, work_dir: &Path)
         let _ = std::fs::remove_file(&tmp);
         bail!("downloaded update does not match the signed hash");
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
-    }
-    self_replace::self_replace(&tmp).context("replace the running executable")?;
-    let _ = std::fs::remove_file(&tmp);
-    tracing::info!("updated {VERSION} -> {}", info.version);
+    install(&tmp, &info.version)?;
     Ok(true)
 }
 

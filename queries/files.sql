@@ -124,3 +124,14 @@ VALUES (:root, :mime, :width, :height, :taken_at, :exif, :read_at, :kind, :durat
 ON CONFLICT (root_hash) DO UPDATE SET mime = excluded.mime, width = excluded.width, height = excluded.height,
     taken_at = excluded.taken_at, exif = excluded.exif, read_at = excluded.read_at, kind = excluded.kind,
     duration_ms = excluded.duration_ms, codec = excluded.codec, lat = excluded.lat, lon = excluded.lon;
+
+--! files_in_folder
+-- The live files directly in a folder of a device with their content: `prefix` is the folder's path with a slash at the
+-- end, empty for the top of the device. Used to find the pictures and the .nfo that sit next to a video.
+SELECT f.path, v.root_hash FROM files f JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id
+WHERE d.folder = :device AND f.deleted_at IS NULL AND starts_with(f.path, :prefix)
+  AND position('/' IN substr(f.path, length(:prefix) + 1)) = 0;
+
+--! file_codec : (codec?)
+-- The video codec read from a content, if it was read.
+SELECT codec FROM file_meta WHERE root_hash = :root;

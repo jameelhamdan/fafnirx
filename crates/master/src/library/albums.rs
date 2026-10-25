@@ -59,14 +59,33 @@ impl From<albums::Album> for AlbumInfo {
     }
 }
 
+/// The cover of an album that shows a folder and has none chosen: its first video as the names sort (episode 1 of season 1),
+/// or its first picture when there are no videos.
+fn first_of(media: Vec<(i64, String)>) -> Option<i64> {
+    let video = |path: &str| crate::library::meta::kind(path) == Some("video");
+    media.into_iter().min_by(|(_, a), (_, b)| video(b).cmp(&video(a)).then_with(|| natural_cmp(a, b))).map(|(id, _)| id)
+}
+
+fn with_cover(c: &mut impl GenericClient, mut album: albums::Album) -> anyhow::Result<AlbumInfo> {
+    if album.folder.is_some() && album.cover.is_none() {
+        album.cover = first_of(albums::media(c, album.id)?);
+    }
+    Ok(album.into())
+}
+
 /// The album, if it is this user's: someone else's album does not exist for them.
 fn load_album(c: &mut impl GenericClient, who: &Access, id: i64) -> anyhow::Result<AlbumInfo> {
-    albums::find(c, who.user_id, id)?.map(AlbumInfo::from).ok_or_else(|| ApiError::not_found("No such album").into())
+    match albums::find(c, who.user_id, id)? {
+        Some(album) => with_cover(c, album),
+        None => Err(ApiError::not_found("No such album").into()),
+    }
 }
 
 pub async fn list(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Vec<AlbumInfo>> {
-    let out =
-        run(&state, move |c| Ok(albums::of_user(c, who.user_id)?.into_iter().map(AlbumInfo::from).collect())).await?;
+    let out = run(&state, move |c| {
+        albums::of_user(c, who.user_id)?.into_iter().map(|album| with_cover(c, album)).collect::<anyhow::Result<_>>()
+    })
+    .await?;
     Ok(Json(out))
 }
 
@@ -354,8 +373,21 @@ pub async fn remove(
 
 #[cfg(test)]
 mod tests {
-    use super::natural_cmp;
+    use super::{first_of, natural_cmp};
     use std::cmp::Ordering;
+
+    #[test]
+    fn the_cover_of_a_folder_is_its_first_video() {
+        let media = vec![
+            (1, "Show/Season 1/poster.jpg".to_string()),
+            (2, "Show/Season 2/E01.mkv".to_string()),
+            (3, "Show/Season 1/E10.mkv".to_string()),
+            (4, "Show/Season 1/E2.mkv".to_string()),
+        ];
+        assert_eq!(first_of(media), Some(4), "a video, and episode 2 before episode 10");
+        assert_eq!(first_of(vec![(7, "b.jpg".into()), (8, "a.jpg".into())]), Some(8));
+        assert_eq!(first_of(Vec::new()), None);
+    }
 
     #[test]
     fn names_sort_the_way_people_read_them() {
