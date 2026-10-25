@@ -1,5 +1,7 @@
+use super::pg::Pg;
 use anyhow::{Context, Result};
 use fafnirx_common::unix_now;
+use fafnirx_db::queries::alerts;
 use postgres::{Client, Config, GenericClient, NoTls};
 use r2d2_postgres::PostgresConnectionManager;
 use std::time::Duration;
@@ -145,20 +147,13 @@ pub fn upsert_alert(
     key: &str,
     message: &str,
 ) -> Result<(), postgres::Error> {
-    conn.execute(
-        "INSERT INTO alerts (kind, key, message, created_at, updated_at) VALUES ($1, $2, $3, $4, $4)
-         ON CONFLICT (kind, key) WHERE resolved_at IS NULL DO UPDATE SET message = excluded.message, updated_at = excluded.updated_at",
-        &[&kind, &key, &message, &unix_now()],
-    )?;
+    alerts::upsert_alert().bind(&mut Pg(&mut *conn), &kind, &key, &message, &unix_now())?;
     notify(conn, "alerts", key)?;
     Ok(())
 }
 
 pub fn resolve_alert(conn: &mut impl GenericClient, kind: &str, key: &str) -> Result<(), postgres::Error> {
-    let n = conn.execute(
-        "UPDATE alerts SET resolved_at = $3 WHERE kind = $1 AND key = $2 AND resolved_at IS NULL",
-        &[&kind, &key, &unix_now()],
-    )?;
+    let n = alerts::resolve_alert().bind(&mut Pg(&mut *conn), &unix_now(), &kind, &key)?;
     if n > 0 {
         notify(conn, "alerts", key)?;
     }
