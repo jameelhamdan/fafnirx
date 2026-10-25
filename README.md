@@ -93,3 +93,10 @@ MIT licensed: see [LICENSE](LICENSE). Third-party licenses are in [THIRD_PARTY_L
 ## Made with Claude
 
 This project was written with [Claude](https://claude.com/claude-code), Anthropic's AI coding assistant, under human direction and review.
+
+## Disclaimer
+
+fafnirx is open source software, provided as is under the [MIT license](LICENSE), without warranty of any kind. You
+are responsible for your own storage, backups and data. The author and contributors are not liable for any data loss,
+corruption or damage from using it. Keep tested copies of anything that matters (for example the 3-2-1 rule above),
+and check that you can restore from them.
