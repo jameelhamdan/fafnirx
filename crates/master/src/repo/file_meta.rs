@@ -50,3 +50,8 @@ pub fn content_is_stored(c: &mut impl GenericClient, root: &[u8]) -> Result<bool
 pub fn path_holds(c: &mut impl GenericClient, device: &str, path: &str, root: &[u8]) -> Result<bool, Error> {
     q::file_holds_content().params(&mut Pg(c), &q::FileHoldsContentParams { device, path, root }).one()
 }
+
+/// The video codec read from a content, if it was read.
+pub fn codec(c: &mut impl GenericClient, root: &[u8]) -> Result<Option<String>, Error> {
+    Ok(q::file_codec().bind(&mut Pg(c), &root).opt()?.flatten())
+}

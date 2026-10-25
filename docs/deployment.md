@@ -39,7 +39,7 @@ versions/<id>/<device>/<path>    what a newer version or a delete replaced
 tmp/                             uploads being assembled (removed after a day untouched)
 cache/thumbs/                    photo previews, made on demand (removed after 30 days without a request)
 cache/video/                     playable copies of videos (removed when no version has the video any more)
-updates/<platform>/              signed client builds
+updates/<platform>/              signed client builds (only if you sign your own, see Usage)
 ```
 
 The config folder (`./config`, `FAFNIRX_CONFIG_DIR`) lives apart from the data. It only holds `rclone.conf`, for mirrors that
@@ -150,7 +150,7 @@ Notes:
 - Uploads from the browser go in 8 MiB pieces, under Cloudflare's request size limit. The device client uploads in
   4 MiB chunks over gRPC streams.
 - Live updates use a long-lived connection (server-sent events) with a keep-alive every 15 seconds, which Cloudflare allows.
-- Client self-updates are signed with a key that is not on the master, so they stay safe whatever the transport.
+- Client self-updates come from GitHub over https (or are signed with a key that is not on the master), so they stay safe whatever the transport to the master.
 - Without a tunnel, a VPN (WireGuard, Tailscale) gives the same safety.
 
 ## Backups
@@ -187,8 +187,8 @@ docker compose up -d
 
 The master applies the database migrations it is missing on start (in order, in one transaction, serialized by an
 advisory lock), and refuses to start against a database made by a newer version. Back up the database before upgrading. Upgrading the PostgreSQL **major** version needs a dump and restore; do not just change the
-image tag. Client updates are separate: publish a signed build with `fafnirx-sign publish` and the devices pick it up
-within about six hours ([Usage](usage.md#signed-client-updates)).
+image tag. Client updates are separate: devices take new releases from GitHub by themselves within about six hours, or, if you sign
+your own builds, from `fafnirx-sign publish` ([Usage](usage.md#client-updates)).
 
 ## Security checklist
 

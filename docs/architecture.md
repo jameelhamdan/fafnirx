@@ -28,10 +28,10 @@ flowchart TB
 
 | Component | Language | Role |
 |---|---|---|
-| Client `fafnirx` (`crates/client`) | Rust | Watch folders, hash in chunks, upload, queue offline, tray icon, self-update, run as a service |
+| Client `fafnirx` (`crates/client`) | Rust | Watch folders, hash in chunks, upload, queue offline, tray icon, self-update from GitHub releases, run as a service |
 | Master `fafnirx-master` (`crates/master`) | Rust | Device API, web API, file store, ingest, retention, alerts, sources, mirrors, metadata |
 | Web app (`frontend`) | TypeScript, React | The web interface, built into the master binary. Its video player (`frontend/src/player`) is a module of its own that imports nothing from the app |
-| `fafnirx-sign` (`crates/sign`) | Rust | Create the update key, publish signed client builds |
+| `fafnirx-sign` (`crates/sign`) | Rust | Optional: create the update key, publish your own signed client builds |
 | `fafnirx-stream` (`crates/stream`) | Rust | Optional HLS streaming service: playlists, and segments made with ffmpeg as they are asked for. Only the master talks to it ([streaming](streaming.md)) |
 | Common (`crates/common`) | Rust | Generated gRPC types, chunking, hashing and path rules shared by client and master, and the reading of `ffprobe`'s answer (`probe`) shared by the master and the streaming service |
 | PostgreSQL | | All metadata |
@@ -67,13 +67,19 @@ flowchart TB
   names); losing the data directory loses the data. Back up both ([Deployment](deployment.md#backups)).
 - **No TLS in the master.** Trust comes from the network (LAN, VPN) or from a TLS proxy in front (a Cloudflare tunnel, or
   the Caddy of `docker-compose.proxy.yml`, which also closes the master's own ports). Device tokens and passwords are hashed
-  (passwords with argon2) or signed, but the transport is plain. Client updates are signed independently, so they are safe
-  on any transport. Behind a proxy, `FAFNIRX_TRUSTED_PROXY` names the addresses whose `X-Forwarded-For` is believed, so that
+  (passwords with argon2) or signed, but the transport is plain. Client updates come from GitHub over https, checked against a checksum, or are signed
+  with a key that is not on the master (`update_public_key`), so they are safe on any transport to the master. Behind a proxy, `FAFNIRX_TRUSTED_PROXY` names the addresses whose `X-Forwarded-For` is believed, so that
   failed logins are counted per person; from anyone else the header is ignored.
 - **An album is files picked, a folder, or both.** `album_files` holds the picked files. An album with `folder_device_id` and
   `folder_prefix` also contains every live photo and video whose path starts with the prefix, so a show's new episodes are
   in its album without anyone adding them; such an album lists its files in natural name order (`Episode 2` before
-  `Episode 10`) and has one per user and folder.
+  `Episode 10`) and has one per user and folder. The cover is `cover_file_id` when set; else, for a picked-files album the
+  newest file (in SQL), for a folder album its first video in natural order, or its first photo (`library/albums.rs`, because
+  natural order is not a SQL ordering).
+- **Artwork and descriptions are read from the neighbours of a video when asked for, not stored.** `library/artwork.rs` picks
+  the picture (`<name>-thumb.jpg`, `<name>.jpg`, `poster.jpg` for a lone video, ...) and the `.nfo` from the live files in the
+  same folder (`repo::files::neighbours`), so a sidecar that arrives later is used without a migration or a rescan; thumbnails are
+  cached by the content hash of whichever image is used.
 
 ## Upload and commit
 
@@ -141,8 +147,16 @@ burst. A dropped stream or a slow browser gets a `resync` and refreshes everythi
 | Retention, version pruning, stale uploads | `monitoring/jobs.rs`, hourly | deletes files with their records |
 | Sources, mirrors | `integrations/` (`mod.rs`, `gdrive.rs`, `mirror.rs`) | claimed with `FOR UPDATE SKIP LOCKED` |
 | File watcher | `files/livetree.rs` | |
-| Photo metadata | `library/meta.rs`, table `jobs` | a job is claimed with `FOR UPDATE SKIP LOCKED`, retried up to 3 times |
-| Previews | `library/meta.rs`, on request | cached in `cache/thumbs/`, at most 4 decoded at once |
+| Photo and video metadata (`meta` jobs) | `library/meta.rs`, table `jobs` | a job is claimed with `FOR UPDATE SKIP LOCKED`, retried up to 3 times; queues the `thumb` job |
+| Pictures (`thumb` jobs) | `library/meta.rs` | the two sizes, from the artwork next to a video or a frame; queues the `proxy` job of a video browsers cannot play |
+| Playable copies (`proxy` jobs) | `library/meta.rs` | the slow lane: a second worker never takes them, so a film does not hold up pictures |
+| Previews on request | `library/meta.rs` | cached in `cache/thumbs/`, at most 4 decoded at once |
+| Segments and subtitle tracks | `crates/stream` (`tasks.rs`) | made when asked for; in memory, with the last failures, at `GET /tasks` |
+
+The queue is visible and steerable in the web app (`monitoring/queue.rs`, the **Processing** page). A job that worked stays as
+`done` for a day (purged hourly), queueing the same `(kind, payload)` while one is queued or running is a no-op, and the setting
+`jobs_paused` makes the workers wait (they re-read it every few seconds). The master adds the streaming service's `/tasks` to
+the answer, leaving out videos the user cannot see.
 
 ## Database structure
 
@@ -239,8 +253,8 @@ erDiagram
 when retention removes a file for good (`ON DELETE CASCADE`), and nothing in them is ever written into the file itself.
 
 The database is the only source of truth for the setup (`settings`, `users`, `devices`, `mirrors`, `sources`). Albums, tags and `file_state` belong to a user (`file_state` is per user and file, so a master file can be a
-favorite of one user and not of another). Other tables: `events` (change log, 90 days), `alerts`, `settings`, `jobs` (queued background work: `meta` reads a
-photo or video and makes its pictures, `proxy` converts a video), `sources`, `source_items`, `mirrors`, `mirror_items`,
+favorite of one user and not of another). Other tables: `events` (change log, 90 days), `alerts`, `settings`, `jobs` (background work: `meta` reads a
+photo or video, `thumb` makes its pictures, `proxy` converts a video; `status` is queued, running, failed or done, kept a day, with `started_at` and `finished_at`), `sources`, `source_items`, `mirrors`, `mirror_items`,
 `tags` and `file_tags`, `album_files`. The numbered migrations in `crates/master/migrations/` are the source of truth and are applied on start.
 
 ## Indexes
@@ -263,6 +277,7 @@ relations, `0002_indexes` for the rest).
 | `file_state` | `file_id` (primary), `file_id` where favorite, archived or placed | Favorites, Archive, the map |
 | `tags`, `file_tags`, `albums`, `album_files` | name (case-insensitive, unique), both directions of each link | Tags and albums from a file and from the tag or album |
 | `jobs` | `(kind = 'proxy', id)` where queued, `run_after` where queued | The next job a worker claims |
+| | `(status, kind)` | The counts of the Processing page |
 | `alerts` | `(kind, key)` unique where open, `resolved_at` where resolved | One open alert per cause; clearing old ones |
 | `mirror_items`, `source_items` | their primary keys | What a mirror or a source already has |
 
@@ -300,6 +315,7 @@ something must carry an `x-requested-with` header, which a form on another site 
 | Library | `GET /api/timeline/buckets` (months with the file count of each day), `GET /api/timeline?month=YYYY-MM` (scope, device, kind and tag filters), `GET /api/library?ids=`, `GET/PATCH /api/library/:id`, `POST /api/library/bulk`, `GET /api/tags`, `DELETE /api/tags/:id`, `GET /api/map`, `GET /api/trash` (restore with `POST /api/files/restore`) |
 | Pictures by id | `GET /api/media/:id/{thumb,preview,video,original,download}` (`?v=<hash>` makes the picture cacheable for good; videos answer `404` until a playable copy exists) |
 | Albums | `GET/POST /api/albums` (a body with `folder` makes an album of a folder, and returns the existing one if there is), `GET/PATCH/DELETE /api/albums/:id`, `POST /api/albums/:id/files` and `/files/remove` (files by `ids`, or by `items` of `{device, path}`: a file or a folder in the file browser) |
+| Processing | `GET /api/queue` (counts per kind and state, the jobs, the streaming service's tasks; for every user, limited to the devices they see; a read-only user sees the master files' jobs), `POST /api/queue/pause` (`{paused}`), `/retry`, `/cancel` (`{status: failed\|queued, id?}`) and `/rebuild` (`{everything}`), administrators only |
 | File store | `POST /api/files/rescan` (administrators): compare `files/` with the database now |
 | Integrations | `GET/POST /api/sources` (each user's own) with `/:user/:name`, `/run` and `/toggle`; `GET/POST /api/mirrors` (administrators) with `/:name`, `/run`, `/toggle` and `/resync` |
 | Settings | `GET/PUT /api/settings` |
@@ -316,7 +332,7 @@ device API.
 | Compromised device | Cannot read, list or delete anything (the API has no such call) |
 | Stolen password | Guesses are rate-limited per connecting address and per user name; sessions are kept in the database and end when the user is disabled, gets a new password or logs out. An administrator's password is the key to protect; put Cloudflare Access or a VPN in front |
 | A user reading or changing another user's files | Every query and every download is limited to the devices the user's role reaches (`web/access.rs`); a device of someone else does not exist for them (404) |
-| Compromised master | Cannot ship a client update: updates need a signature from a key that is not on the master |
+| Compromised master | Cannot ship a client update: clients update from GitHub, or, with `update_public_key`, only to builds signed with a key that is not on the master |
 | Path tricks (`..`, absolute, reserved names) | Paths are validated on arrival and again when mapped to disk |
 | A browser opening a stored HTML or SVG file | Those are always served as downloads, with `nosniff` |
 | A corrected date or place | Stored beside the file, never in it; reversible |

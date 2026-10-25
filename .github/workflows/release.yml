@@ -182,6 +182,8 @@ jobs:
           mkdir "$stage"
           cp target/client/fafnirx installer/install.sh "$stage/"
           tar czf "out/$stage.tar.gz" "$stage"
+          # The plain executable is what installed clients download to update themselves (crates/client/src/release.rs).
+          cp target/client/fafnirx "out/fafnirx-$VERSION-${{ matrix.name }}"
 
       - name: Debian package
         if: matrix.deb
@@ -198,6 +200,8 @@ jobs:
           installer\build.ps1
           New-Item -ItemType Directory out | Out-Null
           Copy-Item dist\fafnirx-setup-*.exe out\
+          # The plain executable is what installed clients download to update themselves (crates/client/src/release.rs).
+          Copy-Item target\client\fafnirx.exe "out\fafnirx-$env:VERSION-windows-x86_64.exe"
 
       - name: Checksums
         run: cd out && for f in *; do sha256sum "$f" > "$f.sha256"; done

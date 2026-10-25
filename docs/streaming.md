@@ -93,6 +93,13 @@ time). The cache grows with what is watched (roughly 1-3 MB per segment-quality)
 hardware encoder, or by the playable copies the master already makes for videos browsers cannot play
 (`FAFNIRX_FFMPEG`, see [Usage](usage.md)).
 
+## Seeing what it does
+
+What the service is making now (segments and subtitle tracks, waiting for a free slot or running) and what failed lately is
+on the **Processing** page of the web app, under *Streaming*, next to the master's own background work. A slow start of a
+video is usually a segment waiting for one of the `FAFNIRX_STREAM_JOBS` slots; a subtitle track that never appears shows its
+`ffmpeg` error there. The service itself answers it at `GET /tasks` ([the API](../crates/stream/README.md)).
+
 ## Not there yet
 
 Share links; audio files; several audio tracks; styled (ASS) subtitles and picture subtitles; HEVC or AV1 output; trick-play

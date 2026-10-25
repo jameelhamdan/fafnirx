@@ -3,7 +3,7 @@
 
 use crate::files::browse::{expand, find_device, find_device_to_change, version_file, FileRef};
 use crate::files::ingest::{self, NewVersion};
-use crate::library::meta;
+use crate::library::{artwork, meta};
 use crate::platform::db;
 use crate::repo::{devices, files};
 use crate::web::access::Access;
@@ -56,6 +56,8 @@ struct Stored {
     name: String,
     /// The video codec, when it is known.
     codec: Option<String>,
+    /// A picture that sits next to a video and stands for it (see `library::artwork`): its place on disk and content.
+    art: Option<(PathBuf, Vec<u8>)>,
 }
 
 fn stored_version(
@@ -73,7 +75,9 @@ fn stored_version(
         let (root, size) =
             files::version_content(c, file_id, version)?.ok_or_else(|| ApiError::not_found("No such version"))?;
         let disk = version_file(&store, &dev.name, &path, version, current, deleted.is_some())?;
-        Ok(Stored { disk, root, size: size as u64, name: base_name(&path).to_string(), codec: None })
+        let art =
+            if deleted.is_none() && Some(version) == current { artwork_of(c, &store, &dev.name, &path) } else { None };
+        Ok(Stored { disk, root, size: size as u64, name: base_name(&path).to_string(), codec: None, art })
     }
 }
 
@@ -187,8 +191,10 @@ async fn preview_response(state: &Shared, stored: &Stored, max: u32, immutable: 
     }
     let _slot = state.previews.acquire().await.map_err(anyhow::Error::from)?;
     let cache = state.data_dir.join("cache").join("thumbs");
-    let root = hex::encode(&stored.root);
-    let disk = stored.disk.clone();
+    let (disk, root) = match &stored.art {
+        Some((disk, root)) => (disk.clone(), hex::encode(root)),
+        None => (stored.disk.clone(), hex::encode(&stored.root)),
+    };
     let thumb = tokio::task::spawn_blocking(move || meta::thumbnail(&disk, &root, max, &cache))
         .await
         .map_err(anyhow::Error::from)?
@@ -226,8 +232,25 @@ fn stored_by_id(state: &Shared, who: Access, id: i64) -> impl FnOnce(&mut postgr
             size: row.size as u64,
             name: base_name(&path).to_string(),
             codec: row.codec,
+            art: if deleted_at.is_none() { artwork_of(c, &store, &device, &path) } else { None },
         })
     }
+}
+
+/// The picture next to a video that stands for it, if there is one. Not finding one is the usual case, and a failed
+/// lookup only means the frame of the video is used.
+fn artwork_of(
+    c: &mut postgres::Client,
+    store: &crate::platform::store::Store,
+    device: &str,
+    path: &str,
+) -> Option<(PathBuf, Vec<u8>)> {
+    if meta::kind(path) != Some("video") {
+        return None;
+    }
+    let near = files::neighbours(c, device, path).ok()?;
+    let (art, root) = artwork::picture(path, &near)?;
+    Some((store.live_path(device, art).ok()?, root.clone()))
 }
 
 /// What the library shows of a file: a small or large picture, the video as played in a browser, the

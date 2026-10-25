@@ -224,6 +224,45 @@ export interface AssetDetail extends Asset {
   albums: { id: number; name: string }[]
   changed: number
   preview: boolean
+  /** What the .nfo next to a video says (Kodi/Jellyfin naming). */
+  described: Described | null
+}
+
+export interface Described {
+  title: string | null
+  show: string | null
+  season: number | null
+  episode: number | null
+  plot: string | null
+  aired: string | null
+}
+
+export interface QueueJob {
+  id: number
+  kind: string
+  status: 'queued' | 'running' | 'failed' | 'done'
+  device: string
+  path: string
+  attempts: number
+  error: string | null
+  created_at: number
+  started_at: number | null
+  finished_at: number | null
+  retry_at: number | null
+}
+
+export interface QueueState {
+  paused: boolean
+  ffmpeg: boolean
+  can_control: boolean
+  summary: { kind: string; queued: number; running: number; failed: number; done: number }[]
+  jobs: QueueJob[]
+  stream: {
+    slots: number
+    made: number
+    active: { kind: string; video: string; running: boolean; since: number }[]
+    failed: { kind: string; video: string; error: string; at: number }[]
+  } | null
 }
 
 export interface TagInfo {

@@ -19,6 +19,7 @@ mod ffmpeg;
 mod hls;
 mod service;
 mod subtitles;
+mod tasks;
 
 use anyhow::{bail, Context, Result};
 use std::net::SocketAddr;

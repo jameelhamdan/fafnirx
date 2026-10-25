@@ -4,6 +4,7 @@
 //! separate `fafnirx-stream` service).
 
 pub mod albums;
+pub mod artwork;
 pub mod media;
 pub mod meta;
 pub mod photos;

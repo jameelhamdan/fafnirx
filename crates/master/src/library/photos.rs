@@ -8,10 +8,10 @@
 //! This module checks what a request says and shapes the answer; what is stored, and how it is found, is in
 //! `repo::library`, `repo::file_state` and `repo::tags`.
 
-use crate::library::meta;
+use crate::library::{artwork, meta};
 use crate::platform::db;
 use crate::repo::library::{self, Media, Scope};
-use crate::repo::{albums, file_state, settings, snapshot, tags};
+use crate::repo::{albums, file_state, files, settings, snapshot, tags};
 use crate::web::access::Access;
 use crate::web::{done, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, Query, State};
@@ -255,6 +255,8 @@ pub struct Detail {
     changed: i64,
     /// The preview picture can be made (so the grid and viewer should ask for it).
     preview: bool,
+    /// What the .nfo next to a video says about it (title, season, episode, plot), when there is one.
+    described: Option<artwork::Described>,
 }
 
 pub async fn detail(
@@ -262,6 +264,7 @@ pub async fn detail(
     Extension(who): Extension<Access>,
     Path(id): Path<i64>,
 ) -> Res<Detail> {
+    let store = state.store.clone();
     let out = run(&state, move |c| {
         let viewer = who.viewer();
         let not_found = || ApiError::not_found("No such file");
@@ -270,6 +273,7 @@ pub async fn detail(
         let tags = tags::of_file(c, viewer.uid, id)?.into_iter().map(|(id, name)| TagRef { id, name }).collect();
         let albums = albums::of_file(c, viewer.uid, id)?.into_iter().map(|(id, name)| AlbumRef { id, name }).collect();
         let asset = Asset::from(asset);
+        let described = described(c, &store, &asset);
         Ok(Detail {
             mime: extras.mime.unwrap_or_else(|| meta::mime(&asset.path)),
             description: extras.description,
@@ -284,11 +288,30 @@ pub async fn detail(
             albums,
             changed: extras.changed,
             preview: meta::can_preview(&asset.path),
+            described,
             asset,
         })
     })
     .await?;
     Ok(Json(out))
+}
+
+/// What the .nfo next to a video says about it. Anything that goes wrong means no description, never an error.
+fn described(
+    c: &mut postgres::Client,
+    store: &crate::platform::store::Store,
+    asset: &Asset,
+) -> Option<artwork::Described> {
+    if asset.kind != "video" {
+        return None;
+    }
+    let near = files::neighbours(c, &asset.device, &asset.path).ok()?;
+    let (nfo, _) = artwork::description(&asset.path, &near)?;
+    let disk = store.live_path(&asset.device, nfo).ok()?;
+    if std::fs::metadata(&disk).ok()?.len() > artwork::NFO_MAX_BYTES {
+        return None;
+    }
+    artwork::parse_nfo(&String::from_utf8_lossy(&std::fs::read(disk).ok()?))
 }
 
 /// `null` in the request means "clear it", an absent field means "leave it": this tells them apart.

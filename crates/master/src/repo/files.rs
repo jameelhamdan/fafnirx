@@ -235,3 +235,14 @@ pub fn live_below(c: &mut impl GenericClient, device_id: i64, path: &str) -> Res
 pub fn location(c: &mut impl GenericClient, id: i64) -> Result<Option<(String, String, Vec<u8>)>, Error> {
     Ok(q::file_location().bind(&mut Pg(c), &id).opt()?.map(|f| (f.folder, f.path, f.root_hash)))
 }
+
+/// The live files directly in the folder that holds `path`, as (path, root hash): the neighbours of a file.
+pub fn neighbours(c: &mut impl GenericClient, device: &str, path: &str) -> Result<Vec<(String, Vec<u8>)>, Error> {
+    let prefix = path.rfind('/').map_or(String::new(), |i| path[..=i].to_string());
+    Ok(q::files_in_folder()
+        .bind(&mut Pg(c), &device, &prefix)
+        .all()?
+        .into_iter()
+        .map(|f| (f.path, f.root_hash))
+        .collect())
+}

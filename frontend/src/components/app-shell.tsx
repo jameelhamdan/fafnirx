@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Archive, FolderOpen, GalleryVerticalEnd, HardDrive, Heart, Images, KeyRound, LayoutDashboard, LogOut, MapPin, Menu, Monitor, Moon, Settings, Sun, Trash2, UploadCloud, Users } from 'lucide-react'
+import { Archive, Cog, FolderOpen, GalleryVerticalEnd, HardDrive, Heart, Images, KeyRound, LayoutDashboard, LogOut, MapPin, Menu, Monitor, Moon, Settings, Sun, Trash2, UploadCloud, Users } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
@@ -38,6 +38,7 @@ const NAV: { title: string; items: { to: string; label: string; icon: typeof Ima
       { to: '/files', label: msg('Files'), icon: FolderOpen, for: 'all' },
       { to: '/devices', label: msg('Devices'), icon: Monitor, for: 'workspace' },
       { to: '/sources', label: msg('Sources'), icon: UploadCloud, for: 'workspace' },
+      { to: '/queue', label: msg('Processing'), icon: Cog, for: 'all' },
       { to: '/mirrors', label: msg('Mirrors'), icon: HardDrive, for: 'admin' },
       { to: '/users', label: msg('Users'), icon: Users, for: 'admin' },
       { to: '/settings', label: msg('Settings'), icon: Settings, for: 'admin' },

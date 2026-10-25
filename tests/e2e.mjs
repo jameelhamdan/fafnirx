@@ -1,7 +1,8 @@
 // End-to-end test: the real master, the real web API and the real client binary.
 //   cd tests && npm install && node e2e.mjs
 import { spawn } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
+import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import { CHUNK, CLIENT, ENV, EXE, MASTER, SIGN, check, clientIn, harness, passedChecks, run, sleep, until } from './lib.mjs'
@@ -324,6 +325,39 @@ try {
   fs.writeFileSync(sig, good)
   const applied = run(copy, ['--config', cfg, 'update'], { ok: false })
   check(applied.code === 0 && fs.readFileSync(copy).equals(fs.readFileSync(SIGN)), `a signed update replaces the executable (${applied.stdout.trim()})`)
+
+  // --- update from the project's releases ---------------------------------------------------------------------------------------------
+  // A stand-in for GitHub: the API answer, the executable and its checksum, on a local port (FAFNIRX_UPDATE_URL points the client at it).
+  const newBinary = fs.readFileSync(MASTER)
+  const name = `fafnirx-99.0.0-${platform}${EXE}`
+  const sum = createHash('sha256').update(newBinary).digest('hex')
+  let wrongSum = true
+  const releases = http.createServer((req, res) => {
+    const base = `http://127.0.0.1:${releases.address().port}`
+    if (req.url === '/latest') {
+      const asset = (n, size) => ({ name: n, browser_download_url: `${base}/files/${n}`, size })
+      res.end(JSON.stringify({ tag_name: 'v99.0.0', assets: [asset(name, newBinary.length), asset(`${name}.sha256`, 80)] }))
+    } else if (req.url === `/files/${name}`) res.end(newBinary)
+    else if (req.url === `/files/${name}.sha256`) res.end(`${wrongSum ? '00'.repeat(32) : sum}  ${name}\n`)
+    else { res.statusCode = 404; res.end() }
+  })
+  await new Promise((ok) => releases.listen(0, '127.0.0.1', ok))
+  fs.writeFileSync(cfg, fs.readFileSync(cfg, 'utf8').replace(/update_public_key = .*\n/, ''))
+  fs.copyFileSync(CLIENT, copy)
+  const env = { FAFNIRX_UPDATE_URL: `http://127.0.0.1:${releases.address().port}/latest` }
+  // Not `run`: that blocks this process, which has to answer the client's requests meanwhile.
+  const update = (extra) => new Promise((done) => {
+    const child = spawn(copy, ['--config', cfg, 'update'], { env: { ...ENV, ...extra } })
+    let stdout = ''
+    child.stdout.on('data', (d) => (stdout += d))
+    child.on('close', (code) => done({ code, stdout }))
+  })
+  const damaged = await update(env)
+  check(damaged.code !== 0 && fs.readFileSync(copy).equals(fs.readFileSync(CLIENT)), 'a download that does not match its checksum is refused')
+  wrongSum = false
+  const fromRelease = await update(env)
+  check(fromRelease.code === 0 && fs.readFileSync(copy).equals(newBinary), `the client updates itself from a release (${fromRelease.stdout.trim()})`)
+  releases.close()
 
   console.log(`\nall ${passedChecks()} checks passed`)
 } finally {

@@ -29,6 +29,7 @@ Every request has `Authorization: Bearer <token>` and names the file by query:
 | `GET /hls/<quality>/seg<n>.ts` | One segment, made when asked for |
 | `GET /hls/subtitles.json` | `[{ "index": 0, "name": "English", "language": "en", "forced": false }]` |
 | `GET /hls/subtitles/<index>.vtt` | One track as WebVTT |
+| `GET /tasks` | What is being made (`segment`, `subtitles`; waiting or running) and the last failures, as JSON, with how many run at once. In memory: a restart starts the list again |
 | `GET /health` | `200` without the token |
 
 A request the service cannot answer says why in the body (not a video, `ffmpeg` failed); it never includes the token or paths.
@@ -49,6 +50,7 @@ quality plays.
 | `ffmpeg.rs` | Running `ffprobe` and `ffmpeg`: reading a video, cutting a segment, converting subtitles. |
 | `service.rs` | The HTTP side: auth, locating a file, playlists, segments, the cache sweep. |
 | `subtitles.rs` | The subtitle list and tracks (files and embedded). |
+| `tasks.rs` | The list behind `GET /tasks`. |
 | `main.rs` | Settings from the environment. |
 
 What `ffprobe` says about a video is read by `fafnirx_common::probe`, which the master shares for its own video details.

@@ -67,13 +67,37 @@ copied or moved: it is another view of the same files.
   their albums, tags and favorite.
 - **Albums** group pictures without moving them. Select pictures, choose **Add to album**, and pick an album or type a new
   name. On an album's page you can rename it, set a cover (select one picture), remove pictures from it, or delete it
-  (the pictures stay).
+  (the pictures stay). An album shows the cover you chose; without one, a picked-files album shows its newest picture and
+  a folder album shows its first video (see below).
   - In **Files**, select files or folders and choose **Add to album**: a folder adds the photos and videos below it.
   - **Use folder as album** (in **Files**, for the folder you are in or one you selected) makes an album that *is* the
     folder: whatever is in it, and below it, is in the album, and a new episode or photo that arrives later shows up by
     itself. It is made for things like a TV show: the files come in the order of their names (`Episode 2` before
     `Episode 10`), under a heading for each season folder, with the name under each one. There is one such album per
     folder; asking again opens it. Files cannot be removed from it, only from the folder.
+  - **The cover of a folder album** is, unless you chose one, the picture of its **first video** in that same name order
+    (episode 1 of the first season), or its first photo when the folder has no video. It follows the folder: if an earlier
+    episode arrives, it becomes the cover. This is the only thing chosen automatically; nothing else about an album is.
+- **Artwork and episode details** next to a video are used when they exist, with the names Jellyfin, Kodi and Plex use, so
+  a library organised for them looks right here. Nothing has to be set up, and nothing is downloaded from the internet:
+  fafnirx only reads files that are in the folder. Without them a video's picture is a frame taken a second into it.
+  - *Picture of a video* (first match wins; `.jpg`, `.jpeg`, `.png` or `.webp`): `<video name>-thumb`,
+    `<video name>-landscape`, `<video name>-poster`, `<video name>`, all in the same folder as the video. A video that is
+    **alone in its folder** (a film in its own folder) also takes `poster`, `folder`, `cover` or `thumb` there. In a folder with
+    several videos those names belong to the show, so they are *not* used for an episode.
+  - *Details*: `<video name>.nfo` (or `movie.nfo` for a video alone in its folder), Kodi's XML. The `title`, `showtitle`,
+    `season`, `episode`, `aired` (or `premiered`, `year`) and `plot` are shown in the **Info** panel of the video. Nothing else
+    in the file is used, and the video's name and place in the library do not change.
+  - They are looked up when a picture is asked for, among the files the folder has *now*: a picture that arrives after the
+    video is used from then on. The picture is a file like any other (it is also in **Files**).
+- **Processing** (in the menu) shows the background work after files arrive, live: reading details, making the small and
+  large pictures, and making playable copies of videos, each with how many are running, waiting, failed and done in the last
+  day, and a list of the jobs with the file and, for a failure, why. When streaming is set up it also lists what the
+  streaming service is making now (video segments, subtitle tracks) and what failed lately. You see the jobs of the devices you
+  can see (a read-only user sees those of the master files). An administrator can also **Pause** the queue (what runs finishes, nothing new starts; it stays paused after a
+  restart until resumed), **Retry** or **Clear** failed jobs, **Cancel** waiting ones, and **Process missing**, which queues the
+  photos and videos that were never read. A job that fails is tried 3 times, a little later each time, before it shows as
+  failed. The same work is never queued twice.
 - The **Map** shows pictures that have a place, grouped in numbered bubbles that open as you zoom. The strip below lists what
   is in view.
 
@@ -141,7 +165,7 @@ fafnirx status | pause | resume                                # talk to the run
 fafnirx release-deletes                                        # send the deletions the delete guard holds back, now
 fafnirx sync                                                   # one cycle in the foreground, then exit
 fafnirx run                                                    # the client itself, in the foreground
-fafnirx update                                                 # check for a signed update now
+fafnirx update                                                 # check for a new release now and install it
 fafnirx install-service | uninstall-service                    # start at login, or stop doing that
 fafnirx tray                                                   # the tray icon (a separate process)
 ```
@@ -159,7 +183,8 @@ bandwidth_limit_kbps = 0        # upload limit in KiB/s, 0 = unlimited
 watch = true                    # react to file changes
 scan_interval_secs = 3600       # full scan interval, 0 disables periodic scans
 delete_hold_hours = 12          # how long a mass deletion is held back, see "When many files disappear"
-update_public_key = "..."       # see Signed client updates
+auto_update = true               # look for a new release now and then and install it, see Client updates
+update_public_key = "..."       # only for your own signed builds, see Client updates
 web_url = "http://nas.lan:8080" # opened from the tray menu (default: port 8080 on the master's host)
 
 [[folders]]
@@ -381,10 +406,22 @@ version of a path is `<data>/files/<user>/<device>/<path>` (`<data>/files/<path>
 version is `<data>/versions/<version id>/<user>/<device>/<path>` (the version ids are in the web app and in the database). Or copy from a
 [mirror's `files/` tree](#mirrors-offsite-copies), which needs nothing from fafnirx.
 
-## Signed client updates
+## Client updates
 
-Clients update themselves from the master, but only to builds you signed. The signing key never leaves your machine,
-so a compromised master cannot ship a client update, and the update channel needs no TLS.
+A client updates itself from this project's **GitHub releases**. Every 6 hours (and on `fafnirx update`, or **Check for
+updates** in the tray) it asks GitHub for the latest release, and when that is newer than the running client it downloads
+the plain executable for its platform (`fafnirx-<version>-<os>-<arch>`, `.exe` on Windows), checks it against the `.sha256`
+published beside it, replaces its own program file and restarts. A damaged or incomplete download is refused and the old
+client keeps running. Set `auto_update = false` in the config to stop the automatic checks; `fafnirx update` still works.
+
+**The device stays the same.** Only the program file is replaced. The config, the token (in the OS keychain) and the state
+directory (the installation id and the list of what was sent) are not touched, so the updated client is the same device, with
+the same folders, and carries on from where the old one stopped: nothing is sent twice and nothing is missed, and the master
+sees no new device or "device in use" conflict. The same holds when you install a newer installer over an old one, and when
+you uninstall and install again on the same computer; only enrolling with *another* device's token makes it another device.
+
+The checksum comes from the same release, so it protects against a bad download, not against someone who can publish releases
+of the project. If you run your own builds, or want updates only you can sign, sign them and let the master offer them:
 
 ```sh
 fafnirx-sign keygen --out update.key        # once. Keep update.key off the master.
@@ -395,6 +432,7 @@ fafnirx-sign publish --key update.key --platform linux-x86_64 --version <version
     --bin target/client/fafnirx --out /path/to/data/updates
 ```
 
-Clients install an update only if the signature verifies and the version is higher than theirs. They check every 6
-hours; `fafnirx update` checks now. The platform is `<os>-<arch>` as Rust reports it: `windows-x86_64`, `linux-x86_64`,
-`linux-aarch64`, `macos-aarch64`, `macos-x86_64`. After an update the client restarts itself.
+A client with `update_public_key` no longer looks at GitHub: it takes updates from the master, only if the signature verifies
+and the version is higher than its own. The signing key never leaves your machine, so a compromised master cannot ship a
+client update, and that channel needs no TLS. The platform is `<os>-<arch>` as Rust reports it: `windows-x86_64`,
+`linux-x86_64`, `linux-aarch64`, `macos-aarch64`, `macos-x86_64`.

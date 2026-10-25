@@ -366,12 +366,12 @@ fn spawn_heartbeat(shared: Shared, mut client: Client, config_path: PathBuf, ide
     });
 }
 
-/// Checks for a signed update now and then.
+/// Checks for a new release now and then.
 fn spawn_updater(mut client: Client, config_path: PathBuf, work_dir: PathBuf) {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(30)).await;
         loop {
-            if let Ok(cfg) = Config::load(&config_path) {
+            if let Some(cfg) = Config::load(&config_path).ok().filter(|c| c.auto_update) {
                 match update::check_and_apply(&mut client, &cfg, &work_dir).await {
                     Ok(true) => {
                         tracing::info!("restarting to run the new version");
