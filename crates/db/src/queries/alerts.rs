@@ -13,6 +13,13 @@ pub struct ResolveAlertParams<T1: crate::StringSql, T2: crate::StringSql> {
     pub kind: T1,
     pub key: T2,
 }
+#[derive(Debug)]
+pub struct ResolveStaleAlertsParams<T1: crate::StringSql, T2: crate::StringSql> {
+    pub now: i64,
+    pub kind: T1,
+    pub key: T2,
+    pub before: i64,
+}
 use crate::client::sync::GenericClient;
 use postgres::fallible_iterator::FallibleIterator;
 pub struct UpsertAlertStmt(&'static str, Option<postgres::Statement>);
@@ -71,5 +78,40 @@ impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql>
 {
     fn params(&'s self, client: &'c mut C, params: &'a ResolveAlertParams<T1, T2>) -> Result<u64, postgres::Error> {
         self.bind(client, &params.now, &params.kind, &params.key)
+    }
+}
+pub struct ResolveStaleAlertsStmt(&'static str, Option<postgres::Statement>);
+pub fn resolve_stale_alerts() -> ResolveStaleAlertsStmt {
+    ResolveStaleAlertsStmt(
+        "UPDATE alerts SET resolved_at = $1 WHERE kind = $2 AND key = $3 AND resolved_at IS NULL AND updated_at < $4",
+        None,
+    )
+}
+impl ResolveStaleAlertsStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql>(
+        &'s self,
+        client: &'c mut C,
+        now: &'a i64,
+        kind: &'a T1,
+        key: &'a T2,
+        before: &'a i64,
+    ) -> Result<u64, postgres::Error> {
+        client.execute(self.0, &[now, kind, key, before])
+    }
+}
+impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql>
+    crate::client::sync::Params<'c, 'a, 's, ResolveStaleAlertsParams<T1, T2>, Result<u64, postgres::Error>, C>
+    for ResolveStaleAlertsStmt
+{
+    fn params(
+        &'s self,
+        client: &'c mut C,
+        params: &'a ResolveStaleAlertsParams<T1, T2>,
+    ) -> Result<u64, postgres::Error> {
+        self.bind(client, &params.now, &params.kind, &params.key, &params.before)
     }
 }

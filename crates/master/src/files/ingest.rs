@@ -6,8 +6,9 @@
 //! moves files before the lock is released, so the database and the file store never disagree for long
 //! and no two processes work on the same path at once.
 
-use crate::platform::db::{self, setting, Device};
+use crate::platform::db::{self, Device};
 use crate::platform::store::Store;
+use crate::repo::settings;
 use anyhow::Result;
 use fafnirx_common::{unix_now, HASH_LEN};
 use postgres::{Client, GenericClient};
@@ -39,7 +40,7 @@ pub struct Seen {
 
 /// Keeps the newest `version_count` versions of a file; older ones are marked pruned and removed by retention.
 fn prune_versions(conn: &mut impl GenericClient, file_id: i64, ts: i64) -> Result<(), postgres::Error> {
-    let keep = setting(conn, "version_count", 5).max(1);
+    let keep = settings::get_i64(conn, "version_count", 5).max(1);
     conn.execute(
         "UPDATE versions SET pruned_at = $1 WHERE file_id = $2 AND pruned_at IS NULL AND id NOT IN
          (SELECT id FROM versions WHERE file_id = $2 AND pruned_at IS NULL ORDER BY id DESC LIMIT $3)",

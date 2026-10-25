@@ -4,3 +4,6 @@ ON CONFLICT (kind, key) WHERE resolved_at IS NULL DO UPDATE SET message = exclud
 
 --! resolve_alert
 UPDATE alerts SET resolved_at = :now WHERE kind = :kind AND key = :key AND resolved_at IS NULL;
+
+--! resolve_stale_alerts
+UPDATE alerts SET resolved_at = :now WHERE kind = :kind AND key = :key AND resolved_at IS NULL AND updated_at < :before;

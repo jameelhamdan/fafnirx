@@ -3,6 +3,7 @@
 //! syncing (a local folder, a source, a change made in the web app).
 
 use crate::platform::db;
+use crate::repo::devices;
 use anyhow::Result;
 use fafnirx_common::unix_now;
 use postgres::Client;
@@ -15,37 +16,18 @@ pub fn refresh(conn: &mut Client, device_id: i64) -> Result<()> {
     let mut tx = conn.transaction()?;
     // The row is locked first: a writer that is still committing marks it stale when it finishes, and the sums are
     // taken after that, so a change is never lost between the two.
-    let Some(row) = tx.query_opt("SELECT folder FROM devices WHERE id = $1 FOR UPDATE", &[&device_id])? else {
+    let Some(folder) = devices::lock(&mut tx, device_id)? else {
         return Ok(());
     };
-    tx.execute(
-        "UPDATE devices d SET file_count = t.live, total_bytes = t.bytes, deleted_files = t.gone,
-                              totals_stale = FALSE, totals_at = $2
-         FROM (SELECT COUNT(*) FILTER (WHERE f.deleted_at IS NULL) AS live,
-                      COALESCE(SUM(v.size) FILTER (WHERE f.deleted_at IS NULL), 0)::BIGINT AS bytes,
-                      COUNT(*) FILTER (WHERE f.deleted_at IS NOT NULL) AS gone
-               FROM files f LEFT JOIN versions v ON v.id = f.current_version_id
-               WHERE f.device_id = $1) t
-         WHERE d.id = $1",
-        &[&device_id, &unix_now()],
-    )?;
-    db::notify(&mut tx, "devices", &row.get::<_, String>(0))?;
+    devices::store_totals(&mut tx, device_id, unix_now())?;
+    db::notify(&mut tx, "devices", &folder)?;
     tx.commit()?;
     Ok(())
 }
 
 /// Adds up again every device whose totals are stale and that is not in the middle of a sync.
 pub fn refresh_stale(conn: &mut Client) -> Result<usize> {
-    let ids: Vec<i64> = conn
-        .query(
-            "SELECT d.id FROM devices d
-             WHERE d.totals_stale
-               AND NOT EXISTS (SELECT 1 FROM device_activity a WHERE a.device_id = d.id AND a.updated_at > $1)",
-            &[&(unix_now() - SYNCING_SECS)],
-        )?
-        .iter()
-        .map(|r| r.get(0))
-        .collect();
+    let ids = devices::stale_totals(conn, unix_now() - SYNCING_SECS)?;
     for id in &ids {
         refresh(conn, *id)?;
     }

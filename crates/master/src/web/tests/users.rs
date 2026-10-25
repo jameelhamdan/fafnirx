@@ -59,8 +59,8 @@ x
 
         // What goes wrong with a source is for its owner (and the administrators), not for everyone.
         crate::platform::db::with(&api.db, |c| {
-            crate::platform::db::upsert_alert(c, "source_failed", "bob/source-bobs", "Drive said no")?;
-            crate::platform::db::upsert_alert(c, "source_failed", "admin/source-roots", "Drive said no")?;
+            crate::repo::alerts::upsert(c, "source_failed", "bob/source-bobs", "Drive said no")?;
+            crate::repo::alerts::upsert(c, "source_failed", "admin/source-roots", "Drive said no")?;
             Ok(())
         })
         .await

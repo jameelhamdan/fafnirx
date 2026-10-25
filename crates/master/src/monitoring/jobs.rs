@@ -1,8 +1,9 @@
 //! Background jobs: offline/disk alerts every minute, version pruning,
 //! retention (with removal of the stored files) and cleanup of unfinished uploads and the cache every hour.
 
-use crate::platform::db::{resolve_alert, setting, upsert_alert, Db};
+use crate::platform::db::Db;
 use crate::platform::store::Store;
+use crate::repo::{alerts, settings};
 use anyhow::Result;
 use fafnirx_common::unix_now;
 use postgres::{Client, GenericClient};
@@ -72,7 +73,7 @@ fn expire_upload_errors(conn: &mut impl GenericClient) -> Result<(), postgres::E
 }
 
 fn offline_alerts(conn: &mut impl GenericClient) -> Result<(), postgres::Error> {
-    let limit = setting(conn, "offline_after_secs", 60);
+    let limit = settings::get_i64(conn, "offline_after_secs", 60);
     let rows: Vec<(String, i64)> = conn
         // Only clients heartbeat; sources and local folders also get a last_seen when they collect something.
         .query(
@@ -85,9 +86,9 @@ fn offline_alerts(conn: &mut impl GenericClient) -> Result<(), postgres::Error> 
     for (name, last_seen) in rows {
         let idle = unix_now() - last_seen;
         if idle > limit {
-            upsert_alert(conn, "device_offline", &name, &format!("Device {name} has not been seen for {idle} s"))?;
+            alerts::upsert(conn, "device_offline", &name, &format!("Device {name} has not been seen for {idle} s"))?;
         } else {
-            resolve_alert(conn, "device_offline", &name)?;
+            alerts::resolve(conn, "device_offline", &name)?;
         }
     }
     Ok(())
@@ -102,9 +103,9 @@ fn disk_alert(conn: &mut impl GenericClient, data_dir: &std::path::Path) -> Resu
     }
     let used = 100.0 * (total - avail) as f64 / total as f64;
     if used > DISK_ALERT_PERCENT {
-        upsert_alert(conn, "disk_usage", "", &format!("Master disk is {used:.0}% full"))
+        alerts::upsert(conn, "disk_usage", "", &format!("Master disk is {used:.0}% full"))
     } else {
-        resolve_alert(conn, "disk_usage", "")
+        alerts::resolve(conn, "disk_usage", "")
     }
 }
 
@@ -130,7 +131,7 @@ pub fn hourly(db: &Db, store: &Store, cache_root: &Path) -> Result<()> {
 /// Removes deleted files and pruned versions older than the retention period from the database and
 /// returns the ids of the removed versions, whose stored files the caller deletes.
 fn retention(conn: &mut Client) -> Result<Vec<i64>> {
-    let cutoff = unix_now() - setting(conn, "retention_days", 30) * 86400;
+    let cutoff = unix_now() - settings::get_i64(conn, "retention_days", 30) * 86400;
     let mut tx = conn.transaction()?;
     // The rows are locked first: a file that came back in the meantime is no longer expired once its lock is
     // released, so it keeps its history.
@@ -200,8 +201,8 @@ mod tests {
         let db = testing::db_with_device();
         let mut c = db.get().unwrap();
         let c = &mut *c;
-        upsert_alert(c, "upload_error", "d", "disk full").unwrap();
-        upsert_alert(c, "disk_usage", "", "90% full").unwrap();
+        alerts::upsert(c, "upload_error", "d", "disk full").unwrap();
+        alerts::upsert(c, "disk_usage", "", "90% full").unwrap();
         let age = |c: &mut Client, kind: &str, hours: i64| {
             c.execute(
                 "UPDATE alerts SET created_at = $1, updated_at = $1 WHERE kind = $2",
@@ -220,9 +221,9 @@ mod tests {
         assert_eq!(testing::open_alerts(c), 1, "49 hours: the upload error is gone, other alerts are untouched");
 
         // The client reporting the same error again keeps (and reopens) it.
-        upsert_alert(c, "upload_error", "d", "disk full").unwrap();
+        alerts::upsert(c, "upload_error", "d", "disk full").unwrap();
         age(c, "upload_error", 47);
-        upsert_alert(c, "upload_error", "d", "disk full").unwrap();
+        alerts::upsert(c, "upload_error", "d", "disk full").unwrap();
         expire_upload_errors(c).unwrap();
         assert_eq!(testing::open_alerts(c), 2, "a repeated report refreshes the alert");
     }

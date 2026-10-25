@@ -1,8 +1,9 @@
 //! Devices (clients and local folders), their tokens, and the settings.
 
 use crate::monitoring::api::{recent, Recent};
-use crate::platform::db::{self, setting};
-use crate::web::access::{scope, Access};
+use crate::platform::db;
+use crate::repo::{alerts, devices, settings};
+use crate::web::access::Access;
 use crate::web::{done, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
@@ -57,58 +58,43 @@ pub fn device_summaries(
     who: &Access,
     folder: Option<&str>,
 ) -> Result<Vec<DeviceSummary>, postgres::Error> {
-    let offline_after = setting(c, "offline_after_secs", 60);
+    let offline_after = settings::get_i64(c, "offline_after_secs", 60);
     let now = unix_now();
     let (all, user) = who.scope_args();
-    let sql = format!(
-        "SELECT d.name, d.kind, d.created_at, d.revoked_at, d.hostname, d.os, d.ip, d.client_version, d.disk_total,
-                d.disk_free, d.last_seen, d.last_collected,
-                d.total_bytes, d.file_count,
-                a.updated_at, a.phase, a.current_file, a.files_done, a.files_total, a.bytes_done, a.bytes_total, a.speed_bps,
-                u.name, d.folder
-         FROM devices d
-         JOIN users u ON u.id = d.user_id
-         LEFT JOIN device_activity a ON a.device_id = d.id
-         WHERE ($1::text IS NULL OR d.folder = $1) AND {}
-         ORDER BY u.name, d.name",
-        scope(2, 3)
-    );
-    let rows = c.query(&sql, &[&folder, &all, &user])?;
+    let rows = devices::summaries(c, folder, all, user)?;
     Ok(rows
-        .iter()
+        .into_iter()
         .map(|r| {
-            let kind: String = r.get(1);
-            let revoked = r.get::<_, Option<i64>>(3).is_some();
-            let last_seen: Option<i64> = r.get(10);
-            let online = kind == "device" && !revoked && last_seen.is_some_and(|t| now - t <= offline_after);
-            let fresh = r.get::<_, Option<i64>>(14).is_some_and(|t| now - t <= ACTIVITY_FRESH_SECS);
+            let revoked = r.revoked_at.is_some();
+            let online = r.kind == "device" && !revoked && r.last_seen.is_some_and(|t| now - t <= offline_after);
+            let fresh = r.activity_at.is_some_and(|t| now - t <= ACTIVITY_FRESH_SECS);
             DeviceSummary {
-                name: r.get(0),
-                user: r.get(22),
-                folder: r.get(23),
+                name: r.name,
+                user: r.user_name,
+                folder: r.folder,
                 online,
                 revoked,
-                created_at: r.get(2),
-                hostname: r.get(4),
-                os: r.get(5),
-                ip: r.get(6),
-                client_version: r.get(7),
-                disk_total: r.get(8),
-                disk_free: r.get(9),
-                last_seen,
-                last_collected: r.get(11),
-                bytes: r.get(12),
-                files: r.get(13),
+                created_at: r.created_at,
+                hostname: r.hostname,
+                os: r.os,
+                ip: r.ip,
+                client_version: r.client_version,
+                disk_total: r.disk_total,
+                disk_free: r.disk_free,
+                last_seen: r.last_seen,
+                last_collected: r.last_collected,
+                bytes: r.total_bytes,
+                files: r.file_count,
                 activity: (online && fresh).then(|| Activity {
-                    phase: r.get(15),
-                    file: r.get(16),
-                    files_done: r.get(17),
-                    files_total: r.get(18),
-                    bytes_done: r.get(19),
-                    bytes_total: r.get(20),
-                    speed_bps: r.get(21),
+                    phase: r.phase.unwrap_or_default(),
+                    file: r.current_file.unwrap_or_default(),
+                    files_done: r.files_done.unwrap_or_default(),
+                    files_total: r.files_total.unwrap_or_default(),
+                    bytes_done: r.bytes_done.unwrap_or_default(),
+                    bytes_total: r.bytes_total.unwrap_or_default(),
+                    speed_bps: r.speed_bps.unwrap_or_default(),
                 }),
-                kind,
+                kind: r.kind,
             }
         })
         .collect())
@@ -178,10 +164,8 @@ pub async fn create(
     let out = run(&state, move |c| {
         // Every device belongs to a user who has a workspace.
         let owner = owner.unwrap_or_else(|| who.name.clone());
-        let row = c
-            .query_opt("SELECT id, role FROM users WHERE name = $1 AND disabled_at IS NULL", &[&owner])?
+        let (user_id, role) = devices::user_for_device(c, &owner)?
             .ok_or_else(|| ApiError::bad(format!("There is no user named {owner}")))?;
-        let (user_id, role): (i64, String) = (row.get(0), row.get(1));
         if role == "readonly" {
             return Err(ApiError::bad(format!("{owner} can only read the master files and cannot have devices")).into());
         }
@@ -197,15 +181,9 @@ pub async fn create(
 fn add_device(c: &mut Client, who: &Access, user_id: i64, name: &str, kind: &str) -> anyhow::Result<DeviceDetail> {
     let token = (kind == "device").then(db::new_token);
     let hash = token.as_deref().map_or_else(|| "!".to_string(), db::hash_token);
-    let inserted = c.query_opt(
-        "INSERT INTO devices (name, kind, token_hash, created_at, user_id) VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (user_id, name) DO NOTHING RETURNING folder",
-        &[&name, &kind, &hash, &unix_now(), &user_id],
-    )?;
-    let Some(row) = inserted else {
+    let Some(folder) = devices::insert(c, user_id, name, kind, &hash, unix_now())? else {
         return Err(ApiError::conflict(format!("There is already a device named {name} for this user")).into());
     };
-    let folder: String = row.get(0);
     db::notify(c, "devices", &folder)?;
     detail_of(c, who, &folder, token)
 }
@@ -218,11 +196,7 @@ pub async fn rotate_token(
     who.check_write(&folder)?;
     let out = run(&state, move |c| {
         let token = db::new_token();
-        let n = c.execute(
-            "UPDATE devices SET token_hash = $2, revoked_at = NULL, instance_id = NULL WHERE folder = $1 AND kind = 'device'",
-            &[&folder, &db::hash_token(&token)],
-        )?;
-        if n == 0 {
+        if !devices::set_token(c, &folder, &db::hash_token(&token))? {
             return Err(ApiError::not_found("No such device").into());
         }
         db::notify(c, "devices", &folder)?;
@@ -241,11 +215,10 @@ pub async fn release(
 ) -> Res<Done> {
     who.check_write(&folder)?;
     run(&state, move |c| {
-        let n = c.execute("UPDATE devices SET instance_id = NULL WHERE folder = $1 AND kind = 'device'", &[&folder])?;
-        if n == 0 {
+        if !devices::release(c, &folder)? {
             return Err(ApiError::not_found("No such device").into());
         }
-        db::resolve_alert(c, "device_conflict", &folder)?;
+        alerts::resolve(c, "device_conflict", &folder)?;
         db::notify(c, "devices", &folder)?;
         Ok(())
     })
@@ -260,18 +233,16 @@ pub async fn revoke(
 ) -> Res<Done> {
     who.check_write(&folder)?;
     run(&state, move |c| {
-        let n = c.execute(
-            "UPDATE devices SET revoked_at = COALESCE(revoked_at, $2) WHERE folder = $1 AND kind = 'device'",
-            &[&folder, &unix_now()],
-        )?;
-        if n == 0 {
+        if !devices::revoke(c, &folder, unix_now())? {
             // A local folder has no token to revoke: nothing to do. Only a name that is no device is an error.
-            let exists =
-                c.query_opt("SELECT 1 FROM devices WHERE folder = $1 AND kind IN ('device', 'local')", &[&folder])?;
-            return exists.map(|_| ()).ok_or_else(|| ApiError::not_found("No such device").into());
+            return if devices::is_device_or_local(c, &folder)? {
+                Ok(())
+            } else {
+                Err(ApiError::not_found("No such device").into())
+            };
         }
         // A revoked device is no longer expected to report, so its offline alert would never clear.
-        db::resolve_alert(c, "device_offline", &folder)?;
+        alerts::resolve(c, "device_offline", &folder)?;
         db::notify(c, "devices", &folder)?;
         Ok(())
     })
@@ -288,7 +259,10 @@ pub struct Settings {
 pub async fn settings(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Settings> {
     who.require_admin()?;
     let s = run(&state, |c| {
-        Ok(Settings { version_count: setting(c, "version_count", 5), retention_days: setting(c, "retention_days", 30) })
+        Ok(Settings {
+            version_count: settings::get_i64(c, "version_count", 5),
+            retention_days: settings::get_i64(c, "retention_days", 30),
+        })
     })
     .await?;
     Ok(Json(s))
@@ -305,10 +279,7 @@ pub async fn save_settings(
     }
     let saved = run(&state, move |c| {
         for (key, value) in [("version_count", s.version_count), ("retention_days", s.retention_days)] {
-            c.execute(
-                "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-                &[&key, &value.to_string()],
-            )?;
+            settings::set(c, key, &value.to_string())?;
         }
         Ok(s)
     })

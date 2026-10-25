@@ -10,4 +10,6 @@ try {
     $files = Get-ChildItem crates\master\migrations\*.sql | Sort-Object Name | ForEach-Object { $_.FullName }
     cornucopia fresh --url $env:DATABASE_URL @files
     if ($LASTEXITCODE) { throw 'cornucopia failed' }
+    # What is committed is formatted like the rest of the workspace, so a regeneration shows only real changes.
+    cargo fmt -p fafnirx-db
 } finally { Pop-Location }
