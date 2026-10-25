@@ -109,7 +109,7 @@ The photo library (`library/`) is the exception that is still to be moved: it bu
 ## Typed queries (Cornucopia)
 
 SQL lives in `queries/*.sql`, one file per area, written as [Cornucopia](https://github.com/cornucopia-rs/cornucopia)
-queries (`--! name`, named `:parameters`). `scripts/codegen.sh` (or `codegen.ps1`) turns them into the crate
+queries (`--! name`, named `:parameters`). `scripts/codegen.sh` turns them into the crate
 `crates/db` (`fafnirx-db`): a typed function and row struct per query, checked against the real schema, which is the
 migrations in `crates/master/migrations`. The generated crate is committed, so building needs no database; CI
 regenerates it and fails on a difference. To add or change a query:
