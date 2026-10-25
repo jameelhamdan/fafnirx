@@ -109,6 +109,25 @@ Rules of thumb: a new endpoint goes in the `api.rs` of its app and is registered
 repository functions and contain none. The rules (who may do what, what a rename means, which things happen in one
 transaction) stay in the app that owns them. There is no ORM (see [Typed queries](#typed-queries-cornucopia)).
 
+## Core and add-ons
+
+The project is a storage service with add-ons. They are tightly coupled for now, in one program and one database, but the
+code keeps them apart so that they could be installable modules later.
+
+| | What |
+|---|---|
+| Core | `crates/client`, `crates/common`, and in the master `devices`, `files`, `monitoring`, `platform`, `repo` (all but the library part), `web` (users, access, the file browser) and the mirrors of `integrations` |
+| Add-ons | the photo library (`library/`, `repo/library.rs`, `file_state.rs`, `tags.rs`, `albums.rs`, `file_meta.rs`, `snapshot.rs`, `queries/library.sql`, `albums.sql`, and the frontend's library pages), video streaming (`crates/stream`, `library/stream.rs`, `frontend/src/player`), Google Drive sources (`integrations/gdrive.rs`, `repo/sources.rs`) |
+
+The rule is that add-ons use the core and the core does not use them. These places still break it, and are what a split
+would have to change first:
+
+- `files/ingest.rs` asks `library::meta::wants` and queues a metadata job (`repo/jobs.rs`) for every new content.
+- `files/browse.rs` and `files/transfer.rs` use `library::meta` for the type and preview of a file.
+- `repo/files.rs` and `repo/jobs.rs` hold queries for what the library reads (`file_meta`, the job queue); `files.media` is a
+  column of the core's table that only the library uses.
+- `monitoring/jobs.rs` cleans the library's cache, and mirrors keep a snapshot of the library (`library::photos::snapshot`).
+
 ## Typed queries (Cornucopia)
 
 SQL lives in `queries/*.sql`, one file per area, written as [Cornucopia](https://github.com/cornucopia-rs/cornucopia)
