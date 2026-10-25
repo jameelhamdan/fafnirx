@@ -71,7 +71,7 @@ Per-platform steps, upgrades and settings: [Installation](docs/installation.md).
 | [Deployment](docs/deployment.md) | Storage, backups, Cloudflare tunnel, security |
 | [Architecture](docs/architecture.md) | Components, data model, locking, live updates |
 | [Development](docs/development.md) | Building, running and testing |
-| [Plans](docs/plans/features.md) | Features that are not built, and [what could be simplified](docs/plans/simplification.md) |
+| [Plans](docs/plans/features.md) | Features that are not built |
 
 ## Repository
 
@@ -89,3 +89,7 @@ Per-platform steps, upgrades and settings: [Installation](docs/installation.md).
 | `docs` | The documentation |
 
 MIT licensed: see [LICENSE](LICENSE). Third-party licenses are in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+
+## Made with Claude
+
+This project was written with [Claude](https://claude.com/claude-code), Anthropic's AI coding assistant, under human direction and review.
