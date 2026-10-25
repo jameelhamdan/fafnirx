@@ -5,6 +5,7 @@ use crate::files::browse::{expand, find_device, find_device_to_change, version_f
 use crate::files::ingest::{self, NewVersion};
 use crate::library::meta;
 use crate::platform::db;
+use crate::repo::{devices, files};
 use crate::web::access::Access;
 use crate::web::{run, ApiError, Res, Shared};
 use axum::body::Body;
@@ -66,19 +67,13 @@ fn stored_version(
     move |c| {
         let dev = find_device(c, &who, &device)?;
         let path = clean_remote_path(&path).map_err(|e| ApiError::bad(e.to_string()))?;
-        let file = c
-            .query_opt(
-                "SELECT id, current_version_id, deleted_at FROM files WHERE device_id = $1 AND path = $2",
-                &[&dev.id, &path],
-            )?
-            .ok_or_else(|| ApiError::not_found("No such file"))?;
-        let (file_id, current, deleted): (i64, Option<i64>, Option<i64>) = (file.get(0), file.get(1), file.get(2));
+        let file = files::locate(c, dev.id, &path)?.ok_or_else(|| ApiError::not_found("No such file"))?;
+        let (file_id, current, deleted) = (file.id, file.current, file.deleted_at);
         let version = version.or(current).ok_or_else(|| ApiError::not_found("No such version"))?;
-        let v = c
-            .query_opt("SELECT root_hash, size FROM versions WHERE id = $1 AND file_id = $2", &[&version, &file_id])?
-            .ok_or_else(|| ApiError::not_found("No such version"))?;
+        let (root, size) =
+            files::version_content(c, file_id, version)?.ok_or_else(|| ApiError::not_found("No such version"))?;
         let disk = version_file(&store, &dev.name, &path, version, current, deleted.is_some())?;
-        Ok(Stored { disk, root: v.get(0), size: v.get::<_, i64>(1) as u64, name: file_name(&path), codec: None })
+        Ok(Stored { disk, root, size: size as u64, name: file_name(&path), codec: None })
     }
 }
 
@@ -226,24 +221,16 @@ pub async fn thumbnail(
 fn stored_by_id(state: &Shared, who: Access, id: i64) -> impl FnOnce(&mut postgres::Client) -> anyhow::Result<Stored> {
     let store = state.store.clone();
     move |c| {
-        let row = c
-            .query_opt(
-                "SELECT d.folder, f.path, f.current_version_id, f.deleted_at, v.root_hash, v.size, m.codec
-                 FROM files f JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id
-                 LEFT JOIN file_meta m ON m.root_hash = v.root_hash WHERE f.id = $1",
-                &[&id],
-            )?
-            .ok_or_else(|| ApiError::not_found("No such file"))?;
-        let (device, path, version, deleted_at): (String, String, i64, Option<i64>) =
-            (row.get(0), row.get(1), row.get(2), row.get(3));
+        let row = files::by_id(c, id)?.ok_or_else(|| ApiError::not_found("No such file"))?;
+        let (device, path, version, deleted_at) = (row.folder, row.path, row.current_version_id, row.deleted_at);
         // A file of someone else's device does not exist for this user.
         who.check_see(&device).map_err(|_| ApiError::not_found("No such file"))?;
         Ok(Stored {
             disk: version_file(&store, &device, &path, version, Some(version), deleted_at.is_some())?,
-            root: row.get(4),
-            size: row.get::<_, i64>(5) as u64,
+            root: row.root_hash,
+            size: row.size as u64,
             name: file_name(&path),
-            codec: row.get(6),
+            codec: row.codec,
         })
     }
 }
@@ -356,15 +343,10 @@ pub async fn zip(
             // Names inside the zip start at the selected folder (or file), not at the device root.
             let parent = selected.rfind('/').map_or(0, |i| i + 1);
             for path in expand(c, &dev, selected, false)? {
-                let mtime = c
-                    .query_one(
-                        "SELECT v.mtime FROM files f JOIN versions v ON v.id = f.current_version_id WHERE f.device_id = $1 AND f.path = $2",
-                        &[&dev.id, &path],
-                    )?
-                    .get::<_, i64>(0)
-                    / 1_000_000_000;
+                let mtime = files::current_mtime(c, dev.id, &path)? / 1_000_000_000;
                 let inner = &path[parent.min(path.len())..];
-                let name = if several || selected.is_empty() { format!("{}/{inner}", dev.name) } else { inner.to_string() };
+                let name =
+                    if several || selected.is_empty() { format!("{}/{inner}", dev.name) } else { inner.to_string() };
                 entries.push(super::zip::Entry { name, path: store.live_path(&dev.name, &path)?, mtime });
             }
         }
@@ -429,9 +411,7 @@ pub async fn start_upload(
     let user = who.clone();
     let kind: String = run(&state, move |c| {
         user.check_write(&device)?;
-        Ok(c.query_opt("SELECT kind FROM devices WHERE folder = $1", &[&device])?
-            .ok_or_else(|| ApiError::not_found("No such device"))?
-            .get(0))
+        Ok(devices::kind_of_folder(c, &device)?.ok_or_else(|| ApiError::not_found("No such device"))?)
     })
     .await?;
     // Only folders that live on the master take uploads: a device's files are what the device sends.

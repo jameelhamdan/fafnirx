@@ -44,3 +44,6 @@ SELECT id, password_hash FROM users WHERE name = :name AND disabled_at IS NULL;
 
 --! password_hash_of
 SELECT password_hash FROM users WHERE id = :id;
+
+--! user_who_can_have_devices
+SELECT id FROM users WHERE name = :name AND disabled_at IS NULL AND role <> 'readonly';

@@ -12,6 +12,7 @@
 use crate::files::ingest::{self, Seen};
 use crate::platform::db::{self, Db, Device};
 use crate::platform::store::{hash_file, Store, MASTER_FOLDER};
+use crate::repo::{devices, files, users};
 use anyhow::Result;
 use fafnirx_common::{clean_remote_path, mode_of, mtime_ns, unix_now, valid_device_name};
 use notify::{RecursiveMode, Watcher};
@@ -142,7 +143,7 @@ fn master() -> Device {
 
 /// The names of the users: their folders in `files/` are not master files.
 fn user_names(conn: &mut impl GenericClient) -> Result<HashSet<String>> {
-    Ok(conn.query("SELECT name FROM users", &[])?.iter().map(|r| r.get(0)).collect())
+    Ok(users::names(conn)?.into_iter().collect())
 }
 
 /// The device and the path inside it that a path of the live tree is about: the first part is the folder of a user (then
@@ -188,23 +189,15 @@ fn report(name: &str, changed: usize, deleted: usize) {
 fn device_for_folder(conn: &mut Client, store: &Store, folder: &str) -> Result<Option<Device>> {
     // Only a local folder is written to in place. What a device or a source sends is a copy of theirs and is not
     // changed from here: edits made inside such a folder are not recorded.
-    if let Some(row) = conn.query_opt("SELECT id, kind FROM devices WHERE folder = $1", &[&folder])? {
-        return Ok((row.get::<_, String>(1) == "local").then(|| Device { id: row.get(0), name: folder.to_string() }));
+    if let Some((id, kind)) = devices::id_and_kind(conn, folder)? {
+        return Ok((kind == "local").then(|| Device { id, name: folder.to_string() }));
     }
     let Some((user, name)) = folder.split_once('/') else { return Ok(None) };
     if !valid_device_name(name) || !store.live_dir(folder).is_dir() {
         return Ok(None);
     }
-    let owner = conn
-        .query_opt("SELECT id FROM users WHERE name = $1 AND disabled_at IS NULL AND role <> 'readonly'", &[&user])?;
-    let Some(owner) = owner else { return Ok(None) };
-    let id: i64 = conn
-        .query_one(
-            "INSERT INTO devices (name, kind, token_hash, created_at, user_id) VALUES ($1, 'local', '!', $2, $3)
-             ON CONFLICT (user_id, name) DO UPDATE SET name = devices.name RETURNING id",
-            &[&name, &unix_now(), &owner.get::<_, i64>(0)],
-        )?
-        .get(0);
+    let Some(owner) = users::who_can_have_devices(conn, user)? else { return Ok(None) };
+    let id = devices::ensure_local(conn, owner, name, unix_now())?;
     tracing::info!("new folder files/{folder}: added as a device");
     db::notify(conn, "devices", folder)?;
     Ok(Some(Device { id, name: folder.to_string() }))
@@ -215,8 +208,7 @@ fn device_for_folder(conn: &mut Client, store: &Store, folder: &str) -> Result<O
 pub fn scan(db: &Db, store: &Store, settle: Duration) -> Result<()> {
     let mut conn = db.get()?;
     let mut devices = vec![master()];
-    let users: Vec<String> = conn.query("SELECT name FROM users", &[])?.iter().map(|r| r.get(0)).collect();
-    for user in users {
+    for user in users::names(&mut *conn)? {
         let folders: Vec<String> = std::fs::read_dir(store.user_dir(&user))
             .into_iter()
             .flatten()
@@ -252,15 +244,8 @@ fn sync_subtree(conn: &mut Client, store: &Store, dev: &Device, rel: &str, settl
     else {
         return Ok((0, 0)); // a name that cannot be stored cannot be tracked
     };
-    let known: HashMap<String, (i64, i64)> = conn
-        .query(
-            "SELECT f.path, v.size, v.mtime FROM files f JOIN versions v ON v.id = f.current_version_id
-             WHERE f.device_id = $1 AND f.deleted_at IS NULL AND ($2 = '' OR f.path = $2 OR f.path LIKE $3)",
-            &[&dev.id, &rel, &db::like_prefix(&format!("{rel}/"))],
-        )?
-        .iter()
-        .map(|r| (r.get(0), (r.get(1), r.get(2))))
-        .collect();
+    let known: HashMap<String, (i64, i64)> =
+        files::live_below(conn, dev.id, rel)?.into_iter().map(|(path, size, mtime)| (path, (size, mtime))).collect();
 
     // The master files share `files/` with the folders of the users, which are not theirs to record.
     let skip = if dev.id == ingest::MASTER_DEVICE_ID && rel.is_empty() { user_names(conn)? } else { HashSet::new() };

@@ -83,3 +83,21 @@ FROM files f LEFT JOIN versions v ON v.id = f.current_version_id
 WHERE f.device_id = :device_id AND f.path LIKE :below AND (:include_deleted::boolean OR f.deleted_at IS NULL)
       AND strpos(substr(f.path, :from), '/') > 0
 GROUP BY 1 ORDER BY lower(split_part(substr(f.path, :from), '/', 1));
+
+--! file_row : (current_version_id?, deleted_at?)
+SELECT id, current_version_id, deleted_at FROM files WHERE device_id = :device_id AND path = :path;
+
+--! version_of_file
+SELECT root_hash, size FROM versions WHERE id = :version_id AND file_id = :file_id;
+
+--! file_by_id : (codec?, deleted_at?)
+SELECT d.folder, f.path, f.current_version_id, f.deleted_at, v.root_hash, v.size, m.codec
+FROM files f JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id
+LEFT JOIN file_meta m ON m.root_hash = v.root_hash WHERE f.id = :id;
+
+--! current_mtime
+SELECT v.mtime FROM files f JOIN versions v ON v.id = f.current_version_id WHERE f.device_id = :device_id AND f.path = :path;
+
+--! live_files_below
+SELECT f.path, v.size, v.mtime FROM files f JOIN versions v ON v.id = f.current_version_id
+WHERE f.device_id = :device_id AND f.deleted_at IS NULL AND (:path = '' OR f.path = :path OR f.path LIKE :below);

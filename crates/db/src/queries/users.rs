@@ -848,3 +848,30 @@ impl PasswordHashOfStmt {
         }
     }
 }
+pub struct UserWhoCanHaveDevicesStmt(&'static str, Option<postgres::Statement>);
+pub fn user_who_can_have_devices() -> UserWhoCanHaveDevicesStmt {
+    UserWhoCanHaveDevicesStmt(
+        "SELECT id FROM users WHERE name = $1 AND disabled_at IS NULL AND role <> 'readonly'",
+        None,
+    )
+}
+impl UserWhoCanHaveDevicesStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient, T1: crate::StringSql>(
+        &'s self,
+        client: &'c mut C,
+        name: &'a T1,
+    ) -> I64Query<'c, 'a, 's, C, i64, 1> {
+        I64Query {
+            client,
+            params: [name],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row| Ok(row.try_get(0)?),
+            mapper: |it| it,
+        }
+    }
+}
