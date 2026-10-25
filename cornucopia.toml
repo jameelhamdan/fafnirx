@@ -5,6 +5,7 @@ async = false
 
 [manifest.package]
 name = "fafnirx-db"
+version.workspace = true
 
 
 [manifest.lints.rust]
