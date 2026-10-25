@@ -28,6 +28,7 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 12
     env:
+      # The tests use this server, and so does the build, which checks the SQL of crates/db against it.
       FAFNIRX_TEST_DATABASE_URL: postgresql://postgres:test@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v4
@@ -48,15 +49,6 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Build the web app (it is embedded in the master)
         run: cd frontend && npm ci && npm run build
-      # The typed queries in crates/db are generated from queries/*.sql against the migrations and committed: what is
-      # committed must be what the queries generate.
-      - name: The generated queries (crates/db) are up to date
-        env:
-          DATABASE_URL: postgresql://postgres:test@localhost:5432
-        run: |
-          cargo install cornucopia --locked --version 1.0.1
-          scripts/codegen.sh
-          git diff --exit-code -- crates/db
       # The Release workflow commits the new version with this script. Doing it here too means that a new crate or a
       # change in Cargo's lockfile breaks CI today and not on the day of a release.
       - name: The version bump of the Release workflow works with this Cargo.lock

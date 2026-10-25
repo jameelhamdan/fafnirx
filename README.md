@@ -79,6 +79,7 @@ Per-platform steps, upgrades and settings: [Installation](docs/installation.md).
 |---|---|
 | `crates/master` | `fafnirx-master`, organized in apps (`devices`, `files`, `library`, `integrations`, `monitoring`, `web`, `platform`), with its database `migrations` |
 | `crates/client` | `fafnirx`: the client, tray and self-update |
+| `crates/db` | `fafnirx-db`: the typed queries, made at build time from `queries/*.sql` (not stored in the repository) |
 | `crates/common` | Shared hashing, chunking, path rules and the generated gRPC types |
 | `crates/stream` | `fafnirx-stream`: the optional video streaming service (HLS, made with ffmpeg as it is watched) |
 | `crates/sign` | `fafnirx-sign`: creates the update key and publishes signed client builds |

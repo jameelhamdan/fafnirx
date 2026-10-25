@@ -1,23 +1,7 @@
-// This file was generated with `cornucopia`. Do not modify.
+//! The typed queries of the master, one function and one row type per query in `queries/*.sql`.
+//!
+//! Everything is made by `build.rs` with Cornucopia into this build's output folder, and none of it is in the
+//! repository. The generated code is the root of this crate (its own modules and `crate::` paths expect that), so it is
+//! included here as it is.
 
-mod array_iterator;
-pub mod client;
-mod domain;
-#[allow(clippy::all, clippy::pedantic)]
-#[allow(unused_variables)]
-#[allow(unused_imports)]
-#[allow(dead_code)]
-pub mod queries;
-mod type_traits;
-#[allow(clippy::all, clippy::pedantic)]
-#[allow(unused_variables)]
-#[allow(unused_imports)]
-#[allow(dead_code)]
-pub mod types;
-mod utils;
-pub use array_iterator::ArrayIterator;
-pub use domain::{Domain, DomainArray};
-pub use postgres;
-pub use postgres::fallible_iterator;
-pub use type_traits::{ArraySql, BytesSql, IterSql, StringSql};
-pub(crate) use utils::slice_iter;
+include!(concat!(env!("OUT_DIR"), "/generated/src/lib.rs"));
