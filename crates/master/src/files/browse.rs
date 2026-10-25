@@ -6,6 +6,7 @@ use crate::files::ingest;
 use crate::library::meta;
 use crate::monitoring::api::Recent;
 use crate::platform::db::{self, Device};
+use crate::platform::store::MASTER_FOLDER;
 use crate::repo::listing::{self, Listed, Page, Sort};
 use crate::repo::{devices, events, files, settings};
 use crate::web::access::Access;
@@ -119,120 +120,150 @@ fn prefix_of(path: &str) -> Result<String, ApiError> {
     clean_remote_path(path).map(|p| p + "/").map_err(|e| ApiError::bad(e.to_string()))
 }
 
-fn order_by(sort: &str) -> Result<Sort, ApiError> {
-    Sort::parse(sort).ok_or_else(|| ApiError::bad(format!("cannot sort by {sort}")))
+/// What a request for a listing asks for, once it is checked.
+struct View {
+    /// `a/b/` for the folder `a/b`, and `""` for the root.
+    prefix: String,
+    /// The folder as the request named it, without slashes at the ends.
+    path: String,
+    sort: Sort,
+    descending: bool,
+    /// `%text%`: what to look for in paths.
+    search: Option<String>,
+    /// A regular expression for the extensions of a kind of file.
+    type_regex: Option<String>,
+    limit: i64,
+    offset: i64,
+    include_deleted: bool,
 }
 
-pub async fn list(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Query(q): Query<ListQuery>,
-) -> Res<Listing> {
-    let prefix = prefix_of(&q.path)?;
-    let sort = q.sort.as_deref().unwrap_or("name");
-    let desc = match q.order.as_deref() {
-        None | Some("asc") => false,
-        Some("desc") => true,
-        Some(other) => return Err(ApiError::bad(format!("order must be asc or desc, not {other}"))),
-    };
-    let order = order_by(sort)?;
-    let type_regex = match q.kind.as_deref().filter(|k| !k.is_empty() && *k != "all") {
-        None => None,
-        Some(k) => Some(format!(
-            "\\.({})$",
-            extensions(k).ok_or_else(|| ApiError::bad(format!("unknown type {k}")))?.join("|")
-        )),
-    };
-    let search = q.q.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(|s| format!("%{}%", db::like_escape(s)));
-    let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-    let offset = q.offset.max(0);
-    let include_deleted = q.deleted == Some(1);
-    let device_name = q.device.clone();
-    let path = q.path.trim_matches('/').to_string();
+impl ListQuery {
+    fn checked(&self) -> Result<View, ApiError> {
+        let descending = match self.order.as_deref() {
+            None | Some("asc") => false,
+            Some("desc") => true,
+            Some(other) => return Err(ApiError::bad(format!("order must be asc or desc, not {other}"))),
+        };
+        let sort = self.sort.as_deref().unwrap_or("name");
+        let sort = Sort::parse(sort).ok_or_else(|| ApiError::bad(format!("cannot sort by {sort}")))?;
+        let type_regex = match self.kind.as_deref().filter(|k| !k.is_empty() && *k != "all") {
+            None => None,
+            Some(k) => Some(format!(
+                r"\.({})$",
+                extensions(k).ok_or_else(|| ApiError::bad(format!("unknown type {k}")))?.join("|")
+            )),
+        };
+        let search =
+            self.q.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(|s| format!("%{}%", db::like_escape(s)));
+        Ok(View {
+            prefix: prefix_of(&self.path)?,
+            path: self.path.trim_matches('/').to_string(),
+            sort,
+            descending,
+            search,
+            type_regex,
+            limit: self.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT),
+            offset: self.offset.max(0),
+            include_deleted: self.deleted == Some(1),
+        })
+    }
+}
 
-    let listing = run(&state, move |c| {
-        let retention_days = settings::get_i64(c, "retention_days", 30);
-        let searching = search.is_some() || type_regex.is_some();
-        let Some(device_name) = device_name else {
-            // The top level: the master files, then one folder per device (an administrator's own and the others').
-            let (master_files, master_bytes) = devices::master_totals(c)?;
-            let mut entries = vec![Entry {
-                kind: "device",
-                name: crate::platform::store::MASTER_FOLDER.into(),
-                device: crate::platform::store::MASTER_FOLDER.into(),
-                files: Some(master_files),
-                size: Some(master_bytes),
-                device_kind: Some("master".into()),
-                writable: who.can_write(crate::platform::store::MASTER_FOLDER),
-                ..Default::default()
-            }];
-            entries.extend(
-                device_summaries(c, &who, None)?.into_iter().filter(|d| d.kind != "source" || d.files > 0).map(|d| {
-                    Entry {
-                        kind: "device",
-                        name: if d.user == who.name { d.name.clone() } else { d.folder.clone() },
-                        writable: editable_kind(&d.kind) && who.can_write(&d.folder),
-                        device_kind: Some(d.kind),
-                        device: d.folder,
-                        files: Some(d.files),
-                        size: Some(d.bytes),
-                        ..Default::default()
-                    }
-                }),
-            );
-            let total = entries.len() as i64;
-            return Ok(Listing {
-                device: None,
-                device_kind: None,
-                writable: false,
-                path,
-                entries,
-                total,
-                searching: false,
-                retention_days,
-            });
-        };
-        let dev = find_device(c, &who, &device_name)?;
-        let kind = devices::kind_of(c, dev.id)?;
-        let writable = editable_kind(&kind) && who.can_write(&device_name);
-        // SQL counts characters, not bytes.
-        let n = prefix.chars().count() as i32;
-        let below = db::like_prefix(&prefix);
-        let mut entries = Vec::new();
-        let total: i64;
-        let page =
-            Page { device_id: dev.id, below: &below, include_deleted, sort: order, descending: desc, limit, offset };
-        let file_entry = |f: Listed, strip: usize| {
-            let full = f.path;
-            Entry {
-                kind: "file",
-                name: full[strip..].to_string(),
-                device: device_name.clone(),
-                mtime: Some(secs_of_ns(f.mtime)),
-                size: Some(f.size),
-                changed: Some(f.created_at),
-                deleted_at: f.deleted_at,
-                purge_at: f.deleted_at.map(|t| t + retention_days * DAY_SECS),
-                preview: meta::can_preview(&full),
-                mime: Some(f.mime.unwrap_or_else(|| meta::mime(&full))),
-                width: f.width,
-                height: f.height,
-                taken_at: f.taken_at,
-                versions: Some(f.versions),
-                path: full,
-                ..Default::default()
-            }
-        };
-        if searching {
-            let found = listing::search(c, &page, search.as_deref(), type_regex.as_deref())?;
-            total = found.total;
-            entries.extend(found.files.into_iter().map(|f| file_entry(f, prefix.len())));
-        } else {
-            // Folders come with the first page only.
-            let folders = files::folders_below(c, dev.id, &below, include_deleted, n + 1)?;
-            entries.extend(folders.into_iter().filter(|_| offset == 0).map(|f| Entry {
+/// The top level: the master files, then one folder per device (an administrator's own and the others').
+fn top_level(c: &mut Client, who: &Access, path: String, retention_days: i64) -> anyhow::Result<Listing> {
+    let (master_files, master_bytes) = devices::master_totals(c)?;
+    let mut entries = vec![Entry {
+        kind: "device",
+        name: MASTER_FOLDER.into(),
+        device: MASTER_FOLDER.into(),
+        files: Some(master_files),
+        size: Some(master_bytes),
+        device_kind: Some("master".into()),
+        writable: who.can_write(MASTER_FOLDER),
+        ..Default::default()
+    }];
+    entries.extend(device_summaries(c, who, None)?.into_iter().filter(|d| d.kind != "source" || d.files > 0).map(
+        |d| Entry {
+            kind: "device",
+            name: if d.user == who.name { d.name.clone() } else { d.folder.clone() },
+            writable: editable_kind(&d.kind) && who.can_write(&d.folder),
+            device_kind: Some(d.kind),
+            device: d.folder,
+            files: Some(d.files),
+            size: Some(d.bytes),
+            ..Default::default()
+        },
+    ));
+    let total = entries.len() as i64;
+    Ok(Listing {
+        device: None,
+        device_kind: None,
+        writable: false,
+        path,
+        entries,
+        total,
+        searching: false,
+        retention_days,
+    })
+}
+
+/// A file of a listing, named relative to the folder shown (`strip` bytes of its path are the folder).
+fn file_entry(f: Listed, strip: usize, device: &str, retention_days: i64) -> Entry {
+    let full = f.path;
+    Entry {
+        kind: "file",
+        name: full[strip..].to_string(),
+        device: device.to_string(),
+        mtime: Some(secs_of_ns(f.mtime)),
+        size: Some(f.size),
+        changed: Some(f.created_at),
+        deleted_at: f.deleted_at,
+        purge_at: f.deleted_at.map(|t| t + retention_days * DAY_SECS),
+        preview: meta::can_preview(&full),
+        mime: Some(f.mime.unwrap_or_else(|| meta::mime(&full))),
+        width: f.width,
+        height: f.height,
+        taken_at: f.taken_at,
+        versions: Some(f.versions),
+        path: full,
+        ..Default::default()
+    }
+}
+
+/// The inside of a device: either what a search or a type filter finds below the folder, or the folder's own folders
+/// (on the first page only) and files.
+fn inside_device(
+    c: &mut Client,
+    who: &Access,
+    device_name: String,
+    view: View,
+    retention_days: i64,
+) -> anyhow::Result<Listing> {
+    let dev = find_device(c, who, &device_name)?;
+    let kind = devices::kind_of(c, dev.id)?;
+    let writable = editable_kind(&kind) && who.can_write(&device_name);
+    // SQL counts characters, not bytes.
+    let names_start = view.prefix.chars().count() as i32 + 1;
+    let below = db::like_prefix(&view.prefix);
+    let page = Page {
+        device_id: dev.id,
+        below: &below,
+        include_deleted: view.include_deleted,
+        sort: view.sort,
+        descending: view.descending,
+        limit: view.limit,
+        offset: view.offset,
+    };
+    let searching = view.search.is_some() || view.type_regex.is_some();
+    let mut entries = Vec::new();
+    let found = if searching {
+        listing::search(c, &page, view.search.as_deref(), view.type_regex.as_deref())?
+    } else {
+        if view.offset == 0 {
+            let folders = files::folders_below(c, dev.id, &below, view.include_deleted, names_start)?;
+            entries.extend(folders.into_iter().map(|f| Entry {
                 kind: "dir",
-                path: format!("{prefix}{}", f.name),
+                path: format!("{}{}", view.prefix, f.name),
                 device: device_name.clone(),
                 files: Some(f.files),
                 size: Some(f.bytes),
@@ -241,20 +272,37 @@ pub async fn list(
                 name: f.name,
                 ..Default::default()
             }));
-            let found = listing::files_in(c, &page, n + 1)?;
-            total = found.total;
-            entries.extend(found.files.into_iter().map(|f| file_entry(f, prefix.len())));
         }
-        Ok(Listing {
-            device: Some(device_name.clone()),
-            device_kind: Some(kind),
-            writable,
-            path,
-            entries,
-            total,
-            searching,
-            retention_days,
-        })
+        listing::files_in(c, &page, names_start)?
+    };
+    let total = found.total;
+    let strip = view.prefix.len();
+    entries.extend(found.files.into_iter().map(|f| file_entry(f, strip, &device_name, retention_days)));
+    Ok(Listing {
+        device: Some(device_name),
+        device_kind: Some(kind),
+        writable,
+        path: view.path,
+        entries,
+        total,
+        searching,
+        retention_days,
+    })
+}
+
+pub async fn list(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    Query(q): Query<ListQuery>,
+) -> Res<Listing> {
+    let view = q.checked()?;
+    let device = q.device;
+    let listing = run(&state, move |c| {
+        let retention_days = settings::get_i64(c, "retention_days", 30);
+        match device {
+            None => top_level(c, &who, view.path, retention_days),
+            Some(device) => inside_device(c, &who, device, view, retention_days),
+        }
     })
     .await?;
     Ok(Json(listing))

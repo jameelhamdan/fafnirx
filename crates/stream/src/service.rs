@@ -55,6 +55,38 @@ impl App {
     pub(crate) fn done_with(&self, path: &Path) {
         self.locks.lock().expect("lock table").remove(path);
     }
+
+    /// Makes the cached file `out` unless it is there: `make` writes it to the path it is given (`out` with the extension
+    /// `tmp`), which is moved to `out` once it worked, so nobody reads half a file and a failure leaves nothing behind.
+    /// One request makes a file while the others for it wait, and at most `jobs` files are made at once.
+    pub(crate) async fn make_once<F, Fut>(&self, out: &Path, make: F) -> anyhow::Result<()>
+    where
+        F: FnOnce(PathBuf) -> Fut,
+        Fut: std::future::Future<Output = anyhow::Result<()>>,
+    {
+        if out.is_file() {
+            return Ok(());
+        }
+        let lock = self.lock_for(out);
+        let made = {
+            let _held = lock.lock().await;
+            if out.is_file() {
+                Ok(())
+            } else {
+                let _permit = self.jobs.acquire().await.expect("the semaphore is never closed");
+                let tmp = out.with_extension("tmp");
+                match make(tmp.clone()).await {
+                    Ok(()) => std::fs::rename(&tmp, out).map_err(Into::into),
+                    Err(e) => {
+                        let _ = std::fs::remove_file(&tmp);
+                        Err(e)
+                    }
+                }
+            }
+        };
+        self.done_with(out);
+        made
+    }
 }
 
 pub(crate) struct Failure(StatusCode, String);
@@ -225,28 +257,13 @@ async fn segment(
         hls::segment_span(n, source.duration).ok_or_else(|| fail(StatusCode::NOT_FOUND, "no such segment"))?;
 
     let out = video.dir.join(format!("{}-seg{n}.ts", v.name));
-    if !out.is_file() {
-        let lock = app.lock_for(&out);
-        let made = {
-            let _held = lock.lock().await;
-            if out.is_file() {
-                Ok(())
-            } else {
-                let _permit = app.jobs.acquire().await.expect("the semaphore is never closed");
-                let tmp = video.dir.join(format!("{}-seg{n}.tmp", v.name));
-                let args = ffmpeg::segment_args(&video.source, &tmp, &v, start, len, source.has_audio, &app.cfg.vcodec);
-                match ffmpeg::run(&app.cfg.ffmpeg, &args).await {
-                    Ok(()) => std::fs::rename(&tmp, &out).map_err(Into::into),
-                    Err(e) => {
-                        let _ = std::fs::remove_file(&tmp);
-                        Err(e)
-                    }
-                }
-            }
-        };
-        app.done_with(&out);
-        made.map_err(|e| internal("making the segment", e))?;
-    }
+    let cfg = &app.cfg;
+    app.make_once(&out, |tmp| async move {
+        let args = ffmpeg::segment_args(&video.source, &tmp, &v, start, len, source.has_audio, &cfg.vcodec);
+        ffmpeg::run(&cfg.ffmpeg, &args).await
+    })
+    .await
+    .map_err(|e| internal("making the segment", e))?;
     let bytes = std::fs::read(&out).map_err(|e| internal("reading the segment", e.into()))?;
     Ok(reply("video/mp2t", "private, max-age=86400", bytes))
 }

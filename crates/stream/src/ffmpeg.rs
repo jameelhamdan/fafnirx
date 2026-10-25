@@ -20,10 +20,10 @@ pub fn parse_probe(json: &str) -> Result<Source> {
     Ok(Source { width, height, duration, has_audio: probe.has_audio })
 }
 
-/// Runs `ffprobe` on `file`.
-pub async fn probe(ffprobe: &str, file: &Path) -> Result<Source> {
+/// Runs `ffprobe` with `args` on `file` and returns what it printed.
+async fn ffprobe_output(ffprobe: &str, args: &[&str], file: &Path) -> Result<String> {
     let out = Command::new(ffprobe)
-        .args(["-v", "error", "-print_format", "json", "-show_format", "-show_streams"])
+        .args(args)
         .arg(file)
         .stdin(Stdio::null())
         .kill_on_drop(true)
@@ -33,7 +33,15 @@ pub async fn probe(ffprobe: &str, file: &Path) -> Result<Source> {
     if !out.status.success() {
         bail!("ffprobe could not read the file: {}", tail(&out.stderr));
     }
-    parse_probe(&String::from_utf8_lossy(&out.stdout))
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Runs `ffprobe` on `file`.
+pub async fn probe(ffprobe: &str, file: &Path) -> Result<Source> {
+    let json =
+        ffprobe_output(ffprobe, &["-v", "error", "-print_format", "json", "-show_format", "-show_streams"], file)
+            .await?;
+    parse_probe(&json)
 }
 
 /// The arguments that make segment `start`..`start + len` (seconds) of `source` in quality `v`, as MPEG-TS with
@@ -146,19 +154,17 @@ pub fn parse_embedded(json: &str) -> Result<Vec<Embedded>> {
 
 /// Runs `ffprobe` on `file` for its subtitle tracks.
 pub async fn embedded_subtitles(ffprobe: &str, file: &Path) -> Result<Vec<Embedded>> {
-    let out = Command::new(ffprobe)
-        .args(["-v", "error", "-select_streams", "s", "-print_format", "json"])
-        .args(["-show_entries", "stream=codec_name:stream_tags=language,title:stream_disposition=forced"])
-        .arg(file)
-        .stdin(Stdio::null())
-        .kill_on_drop(true)
-        .output()
-        .await
-        .with_context(|| format!("run {ffprobe} (is ffmpeg installed?)"))?;
-    if !out.status.success() {
-        bail!("ffprobe could not read the file: {}", tail(&out.stderr));
-    }
-    parse_embedded(&String::from_utf8_lossy(&out.stdout))
+    let args = [
+        "-v",
+        "error",
+        "-select_streams",
+        "s",
+        "-print_format",
+        "json",
+        "-show_entries",
+        "stream=codec_name:stream_tags=language,title:stream_disposition=forced",
+    ];
+    parse_embedded(&ffprobe_output(ffprobe, &args, file).await?)
 }
 
 /// The arguments that write subtitle stream number `stream` of a video as WebVTT.
