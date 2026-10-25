@@ -115,6 +115,7 @@ pub fn status(config_path: &Path) -> Result<()> {
     if daemon::paused_marker(&dir).exists() {
         println!("paused (fafnirx resume to continue)");
     }
+    held_lines(&dir, &cfg).iter().for_each(|l| println!("{l}"));
     let Some(s) = daemon::read_status(&dir) else {
         println!("not running (no status yet)");
         return Ok(());
@@ -140,6 +141,39 @@ pub fn status(config_path: &Path) -> Result<()> {
         println!("last error: {}", s.last_error);
     }
     println!("version {}", s.version);
+    Ok(())
+}
+
+/// What `status` says about deletions held back, one line per folder.
+fn held_lines(dir: &Path, cfg: &Config) -> Vec<String> {
+    let Ok(state) = state::State::open(&dir.join("state.db")) else { return Vec::new() };
+    let mut held: Vec<_> = state.holds().unwrap_or_default().into_iter().collect();
+    held.sort();
+    held.iter()
+        .map(|(folder, (files, since))| {
+            let left = (since + (cfg.delete_hold_hours * 3600) as i64 - unix_now()).max(0);
+            format!(
+                "holding the deletion of {files} files of \"{folder}\" for {}h {}m more (fafnirx release-deletes sends it now)",
+                left / 3600,
+                left % 3600 / 60
+            )
+        })
+        .collect()
+}
+
+/// Asks the client to send the held deletions at its next cycle, which it starts right away.
+pub fn release_deletes(config_path: &Path) -> Result<()> {
+    let cfg = Config::load(config_path)?;
+    let dir = cfg.state_dir(config_path);
+    let lines = held_lines(&dir, &cfg);
+    if lines.is_empty() {
+        println!("no deletions are held");
+        return Ok(());
+    }
+    state::State::open(&dir.join("state.db"))?.request_release()?;
+    wake_client(config_path);
+    println!("the held deletions are sent at the next cycle:");
+    lines.iter().for_each(|l| println!("  {l}"));
     Ok(())
 }
 

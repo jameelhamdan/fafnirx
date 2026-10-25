@@ -4,6 +4,7 @@ mod commands;
 mod config;
 mod credentials;
 mod daemon;
+mod guard;
 mod hash;
 mod instance;
 mod net;
@@ -78,6 +79,8 @@ enum Cmd {
     Sync,
     /// Show what the running client is doing
     Status,
+    /// Send now the deletions that are held back because a large part of a folder's files disappeared
+    ReleaseDeletes,
     /// Stop uploading until `resume`
     Pause,
     Resume,
@@ -149,6 +152,7 @@ fn main() -> Result<()> {
         Cmd::RemoveFolder { name } => commands::remove_folder(&config_path, &name),
         Cmd::Folders => commands::list_folders(&config_path),
         Cmd::Status => commands::status(&config_path),
+        Cmd::ReleaseDeletes => commands::release_deletes(&config_path),
         Cmd::Pause => commands::set_paused(&config_path, true),
         Cmd::Resume => commands::set_paused(&config_path, false),
         Cmd::InstallService { dry_run } => service::install(&config_path, dry_run),
