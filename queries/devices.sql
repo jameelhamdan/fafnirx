@@ -67,3 +67,23 @@ WHERE d.id = :id;
 --! stale_device_ids
 SELECT d.id FROM devices d
 WHERE d.totals_stale AND NOT EXISTS (SELECT 1 FROM device_activity a WHERE a.device_id = d.id AND a.updated_at > :syncing_since);
+
+--! clients_last_seen
+SELECT folder, last_seen FROM devices WHERE kind = 'device' AND revoked_at IS NULL AND last_seen IS NOT NULL;
+
+--! visible_totals
+SELECT COALESCE(SUM(file_count), 0)::BIGINT AS files, COALESCE(SUM(total_bytes), 0)::BIGINT AS bytes,
+       COALESCE(SUM(deleted_files), 0)::BIGINT AS deleted
+FROM devices d WHERE (:all::boolean OR d.kind = 'master' OR d.user_id = :user::bigint);
+
+--! mark_totals_stale
+UPDATE devices SET totals_stale = TRUE WHERE id = ANY(:ids);
+
+--! master_totals
+SELECT file_count, total_bytes FROM devices WHERE kind = 'master';
+
+--! device_kind
+SELECT kind FROM devices WHERE id = :id;
+
+--! device_by_folder
+SELECT id, folder FROM devices WHERE folder = :folder;

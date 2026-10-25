@@ -2,7 +2,8 @@
 
 use crate::devices::api::{device_summaries, DeviceSummary};
 use crate::integrations::api::{job_states, JobState};
-use crate::web::access::{scope, Access};
+use crate::repo::{alerts, devices, events};
+use crate::web::access::Access;
 use crate::web::{done, run, Done, Res, Shared};
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
@@ -38,10 +39,9 @@ pub struct Recent {
     device: String,
 }
 
-impl Recent {
-    /// From a row of `id, ts, action, path, detail, device name`.
-    pub fn from_row(r: &postgres::Row) -> Self {
-        Self { id: r.get(0), ts: r.get(1), action: r.get(2), path: r.get(3), detail: r.get(4), device: r.get(5) }
+impl From<events::Recent> for Recent {
+    fn from(e: events::Recent) -> Self {
+        Self { id: e.id, ts: e.ts, action: e.action, path: e.path, detail: e.detail, device: e.device }
     }
 }
 
@@ -80,15 +80,8 @@ pub struct Dashboard {
 pub fn totals(c: &mut Client, who: &Access) -> Result<Totals, postgres::Error> {
     // Kept on the device rows, as of each device's last sync.
     let (all, user) = who.scope_args();
-    let sums = c.query_one(
-        &format!(
-            "SELECT COALESCE(SUM(file_count), 0)::BIGINT, COALESCE(SUM(total_bytes), 0)::BIGINT,
-                    COALESCE(SUM(deleted_files), 0)::BIGINT FROM devices d WHERE {}",
-            scope(1, 2)
-        ),
-        &[&all, &user],
-    )?;
-    Ok(Totals { files: sums.get(0), bytes: sums.get(1), marked_deleted: sums.get(2) })
+    let (files, bytes, marked_deleted) = devices::visible_totals(c, all, user)?;
+    Ok(Totals { files, bytes, marked_deleted })
 }
 
 /// Changes per day for the last two weeks, oldest first, with the days that had none.
@@ -96,17 +89,9 @@ fn activity(c: &mut Client, who: &Access) -> Result<Vec<Day>, postgres::Error> {
     let today = unix_now() / 86400;
     let first = today - (DAYS - 1);
     let (all, user) = who.scope_args();
-    let rows = c.query(
-        &format!(
-            "SELECT e.ts / 86400, e.action, COUNT(*) FROM events e JOIN devices d ON d.id = e.device_id
-             WHERE e.ts >= $1 AND {} GROUP BY 1, 2",
-            scope(2, 3)
-        ),
-        &[&(first * 86400), &all, &user],
-    )?;
+    let rows = events::activity_by_day(c, first * 86400, all, user)?;
     let mut days: Vec<Day> = (first..=today).map(|day| Day { day, added: 0, updated: 0, deleted: 0 }).collect();
-    for r in rows {
-        let (day, action, n): (i64, String, i64) = (r.get(0), r.get(1), r.get(2));
+    for (day, action, n) in rows {
         if let Some(d) = days.get_mut((day - first) as usize) {
             match action.as_str() {
                 "add" | "rename" => d.added += n,
@@ -122,17 +107,7 @@ fn activity(c: &mut Client, who: &Access) -> Result<Vec<Day>, postgres::Error> {
 /// The latest changes in the devices `who` can see, or only in the device with this folder.
 pub fn recent(c: &mut Client, who: &Access, limit: i64, folder: Option<&str>) -> Result<Vec<Recent>, postgres::Error> {
     let (all, user) = who.scope_args();
-    Ok(c.query(
-        &format!(
-            "SELECT e.id, e.ts, e.action, e.path, e.detail, d.folder FROM events e JOIN devices d ON d.id = e.device_id
-             WHERE ($2::text IS NULL OR d.folder = $2) AND {} ORDER BY e.id DESC LIMIT $1",
-            scope(3, 4)
-        ),
-        &[&limit, &folder, &all, &user],
-    )?
-    .iter()
-    .map(Recent::from_row)
-    .collect())
+    Ok(events::recent(c, folder, all, user, limit)?.into_iter().map(Recent::from).collect())
 }
 
 pub async fn dashboard(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Dashboard> {
@@ -143,30 +118,26 @@ pub async fn dashboard(State(state): State<Shared>, Extension(who): Extension<Ac
         // Sources are per user (an administrator sees all); mirrors belong to the administrators.
         let (sources, mirrors) = if who.has_workspace() { job_states(c, &who)? } else { Default::default() };
         // The alerts of a device are for whoever can see the device; the others are for the administrators.
-        let alerts = c
-            .query(
-                "SELECT id, kind, key, message, created_at, updated_at FROM alerts WHERE resolved_at IS NULL ORDER BY id DESC",
-                &[],
-            )?
-            .iter()
-            .filter(|r| who.is_admin() || who.can_see(r.get::<_, &str>(2)))
-            .map(|r| Alert {
-                id: r.get(0),
-                kind: r.get(1),
-                key: r.get(2),
-                message: r.get(3),
-                created_at: r.get(4),
-                updated_at: r.get(5),
+        let alerts = alerts::open(c)?
+            .into_iter()
+            .filter(|a| who.is_admin() || who.can_see(&a.key))
+            .map(|a| Alert {
+                id: a.id,
+                kind: a.kind,
+                key: a.key,
+                message: a.message,
+                created_at: a.created_at,
+                updated_at: a.updated_at,
             })
             .collect();
-        let disk = fafnirx_common::disk_usage(&data_dir)
-            .filter(|(total, _)| *total > 0 && who.is_admin())
-            .map(|(total, free)| Disk {
+        let disk = fafnirx_common::disk_usage(&data_dir).filter(|(total, _)| *total > 0 && who.is_admin()).map(
+            |(total, free)| Disk {
                 total,
                 used: total.saturating_sub(free),
                 free,
                 percent: 100 * total.saturating_sub(free) / total,
-            });
+            },
+        );
         Ok(Dashboard {
             devices,
             online,
@@ -186,12 +157,11 @@ pub async fn dashboard(State(state): State<Shared>, Extension(who): Extension<Ac
 pub async fn dismiss(State(state): State<Shared>, Extension(who): Extension<Access>, Path(id): Path<i64>) -> Res<Done> {
     run(&state, move |c| {
         // Only the alerts of a device the user can see.
-        let key: Option<String> = c.query_opt("SELECT key FROM alerts WHERE id = $1", &[&id])?.map(|r| r.get(0));
+        let key = alerts::key_of(c, id)?;
         if key.is_some_and(|k| !who.is_admin() && !who.can_see(&k)) {
             return Err(crate::web::ApiError::not_found("No such alert").into());
         }
-        c.execute("UPDATE alerts SET resolved_at = $2 WHERE id = $1 AND resolved_at IS NULL", &[&id, &unix_now()])?;
-        crate::platform::db::notify(c, "alerts", "")?;
+        alerts::dismiss(c, id)?;
         Ok(())
     })
     .await?;

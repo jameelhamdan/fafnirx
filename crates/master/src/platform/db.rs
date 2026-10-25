@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use fafnirx_common::unix_now;
 use postgres::{Client, Config, GenericClient, NoTls};
 use r2d2_postgres::PostgresConnectionManager;
 use std::time::Duration;
@@ -48,15 +47,6 @@ pub fn notify(conn: &mut impl GenericClient, topic: &str, key: &str) -> Result<(
 /// what the file watcher finds never interleave on that path. Works across processes.
 pub fn lock_path(conn: &mut impl GenericClient, device_id: i64, path: &str) -> Result<(), postgres::Error> {
     conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", &[&format!("{device_id}/{path}")])?;
-    Ok(())
-}
-
-/// Queues background work for the job queue (`library::meta`).
-pub fn enqueue(conn: &mut impl GenericClient, kind: &str, payload: &serde_json::Value) -> Result<(), postgres::Error> {
-    conn.execute(
-        "INSERT INTO jobs (kind, payload, created_at) VALUES ($1, $2, $3)",
-        &[&kind, &payload.to_string(), &unix_now()],
-    )?;
     Ok(())
 }
 

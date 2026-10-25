@@ -3,7 +3,7 @@
 
 use crate::platform::db::Db;
 use crate::platform::store::Store;
-use crate::repo::{alerts, settings};
+use crate::repo::{alerts, devices, events, retention, settings};
 use anyhow::Result;
 use fafnirx_common::unix_now;
 use postgres::{Client, GenericClient};
@@ -64,25 +64,14 @@ fn minute(db: &Db, data_dir: &std::path::Path) {
 
 /// Clients report an error again every time they retry, so one that went quiet has been fixed.
 fn expire_upload_errors(conn: &mut impl GenericClient) -> Result<(), postgres::Error> {
-    conn.execute(
-        "UPDATE alerts SET resolved_at = $1
-         WHERE kind = 'upload_error' AND resolved_at IS NULL AND COALESCE(updated_at, created_at) < $2",
-        &[&unix_now(), &(unix_now() - UPLOAD_ERROR_TTL_SECS)],
-    )?;
+    alerts::expire_upload_errors(conn, unix_now() - UPLOAD_ERROR_TTL_SECS)?;
     Ok(())
 }
 
 fn offline_alerts(conn: &mut impl GenericClient) -> Result<(), postgres::Error> {
     let limit = settings::get_i64(conn, "offline_after_secs", 60);
-    let rows: Vec<(String, i64)> = conn
-        // Only clients heartbeat; sources and local folders also get a last_seen when they collect something.
-        .query(
-            "SELECT folder, last_seen FROM devices WHERE kind = 'device' AND revoked_at IS NULL AND last_seen IS NOT NULL",
-            &[],
-        )?
-        .iter()
-        .map(|r| (r.get(0), r.get(1)))
-        .collect();
+    // Only clients heartbeat; sources and local folders also get a last_seen when they collect something.
+    let rows = devices::clients_last_seen(conn)?;
     for (name, last_seen) in rows {
         let idle = unix_now() - last_seen;
         if idle > limit {
@@ -118,8 +107,7 @@ pub fn hourly(db: &Db, store: &Store, cache_root: &Path) -> Result<()> {
     if abandoned > 0 {
         tracing::info!("removed {abandoned} abandoned uploads");
     }
-    let known: std::collections::HashSet<i64> =
-        db.get()?.query("SELECT id FROM versions", &[])?.iter().map(|r| r.get(0)).collect();
+    let known: std::collections::HashSet<i64> = retention::all_version_ids(&mut *db.get()?)?.into_iter().collect();
     let orphans = store.sweep_versions(&known, STALE_UPLOAD);
     if orphans > 0 {
         tracing::info!("removed {orphans} stored versions that no record points to");
@@ -135,29 +123,13 @@ fn retention(conn: &mut Client) -> Result<Vec<i64>> {
     let mut tx = conn.transaction()?;
     // The rows are locked first: a file that came back in the meantime is no longer expired once its lock is
     // released, so it keeps its history.
-    let expired_rows = tx.query(
-        "SELECT id, device_id FROM files WHERE deleted_at IS NOT NULL AND deleted_at < $1 FOR UPDATE",
-        &[&cutoff],
-    )?;
-    let expired: Vec<i64> = expired_rows.iter().map(|r| r.get(0)).collect();
-    let devices: Vec<i64> = expired_rows.iter().map(|r| r.get(1)).collect();
-    let mut removed: Vec<i64> = tx
-        .query("DELETE FROM versions WHERE file_id = ANY($1) RETURNING id", &[&expired])?
-        .iter()
-        .map(|r| r.get(0))
-        .collect();
-    let files = tx.execute("DELETE FROM files WHERE id = ANY($1)", &[&expired])?;
-    tx.execute("UPDATE devices SET totals_stale = TRUE WHERE id = ANY($1)", &[&devices])?;
-    let pruned: Vec<i64> = tx
-        .query("DELETE FROM versions WHERE pruned_at IS NOT NULL AND pruned_at < $1 RETURNING id", &[&cutoff])?
-        .iter()
-        .map(|r| r.get(0))
-        .collect();
-    tx.execute("DELETE FROM events WHERE ts < $1", &[&(unix_now() - EVENT_KEEP_DAYS * 86400)])?;
-    tx.execute(
-        "DELETE FROM alerts WHERE resolved_at IS NOT NULL AND resolved_at < $1",
-        &[&(unix_now() - EVENT_KEEP_DAYS * 86400)],
-    )?;
+    let (expired, device_ids) = retention::lock_expired_files(&mut tx, cutoff)?;
+    let mut removed = retention::delete_versions_of(&mut tx, &expired)?;
+    let files = retention::delete_files(&mut tx, &expired)?;
+    devices::mark_totals_stale(&mut tx, &device_ids)?;
+    let pruned = retention::delete_pruned_versions(&mut tx, cutoff)?;
+    events::purge(&mut tx, unix_now() - EVENT_KEEP_DAYS * 86400)?;
+    alerts::purge_resolved(&mut tx, unix_now() - EVENT_KEEP_DAYS * 86400)?;
     tx.commit()?;
     if files > 0 || !pruned.is_empty() {
         tracing::info!("retention removed {files} files and {} old versions", pruned.len());

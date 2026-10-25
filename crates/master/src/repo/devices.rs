@@ -159,3 +159,54 @@ pub fn store_totals(c: &mut impl GenericClient, id: i64, now: i64) -> Result<(),
 pub fn stale_totals(c: &mut impl GenericClient, syncing_since: i64) -> Result<Vec<i64>, Error> {
     q::stale_device_ids().bind(&mut Pg(c), &syncing_since).all()
 }
+
+/// Every active client with when it was last heard from: (folder, last_seen).
+pub fn clients_last_seen(c: &mut impl GenericClient) -> Result<Vec<(String, i64)>, Error> {
+    Ok(q::clients_last_seen().bind(&mut Pg(c)).all()?.into_iter().map(|d| (d.folder, d.last_seen)).collect())
+}
+
+/// What the visible devices hold together, as of their last sync: (files, bytes, files marked deleted).
+pub fn visible_totals(c: &mut impl GenericClient, all: bool, user: i64) -> Result<(i64, i64, i64), Error> {
+    let t = q::visible_totals().bind(&mut Pg(c), &all, &user).one()?;
+    Ok((t.files, t.bytes, t.deleted))
+}
+
+/// Makes the totals of these devices be added up again.
+pub fn mark_totals_stale(c: &mut impl GenericClient, ids: &[i64]) -> Result<(), Error> {
+    q::mark_totals_stale().bind(&mut Pg(c), &ids)?;
+    Ok(())
+}
+
+/// Notes that a device was heard from and that its totals are out of date.
+pub fn touch(c: &mut impl GenericClient, id: i64, now: i64) -> Result<(), Error> {
+    fafnirx_db::queries::files::touch_device().bind(&mut Pg(c), &now, &id)?;
+    Ok(())
+}
+
+/// Notes that a device collected something and that its totals are out of date.
+pub fn touch_collected(c: &mut impl GenericClient, id: i64, now: i64) -> Result<(), Error> {
+    fafnirx_db::queries::files::touch_collected().bind(&mut Pg(c), &now, &id)?;
+    Ok(())
+}
+
+/// Makes the totals of a device be added up again.
+pub fn mark_stale(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
+    fafnirx_db::queries::files::mark_stale().bind(&mut Pg(c), &id)?;
+    Ok(())
+}
+
+/// (files, bytes) of the master files.
+pub fn master_totals(c: &mut impl GenericClient) -> Result<(i64, i64), Error> {
+    let t = q::master_totals().bind(&mut Pg(c)).one()?;
+    Ok((t.file_count, t.total_bytes))
+}
+
+/// device, local, source or master.
+pub fn kind_of(c: &mut impl GenericClient, id: i64) -> Result<String, Error> {
+    q::device_kind().bind(&mut Pg(c), &id).one()
+}
+
+/// The id and folder of the device with this folder name.
+pub fn by_folder(c: &mut impl GenericClient, folder: &str) -> Result<Option<(i64, String)>, Error> {
+    Ok(q::device_by_folder().bind(&mut Pg(c), &folder).opt()?.map(|d| (d.id, d.folder)))
+}

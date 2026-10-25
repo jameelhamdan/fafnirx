@@ -124,7 +124,7 @@ impl Access {
         }
     }
 
-    /// The two values for [`scope`]: whether everything is visible, and the user whose devices are (-1: nobody's).
+    /// The two values the queries take to scope devices: whether everything is visible, and the user whose devices are (-1: nobody's).
     pub fn scope_args(&self) -> (bool, i64) {
         match self.role {
             Role::Admin => (true, -1),
@@ -132,11 +132,6 @@ impl Access {
             Role::Readonly => (false, -1),
         }
     }
-}
-
-/// SQL for "the device `d` is visible", given the numbers of two parameters that hold [`Access::scope_args`].
-pub fn scope(all: usize, user: usize) -> String {
-    format!("(${all}::boolean OR d.kind = 'master' OR d.user_id = ${user}::bigint)")
 }
 
 #[cfg(test)]

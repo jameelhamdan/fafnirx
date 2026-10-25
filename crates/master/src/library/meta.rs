@@ -5,6 +5,7 @@
 use crate::library::media;
 use crate::platform::db::{self, Db};
 use crate::platform::store::Store;
+use crate::repo::jobs;
 use anyhow::{Context, Result};
 use fafnirx_common::unix_now;
 use image::ImageDecoder;
@@ -440,7 +441,7 @@ fn read_job(db: &Db, store: &Store, cache_root: &Path, payload: &str) -> Result<
         && !media::plays_everywhere(&extension(&p.path), meta.codec.as_deref())
         && !proxy_path(cache_root, &root_hex).is_file()
     {
-        db::enqueue(
+        jobs::enqueue(
             &mut *db.get()?,
             "proxy",
             &serde_json::json!({ "device": p.device, "path": p.path, "root": p.root }),
@@ -612,8 +613,8 @@ mod tests {
         let db = testing::db_with_device();
         {
             let mut c = db.get().unwrap();
-            db::enqueue(&mut *c, "proxy", &serde_json::json!({})).unwrap();
-            db::enqueue(&mut *c, "meta", &serde_json::json!({})).unwrap();
+            jobs::enqueue(&mut *c, "proxy", &serde_json::json!({})).unwrap();
+            jobs::enqueue(&mut *c, "meta", &serde_json::json!({})).unwrap();
         }
         let kinds = |lane: bool| claim(&db, lane).unwrap().map(|c| c.1);
         assert_eq!(kinds(false).as_deref(), Some("meta"));

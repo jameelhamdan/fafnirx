@@ -1,7 +1,7 @@
 use crate::files::ingest;
 use crate::platform::db::{self, Db, Device};
 use crate::platform::store::Store;
-use crate::repo::{alerts, devices};
+use crate::repo::{alerts, devices, files, settings};
 use fafnirx_common::pb::collector_server::Collector;
 use fafnirx_common::pb::*;
 use fafnirx_common::{chunk_count, chunk_hash, clean_remote_path, root_hash, to_hash, unix_now, CHUNK_SIZE, HASH_LEN};
@@ -174,7 +174,7 @@ impl Collector for Service {
         let master_id = self
             .blocking(move |c| {
                 authenticate(c, &who)?;
-                Ok(c.query_one("SELECT value FROM settings WHERE key = 'master_id'", &[])?.get::<_, String>(0))
+                Ok(settings::get(c, "master_id")?.unwrap_or_default())
             })
             .await?;
         Ok(Response::new(IdentifyResponse { master_id }))
@@ -236,20 +236,14 @@ impl Collector for Service {
         let store = self.store.clone();
         self.blocking(move |c| {
             let dev = authenticate(c, &who)?;
-            let current: Option<Vec<u8>> = c
-                .query_opt(
-                    "SELECT v.root_hash FROM files f JOIN versions v ON v.id = f.current_version_id
-                     WHERE f.device_id = $1 AND f.path = $2 AND f.deleted_at IS NULL",
-                    &[&dev.id, &m.path],
-                )?
-                .map(|r| r.get(0));
+            let current = files::live_content(c, dev.id, &m.path)?.map(|(root, _)| root);
             // Deleted in the web app: the device is told it is up to date, whatever it holds now.
-            if current.as_deref() == Some(&m.root[..]) || ingest::deleted_in_web_app(c, dev.id, &m.path)? {
+            if current == Some(m.root) || files::deleted_in_web_app(c, dev.id, &m.path)? {
                 return Ok(Response::new(NegotiateResponse { missing: vec![], already_current: true }));
             }
             // The device already has this content under another path (a rename or a copy): the commit
             // takes it from there, nothing needs to be sent.
-            if ingest::live_path_with_root(c, dev.id, &m.root, None)?.is_some() {
+            if files::live_path_with_root(c, dev.id, &m.root, None)?.is_some() {
                 return Ok(Response::new(NegotiateResponse { missing: vec![], already_current: false }));
             }
             let missing = store.missing_chunks(dev.id, &m.root, &m.chunks);
@@ -292,12 +286,12 @@ impl Collector for Service {
         let version_id = self
             .blocking(move |c| {
                 let dev = authenticate(c, &who)?;
-                if ingest::deleted_in_web_app(c, dev.id, &m.path)? {
+                if files::deleted_in_web_app(c, dev.id, &m.path)? {
                     return Ok(0);
                 }
                 // Content the device already has under another path is taken from there; otherwise the
                 // upload must be complete and intact.
-                let staged = match ingest::live_path_with_root(c, dev.id, &m.root, renamed_from.as_deref())? {
+                let staged = match files::live_path_with_root(c, dev.id, &m.root, renamed_from.as_deref())? {
                     Some(from) => store.copy_live_to_temp(&dev.name, &from, &m.root).map_err(|e| {
                         Status::failed_precondition(format!("the file this one is copied from changed: {e:#}"))
                     })?,
