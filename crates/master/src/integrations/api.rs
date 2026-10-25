@@ -10,6 +10,7 @@ use crate::integrations::spec::MirrorSpec;
 use crate::integrations::Table;
 use crate::platform::db;
 use crate::platform::store::Store;
+use crate::repo::alerts;
 use crate::web::access::Access;
 use crate::web::{done, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, State};
@@ -294,7 +295,7 @@ pub fn remove_source(c: &mut Client, store: &Store, id: i64) -> anyhow::Result<(
     }
     c.execute("DELETE FROM source_items WHERE source_id = $1", &[&id])?;
     c.execute("DELETE FROM sources WHERE id = $1", &[&id])?;
-    db::resolve_alert(c, "source_failed", &device.name)?;
+    alerts::resolve(c, "source_failed", &device.name)?;
     db::notify(c, "jobs", &device.name)?;
     Ok(())
 }
@@ -479,7 +480,7 @@ pub async fn delete_mirror(
         let id = mirror_id(c, &name)?;
         c.execute("DELETE FROM mirror_items WHERE mirror_id = $1", &[&id])?;
         c.execute("DELETE FROM mirrors WHERE id = $1", &[&id])?;
-        db::resolve_alert(c, "mirror_failed", &name)?;
+        alerts::resolve(c, "mirror_failed", &name)?;
         db::notify(c, "jobs", "mirrors")?;
         Ok(())
     })

@@ -6,7 +6,8 @@
 //! files, which everybody sees, are each user's own to favorite, archive, tag and describe.
 
 use crate::library::meta;
-use crate::platform::db::{self, setting};
+use crate::platform::db::{self};
+use crate::repo::settings;
 use crate::web::access::Access;
 use crate::web::{done, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, Query, State};
@@ -750,7 +751,7 @@ pub async fn trash(
 ) -> Res<Trash> {
     let visible = who.visible_sql();
     let out = run(&state, move |c| {
-        let retention_days = setting(c, "retention_days", 30);
+        let retention_days = settings::get_i64(c, "retention_days", 30);
         let rows = c.query(
             &format!(
                 "SELECT f.id, d.folder, f.path, v.size, f.deleted_at, v.id, v.root_hash, COUNT(*) OVER ()

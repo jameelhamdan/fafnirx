@@ -36,6 +36,7 @@ mod integrations;
 mod library;
 mod monitoring;
 mod platform;
+mod repo;
 mod web;
 
 use anyhow::{bail, Context, Result};

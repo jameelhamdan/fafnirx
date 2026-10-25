@@ -1,6 +1,7 @@
 use crate::files::ingest;
-use crate::platform::db::{self, resolve_alert, upsert_alert, Db, Device};
+use crate::platform::db::{self, Db, Device};
 use crate::platform::store::Store;
+use crate::repo::{alerts, devices};
 use fafnirx_common::pb::collector_server::Collector;
 use fafnirx_common::pb::*;
 use fafnirx_common::{chunk_count, chunk_hash, clean_remote_path, root_hash, to_hash, unix_now, CHUNK_SIZE, HASH_LEN};
@@ -76,36 +77,24 @@ fn lease_secs() -> i64 {
 /// owner, so that two computers with one token cannot send two views of the same folders. One decision, in one
 /// statement, so two computers connecting at once cannot both win.
 fn authenticate(conn: &mut Client, who: &Caller) -> Result<Device, Status> {
-    let row = conn
-        .query_opt(
-            // The device is its folder (`<user>/<name>`). A device of a disabled user is refused like a revoked one.
-            "SELECT d.id, d.folder, d.instance_id, d.hostname, d.ip FROM devices d JOIN users u ON u.id = d.user_id
-             WHERE d.token_hash = $1 AND d.revoked_at IS NULL AND d.kind = 'device' AND u.disabled_at IS NULL",
-            &[&db::hash_token(&who.token)],
-        )
+    // The device is its folder (`<user>/<name>`). A device of a disabled user is refused like a revoked one.
+    let found = devices::find_by_token(conn, &db::hash_token(&who.token))
         .map_err(internal)?
         .ok_or_else(|| Status::unauthenticated("unknown or revoked device token"))?;
-    let (id, folder): (i64, String) = (row.get(0), row.get(1));
-    let holder: Option<String> = row.get(2);
+    let (id, folder) = (found.id, found.folder);
+    let holder = found.instance;
     if holder.as_deref() == Some(who.instance.as_str()) {
         return Ok(Device { id, name: folder });
     }
     let now = unix_now();
-    let taken = conn
-        .execute(
-            "UPDATE devices SET instance_id = $2, last_seen = $3
-             WHERE id = $1 AND (instance_id IS NULL OR instance_id = $2 OR last_seen IS NULL OR last_seen < $4)",
-            &[&id, &who.instance, &now, &(now - lease_secs())],
-        )
-        .map_err(internal)?;
-    if taken == 1 {
+    if devices::take_over(conn, id, &who.instance, now, now - lease_secs()).map_err(internal)? {
         if holder.is_some() {
             tracing::info!("{folder}: taken over by another computer, the first one went quiet");
-            let _ = resolve_alert(conn, "device_conflict", &folder);
+            let _ = alerts::resolve(conn, "device_conflict", &folder);
         }
         return Ok(Device { id, name: folder });
     }
-    let (host, ip): (Option<String>, Option<String>) = (row.get(3), row.get(4));
+    let (host, ip) = (found.hostname, found.ip);
     let holder_is = match (host, ip) {
         (Some(h), Some(i)) => format!("{h}, {i}"),
         (Some(h), None) => h,
@@ -113,7 +102,7 @@ fn authenticate(conn: &mut Client, who: &Caller) -> Result<Device, Status> {
         (None, None) => "another computer".into(),
     };
     let caller_is = who.ip.as_deref().unwrap_or("unknown address");
-    let _ = upsert_alert(
+    let _ = alerts::upsert(
         conn,
         "device_conflict",
         &folder,
@@ -198,62 +187,43 @@ impl Collector for Service {
         let name = self
             .blocking(move |c| {
                 let dev = authenticate(c, &who)?;
-                c.execute(
-                    "UPDATE devices SET hostname = $1, os = $2, ip = $3, client_version = $4,
-                     disk_total = $5, disk_free = $6, last_seen = $7 WHERE id = $8",
-                    &[
-                        &clip(&hb.hostname, 100),
-                        &clip(&hb.os, 20),
-                        &ip,
-                        &clip(&hb.client_version, 30),
-                        &(hb.disk_total as i64),
-                        &(hb.disk_free as i64),
-                        &unix_now(),
-                        &dev.id,
-                    ],
-                )?;
+                let ip = ip.as_deref();
+                let info = devices::Heartbeat {
+                    hostname: &clip(&hb.hostname, 100),
+                    os: &clip(&hb.os, 20),
+                    ip,
+                    client_version: &clip(&hb.client_version, 30),
+                    disk_total: hb.disk_total as i64,
+                    disk_free: hb.disk_free as i64,
+                };
+                devices::record_heartbeat(c, dev.id, &info, unix_now())?;
                 // A conflict that has not come back for ten minutes is over.
-                if c.execute(
-                    "UPDATE alerts SET resolved_at = $2 WHERE kind = 'device_conflict' AND key = $1 AND resolved_at IS NULL AND updated_at < $3",
-                    &[&dev.name, &unix_now(), &(unix_now() - 600)],
-                )? > 0
-                {
+                if alerts::resolve_if_quiet(c, "device_conflict", &dev.name, unix_now() - 600)? {
                     db::notify(c, "alerts", &dev.name)?;
                 }
                 if hb.phase.is_empty() || hb.phase == "idle" {
                     // Going from busy to idle means the sync is done: the totals shown for the device are brought up to date.
-                    if c.execute("DELETE FROM device_activity WHERE device_id = $1", &[&dev.id])? > 0 {
+                    if devices::clear_progress(c, dev.id)? {
                         crate::devices::totals::refresh(c, dev.id)?;
                     }
                 } else {
-                    c.execute(
-                        "INSERT INTO device_activity (device_id, updated_at, phase, current_file, files_done,
-                                                      files_total, bytes_done, bytes_total, speed_bps)
-                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                         ON CONFLICT (device_id) DO UPDATE SET updated_at = EXCLUDED.updated_at,
-                           phase = EXCLUDED.phase, current_file = EXCLUDED.current_file,
-                           files_done = EXCLUDED.files_done, files_total = EXCLUDED.files_total,
-                           bytes_done = EXCLUDED.bytes_done, bytes_total = EXCLUDED.bytes_total,
-                           speed_bps = EXCLUDED.speed_bps",
-                        &[
-                            &dev.id,
-                            &unix_now(),
-                            &clip(&hb.phase, 20),
-                            &clip(&hb.current_file, 300),
-                            &(hb.files_done as i64),
-                            &(hb.files_total as i64),
-                            &(hb.bytes_done as i64),
-                            &(hb.bytes_total as i64),
-                            &(hb.speed_bps as i64),
-                        ],
-                    )?;
+                    let progress = devices::Progress {
+                        phase: &clip(&hb.phase, 20),
+                        current_file: &clip(&hb.current_file, 300),
+                        files_done: hb.files_done as i64,
+                        files_total: hb.files_total as i64,
+                        bytes_done: hb.bytes_done as i64,
+                        bytes_total: hb.bytes_total as i64,
+                        speed_bps: hb.speed_bps as i64,
+                    };
+                    devices::save_progress(c, dev.id, &progress, unix_now())?;
                 }
                 db::notify(c, "devices", &dev.name)?;
                 if !hb.errors.is_empty() {
                     let msg = hb.errors.iter().take(5).map(|e| clip(e, 300)).collect::<Vec<_>>().join("\n");
-                    upsert_alert(c, "upload_error", &dev.name, &msg)?;
+                    alerts::upsert(c, "upload_error", &dev.name, &msg)?;
                 }
-                resolve_alert(c, "device_offline", &dev.name)?;
+                alerts::resolve(c, "device_offline", &dev.name)?;
                 Ok(dev.name)
             })
             .await?;

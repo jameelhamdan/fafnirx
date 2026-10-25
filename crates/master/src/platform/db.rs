@@ -1,7 +1,5 @@
-use super::pg::Pg;
 use anyhow::{Context, Result};
 use fafnirx_common::unix_now;
-use fafnirx_db::queries::alerts;
 use postgres::{Client, Config, GenericClient, NoTls};
 use r2d2_postgres::PostgresConnectionManager;
 use std::time::Duration;
@@ -130,34 +128,6 @@ where
         f(&mut conn)
     })
     .await?
-}
-
-pub fn setting(conn: &mut impl GenericClient, key: &str, default: i64) -> i64 {
-    conn.query_opt("SELECT value FROM settings WHERE key = $1", &[&key])
-        .ok()
-        .flatten()
-        .and_then(|r| r.get::<_, String>(0).parse().ok())
-        .unwrap_or(default)
-}
-
-/// Opens an alert, or refreshes the message of the already open one.
-pub fn upsert_alert(
-    conn: &mut impl GenericClient,
-    kind: &str,
-    key: &str,
-    message: &str,
-) -> Result<(), postgres::Error> {
-    alerts::upsert_alert().bind(&mut Pg(&mut *conn), &kind, &key, &message, &unix_now())?;
-    notify(conn, "alerts", key)?;
-    Ok(())
-}
-
-pub fn resolve_alert(conn: &mut impl GenericClient, kind: &str, key: &str) -> Result<(), postgres::Error> {
-    let n = alerts::resolve_alert().bind(&mut Pg(&mut *conn), &unix_now(), &kind, &key)?;
-    if n > 0 {
-        notify(conn, "alerts", key)?;
-    }
-    Ok(())
 }
 
 /// Databases for unit tests. Needs a PostgreSQL server: set `FAFNIRX_TEST_DATABASE_URL`

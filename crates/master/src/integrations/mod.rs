@@ -9,8 +9,9 @@ pub mod gdrive;
 pub mod mirror;
 pub mod spec;
 
-use crate::platform::db::{self, resolve_alert, upsert_alert, Db, Device};
+use crate::platform::db::{self, Db, Device};
 use crate::platform::store::Store;
+use crate::repo::alerts;
 use anyhow::{anyhow, Result};
 use fafnirx_common::unix_now;
 use postgres::{GenericClient, Row};
@@ -239,9 +240,9 @@ fn finish(
         },
     );
     if status == "ok" {
-        let _ = resolve_alert(conn, alert_kind, name);
+        let _ = alerts::resolve(conn, alert_kind, name);
     } else {
-        let _ = upsert_alert(conn, alert_kind, name, message);
+        let _ = alerts::upsert(conn, alert_kind, name, message);
     }
 }
 

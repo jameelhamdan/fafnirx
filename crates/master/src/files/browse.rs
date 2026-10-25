@@ -4,7 +4,8 @@
 use crate::devices::api::device_summaries;
 use crate::files::ingest;
 use crate::library::meta;
-use crate::platform::db::{self, setting, Device};
+use crate::platform::db::{self, Device};
+use crate::repo::settings;
 use crate::web::access::Access;
 use crate::web::{done, run, ApiError, Done, Res, Shared};
 use axum::extract::{Query, State};
@@ -160,7 +161,7 @@ pub async fn list(
     let path = q.path.trim_matches('/').to_string();
 
     let listing = run(&state, move |c| {
-        let retention_days = setting(c, "retention_days", 30);
+        let retention_days = settings::get_i64(c, "retention_days", 30);
         let searching = search.is_some() || type_regex.is_some();
         let Some(device_name) = device_name else {
             // The top level: the master files, then one folder per device (an administrator's own and the others').
@@ -349,7 +350,7 @@ pub async fn info(
     let out = run(&state, move |c| {
         let dev = find_device(c, &who, &r.device)?;
         let path = clean_remote_path(&r.path).map_err(|e| ApiError::bad(e.to_string()))?;
-        let retention = setting(c, "retention_days", 30);
+        let retention = settings::get_i64(c, "retention_days", 30);
         let row = c
             .query_opt(
                 "SELECT f.id, f.current_version_id, f.deleted_at, v.size, v.mtime, v.created_at, v.root_hash,
