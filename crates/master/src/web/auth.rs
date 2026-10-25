@@ -4,6 +4,7 @@
 //! the moment the row goes: when the user logs out, is disabled, or gets a new password.
 
 use super::access::{Access, Role};
+use crate::repo::{sessions, users};
 use crate::web::{done, run, ApiError, Done, Res, Shared};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
@@ -67,16 +68,15 @@ pub fn set_password(
     keep: Option<&str>,
 ) -> anyhow::Result<()> {
     let hash = hash_password(password)?;
-    conn.execute("UPDATE users SET password_hash = $2 WHERE id = $1", &[&user_id, &hash])?;
-    conn.execute("DELETE FROM sessions WHERE user_id = $1 AND token_hash <> $2", &[&user_id, &keep.unwrap_or("")])?;
+    users::set_password_hash(conn, user_id, &hash)?;
+    sessions::end_others(conn, user_id, keep.unwrap_or(""))?;
     Ok(())
 }
 
 /// The default administrator has no password until the master is started with one: `FAFNIRX_ADMIN_PASSWORD` sets it
 /// that once. Afterwards the variable is not read, so a password changed in the web app stays.
 pub fn bootstrap(conn: &mut impl GenericClient, env_password: &str) -> anyhow::Result<()> {
-    let row = conn.query_one("SELECT id, password_hash FROM users WHERE name = 'admin'", &[])?;
-    let (id, hash): (i64, String) = (row.get(0), row.get(1));
+    let (id, hash) = users::admin_credentials(conn)?;
     if hash != "!" {
         return Ok(());
     }
@@ -102,12 +102,8 @@ fn cookie_token(headers: &HeaderMap) -> Option<String> {
 /// The user a session cookie belongs to, if the session is there, has not expired and the user is not disabled.
 pub fn user_of_session(conn: &mut impl GenericClient, headers: &HeaderMap) -> anyhow::Result<Option<Access>> {
     let Some(token) = cookie_token(headers) else { return Ok(None) };
-    let row = conn.query_opt(
-        "SELECT u.id, u.name, u.role FROM sessions s JOIN users u ON u.id = s.user_id
-         WHERE s.token_hash = $1 AND s.expires_at > $2 AND u.disabled_at IS NULL",
-        &[&token_hash(&token), &unix_now()],
-    )?;
-    Ok(row.and_then(|r| Some(Access { user_id: r.get(0), name: r.get(1), role: Role::parse(&r.get::<_, String>(2))? })))
+    let found = sessions::user_of(conn, &token_hash(&token), unix_now())?;
+    Ok(found.and_then(|(user_id, name, role)| Some(Access { user_id, name, role: Role::parse(&role)? })))
 }
 
 #[derive(Deserialize)]
@@ -157,11 +153,7 @@ pub async fn login(
     }
 
     let name = username.clone();
-    let user = run(&state, move |c| {
-        Ok(c.query_opt("SELECT id, password_hash FROM users WHERE name = $1 AND disabled_at IS NULL", &[&name])?
-            .map(|r| (r.get::<_, i64>(0), r.get::<_, String>(1))))
-    })
-    .await?;
+    let user = run(&state, move |c| Ok(users::login_credentials(c, &name)?)).await?;
     let (id, hash) = match &user {
         Some((id, hash)) => (Some(*id), hash.clone()),
         None => (None, dummy_hash().to_string()),
@@ -187,12 +179,7 @@ pub async fn login(
     let token = hex::encode(crate::platform::db::random_bytes::<32>());
     let stored = token_hash(&token);
     run(&state, move |c| {
-        let now = unix_now();
-        c.execute("DELETE FROM sessions WHERE expires_at <= $1", &[&now])?;
-        c.execute(
-            "INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES ($1, $2, $3, $4)",
-            &[&stored, &id, &now, &(now + SESSION_SECS)],
-        )?;
+        sessions::start(c, &stored, id, unix_now(), SESSION_SECS)?;
         Ok(())
     })
     .await?;
@@ -202,8 +189,7 @@ pub async fn login(
 pub async fn logout(State(state): State<Shared>, headers: HeaderMap) -> Result<impl IntoResponse, ApiError> {
     if let Some(token) = cookie_token(&headers) {
         let stored = token_hash(&token);
-        run(&state, move |c| Ok(c.execute("DELETE FROM sessions WHERE token_hash = $1", &[&stored]).map(|_| ())?))
-            .await?;
+        run(&state, move |c| Ok(sessions::end(c, &stored)?)).await?;
     }
     Ok((AppendHeaders([cookie_header("", 0, is_secure(&headers))]), Json(Done { ok: true })))
 }
@@ -257,8 +243,7 @@ pub async fn change_password(
     }
     let keep = cookie_token(&headers).map(|t| token_hash(&t));
     let id = access.user_id;
-    let hash: String =
-        run(&state, move |c| Ok(c.query_one("SELECT password_hash FROM users WHERE id = $1", &[&id])?.get(0))).await?;
+    let hash: String = run(&state, move |c| Ok(users::password_hash_of(c, id)?)).await?;
     let current = body.current;
     let matched = tokio::task::spawn_blocking(move || verify_password(&hash, &current))
         .await

@@ -5,6 +5,7 @@ use super::auth::{self, MIN_PASSWORD};
 use super::{done, run, ApiError, Done, Res, Shared};
 use crate::devices::api::NAME_RULE;
 use crate::platform::db;
+use crate::repo::{sessions, users};
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use fafnirx_common::{unix_now, valid_device_name};
@@ -23,20 +24,14 @@ pub struct UserInfo {
 pub async fn list(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Vec<UserInfo>> {
     who.require_admin()?;
     let users = run(&state, |c| {
-        let rows = c.query(
-            "SELECT u.name, u.role, u.disabled_at IS NOT NULL, u.created_at,
-                    (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.kind IN ('device', 'local'))
-             FROM users u ORDER BY u.name",
-            &[],
-        )?;
-        Ok(rows
-            .iter()
-            .map(|r| UserInfo {
-                name: r.get(0),
-                role: r.get(1),
-                disabled: r.get(2),
-                created_at: r.get(3),
-                devices: r.get(4),
+        Ok(users::list(c)?
+            .into_iter()
+            .map(|u| UserInfo {
+                name: u.name,
+                role: u.role,
+                disabled: u.disabled,
+                created_at: u.created_at,
+                devices: u.devices,
             })
             .collect())
     })
@@ -47,12 +42,7 @@ pub async fn list(State(state): State<Shared>, Extension(who): Extension<Access>
 /// Whether `name` cannot be a user because the master files already use it: a folder or file at the root of the live tree
 /// (compared without regard to case, as a network share does) or a master file path that starts with it.
 pub fn taken_by_master(c: &mut impl GenericClient, live_root: &std::path::Path, name: &str) -> anyhow::Result<bool> {
-    let in_db = c
-        .query_one(
-            "SELECT EXISTS (SELECT 1 FROM files WHERE device_id = 0 AND lower(split_part(path, '/', 1)) = $1)",
-            &[&name],
-        )?
-        .get::<_, bool>(0);
+    let in_db = users::master_path_taken(c, name)?;
     let on_disk = std::fs::read_dir(live_root)
         .into_iter()
         .flatten()
@@ -63,8 +53,7 @@ pub fn taken_by_master(c: &mut impl GenericClient, live_root: &std::path::Path, 
 
 /// Makes sure every user has a folder, so that a network share shows it from the start.
 pub fn ensure_dirs(conn: &mut postgres::Client, store: &crate::platform::store::Store) -> anyhow::Result<()> {
-    for row in conn.query("SELECT name FROM users", &[])? {
-        let name: String = row.get(0);
+    for name in users::names(conn)? {
         std::fs::create_dir_all(store.user_dir(&name))?;
     }
     Ok(())
@@ -81,7 +70,7 @@ pub fn add_user(
     if !valid_device_name(name) {
         return Err(ApiError::bad(format!("User name: {}", NAME_RULE.trim_start_matches("Name: "))).into());
     }
-    let exists = c.query_opt("SELECT 1 FROM users WHERE name = $1", &[&name])?.is_some();
+    let exists = users::exists(c, name)?;
     if exists {
         return Err(ApiError::conflict(format!("There is already a user named {name}")).into());
     }
@@ -91,10 +80,7 @@ pub fn add_user(
         ))
         .into());
     }
-    c.execute(
-        "INSERT INTO users (name, role, password_hash, created_at) VALUES ($1, $2, $3, $4)",
-        &[&name, &role.as_str(), &password_hash, &unix_now()],
-    )?;
+    users::insert(c, name, role.as_str(), password_hash, unix_now())?;
     let _ = std::fs::create_dir_all(live_root.join(name));
     Ok(())
 }
@@ -163,37 +149,23 @@ pub async fn update(
     run(&state, move |c| {
         let mut tx = c.transaction()?;
         // Serializes changes to the administrators, so that two requests cannot each leave the other as the last.
-        tx.execute("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE", &[])?;
-        let row = tx
-            .query_opt("SELECT id, role, disabled_at IS NOT NULL FROM users WHERE name = $1", &[&name])?
-            .ok_or_else(|| ApiError::not_found("No such user"))?;
-        let (id, current, disabled): (i64, String, bool) = (row.get(0), row.get(1), row.get(2));
+        users::lock(&mut tx)?;
+        let account = users::by_name(&mut tx, &name)?.ok_or_else(|| ApiError::not_found("No such user"))?;
+        let (id, current, disabled) = (account.id, account.role, account.disabled);
         let stays_admin = role.map_or(current == "admin", |r| r == Role::Admin);
         let stays_enabled = !body.disabled.unwrap_or(disabled);
         if current == "admin" && !disabled && !(stays_admin && stays_enabled) {
-            let others: i64 = tx
-                .query_one(
-                    "SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled_at IS NULL AND id <> $1",
-                    &[&id],
-                )?
-                .get(0);
+            let others = users::other_active_admins(&mut tx, id)?;
             if others == 0 {
                 return Err(ApiError::conflict("This is the last administrator: make another one first").into());
             }
         }
         if let Some(role) = role {
-            tx.execute("UPDATE users SET role = $2 WHERE id = $1", &[&id, &role.as_str()])?;
+            users::set_role(&mut tx, id, role.as_str())?;
         }
         match body.disabled {
-            Some(true) => {
-                tx.execute(
-                    "UPDATE users SET disabled_at = COALESCE(disabled_at, $2) WHERE id = $1",
-                    &[&id, &unix_now()],
-                )?;
-            }
-            Some(false) => {
-                tx.execute("UPDATE users SET disabled_at = NULL WHERE id = $1", &[&id])?;
-            }
+            Some(true) => users::disable(&mut tx, id, unix_now())?,
+            Some(false) => users::enable(&mut tx, id)?,
             None => {}
         }
         if let Some(password) = &body.password {
@@ -201,7 +173,7 @@ pub async fn update(
         }
         // A role or a lock changes what the sessions of the user may do: they log in again.
         if role.is_some() || body.disabled == Some(true) {
-            tx.execute("DELETE FROM sessions WHERE user_id = $1", &[&id])?;
+            sessions::end_all(&mut tx, id)?;
         }
         db::notify(&mut tx, "users", &name)?;
         tx.commit()?;

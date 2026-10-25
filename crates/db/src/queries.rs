@@ -2,4 +2,6 @@
 
 pub mod alerts;
 pub mod devices;
+pub mod sessions;
 pub mod settings;
+pub mod users;
