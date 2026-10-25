@@ -269,11 +269,24 @@ fn lock(path: &Path) -> Option<fs::File> {
     fs::OpenOptions::new().read(true).share_mode(0).open(path).ok()
 }
 
+/// Gives the file its permissions back when it is dropped.
 #[cfg(unix)]
-fn lock(path: &Path) -> Option<()> {
+struct Unreadable(PathBuf);
+
+#[cfg(unix)]
+impl Drop for Unreadable {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o644));
+    }
+}
+
+#[cfg(unix)]
+fn lock(path: &Path) -> Option<Unreadable> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(0o000)).ok()?;
-    fs::File::open(path).is_err().then_some(())
+    let guard = Unreadable(path.to_path_buf());
+    fs::File::open(path).is_err().then_some(guard)
 }
 
 #[tokio::test]
@@ -290,11 +303,6 @@ async fn a_file_that_is_locked_or_unreadable_is_not_taken_for_deleted() {
     let report = rig.cycle().await;
     assert_eq!(report.deleted, 0);
     assert!(rig.deleted().is_empty(), "it is there, only not readable now");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(rig.folder.path().join("f0.txt"), fs::Permissions::from_mode(0o644)).unwrap();
-    }
     drop(guard);
     assert_eq!(rig.cycle().await, Report::default(), "and when it can be read again nothing changed");
 }
