@@ -22,6 +22,12 @@ pub struct Scan {
     pub entries: Vec<Entry>,
     /// Human readable notes about everything that was skipped.
     pub skipped: Vec<String>,
+    /// Remote paths of files that exist but cannot be read right now (locked, no permission). They are not
+    /// entries, yet they are not deleted either.
+    pub unreadable: Vec<String>,
+    /// False when part of the tree could not be walked (an unreadable directory): what is missing from the entries
+    /// may still exist, so nothing in this folder may be taken for deleted.
+    pub complete: bool,
 }
 
 /// Fails when the folder itself cannot be read; callers must then not treat
@@ -37,6 +43,8 @@ pub fn scan_folder(folder: &Folder, exclude: Option<&Path>) -> Result<Scan> {
     let top: String = folder.name.nfc().collect();
     let mut skipped = Vec::new();
     let mut entries = Vec::new();
+    let mut unreadable = Vec::new();
+    let mut complete = true;
 
     let skip = exclude.map(Path::to_path_buf);
     let walker = ignore::WalkBuilder::new(root)
@@ -50,6 +58,7 @@ pub fn scan_folder(folder: &Folder, exclude: Option<&Path>) -> Result<Scan> {
             Ok(d) => d,
             Err(e) => {
                 skipped.push(e.to_string());
+                complete = false;
                 continue;
             }
         };
@@ -66,22 +75,24 @@ pub fn scan_folder(folder: &Folder, exclude: Option<&Path>) -> Result<Scan> {
             skipped.push(format!("{}: not a regular file", path.display()));
             continue;
         }
+        let Some(remote) = remote_path(&top, root, path) else {
+            skipped.push(format!("{}: name is not valid unicode", path.display()));
+            continue;
+        };
         let meta = match dirent.metadata() {
             Ok(m) => m,
             Err(e) => {
                 skipped.push(format!("{}: {e}", path.display()));
+                unreadable.push(remote);
                 continue;
             }
         };
         // A file another process holds open exclusively (Windows) cannot be read.
         if let Err(e) = std::fs::File::open(path) {
             skipped.push(format!("{}: cannot be opened ({e})", path.display()));
+            unreadable.push(remote);
             continue;
         }
-        let Some(remote) = remote_path(&top, root, path) else {
-            skipped.push(format!("{}: name is not valid unicode", path.display()));
-            continue;
-        };
         entries.push(Entry {
             remote,
             local: path.to_path_buf(),
@@ -93,7 +104,7 @@ pub fn scan_folder(folder: &Folder, exclude: Option<&Path>) -> Result<Scan> {
 
     entries.sort_by(|a, b| a.remote.cmp(&b.remote));
     drop_case_conflicts(&mut entries, &mut skipped);
-    Ok(Scan { entries, skipped })
+    Ok(Scan { entries, skipped, unreadable, complete })
 }
 
 /// Paths that differ only by case would collide on case-insensitive filesystems (mirrors, restores).
