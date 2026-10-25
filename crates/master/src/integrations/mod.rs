@@ -11,10 +11,10 @@ pub mod spec;
 
 use crate::platform::db::{self, Db, Device};
 use crate::platform::store::Store;
-use crate::repo::alerts;
+use crate::repo::{alerts, mirrors, sources};
 use anyhow::{anyhow, Result};
 use fafnirx_common::unix_now;
-use postgres::{GenericClient, Row};
+use postgres::GenericClient;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -147,66 +147,32 @@ pub async fn spawn(db: Db, store: Arc<Store>, data_dir: PathBuf) {
     });
 }
 
-const DUE: &str = "(run_requested = 1 OR (enabled = 1 AND (last_run_at IS NULL OR last_run_at + interval_secs <= $1)))";
-
 /// Runs a blocking claim on a blocking thread.
 async fn blocking_claim<T: Send + 'static>(db: &Db, claim: fn(&Db) -> Option<T>) -> Option<T> {
     let db = db.clone();
     tokio::task::spawn_blocking(move || claim(&db)).await.ok().flatten()
 }
 
-/// Picks one due row of `table` (a source or a mirror), marks it running and builds it from `columns`,
-/// which follow `id` (column 0). One statement, so a row can only be claimed once. `key` is who the change is announced to.
-fn claim<T>(db: &Db, table: Table, columns: &str, build: fn(&Row) -> T, key: fn(&T) -> String) -> Option<T> {
-    let mut conn = db.get().ok()?;
-    let row = conn
-        .query_opt(
-            &format!(
-                "UPDATE {table} SET last_status = 'running', last_run_at = $1, run_requested = 0, last_message = ''
-                 WHERE id = (SELECT id FROM {table} WHERE {DUE} AND last_status IS DISTINCT FROM 'running'
-                             ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)
-                 RETURNING id, {columns}"
-            ),
-            &[&unix_now()],
-        )
-        .map_err(|e| tracing::error!("claim from {table}: {e}"))
-        .ok()??;
-    let item = build(&row);
-    let _ = db::notify(&mut *conn, "jobs", &key(&item));
-    Some(item)
-}
-
 fn claim_source(db: &Db) -> Option<SourceRow> {
-    claim(
-        db,
-        Table::Sources,
-        "kind, config, device_id, (SELECT d.folder FROM devices d WHERE d.id = device_id)",
-        |r| SourceRow {
-            id: r.get(0),
-            kind: r.get(1),
-            config: r.get(2),
-            device: Device { id: r.get(3), name: r.get(4) },
-        },
-        |s| s.device.name.clone(),
-    )
+    let mut conn = db.get().ok()?;
+    let s = sources::claim(&mut *conn, unix_now()).map_err(|e| tracing::error!("claim from sources: {e}")).ok()??;
+    let _ = db::notify(&mut *conn, "jobs", &s.folder);
+    Some(SourceRow { id: s.id, kind: s.kind, config: s.config, device: Device { id: s.device_id, name: s.folder } })
 }
 
 fn claim_mirror(db: &Db) -> Option<MirrorRow> {
-    claim(
-        db,
-        Table::Mirrors,
-        "name, remote_type, options, remote_path, keep_runs, remote",
-        |r| MirrorRow {
-            id: r.get(0),
-            name: r.get(1),
-            remote_type: r.get(2),
-            options: r.get(3),
-            remote_path: r.get(4),
-            keep_runs: r.get(5),
-            remote: r.get(6),
-        },
-        |_| "mirrors".into(),
-    )
+    let mut conn = db.get().ok()?;
+    let m = mirrors::claim(&mut *conn, unix_now()).map_err(|e| tracing::error!("claim from mirrors: {e}")).ok()??;
+    let _ = db::notify(&mut *conn, "jobs", "mirrors");
+    Some(MirrorRow {
+        id: m.id,
+        name: m.name,
+        remote_type: m.remote_type,
+        options: m.options,
+        remote_path: m.remote_path,
+        keep_runs: m.keep_runs,
+        remote: m.remote,
+    })
 }
 
 /// Messages are shown in the web UI: start them with a capital letter.
@@ -227,10 +193,10 @@ fn finish(
     let message = &sentence(message);
     let ts = unix_now();
     let ok_at = if status == "failed" { None } else { Some(ts) };
-    let _ = conn.execute(
-        &format!("UPDATE {table} SET last_status = $1, last_message = $2, last_ok_at = COALESCE($3, last_ok_at) WHERE id = $4"),
-        &[&status, message, &ok_at, &id],
-    );
+    let _ = match table {
+        Table::Sources => sources::finish(conn, id, status, message, ok_at),
+        Table::Mirrors => mirrors::finish(conn, id, status, message, ok_at),
+    };
     let _ = db::notify(
         conn,
         "jobs",

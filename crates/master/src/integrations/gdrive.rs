@@ -8,7 +8,7 @@ use crate::files::ingest::{self, NewVersion};
 use crate::integrations::{Outcome, SourceRow};
 use crate::platform::db::{self, Db, Device};
 use crate::platform::store::Store;
-use crate::repo::files;
+use crate::repo::{files, sources};
 use anyhow::{anyhow, bail, Context, Result};
 use fafnirx_common::{clean_remote_path, unix_now, ChunkHasher, HASH_LEN};
 use serde::Deserialize;
@@ -409,12 +409,7 @@ fn commit(
         renamed_from,
     };
     ingest::commit_version(conn, store, &content.path, &version)?;
-    conn.execute(
-        "INSERT INTO source_items (source_id, remote_id, path, remote_version) VALUES ($1, $2, $3, $4)
-         ON CONFLICT (source_id, remote_id) DO UPDATE SET path = excluded.path, remote_version = excluded.remote_version,
-                                                          removed_in_web_app = FALSE",
-        &[&source_id, &item.id, &item.path, &item.marker],
-    )?;
+    sources::remember_item(conn, source_id, &item.id, &item.path, &item.marker)?;
     Ok(())
 }
 
@@ -429,27 +424,12 @@ pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
     let device_id = device.id;
 
     let (known, live, removed): (Known, HashSet<String>, HashSet<String>) = db::with(&db, move |c| {
-        let known = c
-            .query("SELECT remote_id, path, remote_version FROM source_items WHERE source_id = $1", &[&source_id])?
-            .iter()
-            .map(|r| (r.get(0), (r.get(1), r.get(2))))
-            .collect();
-        let live = c
-            .query("SELECT path FROM files WHERE device_id = $1 AND deleted_at IS NULL", &[&device_id])?
-            .iter()
-            .map(|r| r.get(0))
-            .collect();
+        let known =
+            sources::items(c, source_id)?.into_iter().map(|(id, path, version)| (id, (path, version))).collect();
+        let live = sources::live_paths(c, device_id)?.into_iter().collect();
         // Deleted in the web app: still in the trash, or already removed by the retention job (then only the
         // source's own record remembers it).
-        let removed = c
-            .query(
-                "SELECT path FROM files WHERE device_id = $1 AND deleted_at IS NOT NULL AND deleted_by = 'web'
-                 UNION SELECT path FROM source_items WHERE source_id = $2 AND removed_in_web_app",
-                &[&device_id, &source_id],
-            )?
-            .iter()
-            .map(|r| r.get(0))
-            .collect();
+        let removed = sources::removed_in_web_app(c, device_id, source_id)?.into_iter().collect();
         Ok((known, live, removed))
     })
     .await?;
@@ -467,7 +447,7 @@ pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
         let deleted = db::with(&db, move |c| {
             let changed = ingest::mark_deleted(c, &store, &device, &path, false)?;
             if let Some(id) = remote_id {
-                c.execute("DELETE FROM source_items WHERE source_id = $1 AND remote_id = $2", &[&source_id, &id])?;
+                sources::forget_item(c, source_id, &id)?;
             }
             Ok(changed)
         })

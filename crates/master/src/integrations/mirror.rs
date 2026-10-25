@@ -14,6 +14,7 @@
 use crate::integrations::{JobReport, MirrorRow};
 use crate::platform::db::{self, Db};
 use crate::platform::store::Store;
+use crate::repo::mirrors;
 use anyhow::{bail, Context, Result};
 use fafnirx_common::{unix_now, HASH_LEN};
 use postgres::Client;
@@ -210,24 +211,15 @@ fn stage_file(store: &Store, dest: &Path, f: &LiveFile) -> Result<()> {
 }
 
 fn load_live(conn: &mut Client) -> Result<Vec<LiveFile>> {
-    let rows = conn.query(
-        "SELECT f.device_id, d.folder, f.path, v.root_hash, v.size, v.mtime
-         FROM files f JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id
-         WHERE f.deleted_at IS NULL ORDER BY d.folder, f.path",
-        &[],
-    )?;
-    Ok(rows
-        .iter()
-        .map(|r| {
-            let root: Vec<u8> = r.get(3);
-            LiveFile {
-                device_id: r.get(0),
-                ns: r.get(1),
-                path: r.get(2),
-                root: root.try_into().unwrap_or([0; HASH_LEN]),
-                size: r.get::<_, i64>(4) as u64,
-                mtime: r.get(5),
-            }
+    Ok(mirrors::live_files(conn)?
+        .into_iter()
+        .map(|f| LiveFile {
+            device_id: f.device_id,
+            ns: f.folder,
+            path: f.path,
+            root: f.root_hash.try_into().unwrap_or([0; HASH_LEN]),
+            size: f.size as u64,
+            mtime: f.mtime,
         })
         .collect())
 }
@@ -237,8 +229,8 @@ type Mirrored = HashMap<i64, HashMap<String, Vec<u8>>>;
 
 fn load_mirrored(conn: &mut Client, mirror_id: i64) -> Result<Mirrored> {
     let mut mirrored = Mirrored::new();
-    for row in conn.query("SELECT device_id, path, root_hash FROM mirror_items WHERE mirror_id = $1", &[&mirror_id])? {
-        mirrored.entry(row.get(0)).or_default().insert(row.get(1), row.get(2));
+    for (device_id, path, root) in mirrors::items(conn, mirror_id)? {
+        mirrored.entry(device_id).or_default().insert(path, root);
     }
     Ok(mirrored)
 }
@@ -333,10 +325,7 @@ pub async fn run(db: Db, store: Arc<Store>, data_dir: PathBuf, m: MirrorRow) -> 
     let result = job.run().await;
     if let Ok(o) = &result {
         let (id, files, bytes) = (job.m.id, o.total_files as i64, o.bytes as i64);
-        let _ = db::with(&job.db, move |c| {
-            Ok(c.execute("UPDATE mirrors SET last_files = $1, last_bytes = $2 WHERE id = $3", &[&files, &bytes, &id])?)
-        })
-        .await;
+        let _ = db::with(&job.db, move |c| Ok(mirrors::set_totals(c, id, files, bytes)?)).await;
     }
     result
 }
@@ -421,11 +410,7 @@ impl Job {
                 db::with(&self.db, move |c| {
                     let mut tx = c.transaction()?;
                     for (device_id, path, root) in rows {
-                        tx.execute(
-                            "INSERT INTO mirror_items (mirror_id, device_id, path, root_hash) VALUES ($1, $2, $3, $4)
-                             ON CONFLICT (mirror_id, device_id, path) DO UPDATE SET root_hash = excluded.root_hash",
-                            &[&mirror_id, &device_id, &path, &root],
-                        )?;
+                        mirrors::remember_item(&mut tx, mirror_id, device_id, &path, &root)?;
                     }
                     Ok(tx.commit()?)
                 })
@@ -443,11 +428,8 @@ impl Job {
         if removed.is_empty() {
             return Ok(());
         }
-        let namespaces: HashMap<i64, String> = db::with(&self.db, |c| {
-            let rows = c.query("SELECT id, folder FROM devices", &[])?;
-            Ok(rows.iter().map(|r| (r.get(0), r.get(1))).collect())
-        })
-        .await?;
+        let namespaces: HashMap<i64, String> =
+            db::with(&self.db, |c| Ok(mirrors::device_folders(c)?.into_iter().collect())).await?;
         let list: Vec<String> =
             removed.iter().filter_map(|(d, p)| namespaces.get(d).map(|ns| relative(ns, p))).collect();
         let list_file = self.stage_root.join("removed.txt");
@@ -469,10 +451,7 @@ impl Job {
         db::with(&self.db, move |c| {
             let mut tx = c.transaction()?;
             for (device_id, path) in gone {
-                tx.execute(
-                    "DELETE FROM mirror_items WHERE mirror_id = $1 AND device_id = $2 AND path = $3",
-                    &[&mirror_id, &device_id, &path],
-                )?;
+                mirrors::forget_item(&mut tx, mirror_id, device_id, &path)?;
             }
             Ok(tx.commit()?)
         })
