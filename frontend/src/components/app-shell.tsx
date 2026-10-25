@@ -32,7 +32,7 @@ const NAV: { title: string; items: { to: string; label: string; icon: typeof Ima
     ],
   },
   {
-    title: msg('Backup'),
+    title: msg('Storage'),
     items: [
       { to: '/', label: msg('Dashboard'), icon: LayoutDashboard, end: true, for: 'all' },
       { to: '/files', label: msg('Files'), icon: FolderOpen, for: 'all' },

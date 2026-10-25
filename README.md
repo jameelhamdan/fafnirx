@@ -4,6 +4,12 @@ Collect the files of your computers and phones on a server you own, keep every v
 and copy them offsite. Data flows one way: devices → master → mirrors. A device only reads its own folders and sends
 them; the master never changes a file on a device, and a device can never read or list what the master holds.
 
+The **core** is a storage service: the client, the master that keeps every version as plain files, users and roles, the
+file browser, retention and offsite mirrors. **Add-ons** build on the same files and database: the photo library
+(timeline, map, albums, tags), video streaming and Google Drive sources. For now everything ships together; the add-ons
+are kept apart in the code so that they can become installable modules later (see
+[Development](docs/development.md#core-and-add-ons)).
+
 ```mermaid
 flowchart LR
     D["Devices<br/>(client: fafnirx)"] -->|"upload only"| M["Master<br/>(fafnirx-master + web app + PostgreSQL)"]
@@ -64,7 +70,7 @@ Per-platform steps, upgrades and settings: [Installation](docs/installation.md).
 ## Documentation
 
 | | |
-|---|---|
+| --- | --- |
 | [Overview](docs/overview.md) | What it is and how files move |
 | [Installation](docs/installation.md) | The master and the clients, on every platform |
 | [Usage](docs/usage.md) | The web app, the client, sources, mirrors, restoring |
@@ -76,7 +82,7 @@ Per-platform steps, upgrades and settings: [Installation](docs/installation.md).
 ## Repository
 
 | Path | What |
-|---|---|
+| --- | --- |
 | `crates/master` | `fafnirx-master`, organized in apps (`devices`, `files`, `library`, `integrations`, `monitoring`, `web`, `platform`), with its database `migrations` |
 | `crates/client` | `fafnirx`: the client, tray and self-update |
 | `crates/db` | `fafnirx-db`: the typed queries, made at build time from `queries/*.sql` (not stored in the repository) |
