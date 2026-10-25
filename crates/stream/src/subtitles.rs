@@ -146,21 +146,10 @@ pub async fn track(
         meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
     let key = hex::encode(&Sha256::digest(format!("{}\0{}\0{mtime}", track.file, meta.len()).as_bytes())[..8]);
     let out = video.dir.join(format!("sub-{key}.vtt"));
-    if !out.is_file() {
-        let lock = app.lock_for(&out);
-        let made = {
-            let _held = lock.lock().await;
-            if out.is_file() {
-                Ok(())
-            } else {
-                convert_subtitles(&app, &path, &out, &track.language).await
-            }
-        };
-        app.done_with(&out);
-        made.map_err(|e| {
-            fail(StatusCode::UNSUPPORTED_MEDIA_TYPE, format!("that subtitle file cannot be read: {e:#}"))
-        })?;
-    }
+    let (app_ref, language) = (&*app, &track.language);
+    app.make_once(&out, |tmp| async move { convert_subtitles(app_ref, &path, &tmp, language).await })
+        .await
+        .map_err(|e| fail(StatusCode::UNSUPPORTED_MEDIA_TYPE, format!("that subtitle file cannot be read: {e:#}")))?;
     let bytes = std::fs::read(&out).map_err(|e| internal("reading the track", e.into()))?;
     Ok(reply("text/vtt; charset=utf-8", "private, max-age=3600", bytes))
 }
@@ -168,55 +157,30 @@ pub async fn track(
 /// A track inside the video as WebVTT, taken out with ffmpeg once per version of the video.
 async fn embedded_track(app: &App, video: &Video, stream: usize) -> Result<Response, Failure> {
     let out = video.dir.join(format!("sub-s{stream}.vtt"));
-    if !out.is_file() {
-        let lock = app.lock_for(&out);
-        let made = {
-            let _held = lock.lock().await;
-            if out.is_file() {
-                Ok(())
-            } else {
-                let _permit = app.jobs.acquire().await.expect("the semaphore is never closed");
-                let tmp = out.with_extension("tmp");
-                let args = ffmpeg::embedded_subtitle_args(&video.source, stream, &tmp);
-                let result = ffmpeg::run(&app.cfg.ffmpeg, &args).await;
-                match result {
-                    Ok(()) => std::fs::rename(&tmp, &out).map_err(Into::into),
-                    Err(e) => {
-                        let _ = std::fs::remove_file(&tmp);
-                        Err(e)
-                    }
-                }
-            }
-        };
-        app.done_with(&out);
-        made.map_err(|e| {
-            fail(StatusCode::UNSUPPORTED_MEDIA_TYPE, format!("that subtitle track cannot be read: {e:#}"))
-        })?;
-    }
+    app.make_once(&out, |tmp| async move {
+        let args = ffmpeg::embedded_subtitle_args(&video.source, stream, &tmp);
+        ffmpeg::run(&app.cfg.ffmpeg, &args).await
+    })
+    .await
+    .map_err(|e| fail(StatusCode::UNSUPPORTED_MEDIA_TYPE, format!("that subtitle track cannot be read: {e:#}")))?;
     let bytes = std::fs::read(&out).map_err(|e| internal("reading the track", e.into()))?;
     Ok(reply("text/vtt; charset=utf-8", "private, max-age=3600", bytes))
 }
 
-/// Writes `source` as WebVTT to `out`. A WebVTT file that is already UTF-8 is used as it is; anything else goes through
+/// Writes `source` as WebVTT to `tmp`. A WebVTT file that is already UTF-8 is used as it is; anything else goes through
 /// ffmpeg, in the character set it is written in: UTF-8 or UTF-16 as they are, an older file in the code page of its language.
-async fn convert_subtitles(app: &App, source: &Path, out: &Path, language: &str) -> anyhow::Result<()> {
+async fn convert_subtitles(app: &App, source: &Path, tmp: &Path, language: &str) -> anyhow::Result<()> {
     let bytes = std::fs::read(source)?;
     let body = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(&bytes);
-    let tmp = out.with_extension("tmp");
     let is_vtt = source.extension().is_some_and(|e| e.eq_ignore_ascii_case("vtt"));
     let utf16 = bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]);
     let utf8 = std::str::from_utf8(body).is_ok();
     if is_vtt && utf8 && body.starts_with(b"WEBVTT") {
-        std::fs::write(&tmp, body)?;
+        std::fs::write(tmp, body)?;
     } else {
         let charset = (!utf8 && !utf16).then(|| hls::legacy_charset(language));
-        let args = ffmpeg::subtitle_args(source, &tmp, charset);
-        if let Err(e) = ffmpeg::run(&app.cfg.ffmpeg, &args).await {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(e);
-        }
+        ffmpeg::run(&app.cfg.ffmpeg, &ffmpeg::subtitle_args(source, tmp, charset)).await?;
     }
-    std::fs::rename(&tmp, out)?;
     Ok(())
 }
 

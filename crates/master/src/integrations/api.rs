@@ -336,18 +336,34 @@ fn touch(c: &mut Client, table: Table, id: i64, key: &str, what: Touch) -> anyho
     Ok(())
 }
 
+/// Does `what` to the source `<user>/<name>`, if the user manages it.
+async fn touch_source(state: &Shared, who: Access, user: String, name: String, what: Touch) -> Res<Done> {
+    who.require_workspace()?;
+    run(state, move |c| {
+        let (id, folder) = find_source(c, &who, &user, &name)?;
+        touch(c, Table::Sources, id, &folder, what)
+    })
+    .await?;
+    done()
+}
+
+/// Does `what` to the mirror called `name` (administrators).
+async fn touch_mirror(state: &Shared, who: Access, name: String, what: Touch) -> Res<Done> {
+    who.require_admin()?;
+    run(state, move |c| {
+        let id = mirror_id(c, &name)?;
+        touch(c, Table::Mirrors, id, "mirrors", what)
+    })
+    .await?;
+    done()
+}
+
 pub async fn run_source(
     State(state): State<Shared>,
     Extension(who): Extension<Access>,
     Path((user, name)): Path<(String, String)>,
 ) -> Res<Done> {
-    who.require_workspace()?;
-    run(&state, move |c| {
-        let (id, folder) = find_source(c, &who, &user, &name)?;
-        touch(c, Table::Sources, id, &folder, Touch::RunNow)
-    })
-    .await?;
-    done()
+    touch_source(&state, who, user, name, Touch::RunNow).await
 }
 
 pub async fn toggle_source(
@@ -355,13 +371,7 @@ pub async fn toggle_source(
     Extension(who): Extension<Access>,
     Path((user, name)): Path<(String, String)>,
 ) -> Res<Done> {
-    who.require_workspace()?;
-    run(&state, move |c| {
-        let (id, folder) = find_source(c, &who, &user, &name)?;
-        touch(c, Table::Sources, id, &folder, Touch::ToggleEnabled)
-    })
-    .await?;
-    done()
+    touch_source(&state, who, user, name, Touch::ToggleEnabled).await
 }
 
 pub async fn run_mirror(
@@ -369,13 +379,7 @@ pub async fn run_mirror(
     Extension(who): Extension<Access>,
     Path(name): Path<String>,
 ) -> Res<Done> {
-    who.require_admin()?;
-    run(&state, move |c| {
-        let id = mirror_id(c, &name)?;
-        touch(c, Table::Mirrors, id, "mirrors", Touch::RunNow)
-    })
-    .await?;
-    done()
+    touch_mirror(&state, who, name, Touch::RunNow).await
 }
 
 pub async fn toggle_mirror(
@@ -383,13 +387,7 @@ pub async fn toggle_mirror(
     Extension(who): Extension<Access>,
     Path(name): Path<String>,
 ) -> Res<Done> {
-    who.require_admin()?;
-    run(&state, move |c| {
-        let id = mirror_id(c, &name)?;
-        touch(c, Table::Mirrors, id, "mirrors", Touch::ToggleEnabled)
-    })
-    .await?;
-    done()
+    touch_mirror(&state, who, name, Touch::ToggleEnabled).await
 }
 
 #[derive(Deserialize)]
