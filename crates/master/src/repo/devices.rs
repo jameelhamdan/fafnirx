@@ -210,3 +210,18 @@ pub fn kind_of(c: &mut impl GenericClient, id: i64) -> Result<String, Error> {
 pub fn by_folder(c: &mut impl GenericClient, folder: &str) -> Result<Option<(i64, String)>, Error> {
     Ok(q::device_by_folder().bind(&mut Pg(c), &folder).opt()?.map(|d| (d.id, d.folder)))
 }
+
+/// The kind of the device with this folder name.
+pub fn kind_of_folder(c: &mut impl GenericClient, folder: &str) -> Result<Option<String>, Error> {
+    q::device_kind_by_folder().bind(&mut Pg(c), &folder).opt()
+}
+
+/// The id and kind of the device with this folder name.
+pub fn id_and_kind(c: &mut impl GenericClient, folder: &str) -> Result<Option<(i64, String)>, Error> {
+    Ok(q::device_id_and_kind_by_folder().bind(&mut Pg(c), &folder).opt()?.map(|d| (d.id, d.kind)))
+}
+
+/// The id of the local folder `name` of a user, made if it is new.
+pub fn ensure_local(c: &mut impl GenericClient, user_id: i64, name: &str, now: i64) -> Result<i64, Error> {
+    q::ensure_local_device().bind(&mut Pg(c), &name, &now, &user_id).one()
+}

@@ -89,3 +89,8 @@ pub fn login_credentials(c: &mut impl GenericClient, name: &str) -> Result<Optio
 pub fn password_hash_of(c: &mut impl GenericClient, id: i64) -> Result<String, Error> {
     q::password_hash_of().bind(&mut Pg(c), &id).one()
 }
+
+/// The id of an enabled user who can have devices of their own (not a read-only one).
+pub fn who_can_have_devices(c: &mut impl GenericClient, name: &str) -> Result<Option<i64>, Error> {
+    q::user_who_can_have_devices().bind(&mut Pg(c), &name).opt()
+}

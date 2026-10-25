@@ -103,6 +103,27 @@ pub struct FoldersBelowParams<T1: crate::StringSql> {
     pub below: T1,
     pub include_deleted: bool,
 }
+#[derive(Debug)]
+pub struct FileRowParams<T1: crate::StringSql> {
+    pub device_id: i64,
+    pub path: T1,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct VersionOfFileParams {
+    pub version_id: i64,
+    pub file_id: i64,
+}
+#[derive(Debug)]
+pub struct CurrentMtimeParams<T1: crate::StringSql> {
+    pub device_id: i64,
+    pub path: T1,
+}
+#[derive(Debug)]
+pub struct LiveFilesBelowParams<T1: crate::StringSql, T2: crate::StringSql> {
+    pub device_id: i64,
+    pub path: T1,
+    pub below: T2,
+}
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub struct LockFileRow {
     pub id: i64,
@@ -258,6 +279,76 @@ pub struct FoldersBelowBorrowed<'a> {
 impl<'a> From<FoldersBelowBorrowed<'a>> for FoldersBelow {
     fn from(FoldersBelowBorrowed { name, files, bytes, changed, deleted_at }: FoldersBelowBorrowed<'a>) -> Self {
         Self { name: name.into(), files, bytes, changed, deleted_at }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Copy)]
+pub struct FileRow {
+    pub id: i64,
+    pub current_version_id: Option<i64>,
+    pub deleted_at: Option<i64>,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct VersionOfFile {
+    pub root_hash: Vec<u8>,
+    pub size: i64,
+}
+pub struct VersionOfFileBorrowed<'a> {
+    pub root_hash: &'a [u8],
+    pub size: i64,
+}
+impl<'a> From<VersionOfFileBorrowed<'a>> for VersionOfFile {
+    fn from(VersionOfFileBorrowed { root_hash, size }: VersionOfFileBorrowed<'a>) -> Self {
+        Self { root_hash: root_hash.into(), size }
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileById {
+    pub folder: String,
+    pub path: String,
+    pub current_version_id: i64,
+    pub deleted_at: Option<i64>,
+    pub root_hash: Vec<u8>,
+    pub size: i64,
+    pub codec: Option<String>,
+}
+pub struct FileByIdBorrowed<'a> {
+    pub folder: &'a str,
+    pub path: &'a str,
+    pub current_version_id: i64,
+    pub deleted_at: Option<i64>,
+    pub root_hash: &'a [u8],
+    pub size: i64,
+    pub codec: Option<&'a str>,
+}
+impl<'a> From<FileByIdBorrowed<'a>> for FileById {
+    fn from(
+        FileByIdBorrowed { folder, path, current_version_id, deleted_at, root_hash, size, codec }: FileByIdBorrowed<'a>,
+    ) -> Self {
+        Self {
+            folder: folder.into(),
+            path: path.into(),
+            current_version_id,
+            deleted_at,
+            root_hash: root_hash.into(),
+            size,
+            codec: codec.map(|v| v.into()),
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveFilesBelow {
+    pub path: String,
+    pub size: i64,
+    pub mtime: i64,
+}
+pub struct LiveFilesBelowBorrowed<'a> {
+    pub path: &'a str,
+    pub size: i64,
+    pub mtime: i64,
+}
+impl<'a> From<LiveFilesBelowBorrowed<'a>> for LiveFilesBelow {
+    fn from(LiveFilesBelowBorrowed { path, size, mtime }: LiveFilesBelowBorrowed<'a>) -> Self {
+        Self { path: path.into(), size, mtime }
     }
 }
 use crate::client::sync::GenericClient;
@@ -766,6 +857,202 @@ where
 {
     pub fn map<R>(self, mapper: fn(FoldersBelowBorrowed) -> R) -> FoldersBelowQuery<'c, 'a, 's, C, R, N> {
         FoldersBelowQuery {
+            client: self.client,
+            params: self.params,
+            query: self.query,
+            cached: self.cached,
+            extractor: self.extractor,
+            mapper,
+        }
+    }
+    pub fn one(self) -> Result<T, postgres::Error> {
+        let row = crate::client::sync::one(self.client, self.query, &self.params, self.cached)?;
+        Ok((self.mapper)((self.extractor)(&row)?))
+    }
+    pub fn all(self) -> Result<Vec<T>, postgres::Error> {
+        self.iter()?.collect()
+    }
+    pub fn opt(self) -> Result<Option<T>, postgres::Error> {
+        let opt_row = crate::client::sync::opt(self.client, self.query, &self.params, self.cached)?;
+        Ok(opt_row
+            .map(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+            .transpose()?)
+    }
+    pub fn iter(self) -> Result<impl Iterator<Item = Result<T, postgres::Error>> + 'c, postgres::Error> {
+        let stream = crate::client::sync::raw(self.client, self.query, crate::slice_iter(&self.params), self.cached)?;
+        let mapped = stream.iterator().map(move |res| {
+            res.and_then(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+        });
+        Ok(mapped)
+    }
+}
+pub struct FileRowQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
+    client: &'c mut C,
+    params: [&'a (dyn postgres_types::ToSql + Sync); N],
+    query: &'static str,
+    cached: Option<&'s postgres::Statement>,
+    extractor: fn(&postgres::Row) -> Result<FileRow, postgres::Error>,
+    mapper: fn(FileRow) -> T,
+}
+impl<'c, 'a, 's, C, T: 'c, const N: usize> FileRowQuery<'c, 'a, 's, C, T, N>
+where
+    C: GenericClient,
+{
+    pub fn map<R>(self, mapper: fn(FileRow) -> R) -> FileRowQuery<'c, 'a, 's, C, R, N> {
+        FileRowQuery {
+            client: self.client,
+            params: self.params,
+            query: self.query,
+            cached: self.cached,
+            extractor: self.extractor,
+            mapper,
+        }
+    }
+    pub fn one(self) -> Result<T, postgres::Error> {
+        let row = crate::client::sync::one(self.client, self.query, &self.params, self.cached)?;
+        Ok((self.mapper)((self.extractor)(&row)?))
+    }
+    pub fn all(self) -> Result<Vec<T>, postgres::Error> {
+        self.iter()?.collect()
+    }
+    pub fn opt(self) -> Result<Option<T>, postgres::Error> {
+        let opt_row = crate::client::sync::opt(self.client, self.query, &self.params, self.cached)?;
+        Ok(opt_row
+            .map(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+            .transpose()?)
+    }
+    pub fn iter(self) -> Result<impl Iterator<Item = Result<T, postgres::Error>> + 'c, postgres::Error> {
+        let stream = crate::client::sync::raw(self.client, self.query, crate::slice_iter(&self.params), self.cached)?;
+        let mapped = stream.iterator().map(move |res| {
+            res.and_then(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+        });
+        Ok(mapped)
+    }
+}
+pub struct VersionOfFileQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
+    client: &'c mut C,
+    params: [&'a (dyn postgres_types::ToSql + Sync); N],
+    query: &'static str,
+    cached: Option<&'s postgres::Statement>,
+    extractor: fn(&postgres::Row) -> Result<VersionOfFileBorrowed, postgres::Error>,
+    mapper: fn(VersionOfFileBorrowed) -> T,
+}
+impl<'c, 'a, 's, C, T: 'c, const N: usize> VersionOfFileQuery<'c, 'a, 's, C, T, N>
+where
+    C: GenericClient,
+{
+    pub fn map<R>(self, mapper: fn(VersionOfFileBorrowed) -> R) -> VersionOfFileQuery<'c, 'a, 's, C, R, N> {
+        VersionOfFileQuery {
+            client: self.client,
+            params: self.params,
+            query: self.query,
+            cached: self.cached,
+            extractor: self.extractor,
+            mapper,
+        }
+    }
+    pub fn one(self) -> Result<T, postgres::Error> {
+        let row = crate::client::sync::one(self.client, self.query, &self.params, self.cached)?;
+        Ok((self.mapper)((self.extractor)(&row)?))
+    }
+    pub fn all(self) -> Result<Vec<T>, postgres::Error> {
+        self.iter()?.collect()
+    }
+    pub fn opt(self) -> Result<Option<T>, postgres::Error> {
+        let opt_row = crate::client::sync::opt(self.client, self.query, &self.params, self.cached)?;
+        Ok(opt_row
+            .map(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+            .transpose()?)
+    }
+    pub fn iter(self) -> Result<impl Iterator<Item = Result<T, postgres::Error>> + 'c, postgres::Error> {
+        let stream = crate::client::sync::raw(self.client, self.query, crate::slice_iter(&self.params), self.cached)?;
+        let mapped = stream.iterator().map(move |res| {
+            res.and_then(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+        });
+        Ok(mapped)
+    }
+}
+pub struct FileByIdQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
+    client: &'c mut C,
+    params: [&'a (dyn postgres_types::ToSql + Sync); N],
+    query: &'static str,
+    cached: Option<&'s postgres::Statement>,
+    extractor: fn(&postgres::Row) -> Result<FileByIdBorrowed, postgres::Error>,
+    mapper: fn(FileByIdBorrowed) -> T,
+}
+impl<'c, 'a, 's, C, T: 'c, const N: usize> FileByIdQuery<'c, 'a, 's, C, T, N>
+where
+    C: GenericClient,
+{
+    pub fn map<R>(self, mapper: fn(FileByIdBorrowed) -> R) -> FileByIdQuery<'c, 'a, 's, C, R, N> {
+        FileByIdQuery {
+            client: self.client,
+            params: self.params,
+            query: self.query,
+            cached: self.cached,
+            extractor: self.extractor,
+            mapper,
+        }
+    }
+    pub fn one(self) -> Result<T, postgres::Error> {
+        let row = crate::client::sync::one(self.client, self.query, &self.params, self.cached)?;
+        Ok((self.mapper)((self.extractor)(&row)?))
+    }
+    pub fn all(self) -> Result<Vec<T>, postgres::Error> {
+        self.iter()?.collect()
+    }
+    pub fn opt(self) -> Result<Option<T>, postgres::Error> {
+        let opt_row = crate::client::sync::opt(self.client, self.query, &self.params, self.cached)?;
+        Ok(opt_row
+            .map(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+            .transpose()?)
+    }
+    pub fn iter(self) -> Result<impl Iterator<Item = Result<T, postgres::Error>> + 'c, postgres::Error> {
+        let stream = crate::client::sync::raw(self.client, self.query, crate::slice_iter(&self.params), self.cached)?;
+        let mapped = stream.iterator().map(move |res| {
+            res.and_then(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+        });
+        Ok(mapped)
+    }
+}
+pub struct LiveFilesBelowQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
+    client: &'c mut C,
+    params: [&'a (dyn postgres_types::ToSql + Sync); N],
+    query: &'static str,
+    cached: Option<&'s postgres::Statement>,
+    extractor: fn(&postgres::Row) -> Result<LiveFilesBelowBorrowed, postgres::Error>,
+    mapper: fn(LiveFilesBelowBorrowed) -> T,
+}
+impl<'c, 'a, 's, C, T: 'c, const N: usize> LiveFilesBelowQuery<'c, 'a, 's, C, T, N>
+where
+    C: GenericClient,
+{
+    pub fn map<R>(self, mapper: fn(LiveFilesBelowBorrowed) -> R) -> LiveFilesBelowQuery<'c, 'a, 's, C, R, N> {
+        LiveFilesBelowQuery {
             client: self.client,
             params: self.params,
             query: self.query,
@@ -1573,5 +1860,201 @@ impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql>
         params: &'a FoldersBelowParams<T1>,
     ) -> FoldersBelowQuery<'c, 'a, 's, C, FoldersBelow, 4> {
         self.bind(client, &params.from, &params.device_id, &params.below, &params.include_deleted)
+    }
+}
+pub struct FileRowStmt(&'static str, Option<postgres::Statement>);
+pub fn file_row() -> FileRowStmt {
+    FileRowStmt("SELECT id, current_version_id, deleted_at FROM files WHERE device_id = $1 AND path = $2", None)
+}
+impl FileRowStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient, T1: crate::StringSql>(
+        &'s self,
+        client: &'c mut C,
+        device_id: &'a i64,
+        path: &'a T1,
+    ) -> FileRowQuery<'c, 'a, 's, C, FileRow, 2> {
+        FileRowQuery {
+            client,
+            params: [device_id, path],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row: &postgres::Row| -> Result<FileRow, postgres::Error> {
+                Ok(FileRow { id: row.try_get(0)?, current_version_id: row.try_get(1)?, deleted_at: row.try_get(2)? })
+            },
+            mapper: |it| FileRow::from(it),
+        }
+    }
+}
+impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql>
+    crate::client::sync::Params<'c, 'a, 's, FileRowParams<T1>, FileRowQuery<'c, 'a, 's, C, FileRow, 2>, C>
+    for FileRowStmt
+{
+    fn params(&'s self, client: &'c mut C, params: &'a FileRowParams<T1>) -> FileRowQuery<'c, 'a, 's, C, FileRow, 2> {
+        self.bind(client, &params.device_id, &params.path)
+    }
+}
+pub struct VersionOfFileStmt(&'static str, Option<postgres::Statement>);
+pub fn version_of_file() -> VersionOfFileStmt {
+    VersionOfFileStmt("SELECT root_hash, size FROM versions WHERE id = $1 AND file_id = $2", None)
+}
+impl VersionOfFileStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient>(
+        &'s self,
+        client: &'c mut C,
+        version_id: &'a i64,
+        file_id: &'a i64,
+    ) -> VersionOfFileQuery<'c, 'a, 's, C, VersionOfFile, 2> {
+        VersionOfFileQuery {
+            client,
+            params: [version_id, file_id],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row: &postgres::Row| -> Result<VersionOfFileBorrowed, postgres::Error> {
+                Ok(VersionOfFileBorrowed { root_hash: row.try_get(0)?, size: row.try_get(1)? })
+            },
+            mapper: |it| VersionOfFile::from(it),
+        }
+    }
+}
+impl<'c, 'a, 's, C: GenericClient>
+    crate::client::sync::Params<'c, 'a, 's, VersionOfFileParams, VersionOfFileQuery<'c, 'a, 's, C, VersionOfFile, 2>, C>
+    for VersionOfFileStmt
+{
+    fn params(
+        &'s self,
+        client: &'c mut C,
+        params: &'a VersionOfFileParams,
+    ) -> VersionOfFileQuery<'c, 'a, 's, C, VersionOfFile, 2> {
+        self.bind(client, &params.version_id, &params.file_id)
+    }
+}
+pub struct FileByIdStmt(&'static str, Option<postgres::Statement>);
+pub fn file_by_id() -> FileByIdStmt {
+    FileByIdStmt(
+        "SELECT d.folder, f.path, f.current_version_id, f.deleted_at, v.root_hash, v.size, m.codec FROM files f JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id LEFT JOIN file_meta m ON m.root_hash = v.root_hash WHERE f.id = $1",
+        None,
+    )
+}
+impl FileByIdStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient>(
+        &'s self,
+        client: &'c mut C,
+        id: &'a i64,
+    ) -> FileByIdQuery<'c, 'a, 's, C, FileById, 1> {
+        FileByIdQuery {
+            client,
+            params: [id],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row: &postgres::Row| -> Result<FileByIdBorrowed, postgres::Error> {
+                Ok(FileByIdBorrowed {
+                    folder: row.try_get(0)?,
+                    path: row.try_get(1)?,
+                    current_version_id: row.try_get(2)?,
+                    deleted_at: row.try_get(3)?,
+                    root_hash: row.try_get(4)?,
+                    size: row.try_get(5)?,
+                    codec: row.try_get(6)?,
+                })
+            },
+            mapper: |it| FileById::from(it),
+        }
+    }
+}
+pub struct CurrentMtimeStmt(&'static str, Option<postgres::Statement>);
+pub fn current_mtime() -> CurrentMtimeStmt {
+    CurrentMtimeStmt(
+        "SELECT v.mtime FROM files f JOIN versions v ON v.id = f.current_version_id WHERE f.device_id = $1 AND f.path = $2",
+        None,
+    )
+}
+impl CurrentMtimeStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient, T1: crate::StringSql>(
+        &'s self,
+        client: &'c mut C,
+        device_id: &'a i64,
+        path: &'a T1,
+    ) -> I64Query<'c, 'a, 's, C, i64, 2> {
+        I64Query {
+            client,
+            params: [device_id, path],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row| Ok(row.try_get(0)?),
+            mapper: |it| it,
+        }
+    }
+}
+impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql>
+    crate::client::sync::Params<'c, 'a, 's, CurrentMtimeParams<T1>, I64Query<'c, 'a, 's, C, i64, 2>, C>
+    for CurrentMtimeStmt
+{
+    fn params(&'s self, client: &'c mut C, params: &'a CurrentMtimeParams<T1>) -> I64Query<'c, 'a, 's, C, i64, 2> {
+        self.bind(client, &params.device_id, &params.path)
+    }
+}
+pub struct LiveFilesBelowStmt(&'static str, Option<postgres::Statement>);
+pub fn live_files_below() -> LiveFilesBelowStmt {
+    LiveFilesBelowStmt(
+        "SELECT f.path, v.size, v.mtime FROM files f JOIN versions v ON v.id = f.current_version_id WHERE f.device_id = $1 AND f.deleted_at IS NULL AND ($2 = '' OR f.path = $2 OR f.path LIKE $3)",
+        None,
+    )
+}
+impl LiveFilesBelowStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql>(
+        &'s self,
+        client: &'c mut C,
+        device_id: &'a i64,
+        path: &'a T1,
+        below: &'a T2,
+    ) -> LiveFilesBelowQuery<'c, 'a, 's, C, LiveFilesBelow, 3> {
+        LiveFilesBelowQuery {
+            client,
+            params: [device_id, path, below],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row: &postgres::Row| -> Result<LiveFilesBelowBorrowed, postgres::Error> {
+                Ok(LiveFilesBelowBorrowed { path: row.try_get(0)?, size: row.try_get(1)?, mtime: row.try_get(2)? })
+            },
+            mapper: |it| LiveFilesBelow::from(it),
+        }
+    }
+}
+impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql>
+    crate::client::sync::Params<
+        'c,
+        'a,
+        's,
+        LiveFilesBelowParams<T1, T2>,
+        LiveFilesBelowQuery<'c, 'a, 's, C, LiveFilesBelow, 3>,
+        C,
+    > for LiveFilesBelowStmt
+{
+    fn params(
+        &'s self,
+        client: &'c mut C,
+        params: &'a LiveFilesBelowParams<T1, T2>,
+    ) -> LiveFilesBelowQuery<'c, 'a, 's, C, LiveFilesBelow, 3> {
+        self.bind(client, &params.device_id, &params.path, &params.below)
     }
 }

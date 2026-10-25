@@ -87,3 +87,13 @@ SELECT kind FROM devices WHERE id = :id;
 
 --! device_by_folder
 SELECT id, folder FROM devices WHERE folder = :folder;
+
+--! device_kind_by_folder
+SELECT kind FROM devices WHERE folder = :folder;
+
+--! device_id_and_kind_by_folder
+SELECT id, kind FROM devices WHERE folder = :folder;
+
+--! ensure_local_device
+INSERT INTO devices (name, kind, token_hash, created_at, user_id) VALUES (:name, 'local', '!', :now, :user_id)
+ON CONFLICT (user_id, name) DO UPDATE SET name = devices.name RETURNING id;

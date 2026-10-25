@@ -183,3 +183,50 @@ pub fn folders_below(
 ) -> Result<Vec<Folder>, Error> {
     q::folders_below().bind(&mut Pg(c), &from, &device_id, &below, &include_deleted).all()
 }
+
+/// A path as the transfer code needs it: its row, which may be deleted.
+pub struct Located {
+    pub id: i64,
+    pub current: Option<i64>,
+    pub deleted_at: Option<i64>,
+}
+
+pub fn locate(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<Option<Located>, Error> {
+    Ok(q::file_row().bind(&mut Pg(c), &device_id, &path).opt()?.map(|r| Located {
+        id: r.id,
+        current: r.current_version_id,
+        deleted_at: r.deleted_at,
+    }))
+}
+
+/// (root hash, size) of a version of a file.
+pub fn version_content(
+    c: &mut impl GenericClient,
+    file_id: i64,
+    version_id: i64,
+) -> Result<Option<(Vec<u8>, i64)>, Error> {
+    Ok(q::version_of_file().bind(&mut Pg(c), &version_id, &file_id).opt()?.map(|v| (v.root_hash, v.size)))
+}
+
+/// The file with this id, with its device and current content.
+pub type ById = q::FileById;
+
+pub fn by_id(c: &mut impl GenericClient, id: i64) -> Result<Option<ById>, Error> {
+    q::file_by_id().bind(&mut Pg(c), &id).opt()
+}
+
+/// The modification time (unix nanoseconds) of the current version of a path.
+pub fn current_mtime(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<i64, Error> {
+    q::current_mtime().bind(&mut Pg(c), &device_id, &path).one()
+}
+
+/// The live files at or below a path as (path, size, mtime), for comparing with what is on disk.
+pub fn live_below(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<Vec<(String, i64, i64)>, Error> {
+    let below = crate::platform::db::like_prefix(&format!("{path}/"));
+    Ok(q::live_files_below()
+        .bind(&mut Pg(c), &device_id, &path, &below)
+        .all()?
+        .into_iter()
+        .map(|f| (f.path, f.size, f.mtime))
+        .collect())
+}

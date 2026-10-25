@@ -65,6 +65,12 @@ pub struct VisibleTotalsParams {
     pub all: bool,
     pub user: i64,
 }
+#[derive(Debug)]
+pub struct EnsureLocalDeviceParams<T1: crate::StringSql> {
+    pub name: T1,
+    pub now: i64,
+    pub user_id: i64,
+}
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeviceByToken {
     pub id: i64,
@@ -252,6 +258,20 @@ pub struct DeviceByFolderBorrowed<'a> {
 impl<'a> From<DeviceByFolderBorrowed<'a>> for DeviceByFolder {
     fn from(DeviceByFolderBorrowed { id, folder }: DeviceByFolderBorrowed<'a>) -> Self {
         Self { id, folder: folder.into() }
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceIdAndKindByFolder {
+    pub id: i64,
+    pub kind: String,
+}
+pub struct DeviceIdAndKindByFolderBorrowed<'a> {
+    pub id: i64,
+    pub kind: &'a str,
+}
+impl<'a> From<DeviceIdAndKindByFolderBorrowed<'a>> for DeviceIdAndKindByFolder {
+    fn from(DeviceIdAndKindByFolderBorrowed { id, kind }: DeviceIdAndKindByFolderBorrowed<'a>) -> Self {
+        Self { id, kind: kind.into() }
     }
 }
 use crate::client::sync::GenericClient;
@@ -711,6 +731,58 @@ where
 {
     pub fn map<R>(self, mapper: fn(DeviceByFolderBorrowed) -> R) -> DeviceByFolderQuery<'c, 'a, 's, C, R, N> {
         DeviceByFolderQuery {
+            client: self.client,
+            params: self.params,
+            query: self.query,
+            cached: self.cached,
+            extractor: self.extractor,
+            mapper,
+        }
+    }
+    pub fn one(self) -> Result<T, postgres::Error> {
+        let row = crate::client::sync::one(self.client, self.query, &self.params, self.cached)?;
+        Ok((self.mapper)((self.extractor)(&row)?))
+    }
+    pub fn all(self) -> Result<Vec<T>, postgres::Error> {
+        self.iter()?.collect()
+    }
+    pub fn opt(self) -> Result<Option<T>, postgres::Error> {
+        let opt_row = crate::client::sync::opt(self.client, self.query, &self.params, self.cached)?;
+        Ok(opt_row
+            .map(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+            .transpose()?)
+    }
+    pub fn iter(self) -> Result<impl Iterator<Item = Result<T, postgres::Error>> + 'c, postgres::Error> {
+        let stream = crate::client::sync::raw(self.client, self.query, crate::slice_iter(&self.params), self.cached)?;
+        let mapped = stream.iterator().map(move |res| {
+            res.and_then(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+        });
+        Ok(mapped)
+    }
+}
+pub struct DeviceIdAndKindByFolderQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
+    client: &'c mut C,
+    params: [&'a (dyn postgres_types::ToSql + Sync); N],
+    query: &'static str,
+    cached: Option<&'s postgres::Statement>,
+    extractor: fn(&postgres::Row) -> Result<DeviceIdAndKindByFolderBorrowed, postgres::Error>,
+    mapper: fn(DeviceIdAndKindByFolderBorrowed) -> T,
+}
+impl<'c, 'a, 's, C, T: 'c, const N: usize> DeviceIdAndKindByFolderQuery<'c, 'a, 's, C, T, N>
+where
+    C: GenericClient,
+{
+    pub fn map<R>(
+        self,
+        mapper: fn(DeviceIdAndKindByFolderBorrowed) -> R,
+    ) -> DeviceIdAndKindByFolderQuery<'c, 'a, 's, C, R, N> {
+        DeviceIdAndKindByFolderQuery {
             client: self.client,
             params: self.params,
             query: self.query,
@@ -1426,5 +1498,92 @@ impl DeviceByFolderStmt {
             },
             mapper: |it| DeviceByFolder::from(it),
         }
+    }
+}
+pub struct DeviceKindByFolderStmt(&'static str, Option<postgres::Statement>);
+pub fn device_kind_by_folder() -> DeviceKindByFolderStmt {
+    DeviceKindByFolderStmt("SELECT kind FROM devices WHERE folder = $1", None)
+}
+impl DeviceKindByFolderStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient, T1: crate::StringSql>(
+        &'s self,
+        client: &'c mut C,
+        folder: &'a T1,
+    ) -> StringQuery<'c, 'a, 's, C, String, 1> {
+        StringQuery {
+            client,
+            params: [folder],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row| Ok(row.try_get(0)?),
+            mapper: |it| it.into(),
+        }
+    }
+}
+pub struct DeviceIdAndKindByFolderStmt(&'static str, Option<postgres::Statement>);
+pub fn device_id_and_kind_by_folder() -> DeviceIdAndKindByFolderStmt {
+    DeviceIdAndKindByFolderStmt("SELECT id, kind FROM devices WHERE folder = $1", None)
+}
+impl DeviceIdAndKindByFolderStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient, T1: crate::StringSql>(
+        &'s self,
+        client: &'c mut C,
+        folder: &'a T1,
+    ) -> DeviceIdAndKindByFolderQuery<'c, 'a, 's, C, DeviceIdAndKindByFolder, 1> {
+        DeviceIdAndKindByFolderQuery {
+            client,
+            params: [folder],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row: &postgres::Row| -> Result<DeviceIdAndKindByFolderBorrowed, postgres::Error> {
+                Ok(DeviceIdAndKindByFolderBorrowed { id: row.try_get(0)?, kind: row.try_get(1)? })
+            },
+            mapper: |it| DeviceIdAndKindByFolder::from(it),
+        }
+    }
+}
+pub struct EnsureLocalDeviceStmt(&'static str, Option<postgres::Statement>);
+pub fn ensure_local_device() -> EnsureLocalDeviceStmt {
+    EnsureLocalDeviceStmt(
+        "INSERT INTO devices (name, kind, token_hash, created_at, user_id) VALUES ($1, 'local', '!', $2, $3) ON CONFLICT (user_id, name) DO UPDATE SET name = devices.name RETURNING id",
+        None,
+    )
+}
+impl EnsureLocalDeviceStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient, T1: crate::StringSql>(
+        &'s self,
+        client: &'c mut C,
+        name: &'a T1,
+        now: &'a i64,
+        user_id: &'a i64,
+    ) -> I64Query<'c, 'a, 's, C, i64, 3> {
+        I64Query {
+            client,
+            params: [name, now, user_id],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row| Ok(row.try_get(0)?),
+            mapper: |it| it,
+        }
+    }
+}
+impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql>
+    crate::client::sync::Params<'c, 'a, 's, EnsureLocalDeviceParams<T1>, I64Query<'c, 'a, 's, C, i64, 3>, C>
+    for EnsureLocalDeviceStmt
+{
+    fn params(&'s self, client: &'c mut C, params: &'a EnsureLocalDeviceParams<T1>) -> I64Query<'c, 'a, 's, C, i64, 3> {
+        self.bind(client, &params.name, &params.now, &params.user_id)
     }
 }
