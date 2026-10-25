@@ -7,26 +7,30 @@ use std::process::Command;
 
 const WINDOWS_RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 
+/// The systemd unit of the client. It is restarted when it exits with an error (a crash, or `daemon::restart` after an
+/// update), and left alone when it exits cleanly: that is the tray's "stop".
 pub fn systemd_unit(exe: &Path, config: &Path) -> String {
     format!(
         "[Unit]\nDescription=fafnirx client\nAfter=network-online.target\nWants=network-online.target\n\n\
-         [Service]\nExecStart=\"{}\" --config \"{}\" run --log-file\nRestart=always\nRestartSec=10\n\n\
+         [Service]\nExecStart=\"{}\" --config \"{}\" run --log-file\nRestart=on-failure\nRestartSec=10\n\n\
          [Install]\nWantedBy=default.target\n",
         exe.display(),
         config.display()
     )
 }
 
-/// A LaunchAgent that runs `fafnirx --config <config> <command...>` at login, and restarts it when it stops if `keep_alive`.
-fn launchd_plist(label: &str, exe: &Path, config: &Path, command: &[&str], keep_alive: bool) -> String {
+/// A LaunchAgent that runs `fafnirx --config <config> <command...>` at login, and restarts it when it exits with an error
+/// if `restart_on_failure` (a clean exit is the tray's "stop").
+fn launchd_plist(label: &str, exe: &Path, config: &Path, command: &[&str], restart_on_failure: bool) -> String {
     let command: String = command.iter().map(|word| format!("<string>{word}</string>")).collect();
+    let keep_alive = if restart_on_failure { "<dict><key>SuccessfulExit</key><false/></dict>" } else { "<false/>" };
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
          <plist version=\"1.0\"><dict>\n\
          <key>Label</key><string>{label}</string>\n\
          <key>ProgramArguments</key><array><string>{}</string><string>--config</string><string>{}</string>{command}</array>\n\
-         <key>RunAtLoad</key><true/>\n<key>KeepAlive</key><{keep_alive}/>\n\
+         <key>RunAtLoad</key><true/>\n<key>KeepAlive</key>{keep_alive}\n\
          </dict></plist>\n",
         exe.display(),
         config.display()
@@ -181,10 +185,11 @@ mod tests {
         assert!(unit.contains(
             "ExecStart=\"/usr/local/bin/fafnirx\" --config \"/home/u/.config/fafnirx/config.toml\" run --log-file"
         ));
-        assert!(unit.contains("Restart=always"));
+        assert!(unit.contains("Restart=on-failure"));
         let plist = client_plist(exe, cfg);
         assert!(
-            plist.contains("<string>/usr/local/bin/fafnirx</string>") && plist.contains("<key>KeepAlive</key><true/>")
+            plist.contains("<string>/usr/local/bin/fafnirx</string>")
+                && plist.contains("<key>SuccessfulExit</key><false/>")
         );
         let tray = tray_plist(exe, cfg);
         assert!(

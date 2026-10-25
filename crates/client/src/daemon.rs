@@ -254,14 +254,23 @@ impl Identity {
     }
 }
 
+/// How a client exits to be started again by systemd or launchd, which restart one that exits with an error and leave
+/// one that exits cleanly (the tray's "stop") alone.
+#[cfg(not(windows))]
+const RESTART_EXIT_CODE: i32 = 75;
+
 /// Starts the executable again and exits, to run a new version or pick up a new enrollment. Only the daemon itself can do this on Windows
-/// (the Run key only fires at logon); systemd and launchd restart it on their own.
+/// (the Run key only fires at logon); systemd and launchd restart it when it exits with an error.
 fn restart() -> ! {
     // The new process needs the instance lock.
     crate::instance::release("daemon");
     #[cfg(windows)]
-    let _ = crate::service::spawn_detached(std::env::args_os().skip(1));
-    std::process::exit(0)
+    {
+        let _ = crate::service::spawn_detached(std::env::args_os().skip(1));
+        std::process::exit(0)
+    }
+    #[cfg(not(windows))]
+    std::process::exit(RESTART_EXIT_CODE)
 }
 
 /// Handles requests from the tray (sync now, stop) and copies what the engine is doing into the status file.
