@@ -12,12 +12,11 @@ use crate::web::access::Access;
 use crate::web::{done, run, ApiError, Done, Res, Shared};
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
-use fafnirx_common::clean_remote_path;
+use fafnirx_common::{base_name, clean_remote_path, secs_of_ns, DAY_SECS};
 use postgres::Client;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-const DAY: i64 = 86400;
 const DEFAULT_LIMIT: i64 = 1000;
 const MAX_LIMIT: i64 = 5000;
 
@@ -209,11 +208,11 @@ pub async fn list(
                 kind: "file",
                 name: full[strip..].to_string(),
                 device: device_name.clone(),
-                mtime: Some(f.mtime / 1_000_000_000),
+                mtime: Some(secs_of_ns(f.mtime)),
                 size: Some(f.size),
                 changed: Some(f.created_at),
                 deleted_at: f.deleted_at,
-                purge_at: f.deleted_at.map(|t| t + retention_days * DAY),
+                purge_at: f.deleted_at.map(|t| t + retention_days * DAY_SECS),
                 preview: meta::can_preview(&full),
                 mime: Some(f.mime.unwrap_or_else(|| meta::mime(&full))),
                 width: f.width,
@@ -341,7 +340,7 @@ pub async fn info(
                     id: v.id,
                     created_at: v.created_at,
                     size: v.size,
-                    mtime: v.mtime / 1_000_000_000,
+                    mtime: secs_of_ns(v.mtime),
                     hash: hex::encode(v.root_hash),
                     current: Some(v.id) == current,
                     pruned_at: v.pruned_at,
@@ -354,11 +353,11 @@ pub async fn info(
         Ok(Info {
             id: file_id,
             device: dev.name,
-            name: path.rsplit('/').next().unwrap_or(&path).to_string(),
+            name: base_name(&path).to_string(),
             deleted_at,
-            purge_at: deleted_at.map(|t| t + retention * DAY),
+            purge_at: deleted_at.map(|t| t + retention * DAY_SECS),
             size: row.size,
-            mtime: row.mtime / 1_000_000_000,
+            mtime: secs_of_ns(row.mtime),
             changed: row.created_at,
             hash: hex::encode(row.root_hash),
             mime: row.mime.unwrap_or_else(|| meta::mime(&path)),

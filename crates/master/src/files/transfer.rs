@@ -13,7 +13,7 @@ use axum::extract::{Form, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
-use fafnirx_common::{clean_remote_path, unix_now};
+use fafnirx_common::{base_name, clean_remote_path, secs_of_ns, unix_now};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -73,13 +73,8 @@ fn stored_version(
         let (root, size) =
             files::version_content(c, file_id, version)?.ok_or_else(|| ApiError::not_found("No such version"))?;
         let disk = version_file(&store, &dev.name, &path, version, current, deleted.is_some())?;
-        Ok(Stored { disk, root, size: size as u64, name: file_name(&path), codec: None })
+        Ok(Stored { disk, root, size: size as u64, name: base_name(&path).to_string(), codec: None })
     }
-}
-
-/// The last component of a stored path.
-fn file_name(path: &str) -> String {
-    path.rsplit('/').next().unwrap_or(path).to_string()
 }
 
 /// `filename*=UTF-8''...` value: everything but unreserved characters is percent-encoded.
@@ -229,7 +224,7 @@ fn stored_by_id(state: &Shared, who: Access, id: i64) -> impl FnOnce(&mut postgr
             disk: version_file(&store, &device, &path, version, Some(version), deleted_at.is_some())?,
             root: row.root_hash,
             size: row.size as u64,
-            name: file_name(&path),
+            name: base_name(&path).to_string(),
             codec: row.codec,
         })
     }
@@ -343,7 +338,7 @@ pub async fn zip(
             // Names inside the zip start at the selected folder (or file), not at the device root.
             let parent = selected.rfind('/').map_or(0, |i| i + 1);
             for path in expand(c, &dev, selected, false)? {
-                let mtime = files::current_mtime(c, dev.id, &path)? / 1_000_000_000;
+                let mtime = secs_of_ns(files::current_mtime(c, dev.id, &path)?);
                 let inner = &path[parent.min(path.len())..];
                 let name =
                     if several || selected.is_empty() { format!("{}/{inner}", dev.name) } else { inner.to_string() };
@@ -434,7 +429,8 @@ pub async fn start_upload(
         let _ = std::fs::remove_file(&file);
         return Err(ApiError::conflict("Too many uploads in progress"));
     }
-    let mtime_ns = b.mtime_ms.map_or_else(|| unix_now() * 1_000_000_000, |ms| ms * 1_000_000);
+    let mtime_ns =
+        b.mtime_ms.map_or_else(|| unix_now().saturating_mul(1_000_000_000), |ms| ms.saturating_mul(1_000_000));
     uploads.insert(
         id.clone(),
         Upload {

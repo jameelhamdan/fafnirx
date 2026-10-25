@@ -109,7 +109,7 @@ async fn main() -> Result<()> {
     });
 
     tokio::select! {
-        _ = tokio::signal::ctrl_c() => tracing::info!("shutting down"),
+        _ = fafnirx_common::shutdown_signal() => tracing::info!("shutting down"),
         Some(done) = servers.join_next() => {
             // A server that stops is a failure: the other cannot do its job without it.
             done.context("server task")??;

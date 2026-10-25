@@ -46,7 +46,9 @@ flowchart TB
   `files/<user>/<device>/<path>`, or in `files/<path>` for the master files. A version that is replaced or deleted moves to
   `versions/<version id>/<user>/<device>/<path>` (`versions/<version id>/<path>` for a master file). Chunks exist only on the wire and
   while an upload is assembled in `tmp/`; they are never stored separately, so there is no cross-file deduplication.
-, no reserved Windows names), immutable, enforced by the database; a device name is unique
+- **Users own devices, and the device name is the folder.** A user has a folder in `files/` and their devices are folders
+  in it. `devices.name` is a slug (1-63 characters of lowercase letters, digits, `.`, `_` and `-`, starting with a letter or
+  digit, no reserved Windows names), immutable, enforced by the database; a device name is unique
   per user. `devices.folder` (`<user>/<name>`, set by a trigger) is what the file store, the mirrors and the API call a
   device. The master files are held by one internal device (kind `master`, id 0, folder `_master`, no owner), so that they
   use the same tables as everything else. A top-level name of `files/` is a user if a user has that name; anything else is

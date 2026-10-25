@@ -77,7 +77,7 @@ const COLUMNS: &str = "f.path, v.size, v.mtime, v.created_at, f.deleted_at, m.mi
 
 const SCOPE: &str = "f.device_id = $1 AND f.path LIKE $2 AND ($3 OR f.deleted_at IS NULL)";
 
-fn found(rows: Vec<postgres::Row>) -> Found {
+fn found(rows: &[postgres::Row]) -> Found {
     let total = rows.first().map_or(0, |r| r.get(10));
     let files = rows
         .iter()
@@ -124,7 +124,7 @@ pub fn search(
         &sql,
         &[&page.device_id, &page.below, &page.include_deleted, &search, &type_regex, &page.limit, &page.offset],
     )?;
-    Ok(found(rows))
+    Ok(found(&rows))
 }
 
 /// The files directly in a folder; `from` is the 1-based character position where the names inside it start.
@@ -139,5 +139,5 @@ pub fn files_in(c: &mut impl GenericClient, page: &Page, from: i32) -> Result<Fo
     );
     let rows =
         c.query(&sql, &[&page.device_id, &page.below, &page.include_deleted, &from, &page.limit, &page.offset])?;
-    Ok(found(rows))
+    Ok(found(&rows))
 }

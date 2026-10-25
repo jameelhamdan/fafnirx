@@ -266,7 +266,8 @@ struct Env {
 }
 
 impl Env {
-    fn touch(&self, marker: PathBuf) {
+    /// Leaves a marker file for the running client to find.
+    fn touch(marker: PathBuf) {
         let _ = std::fs::write(marker, b"");
     }
 
@@ -278,17 +279,17 @@ impl Env {
             Action::TogglePause if pause_marker.exists() => {
                 let _ = std::fs::remove_file(pause_marker);
             }
-            Action::TogglePause => self.touch(pause_marker),
-            Action::SyncNow => self.touch(daemon::sync_now_marker(&self.state_dir)),
+            Action::TogglePause => Self::touch(pause_marker),
+            Action::SyncNow => Self::touch(daemon::sync_now_marker(&self.state_dir)),
             Action::CheckUpdates => check_for_updates(self.config_path.clone(), self.update_result.clone()),
             Action::ToggleClient if client_stopped => start_client(&self.config_path),
-            Action::ToggleClient => self.touch(daemon::stop_marker(&self.state_dir)),
+            Action::ToggleClient => Self::touch(daemon::stop_marker(&self.state_dir)),
             Action::OpenFile(p) => open_path(&p, true),
             Action::OpenFolder(p) => open_path(&p, false),
             Action::OpenUrl(u) => open_url(&u),
             Action::AddFolders => {
                 if add_folders_dialog(&self.config_path) {
-                    self.touch(daemon::sync_now_marker(&self.state_dir));
+                    Self::touch(daemon::sync_now_marker(&self.state_dir));
                 }
             }
             Action::RemoveFolder(name) => remove_folder_dialog(&self.config_path, &name),
