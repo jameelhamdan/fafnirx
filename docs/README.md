@@ -2,11 +2,11 @@
 
 | Document | Read it to |
 |---|---|
-| [Overview](overview.md) | Understand what fafnirx does and how a file travels |
-| [Installation](installation.md) | Install the master and enroll devices (Windows, macOS, Linux) |
-| [Usage](usage.md) | Use the web app and the client; sources, mirrors, restoring, updates |
-| [Video streaming](streaming.md) | Play videos in several qualities, made with ffmpeg as they are watched (optional) |
-| [Deployment](deployment.md) | Plan storage and backups, publish with a Cloudflare tunnel |
-| [Architecture](architecture.md) | See the components, the data model, locking and live updates |
-| [Development](development.md) | Build, run and test; change the schema or the API |
-| [Plans](plans/features.md) | Features that are not built |
+| [Overview](overview.md) | Know what fafnirx does and the rules it keeps |
+| [Installation](installation.md) | Install the master and enroll devices; configuration reference |
+| [Usage](usage.md) | Use the web app, the library, Processing and the change log; run the client, sources, mirrors |
+| [Video streaming](streaming.md) | Set up optional adaptive playback |
+| [Deployment](deployment.md) | Plan storage, proxy, tunnel and backups |
+| [Architecture](architecture.md) | See components, data model, IDs, locking, API |
+| [Development](development.md) | Build, test, change the schema or the API, release |
+| [Plans](plans/features.md) | See what is not built |

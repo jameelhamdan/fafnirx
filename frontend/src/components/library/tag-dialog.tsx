@@ -8,7 +8,7 @@ import { useLibraryActions, useTags } from '@/lib/library'
 import { useT } from '@/lib/i18n'
 
 /** Adds tags to many files at once. Tags they already have are kept. */
-export function TagDialog({ open, ids, onClose, onDone }: { open: boolean; ids: number[]; onClose: () => void; onDone?: () => void }) {
+export function TagDialog({ open, ids, onClose, onDone }: { open: boolean; ids: string[]; onClose: () => void; onDone?: () => void }) {
   const { bulk } = useLibraryActions()
   const t = useT()
   const tags = useTags(open)

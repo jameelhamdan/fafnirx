@@ -14,7 +14,7 @@ import { TagDialog } from './tag-dialog'
 import { useT } from '@/lib/i18n'
 
 /** What can be done to the selected photos and videos. Sticks to the top while you scroll. */
-export function SelectionBar({ selected, onClear, albumId }: { selected: Asset[]; onClear: () => void; albumId?: number }) {
+export function SelectionBar({ selected, onClear, albumId }: { selected: Asset[]; onClear: () => void; albumId?: string }) {
   const mine = hasWorkspace(useRole())
   const { bulk, remove } = useLibraryActions()
   const t = useT()

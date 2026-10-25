@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Download, ExternalLink, History, Play, RotateCcw, Trash2 } from 'lucide-react'
-import { Suspense, useState } from 'react'
+import { Archive, ArchiveRestore, Clapperboard, Download, ExternalLink, FolderPlus, Heart, History, Play, RotateCcw, Trash2 } from 'lucide-react'
+import { lazy, Suspense, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ErrorNote, Fact } from '../common'
 import { Confirm } from '../confirm'
@@ -12,12 +13,18 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { Skeleton } from '../ui/skeleton'
 import { useNow } from '@/hooks/use-now'
 import { api, downloadUrl, thumbUrl } from '@/lib/api'
+import { isLibraryFile } from '@/lib/entries'
+import { useLibraryActions } from '@/lib/library'
 import { ago, bytes, dateTime } from '@/lib/format'
 import { fileSource } from '@/lib/player-source'
-import { useSession } from '@/lib/session'
-import type { FileInfo } from '@/lib/types'
+import { hasWorkspace, useRole, useSession } from '@/lib/session'
+import type { AssetDetail, FileInfo } from '@/lib/types'
+import { AlbumPicker } from '../library/album-picker'
+import { WorkNote } from '../work-note'
 import { FileIcon } from './file-icon'
 import { useT } from '@/lib/i18n'
+
+const InfoPanel = lazy(() => import('../library/info-panel'))
 
 /**
  * A video plays in the same player as in the library viewer (qualities, subtitles, the keys). Opening the details does
@@ -77,6 +84,36 @@ function Preview({ info }: { info: FileInfo }) {
   )
 }
 
+/**
+ * What people say about a photo or video, the same as in the timeline and the viewer: favorite, archive, albums, rating,
+ * description, tags, date and place. Only for files the library lists (live photos and videos).
+ */
+function LibrarySection({ id }: { id: string }) {
+  const t = useT()
+  const mine = hasWorkspace(useRole())
+  const { edit } = useLibraryActions()
+  const [album, setAlbum] = useState(false)
+  const { data: d } = useQuery({ queryKey: ['asset', id], queryFn: () => api.get<AssetDetail>(`/api/library/${id}`) })
+  return (
+    <section className="space-y-3">
+      <h3 className="text-sm font-medium">{t('In the library')}</h3>
+      {mine && d && (
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" aria-pressed={d.favorite} onClick={() => edit.mutate({ id, favorite: !d.favorite })}>
+            <Heart className={d.favorite ? 'size-4 fill-current' : 'size-4'} />{d.favorite ? t('Remove from favorites') : t('Add to favorites')}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => edit.mutate({ id, archived: !d.archived })}>
+            {d.archived ? <ArchiveRestore className="size-4" /> : <Archive className="size-4" />}{d.archived ? t('Unarchive') : t('Archive')}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setAlbum(true)}><FolderPlus className="size-4" />{t('Add to album')}</Button>
+        </div>
+      )}
+      <Suspense fallback={<Skeleton className="h-40" />}><InfoPanel id={id} embedded /></Suspense>
+      <AlbumPicker open={album} ids={[id]} onClose={() => setAlbum(false)} onDone={() => setAlbum(false)} />
+    </section>
+  )
+}
+
 /** Everything about one file: a preview, its metadata, and its history with download and restore. */
 export function DetailsSheet({ device, path, onClose, onDeleted }: { device: string; path: string | null; onClose: () => void; onDeleted: () => void }) {
   const t = useT()
@@ -102,6 +139,8 @@ export function DetailsSheet({ device, path, onClose, onDeleted }: { device: str
   })
 
   const exif = info?.exif ? Object.entries(info.exif) : []
+  // Photos and videos that are not deleted are in the library: they can be watched in the viewer and rated.
+  const inLibrary = !!info && !info.deleted_at && isLibraryFile(info.name)
   return (
     <Sheet open={path !== null} onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="w-full gap-0 overflow-y-auto sm:max-w-lg">
@@ -114,11 +153,13 @@ export function DetailsSheet({ device, path, onClose, onDeleted }: { device: str
         ) : (
           <div className="space-y-5 p-4 pt-0">
             <Preview info={info} />
+            <WorkNote work={info.work} />
             <div className="flex flex-wrap gap-2">
               <Button asChild><a href={downloadUrl(device, info.path)}><Download className="size-4" />{t('Download')}</a></Button>
               {(info.preview || info.mime.startsWith('video/') || info.mime === 'application/pdf') && (
                 <Button variant="outline" asChild><a href={downloadUrl(device, info.path, { inline: true })} target="_blank" rel="noreferrer"><ExternalLink className="size-4" />{t('Open')}</a></Button>
               )}
+              {inLibrary && <Button variant="outline" asChild><Link to={`/watch/${info.id}`}><Clapperboard className="size-4" />{t('Open in viewer')}</Link></Button>}
               {!info.deleted_at && <Button variant="outline" onClick={() => setConfirm('delete')}><Trash2 className="size-4" />{t('Delete')}</Button>}
             </div>
             {info.deleted_at && (
@@ -136,6 +177,13 @@ export function DetailsSheet({ device, path, onClose, onDeleted }: { device: str
               <Fact label={t('Recorded here')}>{dateTime(info.changed)}</Fact>
               <div className="col-span-2"><Fact label={t('Content hash (BLAKE3 root)')}><code className="text-xs break-all">{info.hash}</code></Fact></div>
             </dl>
+
+            {inLibrary && (
+              <>
+                <Separator />
+                <LibrarySection id={info.id} />
+              </>
+            )}
 
             {exif.length > 0 && (
               <>

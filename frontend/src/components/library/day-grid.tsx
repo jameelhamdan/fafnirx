@@ -17,10 +17,10 @@ export function DayGrid({
 }: {
   assets: Asset[]
   src: (a: Asset) => string
-  selected: Set<number>
+  selected: Set<string>
   onOpen: (a: Asset) => void
-  onToggle: (id: number) => void
-  onToggleMany: (ids: number[], on: boolean) => void
+  onToggle: (id: string) => void
+  onToggleMany: (ids: string[], on: boolean) => void
 }) {
   const t = useT()
   const ref = useRef<HTMLDivElement>(null)

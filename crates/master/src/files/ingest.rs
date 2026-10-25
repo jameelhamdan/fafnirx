@@ -8,7 +8,7 @@
 
 use crate::platform::db::{self, Device};
 use crate::platform::store::Store;
-use crate::repo::{devices, events, files, jobs, settings, users};
+use crate::repo::{albums, devices, events, files, jobs, settings, users};
 use anyhow::Result;
 use fafnirx_common::{unix_now, HASH_LEN};
 use postgres::{Client, GenericClient};
@@ -39,13 +39,18 @@ pub struct Seen {
 }
 
 /// Keeps the newest `version_count` versions of a file; older ones are marked pruned and removed by retention.
-fn prune_versions(conn: &mut impl GenericClient, file_id: i64, ts: i64) -> Result<(), postgres::Error> {
+fn prune_versions(conn: &mut impl GenericClient, file_id: uuid::Uuid, ts: i64) -> Result<(), postgres::Error> {
     let keep = settings::get_i64(conn, "version_count", 5).max(1);
     files::prune_versions(conn, file_id, keep, ts)
 }
 
 /// Makes a version the current one of its file (undeleting it) and prunes the ones that are too old.
-fn make_current(conn: &mut impl GenericClient, file_id: i64, version_id: i64, ts: i64) -> Result<(), postgres::Error> {
+fn make_current(
+    conn: &mut impl GenericClient,
+    file_id: uuid::Uuid,
+    version_id: i64,
+    ts: i64,
+) -> Result<(), postgres::Error> {
     files::make_current(conn, file_id, version_id)?;
     prune_versions(conn, file_id, ts)
 }
@@ -159,9 +164,14 @@ fn commit_inner(conn: &mut Client, store: &Store, staged: &Path, v: &NewVersion)
         };
         log_event(&mut tx, dev, v.path, action, ts, Some(&hex::encode(v.root)), detail)?;
         queue_meta(&mut tx, dev, v.path, root)?;
+        // The old path is vacated, not deleted: the log has the one `rename` event, and the trash does not get the file.
         let vacated = match v.renamed_from {
             Some(old) => {
-                delete_path(&mut tx, dev, old, ts, false, Some(&format!("renamed to {}", v.path)))?.map(|id| (old, id))
+                let gone = files::vacate_renamed(&mut tx, dev.id, old, ts)?.map(|id| (old, id));
+                if albums::follow_folder_move(&mut tx, dev.id, old, v.path, ts)? {
+                    db::notify(&mut tx, "library", "")?;
+                }
+                gone
             }
             None => None,
         };
@@ -188,6 +198,79 @@ fn commit_inner(conn: &mut Client, store: &Store, staged: &Path, v: &NewVersion)
     Ok(version_id as u64)
 }
 
+/// Moves or renames a live file of a device the master owns (a local folder or the master files): the file in the store is
+/// moved, not copied, and recorded as a rename of the same content, with the old path vacated like any rename. Devices and
+/// sources are not moved here: their files are theirs to move. The caller checks that the device is changeable.
+pub fn move_path(conn: &mut Client, store: &Store, device: &Device, from: &str, to: &str) -> Result<()> {
+    check_master_path(conn, device, to)?;
+    let mut tx = conn.transaction()?;
+    let mut locked = [from, to];
+    locked.sort_unstable();
+    for path in locked {
+        db::lock_path(&mut tx, device.id, path)?;
+    }
+    let version = files::lock_row(&mut tx, device.id, from)?
+        .and_then(|r| r.live_version())
+        .ok_or_else(|| crate::web::ApiError::not_found("No such file"))?;
+    let target = files::lock_row(&mut tx, device.id, to)?;
+    if target.as_ref().is_some_and(|r| r.live_version().is_some()) {
+        return Err(crate::web::ApiError::conflict(format!("{to} exists already")).into());
+    }
+    let record =
+        files::version_record(&mut tx, version)?.ok_or_else(|| crate::web::ApiError::not_found("No such file"))?;
+    let (root, size, mtime, mode) = (record.root_hash, record.size, record.mtime, record.mode);
+    let (src, dst) = (store.live_path(&device.name, from)?, store.live_path(&device.name, to)?);
+    if dst.exists() {
+        return Err(crate::web::ApiError::conflict(format!("{to} exists already")).into());
+    }
+    if !src.is_file() {
+        return Err(crate::web::ApiError::conflict(format!("{from} is not in the file store")).into());
+    }
+    if let Some(dir) = dst.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::rename(&src, &dst)?;
+
+    let ts = unix_now();
+    let recorded = (|| -> Result<()> {
+        let file_id = match &target {
+            Some(row) => row.id,
+            None => files::ensure(&mut tx, device.id, to)?,
+        };
+        let new = files::insert_version(
+            &mut tx,
+            &files::NewVersion { file_id, root: &root, size: size as u64, mtime, mode: mode as u32, created_at: ts },
+        )?;
+        make_current(&mut tx, file_id, new, ts)?;
+        log_event(&mut tx, device, to, "rename", ts, Some(&hex::encode(&root)), Some(from))?;
+        queue_meta(&mut tx, device, to, &root)?;
+        files::vacate_renamed(&mut tx, device.id, from, ts)?;
+        if albums::follow_folder_move(&mut tx, device.id, from, to, ts)? {
+            db::notify(&mut tx, "library", "")?;
+        }
+        devices::touch(&mut tx, device.id, ts)?;
+        db::notify(&mut tx, "devices", &device.name)?;
+        Ok(())
+    })();
+    if let Err(e) = recorded.and_then(|()| tx.commit().map_err(Into::into)) {
+        let _ = std::fs::rename(&dst, &src);
+        return Err(e);
+    }
+    remove_empty_dirs(&src, &store.live_dir(&device.name));
+    Ok(())
+}
+
+/// Removes the folders a move left empty, up to (not including) `stop`.
+fn remove_empty_dirs(moved: &Path, stop: &Path) {
+    let mut dir = moved.parent();
+    while let Some(d) = dir.filter(|d| *d != stop && d.starts_with(stop)) {
+        if std::fs::remove_dir(d).is_err() {
+            break;
+        }
+        dir = d.parent();
+    }
+}
+
 /// Marks a live path deleted and logs it. Returns the version that was current if the path was live;
 /// the caller moves its file out of the live tree with [`archive_deleted`].
 fn delete_path(
@@ -196,10 +279,9 @@ fn delete_path(
     path: &str,
     ts: i64,
     in_web_app: bool,
-    detail: Option<&str>,
 ) -> Result<Option<i64>> {
     let Some(version) = files::delete_path(conn, device.id, path, ts, in_web_app)? else { return Ok(None) };
-    log_event(conn, device, path, "delete", ts, None, detail)?;
+    log_event(conn, device, path, "delete", ts, None, None)?;
     Ok(Some(version))
 }
 
@@ -235,7 +317,7 @@ fn delete_locked(
     in_web_app: bool,
 ) -> Result<bool> {
     let ts = unix_now();
-    let deleted = delete_path(tx, device, path, ts, in_web_app, None)?;
+    let deleted = delete_path(tx, device, path, ts, in_web_app)?;
     if in_web_app && deleted.is_some() {
         // A file a source collected stays deleted until it changes at the source, whatever the retention period does.
         files::keep_source_item_deleted(tx, device.id, path)?;
@@ -252,9 +334,21 @@ fn delete_locked(
 /// place, so only the database changes; a file it overwrote is gone, there is nothing to keep as the
 /// previous version. Returns whether a version was added. Nothing happens if the file changed again
 /// since it was hashed (`seen` no longer matches); the next scan sees it.
-pub fn adopt_live(conn: &mut Client, store: &Store, device: &Device, path: &str, seen: &Seen) -> Result<bool> {
+pub fn adopt_live(
+    conn: &mut Client,
+    store: &Store,
+    device: &Device,
+    path: &str,
+    seen: &Seen,
+    renamed_from: Option<&str>,
+) -> Result<bool> {
     let mut tx = conn.transaction()?;
-    db::lock_path(&mut tx, device.id, path)?;
+    let mut locked = vec![path];
+    locked.extend(renamed_from);
+    locked.sort_unstable();
+    for p in locked {
+        db::lock_path(&mut tx, device.id, p)?;
+    }
     let still_there = std::fs::metadata(store.live_path(&device.name, path)?)
         .is_ok_and(|m| m.len() == seen.size && fafnirx_common::mtime_ns(&m) == seen.mtime);
     if !still_there {
@@ -281,12 +375,24 @@ pub fn adopt_live(conn: &mut Client, store: &Store, device: &Device, path: &str,
         &files::NewVersion { file_id, root, size: seen.size, mtime: seen.mtime, mode: seen.mode, created_at: ts },
     )?;
     make_current(&mut tx, file_id, version_id, ts)?;
-    let (action, detail) = match live {
-        Some(_) => ("update", "changed in the file store"),
-        None => ("add", "added to the file store"),
+    // A rename only if the old path still holds exactly this content; it is then vacated, not deleted.
+    let renamed_from = match renamed_from {
+        Some(old) if files::live_content(&mut tx, device.id, old)?.is_some_and(|(r, _)| r == seen.root) => Some(old),
+        _ => None,
+    };
+    let (action, detail) = match (renamed_from, live) {
+        (Some(old), _) => ("rename", old),
+        (None, Some(_)) => ("update", "changed in the file store"),
+        (None, None) => ("add", "added to the file store"),
     };
     log_event(&mut tx, device, path, action, ts, Some(&hex::encode(seen.root)), Some(detail))?;
     queue_meta(&mut tx, device, path, root)?;
+    if let Some(old) = renamed_from {
+        files::vacate_renamed(&mut tx, device.id, old, ts)?;
+        if albums::follow_folder_move(&mut tx, device.id, old, path, ts)? {
+            db::notify(&mut tx, "library", "")?;
+        }
+    }
     devices::mark_stale(&mut tx, device.id)?;
     tx.commit()?;
     Ok(true)
@@ -334,6 +440,42 @@ mod tests {
     }
 
     #[test]
+    fn an_album_of_a_folder_follows_the_folder_when_it_is_renamed() {
+        let db = testing::db_with_device();
+        let mut c = db.get().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        for (path, data) in [("Show/S1/a.mkv", b"a"), ("Show/S1/b.mkv", b"b")] {
+            commit(&mut c, &store, path, data, None).unwrap();
+        }
+        let album = albums::insert(&mut *c, 1, "Show", "", Some((1, "Show/")), 0).unwrap();
+        let follows = |c: &mut Client| -> (String, String) {
+            let r = c.query_one("SELECT folder_prefix, name FROM albums WHERE id = $1", &[&album]).unwrap();
+            (r.get(0), r.get(1))
+        };
+
+        commit(&mut c, &store, "Show 2/S1/a.mkv", b"a", Some("Show/S1/a.mkv")).unwrap();
+        assert_eq!(follows(&mut c), ("Show/".into(), "Show".into()), "a file is still in the folder: the album stays");
+        commit(&mut c, &store, "Show 2/S1/b.mkv", b"b", Some("Show/S1/b.mkv")).unwrap();
+        assert_eq!(
+            follows(&mut c),
+            ("Show 2/".into(), "Show 2".into()),
+            "the folder moved: the album and its name follow"
+        );
+
+        // An album the user named themselves keeps its name.
+        c.execute("UPDATE albums SET name = 'My show' WHERE id = $1", &[&album]).unwrap();
+        commit(&mut c, &store, "Show 3/S1/a.mkv", b"a", Some("Show 2/S1/a.mkv")).unwrap();
+        commit(&mut c, &store, "Show 3/S1/b.mkv", b"b", Some("Show 2/S1/b.mkv")).unwrap();
+        assert_eq!(follows(&mut c), ("Show 3/".into(), "My show".into()));
+
+        // A folder emptied into an unrelated place is not followed.
+        commit(&mut c, &store, "Else/where/S1/a.mkv", b"a", Some("Show 3/S1/a.mkv")).unwrap();
+        commit(&mut c, &store, "Else/where/S1/b.mkv", b"b", Some("Show 3/S1/b.mkv")).unwrap();
+        assert_eq!(follows(&mut c), ("Show 3/".into(), "My show".into()));
+    }
+
+    #[test]
     fn add_update_noop_delete_and_rename() {
         let db = testing::db_with_device();
         let mut c = db.get().unwrap();
@@ -366,7 +508,23 @@ mod tests {
         assert!(!deleted_in_web_app(&mut *c, device.id, "b").unwrap(), "a delete on the device is the device's own");
         let actions: Vec<String> =
             c.query("SELECT action FROM events ORDER BY id", &[]).unwrap().iter().map(|r| r.get(0)).collect();
-        assert_eq!(actions, ["add", "update", "rename", "delete", "delete"]);
+        assert_eq!(
+            actions,
+            ["add", "update", "rename", "delete"],
+            "a rename is one event: the old path is vacated, not deleted"
+        );
+        let hidden: i64 =
+            c.query_one("SELECT COUNT(*) FROM files WHERE path = 'a' AND deleted_by = 'rename'", &[]).unwrap().get(0);
+        assert_eq!(hidden, 1, "the old path is kept, marked as renamed, until retention removes it");
+        let (in_trash, in_listing): (i64, i64) = (
+            crate::repo::library::trash(&mut *c, crate::repo::Viewer { uid: 1, all: true, scope_user: -1 }, 10, 0)
+                .unwrap()
+                .iter()
+                .filter(|t| t.path == "a")
+                .count() as i64,
+            crate::repo::files::expand(&mut *c, 1, "a", true).unwrap().len() as i64,
+        );
+        assert_eq!((in_trash, in_listing), (0, 0), "a renamed file is not in the trash, nor listed as deleted");
 
         commit(&mut c, &store, "b", b"back", None).unwrap();
         assert_eq!(live(&store, "b").unwrap(), b"back", "a deleted path can be added again");

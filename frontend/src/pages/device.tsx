@@ -97,7 +97,7 @@ export default function DeviceDetailPage() {
               <ul className="divide-y">
                 {data.events.map((e) => (
                   <li key={e.id} className="flex items-center gap-3 py-2 text-sm">
-                    <span className={cn('w-16 shrink-0 text-xs font-medium uppercase', e.action === 'delete' ? 'text-destructive' : e.action === 'update' ? 'text-warning' : 'text-success')}>{e.action}</span>
+                    <span className={cn('w-16 shrink-0 text-xs font-medium uppercase', e.action === 'delete' ? 'text-destructive' : e.action === 'update' ? 'text-warning' : e.action === 'rename' ? 'text-foreground' : 'text-success')}>{e.action}</span>
                     <Link to={`/files?device=${encodeURIComponent(d.folder)}&file=${encodeURIComponent(e.path)}`} className="min-w-0 flex-1 truncate hover:underline" title={e.path}>{e.path}</Link>
                     <span className="shrink-0 text-xs text-muted-foreground">{ago(e.ts, now)}</span>
                   </li>

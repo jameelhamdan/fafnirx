@@ -99,8 +99,8 @@ export function Viewer({
   onEdge,
 }: {
   assets: Asset[]
-  id: number
-  onChange: (id: number) => void
+  id: string
+  onChange: (id: string) => void
   onClose: () => void
   /** Called when the viewer gets near the end of what it was given, so that the page can load more. */
   onEdge?: (direction: 'prev' | 'next') => void
@@ -199,7 +199,7 @@ export function Viewer({
         <Button variant="ghost" size="icon" className={bare} aria-label={t('Close')} onClick={onClose}><X className="size-5" /></Button>
         <div className="mr-auto min-w-0 px-2">
           <p className="truncate text-sm font-medium">{asset.name}</p>
-          <p className="text-xs text-white/70">{whenText(asset.when)}</p>
+          <p className="text-xs text-white/70">{whenText(asset.when)}{asset.processing && <span className="ml-2">· {t('Still being processed')}</span>}</p>
         </div>
         {mine && (
           <Button variant="ghost" size="icon" className={bare} aria-label={asset.favorite ? t('Remove from favorites') : t('Add to favorites')} aria-pressed={asset.favorite} onClick={() => edit.mutate({ id: asset.id, favorite: !asset.favorite })}>

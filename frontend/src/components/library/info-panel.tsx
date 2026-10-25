@@ -14,6 +14,7 @@ import { useLibraryActions, useTags } from '@/lib/library'
 import { hasWorkspace, useRole } from '@/lib/session'
 import type { AssetDetail, Session } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { WorkNote } from '../work-note'
 import type { Place } from './location-picker'
 import { useT } from '@/lib/i18n'
 
@@ -55,7 +56,7 @@ function Stars({ value, onChange }: { value: number | null; onChange: (v: number
 }
 
 /** Keyed by the saved text by its parent, so a change made elsewhere replaces the draft. */
-function Description({ id, text }: { id: number; text: string }) {
+function Description({ id, text }: { id: string; text: string }) {
   const t = useT()
   const { edit } = useLibraryActions()
   const [draft, setDraft] = useState(text)
@@ -73,7 +74,7 @@ function Description({ id, text }: { id: number; text: string }) {
   )
 }
 
-function Tags({ id, tags }: { id: number; tags: { id: number; name: string }[] }) {
+function Tags({ id, tags }: { id: string; tags: { id: string; name: string }[] }) {
   const t = useT()
   const { edit } = useLibraryActions()
   const known = useTags()
@@ -192,7 +193,7 @@ function PlaceDialog({ detail, onClose }: { detail: AssetDetail; onClose: () => 
 const parent = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf('/')))
 
 /** Everything about one photo or video, with the parts people can change: rating, description, tags, date, place. */
-export default function InfoPanel({ id, onClose }: { id: number; onClose: () => void }) {
+export default function InfoPanel({ id, onClose, embedded }: { id: string; onClose?: () => void; embedded?: boolean }) {
   const t = useT()
   const { edit } = useLibraryActions()
   // A read-only user sees everything about a file and changes nothing.
@@ -202,13 +203,16 @@ export default function InfoPanel({ id, onClose }: { id: number; onClose: () => 
   const exif = d?.exif ? Object.entries(d.exif) : []
 
   return (
-    <div className="space-y-5 p-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold">{t('Info')}</h2>
-        <Button variant="ghost" size="icon" className="size-8" aria-label={t('Close info')} onClick={onClose}><X className="size-4" /></Button>
-      </div>
+    <div className={cn('space-y-5', !embedded && 'p-4')}>
+      {!embedded && (
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold">{t('Info')}</h2>
+          {onClose && <Button variant="ghost" size="icon" className="size-8" aria-label={t('Close info')} onClick={onClose}><X className="size-4" /></Button>}
+        </div>
+      )}
       {error ? <p className="text-sm text-destructive">{error.message}</p> : !d ? <Skeleton className="h-64" /> : (
         <>
+          <WorkNote work={d.work} />
           {mine ? (
             <>
               <Description key={`${d.id}:${d.description}`} id={d.id} text={d.description} />

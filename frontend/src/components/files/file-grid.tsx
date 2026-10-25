@@ -1,3 +1,4 @@
+import { Loader2 } from 'lucide-react'
 import { thumbUrl } from '@/lib/api'
 import { bytes, plural } from '@/lib/format'
 import { entryKey } from '@/lib/entries'
@@ -39,6 +40,7 @@ export function FileGrid({
               </div>
               <div className="px-2.5 py-2">
                 <p className={cn('truncate text-sm', e.kind !== 'file' && 'font-medium')}>{e.name}</p>
+                {e.processing && <p className="flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="size-3 animate-spin" />{t('Still being processed')}</p>}
                 <p className="text-xs text-muted-foreground">{e.kind === 'file' ? bytes(e.size) : `${plural(e.files ?? 0, 'file')} · ${bytes(e.size)}`}</p>
                 {e.kind === 'device' && <div className="mt-1"><AccessBadge writable={e.writable} kind={e.device_kind} /></div>}
               </div>

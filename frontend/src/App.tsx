@@ -21,6 +21,7 @@ const Sources = lazy(() => import('./pages/sources.tsx'))
 const Timeline = lazy(() => import('./pages/timeline.tsx'))
 const Albums = lazy(() => import('./pages/albums.tsx'))
 const Album = lazy(() => import('./pages/album.tsx'))
+const Watch = lazy(() => import('./pages/watch.tsx'))
 const MapPage = lazy(() => import('./pages/map.tsx'))
 const Trash = lazy(() => import('./pages/trash.tsx'))
 const Users = lazy(() => import('./pages/users.tsx'))
@@ -60,6 +61,7 @@ export default function App() {
             <Route path="/archive" element={<Only allow="workspace" role={role}><Timeline key="archive" scope="archive" /></Only>} />
             <Route path="/albums" element={<Only allow="workspace" role={role}><Albums /></Only>} />
             <Route path="/albums/:id" element={<Only allow="workspace" role={role}><Album /></Only>} />
+            <Route path="/watch/:id" element={<Watch />} />
             <Route path="/map" element={<MapPage />} />
             <Route path="/trash" element={<Only allow="workspace" role={role}><Trash /></Only>} />
             <Route path="/files" element={<Files />} />

@@ -5,7 +5,7 @@
 --   OR (a.folder_device_id = f.device_id AND starts_with(f.path, a.folder_prefix))
 -- The visibility numbers (:all, :scope_user) are the ones explained in library.sql.
 
---! find_albums (id?) : (cover?, folder_device?, folder_prefix?)
+--! find_albums (id?) : (chosen?, newest?, folder_device?, folder_prefix?)
 -- The albums of a user with what each holds, newest change first; or the one with this id.
 SELECT a.id, a.name, a.description, a.created_at, a.updated_at,
        (SELECT COUNT(*) FROM files f
@@ -16,10 +16,11 @@ SELECT a.id, a.name, a.description, a.created_at, a.updated_at,
         WHERE (EXISTS (SELECT 1 FROM album_files af WHERE af.album_id = a.id AND af.file_id = f.id)
                OR (a.folder_device_id = f.device_id AND starts_with(f.path, a.folder_prefix)))
           AND f.deleted_at IS NULL AND f.media IS NOT NULL) AS bytes,
-       -- The cover: the file chosen, else the newest of the album. An album that shows a folder has no answer here: its
-       -- first video is found in code (names sort "naturally" there, see `media_of_album`).
-       COALESCE((SELECT f.id FROM files f WHERE f.id = a.cover_file_id AND f.deleted_at IS NULL),
-                CASE WHEN a.folder_device_id IS NULL THEN
+       -- The cover is chosen in code (`library::albums::with_cover`): the file picked, else a poster picture (`album_poster`),
+       -- else for an album of a folder its first video (names sort "naturally" there, see `media_of_album`), else the newest
+       -- file of an album of picked files.
+       (SELECT f.id FROM files f WHERE f.id = a.cover_file_id AND f.deleted_at IS NULL) AS chosen,
+       CASE WHEN a.folder_device_id IS NULL THEN
                 (SELECT f.id FROM files f JOIN versions v ON v.id = f.current_version_id
                  LEFT JOIN file_meta m ON m.root_hash = v.root_hash
                  LEFT JOIN file_state s ON s.file_id = f.id AND s.user_id = a.user_id
@@ -27,11 +28,11 @@ SELECT a.id, a.name, a.description, a.created_at, a.updated_at,
                         OR (a.folder_device_id = f.device_id AND starts_with(f.path, a.folder_prefix)))
                    AND f.deleted_at IS NULL AND f.media IS NOT NULL
                  ORDER BY COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000) DESC, f.id DESC LIMIT 1)
-                END) AS cover,
+       END AS newest,
        (SELECT d.folder FROM devices d WHERE d.id = a.folder_device_id) AS folder_device,
        a.folder_prefix
 FROM albums a
-WHERE a.user_id = :user_id AND (:id::bigint IS NULL OR a.id = :id)
+WHERE a.user_id = :user_id AND (:id::uuid IS NULL OR a.id = :id)
 ORDER BY a.updated_at DESC, a.id DESC;
 
 --! media_of_album
@@ -94,3 +95,31 @@ UPDATE albums SET cover_file_id = NULL WHERE id = :album_id AND cover_file_id = 
 --! albums_of_file
 SELECT a.id, a.name FROM album_files af JOIN albums a ON a.id = af.album_id
 WHERE af.file_id = :file_id AND a.user_id = :uid ORDER BY lower(a.name);
+
+--! albums_under_folder : (folder_prefix?)
+-- The albums, whoever's, that follow this folder of a device or a folder below it. The whole device (an empty prefix) is
+-- not a folder that can move, so it is left out.
+SELECT id, user_id, name, folder_prefix FROM albums
+WHERE folder_device_id = :device_id AND folder_prefix <> '' AND starts_with(folder_prefix, :prefix);
+
+--! folder_is_empty
+-- Whether no live file of the device is below this folder (`prefix` ends with a slash).
+SELECT NOT EXISTS (SELECT 1 FROM files WHERE device_id = :device_id AND deleted_at IS NULL AND starts_with(path, :prefix)) AS empty;
+
+--! move_album_folder
+-- The folder of the album moved: it follows it, and keeps the name of the folder when it had that.
+UPDATE albums SET folder_prefix = :prefix, name = :name, updated_at = :now WHERE id = :id;
+
+--! album_poster
+-- The picture that stands for an album: a file named poster, cover, folder, thumb or thumbnail (.jpg, .jpeg, .png, .webp)
+-- in it, the one nearest to the top of its folders first, then by that order of names.
+SELECT f.id FROM files f JOIN albums a ON a.id = :album_id
+WHERE (EXISTS (SELECT 1 FROM album_files af WHERE af.album_id = a.id AND af.file_id = f.id)
+       OR (a.folder_device_id = f.device_id AND starts_with(f.path, a.folder_prefix)))
+  AND f.deleted_at IS NULL AND f.media = 'image'
+  AND lower(regexp_replace(f.path, '^.*/', '')) ~ '^(poster|cover|folder|thumb|thumbnail)\.(jpg|jpeg|png|webp)$'
+ORDER BY length(f.path) - length(replace(f.path, '/', '')),
+         array_position(ARRAY['poster', 'cover', 'folder', 'thumb', 'thumbnail'],
+                        lower(regexp_replace(regexp_replace(f.path, '^.*/', ''), '\.[^.]*$', ''))),
+         f.path
+LIMIT 1;

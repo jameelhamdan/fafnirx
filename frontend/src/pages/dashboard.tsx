@@ -38,24 +38,25 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
   )
 }
 
-/** Changes per day for two weeks, stacked: added, updated, deleted. */
+/** Changes per day for two weeks, stacked: added, updated, renamed, deleted. */
 function ActivityChart({ days }: { days: DashboardData['activity'] }) {
   const t = useT()
-  const peak = Math.max(1, ...days.map((d) => d.added + d.updated + d.deleted))
+  const peak = Math.max(1, ...days.map((d) => d.added + d.updated + d.renamed + d.deleted))
   return (
     <div>
       <div className="flex h-32 items-end gap-1.5" role="img" aria-label={t('Changes per day over the last two weeks')}>
         {days.map((d) => {
-          const total = d.added + d.updated + d.deleted
+          const total = d.added + d.updated + d.renamed + d.deleted
           const label = new Date(d.day * 86400_000).toLocaleDateString(locale(), { month: 'short', day: 'numeric', timeZone: 'UTC' })
           return (
-            <div key={d.day} className="group relative flex h-full flex-1 flex-col justify-end" title={`${label}: ${t('{added} added, {updated} updated, {deleted} deleted', { added: d.added, updated: d.updated, deleted: d.deleted })}`}>
+            <div key={d.day} className="group relative flex h-full flex-1 flex-col justify-end" title={`${label}: ${t('{added} added, {updated} updated, {renamed} renamed, {deleted} deleted', { added: d.added, updated: d.updated, renamed: d.renamed, deleted: d.deleted })}`}>
               {total === 0 ? (
                 <div className="h-px bg-border" />
               ) : (
                 <div className="flex flex-col-reverse overflow-hidden rounded-sm" style={{ height: `${(100 * total) / peak}%` }}>
                   <div className="bg-primary" style={{ flex: d.added }} />
                   <div className="bg-primary/55" style={{ flex: d.updated }} />
+                  <div className="bg-foreground/35" style={{ flex: d.renamed }} />
                   <div className="bg-destructive/70" style={{ flex: d.deleted }} />
                 </div>
               )}
@@ -68,6 +69,7 @@ function ActivityChart({ days }: { days: DashboardData['activity'] }) {
         <span className="flex gap-3">
           <span className="flex items-center gap-1"><i className="size-2 rounded-sm bg-primary" />{t('Added')}</span>
           <span className="flex items-center gap-1"><i className="size-2 rounded-sm bg-primary/55" />{t('Updated')}</span>
+          <span className="flex items-center gap-1"><i className="size-2 rounded-sm bg-foreground/35" />{t('Renamed')}</span>
           <span className="flex items-center gap-1"><i className="size-2 rounded-sm bg-destructive/70" />{t('Deleted')}</span>
         </span>
         <span>{t('Today')}</span>
@@ -82,7 +84,7 @@ export default function Dashboard() {
   const now = useNow()
   const { data, error } = useQuery({ queryKey: ['dashboard'], queryFn: () => api.get<DashboardData>('/api/dashboard') })
   const dismiss = useMutation({
-    mutationFn: (id: number) => api.post(`/api/alerts/${id}/dismiss`),
+    mutationFn: (id: string) => api.post(`/api/alerts/${id}/dismiss`),
     onSuccess: () => client.invalidateQueries({ queryKey: ['dashboard'] }),
     onError: (e) => toast.error(e.message),
   })
@@ -210,7 +212,7 @@ export default function Dashboard() {
             <ul className="divide-y">
               {data.recent.map((e) => (
                 <li key={e.id} className="flex items-center gap-3 py-2 text-sm">
-                  <span className={cn('w-16 shrink-0 text-xs font-medium uppercase', e.action === 'delete' ? 'text-destructive' : e.action === 'update' ? 'text-warning' : 'text-success')}>{t(ACTION[e.action] ?? e.action)}</span>
+                  <span className={cn('w-16 shrink-0 text-xs font-medium uppercase', e.action === 'delete' ? 'text-destructive' : e.action === 'update' ? 'text-warning' : e.action === 'rename' ? 'text-foreground' : 'text-success')}>{t(ACTION[e.action] ?? e.action)}</span>
                   <Link to={`/files?device=${encodeURIComponent(e.device)}&file=${encodeURIComponent(e.path)}`} className="min-w-0 flex-1 truncate hover:underline" title={e.path}>
                     <span className="text-muted-foreground">{e.device}/</span>{e.path}
                   </Link>

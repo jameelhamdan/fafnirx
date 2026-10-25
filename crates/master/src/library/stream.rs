@@ -5,6 +5,7 @@
 //! Set `FAFNIRX_STREAM_URL` (for example `http://stream:8090`) and `FAFNIRX_STREAM_TOKEN` (the token the service
 //! was given). Without them streaming is off, and the web app does not offer it.
 
+use crate::platform::id::Id;
 use crate::repo::files;
 use crate::web::access::Access;
 use crate::web::{ApiError, Shared};
@@ -79,7 +80,7 @@ pub fn valid_resource(rest: &str) -> bool {
 }
 
 /// What the service needs to know about a file: where it is in the file tree and which content it holds.
-fn locate(c: &mut postgres::Client, who: &Access, id: i64) -> anyhow::Result<(String, String)> {
+fn locate(c: &mut postgres::Client, who: &Access, id: uuid::Uuid) -> anyhow::Result<(String, String)> {
     let (folder, path, root) = files::location(c, id)?.ok_or_else(|| ApiError::not_found("No such file"))?;
     // A file of someone else's device does not exist for this user.
     who.check_see(&folder).map_err(|_| ApiError::not_found("No such file"))?;
@@ -91,7 +92,7 @@ fn locate(c: &mut postgres::Client, who: &Access, id: i64) -> anyhow::Result<(St
 pub async fn proxy(
     State(state): State<Shared>,
     Extension(who): Extension<Access>,
-    Path((id, rest)): Path<(i64, String)>,
+    Path((Id(id), rest)): Path<(Id, String)>,
 ) -> Result<Response, ApiError> {
     let backend = state.stream.as_ref().ok_or_else(|| ApiError::not_found("Streaming is not set up"))?;
     if !valid_resource(&rest) {

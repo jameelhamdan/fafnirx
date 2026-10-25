@@ -5,6 +5,7 @@
 //! for files to be read again.
 
 use crate::library::meta::PAUSED;
+use crate::platform::id::Id;
 use crate::repo::{jobs, settings};
 use crate::web::access::Access;
 use crate::web::{done, run, ApiError, Done, Res, Shared};
@@ -30,13 +31,15 @@ pub struct Summary {
 
 #[derive(Serialize)]
 pub struct Job {
-    id: i64,
+    id: Id,
     kind: String,
     status: String,
     device: String,
     path: String,
     attempts: i64,
     error: Option<String>,
+    /// What a finished job found (the picture a lookup chose).
+    note: Option<String>,
     created_at: i64,
     started_at: Option<i64>,
     finished_at: Option<i64>,
@@ -72,13 +75,14 @@ impl From<jobs::Item> for Job {
             serde_json::from_str(&j.payload).unwrap_or(JobPayload { device: String::new(), path: String::new() });
         let waiting_to_retry = j.status == "queued" && j.attempts > 0;
         Job {
-            id: j.id,
+            id: Id(j.id),
             kind: j.kind,
             status: j.status,
             device: p.device,
             path: p.path,
             attempts: j.attempts,
             error: j.error,
+            note: j.note,
             created_at: j.created_at,
             started_at: j.started_at,
             finished_at: j.finished_at,
@@ -157,7 +161,7 @@ pub async fn pause(State(state): State<Shared>, Extension(who): Extension<Access
 #[derive(Deserialize)]
 pub struct Target {
     /// One job; all of them when left out.
-    id: Option<i64>,
+    id: Option<Id>,
 }
 
 #[derive(Serialize)]
@@ -172,7 +176,7 @@ pub async fn retry(
     Json(b): Json<Target>,
 ) -> Res<Changed> {
     who.require_admin()?;
-    let changed = run(&state, move |c| Ok(jobs::retry_failed(c, b.id)?)).await?;
+    let changed = run(&state, move |c| Ok(jobs::retry_failed(c, b.id.map(|i| i.0))?)).await?;
     Ok(Json(Changed { changed }))
 }
 
@@ -180,7 +184,7 @@ pub async fn retry(
 pub struct Cancel {
     /// `failed` (forget it) or `queued` (do not start it).
     status: String,
-    id: Option<i64>,
+    id: Option<Id>,
 }
 
 /// Forgets failed jobs, or cancels jobs that have not started. A running job cannot be stopped: it ends by itself.
@@ -193,7 +197,7 @@ pub async fn cancel(
     if !matches!(b.status.as_str(), "failed" | "queued") {
         return Err(ApiError::bad("Only failed or waiting jobs can be removed"));
     }
-    let changed = run(&state, move |c| Ok(jobs::drop_where(c, &b.status, b.id)?)).await?;
+    let changed = run(&state, move |c| Ok(jobs::drop_where(c, &b.status, b.id.map(|i| i.0))?)).await?;
     Ok(Json(Changed { changed }))
 }
 
@@ -260,7 +264,7 @@ mod tests {
         assert_eq!(jobs::retry_failed(c, None).unwrap(), 1);
 
         let job = jobs::claim(c, 0, false).unwrap().unwrap();
-        jobs::complete(c, job.id).unwrap();
+        jobs::complete(c, job.id, Some("picture: poster.jpg")).unwrap();
         let summary = summarize(jobs::counts(c, true, -1).unwrap());
         assert_eq!((summary[0].queued, summary[0].failed, summary[0].done), (0, 0, 1));
         assert_eq!(

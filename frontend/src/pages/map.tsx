@@ -13,11 +13,11 @@ import { addTiles, L } from '@/lib/leaflet'
 import type { Asset, MapData, Session } from '@/lib/types'
 import { useT } from '@/lib/i18n'
 
-type Props = { id: number; when: number }
+type Props = { id: string; when: number }
 const STRIP = 60
 
 /** A round picture of a photo, or a numbered bubble for a group of them. */
-const pin = (id: number) =>
+const pin = (id: string) =>
   L.divIcon({
     className: '',
     iconSize: [46, 46],
@@ -43,8 +43,8 @@ export default function MapPage() {
   const map = useRef<L.Map | null>(null)
   const markers = useRef<L.LayerGroup | null>(null)
   const fitted = useRef(false)
-  const [inView, setInView] = useState<{ ids: number[]; total: number }>({ ids: [], total: 0 })
-  const [viewer, setViewer] = useState<{ assets: Asset[]; id: number } | null>(null)
+  const [inView, setInView] = useState<{ ids: string[]; total: number }>({ ids: [], total: 0 })
+  const [viewer, setViewer] = useState<{ assets: Asset[]; id: string } | null>(null)
 
   const points = data?.points
   const index = useMemo(() => {
@@ -54,7 +54,7 @@ export default function MapPage() {
     return sc
   }, [points])
 
-  const open = async (ids: number[], start: number) => {
+  const open = async (ids: string[], start: string) => {
     try {
       const { assets } = await api.get<{ assets: Asset[] }>(`/api/library?ids=${ids.slice(0, 500).join(',')}`)
       if (assets.length > 0) setViewer({ assets, id: assets.some((a) => a.id === start) ? start : assets[0].id })
@@ -108,7 +108,7 @@ export default function MapPage() {
             .on('click', () => {
               const zoomTo = index.getClusterExpansionZoom(clusterId)
               // Points that stay together even when fully zoomed in (the same spot): show them instead.
-              if (zoomTo > 18 || m.getZoom() >= 18) void openRef.current(index.getLeaves(clusterId, 200).map((l) => l.properties.id), 0)
+              if (zoomTo > 18 || m.getZoom() >= 18) void openRef.current(index.getLeaves(clusterId, 200).map((l) => l.properties.id), '')
               else m.flyTo([lat, lon], Math.min(zoomTo, 18))
             })
             .addTo(layer)

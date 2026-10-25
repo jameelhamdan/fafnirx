@@ -1360,6 +1360,7 @@ dependencies = [
  "postgres",
  "postgres-protocol",
  "postgres-types",
+ "uuid",
 ]
 
 [[package]]
@@ -1400,6 +1401,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-normalization",
+ "uuid",
  "zip",
 ]
 
@@ -3595,6 +3597,7 @@ dependencies = [
  "fallible-iterator 0.2.0",
  "postgres-derive",
  "postgres-protocol",
+ "uuid",
 ]
 
 [[package]]

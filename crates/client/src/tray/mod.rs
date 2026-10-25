@@ -91,6 +91,7 @@ impl Menus {
         let (now, last_sync, on_server, session, error) = (info("..."), info(""), info(""), info(""), info(""));
         let (pause, sync, check) = (control("Pause"), control("Sync now"), control("Check for updates"));
         let updates = info("Updates: not checked");
+        let downloads = control("Downloads on GitHub...");
         let client = control("Stop client");
         let quit = control("Quit tray");
         let add_folders = MenuItem::new("Add folders...", true, None);
@@ -105,6 +106,7 @@ impl Menus {
             (pause.item.id().clone(), Action::TogglePause),
             (sync.item.id().clone(), Action::SyncNow),
             (check.item.id().clone(), Action::CheckUpdates),
+            (downloads.item.id().clone(), Action::OpenUrl(crate::release::releases_page())),
             (client.item.id().clone(), Action::ToggleClient),
             (quit.item.id().clone(), Action::Quit),
             (add_folders.id().clone(), Action::AddFolders),
@@ -133,6 +135,7 @@ impl Menus {
             &sync.item,
             &check.item,
             &updates.item,
+            &downloads.item,
             &sep(),
             &folders,
             &sep(),

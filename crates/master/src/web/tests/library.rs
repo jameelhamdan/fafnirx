@@ -7,10 +7,14 @@ fn streaming_is_for_whoever_can_see_the_file_and_only_when_a_service_is_set_up()
     // Not set up: nothing to offer, and nothing is passed on.
     let mut api = Api::new();
     block(async {
-        assert_eq!(api.get("/api/stream/1/master.m3u8").await.0, StatusCode::UNAUTHORIZED, "the login comes first");
+        assert_eq!(
+            api.get("/api/stream/AAAAAAAAAAAAAAAAAAAAAA/master.m3u8").await.0,
+            StatusCode::UNAUTHORIZED,
+            "the login comes first"
+        );
         api.cookie = login(&api).await;
         assert_eq!(api.get("/api/session").await.1["stream"], false);
-        assert_eq!(api.get("/api/stream/1/master.m3u8").await.0, StatusCode::NOT_FOUND);
+        assert_eq!(api.get("/api/stream/AAAAAAAAAAAAAAAAAAAAAA/master.m3u8").await.0, StatusCode::NOT_FOUND);
     });
 
     // A stand-in for the streaming service: answers only with the right token, and says what it was asked for.
@@ -40,16 +44,17 @@ fn streaming_is_for_whoever_can_see_the_file_and_only_when_a_service_is_set_up()
             axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), service).await.unwrap();
         });
 
-        assert_eq!(api.get("/api/stream/1/master.m3u8").await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(api.get("/api/stream/AAAAAAAAAAAAAAAAAAAAAA/master.m3u8").await.0, StatusCode::UNAUTHORIZED);
         api.cookie = login(&api).await;
         assert_eq!(api.get("/api/session").await.1["stream"], true);
         api.json(Method::POST, "/api/devices", json!({"name": "videos", "kind": "local"})).await;
         api.upload("admin/videos", "trip/clip.mkv", b"video bytes").await;
-        let id: i64 = crate::platform::db::with(&api.db, |c| {
+        let id: uuid::Uuid = crate::platform::db::with(&api.db, |c| {
             Ok(c.query_one("SELECT id FROM files WHERE path = 'trip/clip.mkv'", &[])?.get(0))
         })
         .await
         .unwrap();
+        let id = crate::platform::id::Id(id);
 
         let (status, headers, body) =
             api.send(Method::GET, &format!("/api/stream/{id}/720p/index.m3u8"), Body::empty(), None, &[]).await;
@@ -71,7 +76,11 @@ fn streaming_is_for_whoever_can_see_the_file_and_only_when_a_service_is_set_up()
         for bad in ["../master.m3u8", "720p/seg1.mp4", "other"] {
             assert_eq!(api.get(&format!("/api/stream/{id}/{bad}")).await.0, StatusCode::NOT_FOUND, "{bad}");
         }
-        assert_eq!(api.get("/api/stream/99999/master.m3u8").await.0, StatusCode::NOT_FOUND, "no such file");
+        assert_eq!(
+            api.get("/api/stream/AAAAAAAAAAAAAAAAAAAAAQ/master.m3u8").await.0,
+            StatusCode::NOT_FOUND,
+            "no such file"
+        );
 
         api.json(
             Method::POST,
@@ -115,14 +124,14 @@ fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
 
         let a = photo_id(&api, "a.png").await;
         let b = photo_id(&api, "b.png").await;
-        let edit = |id: i64, body: Value| {
-            let api = &api;
+        let edit = |id: &str, body: Value| {
+            let (api, id) = (&api, id.to_string());
             async move { api.json(Method::PATCH, &format!("/api/library/{id}"), body).await }
         };
 
         // Favorite, rating, description and tags (case does not make a new tag).
         let (status, _) = edit(
-            a,
+            &a,
             json!({"favorite": true, "rating": 4, "description": " Beach day ", "tags": ["Trip", " trip ", "Summer", ""]}),
         )
         .await;
@@ -134,19 +143,22 @@ fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
         assert_eq!(tags, ["Summer", "Trip"]);
         assert_eq!(detail["mime"], "image/png");
         assert_eq!(api.get("/api/timeline/buckets?scope=favorites").await.1["total"], 1);
-        assert_eq!(edit(a, json!({"rating": 9})).await.0, StatusCode::BAD_REQUEST);
-        assert_eq!(edit(999_999, json!({"favorite": true})).await.0, StatusCode::NOT_FOUND);
-        edit(a, json!({"rating": null})).await;
+        assert_eq!(edit(&a, json!({"rating": 9})).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(edit("AAAAAAAAAAAAAAAAAAAAAA", json!({"favorite": true})).await.0, StatusCode::NOT_FOUND);
+        edit(&a, json!({"rating": null})).await;
         let detail = api.get(&format!("/api/library/{a}")).await.1;
         assert!(detail["rating"].is_null(), "null clears");
         assert_eq!(detail["favorite"], true, "an absent field leaves things alone");
 
         let (_, all_tags) = api.get("/api/tags").await;
         assert_eq!(all_tags.as_array().unwrap().len(), 2);
-        let trip = all_tags.as_array().unwrap().iter().find(|t| t["name"] == "Trip").unwrap()["id"].as_i64().unwrap();
+        let trip = all_tags.as_array().unwrap().iter().find(|t| t["name"] == "Trip").unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert_eq!(api.get(&format!("/api/timeline/buckets?tag={trip}")).await.1["total"], 1);
         // Dropping a tag from the only file that has it removes it.
-        edit(a, json!({"tags": ["Summer"]})).await;
+        edit(&a, json!({"tags": ["Summer"]})).await;
         assert_eq!(api.get("/api/tags").await.1.as_array().unwrap().len(), 1);
 
         // Bulk: favorite both, then archive one: the timeline no longer shows it, the archive does.
@@ -155,31 +167,31 @@ fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
             .await;
         assert_eq!(changed["changed"], 2);
         assert_eq!(api.get("/api/timeline/buckets?scope=favorites").await.1["total"], 2);
-        edit(a, json!({"archived": true})).await;
+        edit(&a, json!({"archived": true})).await;
         assert_eq!(api.get("/api/timeline/buckets").await.1["total"], 1);
         assert_eq!(api.get("/api/timeline/buckets?scope=archive").await.1["total"], 1);
         assert_eq!(api.json(Method::POST, "/api/library/bulk", json!({"ids": []})).await.0, StatusCode::BAD_REQUEST);
-        edit(a, json!({"archived": false})).await;
+        edit(&a, json!({"archived": false})).await;
 
         // A corrected date moves the photo to another month and can be taken back.
-        edit(a, json!({"taken_at": 1_700_000_000})).await;
+        edit(&a, json!({"taken_at": 1_700_000_000})).await;
         let (_, moved) = api.get("/api/timeline?month=2023-11").await;
         assert_eq!(moved["assets"][0]["when"], 1_700_000_000);
         assert_eq!(api.get(&format!("/api/library/{a}")).await.1["when_edited"], true);
         assert_eq!(api.get("/api/timeline/buckets").await.1["months"].as_array().unwrap().len(), 2);
-        edit(a, json!({"taken_at": null})).await;
+        edit(&a, json!({"taken_at": null})).await;
         assert_eq!(api.get("/api/timeline/buckets").await.1["months"].as_array().unwrap().len(), 1);
 
         // A corrected place shows on the map; nonsense places and the "null island" are refused.
         assert_eq!(api.get("/api/map").await.1["points"].as_array().unwrap().len(), 0);
         let place = |lat: f64, lon: f64| json!({"location": {"lat": lat, "lon": lon}});
-        assert_eq!(edit(a, place(95.0, 0.0)).await.0, StatusCode::BAD_REQUEST);
-        assert_eq!(edit(a, place(0.0, 0.0)).await.0, StatusCode::BAD_REQUEST);
-        edit(a, place(52.5, 13.4)).await;
+        assert_eq!(edit(&a, place(95.0, 0.0)).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(edit(&a, place(0.0, 0.0)).await.0, StatusCode::BAD_REQUEST);
+        edit(&a, place(52.5, 13.4)).await;
         let (_, map) = api.get("/api/map").await;
         assert_eq!(json!([map["points"][0][0], map["points"][0][1], map["points"][0][2]]), json!([a, 52.5, 13.4]));
         assert_eq!(api.get(&format!("/api/library/{a}")).await.1["place_edited"], true);
-        edit(a, json!({"location": null})).await;
+        edit(&a, json!({"location": null})).await;
         assert_eq!(api.get("/api/map").await.1["points"].as_array().unwrap().len(), 0);
 
         // Pictures and originals by id.
@@ -211,7 +223,7 @@ fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
         );
         let in_trash = api.send(Method::GET, &format!("/api/media/{a}/thumb"), Body::empty(), None, &[]).await;
         assert_eq!(in_trash.0, StatusCode::OK);
-        assert_eq!(edit(a, json!({"favorite": false})).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(edit(&a, json!({"favorite": false})).await.0, StatusCode::NOT_FOUND);
         let version = trash["entries"][0]["version"].clone();
         let (status, _) = api
             .json(
@@ -245,7 +257,7 @@ fn a_folder_can_be_an_album_and_files_are_added_from_the_file_browser() {
         // The folder is the album: its name is the folder's, and what is below it is in it, in the order of the names.
         let (status, album) = api.json(Method::POST, "/api/albums", json!({"name": "", "folder": folder})).await;
         assert_eq!(status, StatusCode::OK, "{album}");
-        let id = album["id"].as_i64().unwrap();
+        let id = album["id"].as_str().unwrap().to_string();
         assert_eq!(
             (album["name"].clone(), album["count"].clone(), album["folder"].clone()),
             (json!("Show"), json!(2), folder.clone())
@@ -262,7 +274,7 @@ fn a_folder_can_be_an_album_and_files_are_added_from_the_file_browser() {
 
         // Asking again gives the same album, and a new file in the folder is in it without doing anything.
         let (_, again) = api.json(Method::POST, "/api/albums", json!({"name": "", "folder": folder})).await;
-        assert_eq!(again["id"].as_i64(), Some(id));
+        assert_eq!(again["id"].as_str(), Some(id.as_str()));
         api.upload("admin/tv", "Show/S1/Episode 3.png", &png(4, 4, [9, 9, 9])).await;
         let (_, detail) = api.get(&format!("/api/albums/{id}")).await;
         assert_eq!(
@@ -281,7 +293,7 @@ fn a_folder_can_be_an_album_and_files_are_added_from_the_file_browser() {
 
         // From the file browser: files and folders by where they are, without ids.
         let (_, trip) = api.json(Method::POST, "/api/albums", json!({"name": "Trip"})).await;
-        let trip_id = trip["id"].as_i64().unwrap();
+        let trip_id = trip["id"].as_str().unwrap().to_string();
         let items =
             json!({"items": [{"device": "admin/tv", "path": "Other/x.png"}, {"device": "admin/tv", "path": "Show"}]});
         let (_, added) = api.json(Method::POST, &format!("/api/albums/{trip_id}/files"), items).await;
@@ -306,7 +318,7 @@ fn albums_collect_files_and_leave_the_files_alone() {
         assert_eq!(api.json(Method::POST, "/api/albums", json!({"name": "  "})).await.0, StatusCode::BAD_REQUEST);
         let (status, album) = api.json(Method::POST, "/api/albums", json!({"name": " Trip ", "ids": [a]})).await;
         assert_eq!(status, StatusCode::OK);
-        let id = album["id"].as_i64().unwrap();
+        let id = album["id"].as_str().unwrap().to_string();
         assert_eq!(
             (album["name"].clone(), album["count"].clone(), album["cover"].clone()),
             (json!("Trip"), json!(1), json!(a))
@@ -356,5 +368,54 @@ fn albums_collect_files_and_leave_the_files_alone() {
         );
         assert_eq!(api.get(&format!("/api/albums/{id}")).await.0, StatusCode::NOT_FOUND);
         assert_eq!(api.get("/api/timeline/buckets").await.1["total"], 3);
+    });
+}
+
+#[test]
+fn an_album_uses_its_poster_as_the_cover_and_a_viewer_steps_through_a_folder() {
+    let mut api = Api::new();
+    block(async {
+        api.cookie = login(&api).await;
+        api.json(Method::POST, "/api/devices", json!({"name": "tv", "kind": "local"})).await;
+        for (path, shade) in
+            [("Show/S1/E1.png", 1), ("Show/S1/E2.png", 2), ("Show/poster.png", 3), ("Show/S1/cover.png", 4)]
+        {
+            api.upload("admin/tv", path, &png(4, 4, [shade, shade, shade])).await;
+        }
+        let poster = photo_id(&api, "poster.png").await;
+        let (_, album) = api
+            .json(Method::POST, "/api/albums", json!({"name": "", "folder": {"device": "admin/tv", "path": "Show"}}))
+            .await;
+        assert_eq!(album["cover"], poster.as_str(), "the poster nearest the top of the folder is the cover");
+        let id = album["id"].as_str().unwrap().to_string();
+
+        // A cover that was chosen wins over the poster.
+        let e1 = photo_id(&api, "E1.png").await;
+        api.json(Method::PATCH, &format!("/api/albums/{id}"), json!({"cover": e1})).await;
+        assert_eq!(api.get(&format!("/api/albums/{id}")).await.1["album"]["cover"], e1.as_str());
+
+        // The viewer of a file lists the pictures of its folder in the order of their names.
+        let (status, folder) = api.get(&format!("/api/library/{e1}/folder")).await;
+        assert_eq!(status, StatusCode::OK);
+        let names: Vec<&str> =
+            folder["assets"].as_array().unwrap().iter().map(|a| a["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["cover.png", "E1.png", "E2.png"]);
+    });
+}
+
+#[test]
+fn the_folder_of_a_viewer_takes_wildcards_in_names_literally() {
+    let mut api = Api::new();
+    block(async {
+        api.cookie = login(&api).await;
+        api.json(Method::POST, "/api/devices", json!({"name": "pics", "kind": "local"})).await;
+        for (path, shade) in [("a_b/one.png", 1), ("axb/two.png", 2), ("a_b/sub/three.png", 3)] {
+            api.upload("admin/pics", path, &png(4, 4, [shade, shade, shade])).await;
+        }
+        let one = photo_id(&api, "one.png").await;
+        let (_, folder) = api.get(&format!("/api/library/{one}/folder")).await;
+        let names: Vec<&str> =
+            folder["assets"].as_array().unwrap().iter().map(|a| a["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["one.png"], "neither axb/ nor the subfolder");
     });
 }

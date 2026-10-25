@@ -1,22 +1,20 @@
-# Plans: features and release work
+# Plans
 
-Nothing here exists yet. The rest of the documentation describes only what is built.
+Nothing here is built; the rest of the documentation describes only what exists.
 
 ## Features
 
-- **Rename, move and edit in local folders** from the web app. Files in local folders (the ones uploaded to the master)
-  can be uploaded and deleted today, but not renamed or moved.
-- **Android client** that backs up the photos of a phone: see [the Android plan](android.md).
-- **Scoped API tokens** for the web API, which the phone app needs.
+- **Edit files in local folders** from the web app (move and rename are built; content editing is not). Files a computer or a source sent stay unmovable by design.
+- **Android client** that backs up a phone's photos: [plan](android.md).
+- **Scoped API tokens** for the web API (needed by the phone app).
 - **Google Keep source**, through an unofficial library.
 - **Email and webhook alerts.**
+- **Embedded cover art** of videos (MKV attachments, MP4 `attached_pic`) as the picture of a video.
 
 ## Release work
 
 - Screenshots in the README.
-- Try the Homebrew workflow (the release and Docker workflows have run: see the releases and Docker Hub).
-- Test the Linux and macOS autostart, the tray icon, Google Drive against Google, the Cloudflare tunnel setup and the
-  video parts against a real ffmpeg.
-- Publish the Homebrew tap and, if wanted, an apt repository (releases already carry `.deb` files).
-- A changelog, a code of conduct and issue templates.
-- A note in the deployment guide about the OpenStreetMap tile usage policy for the map's default tile server.
+- Try the Homebrew workflow; publish the tap and, if wanted, an apt repository (releases already carry `.deb` files).
+- Test Linux/macOS autostart, the tray, Google Drive against Google, the Cloudflare setup and the video parts against a real ffmpeg.
+- A changelog, a code of conduct, issue templates.
+- A note about the OpenStreetMap tile usage policy for the default map tiles.

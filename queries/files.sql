@@ -18,7 +18,7 @@ INSERT INTO versions (file_id, root_hash, size, mtime, mode, created_at)
 VALUES (:file_id, :root, :size, :mtime, :mode, :created_at) RETURNING id;
 
 --! make_current
-UPDATE files SET current_version_id = :version_id, deleted_at = NULL WHERE id = :file_id;
+UPDATE files SET current_version_id = :version_id, deleted_at = NULL, deleted_by = NULL WHERE id = :file_id;
 
 --! set_version_mtime
 UPDATE versions SET mtime = :mtime WHERE id = :version_id;
@@ -40,6 +40,12 @@ WHERE f.device_id = :device_id AND f.path = :path AND f.deleted_at IS NULL;
 
 --! delete_path (deleted_by?) : (current_version_id?)
 UPDATE files SET deleted_at = :ts, deleted_by = :deleted_by WHERE device_id = :device_id AND path = :path AND deleted_at IS NULL
+RETURNING current_version_id;
+
+--! vacate_renamed : (current_version_id?)
+-- The old path of a rename leaves the live tree. It is not a deletion: nothing is logged, and the row is hidden from the
+-- trash and from every listing (`deleted_by = 'rename'`) until retention removes it with the versions it still holds.
+UPDATE files SET deleted_at = :ts, deleted_by = 'rename' WHERE device_id = :device_id AND path = :path AND deleted_at IS NULL
 RETURNING current_version_id;
 
 --! keep_source_item_deleted
@@ -68,7 +74,7 @@ SELECT id, created_at, size, mtime, root_hash, pruned_at FROM versions WHERE fil
 --! expand_paths
 SELECT path FROM files
 WHERE device_id = :device_id AND (:path = '' OR path = :path OR path LIKE :below)
-  AND current_version_id IS NOT NULL AND (:include_deleted::boolean OR deleted_at IS NULL)
+  AND current_version_id IS NOT NULL AND (deleted_at IS NULL OR (:include_deleted::boolean AND deleted_by IS DISTINCT FROM 'rename'))
 ORDER BY path;
 
 --! version_to_restore : (current_version_id?, deleted_at?)
@@ -80,7 +86,7 @@ WHERE f.device_id = :device_id AND f.path = :path AND v.id = :version_id;
 SELECT split_part(substr(f.path, :from), '/', 1) AS name, COUNT(f.id) AS files, COALESCE(SUM(v.size), 0)::BIGINT AS bytes,
        MAX(v.created_at) AS changed, CASE WHEN bool_and(f.deleted_at IS NOT NULL) THEN MAX(f.deleted_at) END AS deleted_at
 FROM files f LEFT JOIN versions v ON v.id = f.current_version_id
-WHERE f.device_id = :device_id AND f.path LIKE :below AND (:include_deleted::boolean OR f.deleted_at IS NULL)
+WHERE f.device_id = :device_id AND f.path LIKE :below AND (f.deleted_at IS NULL OR (:include_deleted::boolean AND f.deleted_by IS DISTINCT FROM 'rename'))
       AND strpos(substr(f.path, :from), '/') > 0
 GROUP BY 1 ORDER BY lower(split_part(substr(f.path, :from), '/', 1));
 
@@ -135,3 +141,7 @@ WHERE d.folder = :device AND f.deleted_at IS NULL AND starts_with(f.path, :prefi
 --! file_codec : (codec?)
 -- The video codec read from a content, if it was read.
 SELECT codec FROM file_meta WHERE root_hash = :root;
+
+--! version_record
+-- What a version holds, to record the same content under another path.
+SELECT root_hash, size, mtime, mode FROM versions WHERE id = :version_id;

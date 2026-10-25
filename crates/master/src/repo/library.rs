@@ -9,6 +9,7 @@ use crate::platform::pg::Pg;
 use fafnirx_db::client::Params;
 use fafnirx_db::queries::library as q;
 use postgres::{Error, GenericClient};
+use uuid::Uuid;
 
 /// A photo or video as the grid and the viewer need it, with the user's own say about it.
 pub type Asset = q::Asset;
@@ -54,7 +55,7 @@ pub struct Filter<'a> {
     pub device: Option<&'a str>,
     pub kind: Option<Media>,
     /// Only the files that carry this tag.
-    pub tag: Option<i64>,
+    pub tag: Option<Uuid>,
     /// Only the files of this month, `YYYY-MM`.
     pub month: Option<&'a str>,
 }
@@ -91,7 +92,7 @@ pub fn assets(c: &mut impl GenericClient, who: Viewer, f: &Filter, limit: i64) -
 }
 
 /// A place on the map: (file id, latitude, longitude, when it was taken).
-pub type Point = (i64, f64, f64, i64);
+pub type Point = (Uuid, f64, f64, i64);
 
 /// The files of a view that have a place, newest first, at most `limit`.
 pub fn map_points(c: &mut impl GenericClient, who: Viewer, f: &Filter, limit: i64) -> Result<Vec<Point>, Error> {
@@ -115,7 +116,7 @@ pub fn map_points(c: &mut impl GenericClient, who: Viewer, f: &Filter, limit: i6
 }
 
 /// Some files by id, as long as they are not deleted and the viewer can see them.
-pub fn by_ids(c: &mut impl GenericClient, who: Viewer, ids: &[i64]) -> Result<Vec<Asset>, Error> {
+pub fn by_ids(c: &mut impl GenericClient, who: Viewer, ids: &[Uuid]) -> Result<Vec<Asset>, Error> {
     let params = q::AssetsByIdsParams { uid: who.uid, all: who.all, scope_user: who.scope_user, ids };
     q::assets_by_ids().params(&mut Pg(c), &params).all()
 }
@@ -124,7 +125,7 @@ pub fn by_ids(c: &mut impl GenericClient, who: Viewer, ids: &[i64]) -> Result<Ve
 pub fn album_assets(
     c: &mut impl GenericClient,
     who: Viewer,
-    album_id: i64,
+    album_id: Uuid,
     by_path: bool,
     limit: i64,
 ) -> Result<Vec<Asset>, Error> {
@@ -138,7 +139,7 @@ pub type Extras = q::AssetExtras;
 
 /// What the camera said about a file before any correction, whether the viewer corrected the time or the place,
 /// and the viewer's description. `None` when there is no such file.
-pub fn extras(c: &mut impl GenericClient, uid: i64, id: i64) -> Result<Option<Extras>, Error> {
+pub fn extras(c: &mut impl GenericClient, uid: i64, id: Uuid) -> Result<Option<Extras>, Error> {
     q::asset_extras().params(&mut Pg(c), &q::AssetExtrasParams { uid, id }).opt()
 }
 
@@ -149,4 +150,10 @@ pub type Trashed = q::TrashPage;
 pub fn trash(c: &mut impl GenericClient, who: Viewer, limit: i64, offset: i64) -> Result<Vec<Trashed>, Error> {
     let params = q::TrashPageParams { all: who.all, scope_user: who.scope_user, limit, offset };
     q::trash_page().params(&mut Pg(c), &params).all()
+}
+
+/// The photos and videos directly in the folder of a file.
+pub fn folder_of(c: &mut impl GenericClient, who: Viewer, id: Uuid, limit: i64) -> Result<Vec<Asset>, Error> {
+    let params = q::FolderAssetsParams { uid: who.uid, all: who.all, scope_user: who.scope_user, id, limit };
+    q::folder_assets().params(&mut Pg(c), &params).all()
 }

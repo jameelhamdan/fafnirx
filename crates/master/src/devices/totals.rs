@@ -53,7 +53,7 @@ mod tests {
         };
         assert_eq!(totals(&mut c), (0, 0, 0, true), "a new device has nothing to show yet");
         for (path, size, deleted) in [("a", 10_i64, false), ("b", 5, false), ("c", 7, true)] {
-            let file: i64 = c
+            let file: uuid::Uuid = c
                 .query_one("INSERT INTO files (device_id, path) VALUES (1, $1) RETURNING id", &[&path])
                 .unwrap()
                 .get(0);

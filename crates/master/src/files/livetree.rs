@@ -254,26 +254,57 @@ fn sync_subtree(conn: &mut Client, store: &Store, dev: &Device, rel: &str, settl
         Ok(m) if m.is_file() => vec![(rel.to_string(), base)],
         _ => Vec::new(),
     };
-    let mut found = HashSet::new();
+    // A name the master would not accept from a client (or would change) cannot be tracked.
+    let files: Vec<_> = files
+        .into_iter()
+        .filter(|(path, full)| {
+            let ok = clean_remote_path(path).ok().as_deref() == Some(path.as_str());
+            if !ok {
+                tracing::warn!("ignoring {}: not a valid path", full.display());
+            }
+            ok
+        })
+        .collect();
+    let found: HashSet<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
+    // A new file with the size and modification time of exactly one vanished path is that path renamed (a move keeps both).
+    let mut vanished: Vec<(&str, (i64, i64))> =
+        known.iter().filter(|(p, _)| !found.contains(p.as_str())).map(|(p, v)| (p.as_str(), *v)).collect();
     let mut changed = 0;
-    for (path, full) in files {
-        // A name the master would not accept from a client (or would change) cannot be tracked.
-        if clean_remote_path(&path).ok().as_deref() != Some(path.as_str()) {
-            tracing::warn!("ignoring {}: not a valid path", full.display());
-            continue;
-        }
-        if check_file(conn, store, dev, &path, &full, known.get(&path).copied(), settle)? {
+    for (path, full) in &files {
+        let renamed_from = if known.contains_key(path) { None } else { take_rename(&mut vanished, full) };
+        if check_file(conn, store, dev, path, full, Before { known: known.get(path).copied(), renamed_from }, settle)? {
             changed += 1;
         }
-        found.insert(path);
     }
     let mut deleted = 0;
-    for path in known.keys().filter(|p| !found.contains(*p)) {
+    for (path, _) in &vanished {
         if ingest::forget_absent(conn, store, dev, path)? {
             deleted += 1;
         }
     }
     Ok((changed, deleted))
+}
+
+/// What the database knows before a file is looked at: its size and mtime, and the path it was moved from.
+struct Before {
+    known: Option<(i64, i64)>,
+    renamed_from: Option<String>,
+}
+
+/// The vanished path a new file at `full` is a rename of: the only one with its size and modification time. Taken out of the list.
+fn take_rename(vanished: &mut Vec<(&str, (i64, i64))>, full: &Path) -> Option<String> {
+    let meta = std::fs::metadata(full).ok()?;
+    let (size, mtime) = (meta.len() as i64, mtime_ns(&meta));
+    if size == 0 {
+        return None;
+    }
+    let mut hits =
+        vanished.iter().enumerate().filter(|(_, (_, (s, m)))| *s == size && (m - mtime).abs() < MTIME_SLACK_NS);
+    let (index, _) = hits.next()?;
+    if hits.next().is_some() {
+        return None;
+    }
+    Some(vanished.remove(index).0.to_string())
 }
 
 /// Records a file if it differs from `known` (size, mtime of its current version). Returns whether a
@@ -284,7 +315,7 @@ fn check_file(
     dev: &Device,
     path: &str,
     full: &Path,
-    known: Option<(i64, i64)>,
+    before: Before,
     settle: Duration,
 ) -> Result<bool> {
     let Ok(meta) = std::fs::metadata(full) else { return Ok(false) };
@@ -293,7 +324,7 @@ fn check_file(
     if age < settle {
         return Ok(false);
     }
-    if known.is_some_and(|(s, m)| s as u64 == size && (m - mtime).abs() < MTIME_SLACK_NS) {
+    if before.known.is_some_and(|(s, m)| s as u64 == size && (m - mtime).abs() < MTIME_SLACK_NS) {
         return Ok(false);
     }
     let (root, hashed) = match hash_file(full) {
@@ -304,7 +335,7 @@ fn check_file(
         }
     };
     let seen = Seen { root, size: hashed, mtime, mode: mode_of(&meta) };
-    Ok(hashed == size && ingest::adopt_live(conn, store, dev, path, &seen)?)
+    Ok(hashed == size && ingest::adopt_live(conn, store, dev, path, &seen, before.renamed_from.as_deref())?)
 }
 
 /// Every regular file under `dir` as (path with `/`, full path); `prefix` is the path of `dir` itself.
@@ -405,6 +436,35 @@ mod tests {
         let actions: Vec<String> =
             c.query("SELECT action FROM events ORDER BY id", &[]).unwrap().iter().map(|r| r.get(0)).collect();
         assert_eq!(actions, ["add", "update", "delete"]);
+    }
+
+    #[test]
+    fn a_file_moved_in_a_local_folder_is_a_rename_and_its_album_follows() {
+        let db = testing::db_with_device();
+        let mut c = db.get().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let (dev, none) = (testing::device(), Duration::ZERO);
+        put(&store, "Show/a.txt", b"episode one");
+        assert_eq!(sync_subtree(&mut c, &store, &dev, "", none).unwrap(), (1, 0));
+        let album = crate::repo::albums::insert(&mut *c, 1, "Show", "", Some((1, "Show/")), 0).unwrap();
+
+        let from = store.live_path("admin/d", "Show/a.txt").unwrap();
+        let to = store.live_path("admin/d", "Show 2/a.txt").unwrap();
+        fs::create_dir_all(to.parent().unwrap()).unwrap();
+        fs::rename(from, to).unwrap();
+        assert_eq!(sync_subtree(&mut c, &store, &dev, "", none).unwrap(), (1, 0), "moved, not deleted");
+
+        let events: Vec<(String, Option<String>)> = c
+            .query("SELECT action, detail FROM events ORDER BY id", &[])
+            .unwrap()
+            .iter()
+            .map(|r| (r.get(0), r.get(1)))
+            .collect();
+        assert_eq!(events[1], ("rename".to_string(), Some("Show/a.txt".to_string())));
+        assert_eq!(events.len(), 2, "no delete");
+        let prefix: String = c.query_one("SELECT folder_prefix FROM albums WHERE id = $1", &[&album]).unwrap().get(0);
+        assert_eq!(prefix, "Show 2/");
     }
 
     #[test]

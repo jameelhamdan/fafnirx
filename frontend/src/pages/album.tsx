@@ -59,12 +59,12 @@ function EditAlbum({ album, onClose }: { album: AlbumInfo; onClose: () => void }
 
 export default function Album() {
   const t = useT()
-  const id = Number(useParams().id)
+  const id = useParams().id ?? ""
   const navigate = useNavigate()
   const refresh = useRefreshLibrary()
-  const { data, error } = useQuery({ queryKey: ['album', id], queryFn: () => api.get<{ album: AlbumInfo; assets: Asset[] }>(`/api/albums/${id}`), enabled: Number.isFinite(id) })
-  const [selected, setSelected] = useState<Map<number, Asset>>(new Map())
-  const [viewing, setViewing] = useState<number | null>(null)
+  const { data, error } = useQuery({ queryKey: ['album', id], queryFn: () => api.get<{ album: AlbumInfo; assets: Asset[] }>(`/api/albums/${id}`), enabled: id !== "" })
+  const [selected, setSelected] = useState<Map<string, Asset>>(new Map())
+  const [viewing, setViewing] = useState<string | null>(null)
   const [dialog, setDialog] = useState<'edit' | 'delete' | null>(null)
   const [showAll, setShowAll] = useState(false)
 
@@ -72,12 +72,12 @@ export default function Album() {
   const shown = useMemo(() => (showAll ? assets : assets?.slice(0, FIRST)) ?? [], [assets, showAll])
   const byId = useMemo(() => new Map((assets ?? []).map((a) => [a.id, a])), [assets])
   const ids = useMemo(() => new Set(selected.keys()), [selected])
-  const toggle = useCallback((id: number) => setSelected((s) => { const n = new Map(s); const a = byId.get(id); if (!n.delete(id) && a) n.set(id, a); return n }), [byId])
-  const toggleMany = useCallback((list: number[], on: boolean) => setSelected((s) => { const n = new Map(s); list.forEach((id) => { const a = byId.get(id); if (on && a) n.set(id, a); else n.delete(id) }); return n }), [byId])
+  const toggle = useCallback((id: string) => setSelected((s) => { const n = new Map(s); const a = byId.get(id); if (!n.delete(id) && a) n.set(id, a); return n }), [byId])
+  const toggleMany = useCallback((list: string[], on: boolean) => setSelected((s) => { const n = new Map(s); list.forEach((id) => { const a = byId.get(id); if (on && a) n.set(id, a); else n.delete(id) }); return n }), [byId])
   const clear = useCallback(() => setSelected(new Map()), [])
 
   const cover = useMutation({
-    mutationFn: (file: number) => api.patch(`/api/albums/${id}`, { cover: file }),
+    mutationFn: (file: string) => api.patch(`/api/albums/${id}`, { cover: file }),
     onSuccess: () => { toast.success(t('Cover changed')); clear(); void refresh() },
     onError: (e) => toast.error(e.message),
   })
@@ -87,7 +87,15 @@ export default function Album() {
     onError: (e) => toast.error(e.message),
   })
 
-  if (error) return <ErrorNote error={error} />
+  if (error) {
+    return (
+      <div className="space-y-3">
+        <ErrorNote error={error} />
+        <p className="text-sm text-muted-foreground">{t('This link is not valid any more, or the file is gone.')}</p>
+        <Button variant="outline" asChild><Link to="/albums">{t('Back to Albums')}</Link></Button>
+      </div>
+    )
+  }
   if (!data) return <Skeleton className="h-96" />
   const { album } = data
   const folder = album.folder

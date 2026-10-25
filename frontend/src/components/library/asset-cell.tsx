@@ -1,4 +1,4 @@
-import { Check, Heart, Image as ImageIcon, Play } from 'lucide-react'
+import { Check, Heart, Image as ImageIcon, Loader2, Play } from 'lucide-react'
 import { clock } from '@/lib/format'
 import type { Asset } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -37,6 +37,11 @@ export function AssetCell({
         <span className="pointer-events-none absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-black/55 px-1.5 py-0.5 text-[11px] font-medium text-white">
           {asset.duration_ms ? clock(asset.duration_ms) : null}
           <Play className="size-3 fill-white" />
+        </span>
+      )}
+      {asset.processing && (
+        <span title={t('Still being processed')} className="pointer-events-none absolute right-1.5 bottom-1.5 grid size-5 place-items-center rounded-full bg-black/55 text-white">
+          <Loader2 className="size-3 animate-spin" />
         </span>
       )}
       {asset.favorite && <Heart className="pointer-events-none absolute bottom-1.5 left-1.5 size-4 fill-white text-white drop-shadow" />}

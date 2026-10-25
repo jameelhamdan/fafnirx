@@ -153,17 +153,20 @@ mod tests {
         c.execute("INSERT INTO files (device_id, path, deleted_at) VALUES (1, 'old', $1)", &[&old]).unwrap();
         c.execute("INSERT INTO files (device_id, path, deleted_at) VALUES (1, 'fresh', $1)", &[&fresh]).unwrap();
         c.execute("INSERT INTO files (device_id, path) VALUES (1, 'live')", &[]).unwrap();
-        for f in 1..=3i64 {
-            c.execute(
-                "INSERT INTO versions (file_id, root_hash, size, mtime, created_at) VALUES ($1, decode('00', 'hex'), 0, 0, 0)",
-                &[&f],
-            )
-            .unwrap();
-        }
+        c.execute(
+            "INSERT INTO versions (file_id, root_hash, size, mtime, created_at)
+             SELECT id, decode('00', 'hex'), 0, 0, 0 FROM files ORDER BY deleted_at NULLS LAST",
+            &[],
+        )
+        .unwrap();
         let removed = retention(&mut c).unwrap();
         assert_eq!(removed, [1], "the version of the expired file is reported so its files can be deleted");
-        let paths: Vec<String> =
-            c.query("SELECT path FROM files ORDER BY path", &[]).unwrap().iter().map(|r| r.get(0)).collect();
+        let paths: Vec<String> = c
+            .query("SELECT path FROM files ORDER BY deleted_at NULLS LAST", &[])
+            .unwrap()
+            .iter()
+            .map(|r| r.get(0))
+            .collect();
         assert_eq!(paths, ["fresh", "live"]);
         let versions: i64 = c.query_one("SELECT COUNT(*) FROM versions", &[]).unwrap().get(0);
         assert_eq!(versions, 2);

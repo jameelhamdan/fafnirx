@@ -20,7 +20,7 @@ export default function TrashPage() {
   const t = useT()
   const now = useNow()
   const refresh = useRefreshLibrary()
-  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   const trash = useInfiniteQuery({
     queryKey: ['trash'],
     initialPageParam: 0,
@@ -54,7 +54,7 @@ export default function TrashPage() {
       void refresh()
     },
   })
-  const toggle = (id: number) => setSelected((s) => { const n = new Set(s); if (!n.delete(id)) n.add(id); return n })
+  const toggle = (id: string) => setSelected((s) => { const n = new Set(s); if (!n.delete(id)) n.add(id); return n })
 
   return (
     <div>
