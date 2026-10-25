@@ -8,6 +8,7 @@ use crate::files::ingest::{self, NewVersion};
 use crate::integrations::{Outcome, SourceRow};
 use crate::platform::db::{self, Db, Device};
 use crate::platform::store::Store;
+use crate::repo::files;
 use anyhow::{anyhow, bail, Context, Result};
 use fafnirx_common::{clean_remote_path, unix_now, ChunkHasher, HASH_LEN};
 use serde::Deserialize;
@@ -482,7 +483,7 @@ pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
         let (old_path, moved) = (old.to_string(), item.clone());
         let (store, device) = (store.clone(), device.clone());
         let renamed = db::with(&db, move |c| {
-            let (root, size) = ingest::live_content(c, device_id, &old_path)?.context("the old file is gone")?;
+            let (root, size) = files::live_content(c, device_id, &old_path)?.context("the old file is gone")?;
             let path = store.copy_live_to_temp(&device.name, &old_path, &root)?;
             commit(c, &store, source_id, &device, &moved, Download { path, root, size }, Some(&old_path))
         })

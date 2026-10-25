@@ -60,6 +60,11 @@ pub struct UpdateTotalsParams {
     pub now: i64,
     pub id: i64,
 }
+#[derive(Clone, Copy, Debug)]
+pub struct VisibleTotalsParams {
+    pub all: bool,
+    pub user: i64,
+}
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeviceByToken {
     pub id: i64,
@@ -208,6 +213,45 @@ pub struct UserForDeviceBorrowed<'a> {
 impl<'a> From<UserForDeviceBorrowed<'a>> for UserForDevice {
     fn from(UserForDeviceBorrowed { id, role }: UserForDeviceBorrowed<'a>) -> Self {
         Self { id, role: role.into() }
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClientsLastSeen {
+    pub folder: String,
+    pub last_seen: i64,
+}
+pub struct ClientsLastSeenBorrowed<'a> {
+    pub folder: &'a str,
+    pub last_seen: i64,
+}
+impl<'a> From<ClientsLastSeenBorrowed<'a>> for ClientsLastSeen {
+    fn from(ClientsLastSeenBorrowed { folder, last_seen }: ClientsLastSeenBorrowed<'a>) -> Self {
+        Self { folder: folder.into(), last_seen }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Copy)]
+pub struct VisibleTotals {
+    pub files: i64,
+    pub bytes: i64,
+    pub deleted: i64,
+}
+#[derive(Debug, Clone, PartialEq, Copy)]
+pub struct MasterTotals {
+    pub file_count: i64,
+    pub total_bytes: i64,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceByFolder {
+    pub id: i64,
+    pub folder: String,
+}
+pub struct DeviceByFolderBorrowed<'a> {
+    pub id: i64,
+    pub folder: &'a str,
+}
+impl<'a> From<DeviceByFolderBorrowed<'a>> for DeviceByFolder {
+    fn from(DeviceByFolderBorrowed { id, folder }: DeviceByFolderBorrowed<'a>) -> Self {
+        Self { id, folder: folder.into() }
     }
 }
 use crate::client::sync::GenericClient;
@@ -471,6 +515,202 @@ where
 {
     pub fn map<R>(self, mapper: fn(i64) -> R) -> I64Query<'c, 'a, 's, C, R, N> {
         I64Query {
+            client: self.client,
+            params: self.params,
+            query: self.query,
+            cached: self.cached,
+            extractor: self.extractor,
+            mapper,
+        }
+    }
+    pub fn one(self) -> Result<T, postgres::Error> {
+        let row = crate::client::sync::one(self.client, self.query, &self.params, self.cached)?;
+        Ok((self.mapper)((self.extractor)(&row)?))
+    }
+    pub fn all(self) -> Result<Vec<T>, postgres::Error> {
+        self.iter()?.collect()
+    }
+    pub fn opt(self) -> Result<Option<T>, postgres::Error> {
+        let opt_row = crate::client::sync::opt(self.client, self.query, &self.params, self.cached)?;
+        Ok(opt_row
+            .map(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+            .transpose()?)
+    }
+    pub fn iter(self) -> Result<impl Iterator<Item = Result<T, postgres::Error>> + 'c, postgres::Error> {
+        let stream = crate::client::sync::raw(self.client, self.query, crate::slice_iter(&self.params), self.cached)?;
+        let mapped = stream.iterator().map(move |res| {
+            res.and_then(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+        });
+        Ok(mapped)
+    }
+}
+pub struct ClientsLastSeenQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
+    client: &'c mut C,
+    params: [&'a (dyn postgres_types::ToSql + Sync); N],
+    query: &'static str,
+    cached: Option<&'s postgres::Statement>,
+    extractor: fn(&postgres::Row) -> Result<ClientsLastSeenBorrowed, postgres::Error>,
+    mapper: fn(ClientsLastSeenBorrowed) -> T,
+}
+impl<'c, 'a, 's, C, T: 'c, const N: usize> ClientsLastSeenQuery<'c, 'a, 's, C, T, N>
+where
+    C: GenericClient,
+{
+    pub fn map<R>(self, mapper: fn(ClientsLastSeenBorrowed) -> R) -> ClientsLastSeenQuery<'c, 'a, 's, C, R, N> {
+        ClientsLastSeenQuery {
+            client: self.client,
+            params: self.params,
+            query: self.query,
+            cached: self.cached,
+            extractor: self.extractor,
+            mapper,
+        }
+    }
+    pub fn one(self) -> Result<T, postgres::Error> {
+        let row = crate::client::sync::one(self.client, self.query, &self.params, self.cached)?;
+        Ok((self.mapper)((self.extractor)(&row)?))
+    }
+    pub fn all(self) -> Result<Vec<T>, postgres::Error> {
+        self.iter()?.collect()
+    }
+    pub fn opt(self) -> Result<Option<T>, postgres::Error> {
+        let opt_row = crate::client::sync::opt(self.client, self.query, &self.params, self.cached)?;
+        Ok(opt_row
+            .map(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+            .transpose()?)
+    }
+    pub fn iter(self) -> Result<impl Iterator<Item = Result<T, postgres::Error>> + 'c, postgres::Error> {
+        let stream = crate::client::sync::raw(self.client, self.query, crate::slice_iter(&self.params), self.cached)?;
+        let mapped = stream.iterator().map(move |res| {
+            res.and_then(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+        });
+        Ok(mapped)
+    }
+}
+pub struct VisibleTotalsQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
+    client: &'c mut C,
+    params: [&'a (dyn postgres_types::ToSql + Sync); N],
+    query: &'static str,
+    cached: Option<&'s postgres::Statement>,
+    extractor: fn(&postgres::Row) -> Result<VisibleTotals, postgres::Error>,
+    mapper: fn(VisibleTotals) -> T,
+}
+impl<'c, 'a, 's, C, T: 'c, const N: usize> VisibleTotalsQuery<'c, 'a, 's, C, T, N>
+where
+    C: GenericClient,
+{
+    pub fn map<R>(self, mapper: fn(VisibleTotals) -> R) -> VisibleTotalsQuery<'c, 'a, 's, C, R, N> {
+        VisibleTotalsQuery {
+            client: self.client,
+            params: self.params,
+            query: self.query,
+            cached: self.cached,
+            extractor: self.extractor,
+            mapper,
+        }
+    }
+    pub fn one(self) -> Result<T, postgres::Error> {
+        let row = crate::client::sync::one(self.client, self.query, &self.params, self.cached)?;
+        Ok((self.mapper)((self.extractor)(&row)?))
+    }
+    pub fn all(self) -> Result<Vec<T>, postgres::Error> {
+        self.iter()?.collect()
+    }
+    pub fn opt(self) -> Result<Option<T>, postgres::Error> {
+        let opt_row = crate::client::sync::opt(self.client, self.query, &self.params, self.cached)?;
+        Ok(opt_row
+            .map(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+            .transpose()?)
+    }
+    pub fn iter(self) -> Result<impl Iterator<Item = Result<T, postgres::Error>> + 'c, postgres::Error> {
+        let stream = crate::client::sync::raw(self.client, self.query, crate::slice_iter(&self.params), self.cached)?;
+        let mapped = stream.iterator().map(move |res| {
+            res.and_then(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+        });
+        Ok(mapped)
+    }
+}
+pub struct MasterTotalsQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
+    client: &'c mut C,
+    params: [&'a (dyn postgres_types::ToSql + Sync); N],
+    query: &'static str,
+    cached: Option<&'s postgres::Statement>,
+    extractor: fn(&postgres::Row) -> Result<MasterTotals, postgres::Error>,
+    mapper: fn(MasterTotals) -> T,
+}
+impl<'c, 'a, 's, C, T: 'c, const N: usize> MasterTotalsQuery<'c, 'a, 's, C, T, N>
+where
+    C: GenericClient,
+{
+    pub fn map<R>(self, mapper: fn(MasterTotals) -> R) -> MasterTotalsQuery<'c, 'a, 's, C, R, N> {
+        MasterTotalsQuery {
+            client: self.client,
+            params: self.params,
+            query: self.query,
+            cached: self.cached,
+            extractor: self.extractor,
+            mapper,
+        }
+    }
+    pub fn one(self) -> Result<T, postgres::Error> {
+        let row = crate::client::sync::one(self.client, self.query, &self.params, self.cached)?;
+        Ok((self.mapper)((self.extractor)(&row)?))
+    }
+    pub fn all(self) -> Result<Vec<T>, postgres::Error> {
+        self.iter()?.collect()
+    }
+    pub fn opt(self) -> Result<Option<T>, postgres::Error> {
+        let opt_row = crate::client::sync::opt(self.client, self.query, &self.params, self.cached)?;
+        Ok(opt_row
+            .map(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+            .transpose()?)
+    }
+    pub fn iter(self) -> Result<impl Iterator<Item = Result<T, postgres::Error>> + 'c, postgres::Error> {
+        let stream = crate::client::sync::raw(self.client, self.query, crate::slice_iter(&self.params), self.cached)?;
+        let mapped = stream.iterator().map(move |res| {
+            res.and_then(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+        });
+        Ok(mapped)
+    }
+}
+pub struct DeviceByFolderQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
+    client: &'c mut C,
+    params: [&'a (dyn postgres_types::ToSql + Sync); N],
+    query: &'static str,
+    cached: Option<&'s postgres::Statement>,
+    extractor: fn(&postgres::Row) -> Result<DeviceByFolderBorrowed, postgres::Error>,
+    mapper: fn(DeviceByFolderBorrowed) -> T,
+}
+impl<'c, 'a, 's, C, T: 'c, const N: usize> DeviceByFolderQuery<'c, 'a, 's, C, T, N>
+where
+    C: GenericClient,
+{
+    pub fn map<R>(self, mapper: fn(DeviceByFolderBorrowed) -> R) -> DeviceByFolderQuery<'c, 'a, 's, C, R, N> {
+        DeviceByFolderQuery {
             client: self.client,
             params: self.params,
             query: self.query,
@@ -1023,6 +1263,168 @@ impl StaleDeviceIdsStmt {
             cached: self.1.as_ref(),
             extractor: |row| Ok(row.try_get(0)?),
             mapper: |it| it,
+        }
+    }
+}
+pub struct ClientsLastSeenStmt(&'static str, Option<postgres::Statement>);
+pub fn clients_last_seen() -> ClientsLastSeenStmt {
+    ClientsLastSeenStmt(
+        "SELECT folder, last_seen FROM devices WHERE kind = 'device' AND revoked_at IS NULL AND last_seen IS NOT NULL",
+        None,
+    )
+}
+impl ClientsLastSeenStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient>(
+        &'s self,
+        client: &'c mut C,
+    ) -> ClientsLastSeenQuery<'c, 'a, 's, C, ClientsLastSeen, 0> {
+        ClientsLastSeenQuery {
+            client,
+            params: [],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row: &postgres::Row| -> Result<ClientsLastSeenBorrowed, postgres::Error> {
+                Ok(ClientsLastSeenBorrowed { folder: row.try_get(0)?, last_seen: row.try_get(1)? })
+            },
+            mapper: |it| ClientsLastSeen::from(it),
+        }
+    }
+}
+pub struct VisibleTotalsStmt(&'static str, Option<postgres::Statement>);
+pub fn visible_totals() -> VisibleTotalsStmt {
+    VisibleTotalsStmt(
+        "SELECT COALESCE(SUM(file_count), 0)::BIGINT AS files, COALESCE(SUM(total_bytes), 0)::BIGINT AS bytes, COALESCE(SUM(deleted_files), 0)::BIGINT AS deleted FROM devices d WHERE ($1::boolean OR d.kind = 'master' OR d.user_id = $2::bigint)",
+        None,
+    )
+}
+impl VisibleTotalsStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient>(
+        &'s self,
+        client: &'c mut C,
+        all: &'a bool,
+        user: &'a i64,
+    ) -> VisibleTotalsQuery<'c, 'a, 's, C, VisibleTotals, 2> {
+        VisibleTotalsQuery {
+            client,
+            params: [all, user],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row: &postgres::Row| -> Result<VisibleTotals, postgres::Error> {
+                Ok(VisibleTotals { files: row.try_get(0)?, bytes: row.try_get(1)?, deleted: row.try_get(2)? })
+            },
+            mapper: |it| VisibleTotals::from(it),
+        }
+    }
+}
+impl<'c, 'a, 's, C: GenericClient>
+    crate::client::sync::Params<'c, 'a, 's, VisibleTotalsParams, VisibleTotalsQuery<'c, 'a, 's, C, VisibleTotals, 2>, C>
+    for VisibleTotalsStmt
+{
+    fn params(
+        &'s self,
+        client: &'c mut C,
+        params: &'a VisibleTotalsParams,
+    ) -> VisibleTotalsQuery<'c, 'a, 's, C, VisibleTotals, 2> {
+        self.bind(client, &params.all, &params.user)
+    }
+}
+pub struct MarkTotalsStaleStmt(&'static str, Option<postgres::Statement>);
+pub fn mark_totals_stale() -> MarkTotalsStaleStmt {
+    MarkTotalsStaleStmt("UPDATE devices SET totals_stale = TRUE WHERE id = ANY($1)", None)
+}
+impl MarkTotalsStaleStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient, T1: crate::ArraySql<Item = i64>>(
+        &'s self,
+        client: &'c mut C,
+        ids: &'a T1,
+    ) -> Result<u64, postgres::Error> {
+        client.execute(self.0, &[ids])
+    }
+}
+pub struct MasterTotalsStmt(&'static str, Option<postgres::Statement>);
+pub fn master_totals() -> MasterTotalsStmt {
+    MasterTotalsStmt("SELECT file_count, total_bytes FROM devices WHERE kind = 'master'", None)
+}
+impl MasterTotalsStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient>(
+        &'s self,
+        client: &'c mut C,
+    ) -> MasterTotalsQuery<'c, 'a, 's, C, MasterTotals, 0> {
+        MasterTotalsQuery {
+            client,
+            params: [],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row: &postgres::Row| -> Result<MasterTotals, postgres::Error> {
+                Ok(MasterTotals { file_count: row.try_get(0)?, total_bytes: row.try_get(1)? })
+            },
+            mapper: |it| MasterTotals::from(it),
+        }
+    }
+}
+pub struct DeviceKindStmt(&'static str, Option<postgres::Statement>);
+pub fn device_kind() -> DeviceKindStmt {
+    DeviceKindStmt("SELECT kind FROM devices WHERE id = $1", None)
+}
+impl DeviceKindStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient>(
+        &'s self,
+        client: &'c mut C,
+        id: &'a i64,
+    ) -> StringQuery<'c, 'a, 's, C, String, 1> {
+        StringQuery {
+            client,
+            params: [id],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row| Ok(row.try_get(0)?),
+            mapper: |it| it.into(),
+        }
+    }
+}
+pub struct DeviceByFolderStmt(&'static str, Option<postgres::Statement>);
+pub fn device_by_folder() -> DeviceByFolderStmt {
+    DeviceByFolderStmt("SELECT id, folder FROM devices WHERE folder = $1", None)
+}
+impl DeviceByFolderStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient, T1: crate::StringSql>(
+        &'s self,
+        client: &'c mut C,
+        folder: &'a T1,
+    ) -> DeviceByFolderQuery<'c, 'a, 's, C, DeviceByFolder, 1> {
+        DeviceByFolderQuery {
+            client,
+            params: [folder],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row: &postgres::Row| -> Result<DeviceByFolderBorrowed, postgres::Error> {
+                Ok(DeviceByFolderBorrowed { id: row.try_get(0)?, folder: row.try_get(1)? })
+            },
+            mapper: |it| DeviceByFolder::from(it),
         }
     }
 }
