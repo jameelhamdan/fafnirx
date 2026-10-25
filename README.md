@@ -52,7 +52,7 @@ docker compose up -d
 
 Open `http://<server>:8080`, log in as `admin` with that password, and add a device: the web app shows its token once.
 On the device, install the client from the [latest release](https://github.com/jameelhamdan/fafnirx/releases/latest)
-(Windows setup, macOS and Linux tarball, or a `.deb`), then:
+(Windows setup, a `.deb`, or on macOS and Linux `curl -fsSL .../installer/get.sh | sh`, see the guide), then:
 
 ```sh
 fafnirx enroll --server http://<server>:7443      # asks for the token; also starts the client at every login

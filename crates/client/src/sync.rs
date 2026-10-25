@@ -449,7 +449,11 @@ impl Engine {
                 .await?;
         }
         if let Some(old) = &c.renamed_from {
-            // The commit above already marked the old path deleted on the master.
+            if neg.already_current {
+                // The new path already held this content, so there was no commit to carry the rename.
+                self.client.mark_deleted(pb::DeleteRequest { path: old.clone() }).await?;
+            }
+            // Otherwise the commit above already marked the old path deleted on the master.
             self.state.remove_synced(old)?;
         }
         self.state.set_synced(&Synced {

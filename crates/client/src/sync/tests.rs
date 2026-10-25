@@ -11,6 +11,8 @@ use tonic::{Request, Response, Status, Streaming};
 struct Calls {
     commits: Vec<(String, String)>,
     deleted: Vec<String>,
+    /// Paths for which the master says it already holds the content.
+    already: Vec<String>,
 }
 
 struct Recorder(Arc<Mutex<Calls>>);
@@ -24,8 +26,9 @@ impl Collector for Recorder {
         Ok(Response::new(pb::HeartbeatResponse::default()))
     }
     async fn negotiate(&self, req: Request<pb::Manifest>) -> Result<Response<pb::NegotiateResponse>, Status> {
-        let missing = (0..req.get_ref().chunk_hashes.len() as u32).collect();
-        Ok(Response::new(pb::NegotiateResponse { missing, already_current: false }))
+        let already_current = self.0.lock().unwrap().already.contains(&req.get_ref().path);
+        let missing = if already_current { vec![] } else { (0..req.get_ref().chunk_hashes.len() as u32).collect() };
+        Ok(Response::new(pb::NegotiateResponse { missing, already_current }))
     }
     async fn upload_chunks(&self, req: Request<Streaming<pb::Chunk>>) -> Result<Response<pb::UploadSummary>, Status> {
         let mut stream = req.into_inner();
@@ -315,4 +318,16 @@ async fn a_directory_that_cannot_be_walked_deletes_nothing() {
     rig.cycle().await;
     fs::set_permissions(&sub, fs::Permissions::from_mode(0o755)).unwrap();
     assert!(rig.deleted().is_empty(), "nothing is deleted from a folder that could not be read completely");
+}
+
+#[tokio::test]
+async fn a_rename_onto_a_path_the_master_already_has_still_removes_the_old_path() {
+    let mut rig = Rig::new().await;
+    rig.files(3);
+    rig.cycle().await;
+    rig.calls.lock().unwrap().already.push("docs/dup.txt".into());
+    fs::rename(rig.folder.path().join("f1.txt"), rig.folder.path().join("dup.txt")).unwrap();
+    rig.cycle().await;
+    assert_eq!(rig.deleted(), ["docs/f1.txt"], "the old name is gone on the master too");
+    assert_eq!(rig.cycle().await, Report::default());
 }
