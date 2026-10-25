@@ -176,5 +176,11 @@ fn respawn_hidden(hidden: bool, log_file: bool) -> Result<bool> {
 }
 
 fn tokio_main<F: std::future::Future<Output = Result<()>>>(f: F) -> Result<()> {
-    tokio::runtime::Builder::new_multi_thread().enable_all().build()?.block_on(f)
+    // The client waits for the disk and the network: two workers are plenty, and each idle thread costs memory.
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(8)
+        .enable_all()
+        .build()?
+        .block_on(f)
 }

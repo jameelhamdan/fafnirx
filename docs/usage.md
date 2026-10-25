@@ -390,9 +390,9 @@ so a compromised master cannot ship a client update, and the update channel need
 fafnirx-sign keygen --out update.key        # once. Keep update.key off the master.
 # put the printed  update_public_key = "..."  in each client's config.toml
 
-cargo build --release -p fafnirx
+cargo build --profile client -p fafnirx
 fafnirx-sign publish --key update.key --platform linux-x86_64 --version 0.2.0 \
-    --bin target/release/fafnirx --out /path/to/data/updates
+    --bin target/client/fafnirx --out /path/to/data/updates
 ```
 
 Clients install an update only if the signature verifies and the version is higher than theirs. They check every 6

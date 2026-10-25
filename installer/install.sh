@@ -8,7 +8,7 @@
 # The device token is asked for without echo. For scripts, put it in FAFNIRX_TOKEN or pipe it in; it is never an
 # argument, which other users of the machine could see.
 #
-# The binary is taken from --binary, or from `fafnirx` next to this script, or from target/release.
+# The binary is taken from --binary, or from `fafnirx` next to this script, or from target/client.
 set -eu
 
 server= binary=
@@ -27,7 +27,7 @@ done
 
 here=$(cd "$(dirname "$0")" && pwd)
 if [ -z "$binary" ]; then
-  for candidate in "$here/fafnirx" "$here/../target/release/fafnirx"; do
+  for candidate in "$here/fafnirx" "$here/../target/client/fafnirx"; do
     [ -x "$candidate" ] && binary=$candidate && break
   done
 fi
