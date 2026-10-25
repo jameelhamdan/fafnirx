@@ -124,6 +124,33 @@ pub struct LiveFilesBelowParams<T1: crate::StringSql, T2: crate::StringSql> {
     pub path: T1,
     pub below: T2,
 }
+#[derive(Debug)]
+pub struct FileHoldsContentParams<T1: crate::StringSql, T2: crate::StringSql, T3: crate::BytesSql> {
+    pub device: T1,
+    pub path: T2,
+    pub root: T3,
+}
+#[derive(Debug)]
+pub struct SaveFileMetaParams<
+    T1: crate::BytesSql,
+    T2: crate::StringSql,
+    T3: crate::StringSql,
+    T4: crate::StringSql,
+    T5: crate::StringSql,
+> {
+    pub root: T1,
+    pub mime: T2,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub taken_at: Option<i64>,
+    pub exif: T3,
+    pub read_at: i64,
+    pub kind: T4,
+    pub duration_ms: Option<i64>,
+    pub codec: Option<T5>,
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
+}
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub struct LockFileRow {
     pub id: i64,
@@ -349,6 +376,22 @@ pub struct LiveFilesBelowBorrowed<'a> {
 impl<'a> From<LiveFilesBelowBorrowed<'a>> for LiveFilesBelow {
     fn from(LiveFilesBelowBorrowed { path, size, mtime }: LiveFilesBelowBorrowed<'a>) -> Self {
         Self { path: path.into(), size, mtime }
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileLocation {
+    pub folder: String,
+    pub path: String,
+    pub root_hash: Vec<u8>,
+}
+pub struct FileLocationBorrowed<'a> {
+    pub folder: &'a str,
+    pub path: &'a str,
+    pub root_hash: &'a [u8],
+}
+impl<'a> From<FileLocationBorrowed<'a>> for FileLocation {
+    fn from(FileLocationBorrowed { folder, path, root_hash }: FileLocationBorrowed<'a>) -> Self {
+        Self { folder: folder.into(), path: path.into(), root_hash: root_hash.into() }
     }
 }
 use crate::client::sync::GenericClient;
@@ -1053,6 +1096,55 @@ where
 {
     pub fn map<R>(self, mapper: fn(LiveFilesBelowBorrowed) -> R) -> LiveFilesBelowQuery<'c, 'a, 's, C, R, N> {
         LiveFilesBelowQuery {
+            client: self.client,
+            params: self.params,
+            query: self.query,
+            cached: self.cached,
+            extractor: self.extractor,
+            mapper,
+        }
+    }
+    pub fn one(self) -> Result<T, postgres::Error> {
+        let row = crate::client::sync::one(self.client, self.query, &self.params, self.cached)?;
+        Ok((self.mapper)((self.extractor)(&row)?))
+    }
+    pub fn all(self) -> Result<Vec<T>, postgres::Error> {
+        self.iter()?.collect()
+    }
+    pub fn opt(self) -> Result<Option<T>, postgres::Error> {
+        let opt_row = crate::client::sync::opt(self.client, self.query, &self.params, self.cached)?;
+        Ok(opt_row
+            .map(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+            .transpose()?)
+    }
+    pub fn iter(self) -> Result<impl Iterator<Item = Result<T, postgres::Error>> + 'c, postgres::Error> {
+        let stream = crate::client::sync::raw(self.client, self.query, crate::slice_iter(&self.params), self.cached)?;
+        let mapped = stream.iterator().map(move |res| {
+            res.and_then(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+        });
+        Ok(mapped)
+    }
+}
+pub struct FileLocationQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
+    client: &'c mut C,
+    params: [&'a (dyn postgres_types::ToSql + Sync); N],
+    query: &'static str,
+    cached: Option<&'s postgres::Statement>,
+    extractor: fn(&postgres::Row) -> Result<FileLocationBorrowed, postgres::Error>,
+    mapper: fn(FileLocationBorrowed) -> T,
+}
+impl<'c, 'a, 's, C, T: 'c, const N: usize> FileLocationQuery<'c, 'a, 's, C, T, N>
+where
+    C: GenericClient,
+{
+    pub fn map<R>(self, mapper: fn(FileLocationBorrowed) -> R) -> FileLocationQuery<'c, 'a, 's, C, R, N> {
+        FileLocationQuery {
             client: self.client,
             params: self.params,
             query: self.query,
@@ -2056,5 +2148,176 @@ impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql>
         params: &'a LiveFilesBelowParams<T1, T2>,
     ) -> LiveFilesBelowQuery<'c, 'a, 's, C, LiveFilesBelow, 3> {
         self.bind(client, &params.device_id, &params.path, &params.below)
+    }
+}
+pub struct FileLocationStmt(&'static str, Option<postgres::Statement>);
+pub fn file_location() -> FileLocationStmt {
+    FileLocationStmt(
+        "SELECT d.folder, f.path, v.root_hash FROM files f JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id WHERE f.id = $1 AND f.deleted_at IS NULL",
+        None,
+    )
+}
+impl FileLocationStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient>(
+        &'s self,
+        client: &'c mut C,
+        id: &'a i64,
+    ) -> FileLocationQuery<'c, 'a, 's, C, FileLocation, 1> {
+        FileLocationQuery {
+            client,
+            params: [id],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row: &postgres::Row| -> Result<FileLocationBorrowed, postgres::Error> {
+                Ok(FileLocationBorrowed { folder: row.try_get(0)?, path: row.try_get(1)?, root_hash: row.try_get(2)? })
+            },
+            mapper: |it| FileLocation::from(it),
+        }
+    }
+}
+pub struct FileHoldsContentStmt(&'static str, Option<postgres::Statement>);
+pub fn file_holds_content() -> FileHoldsContentStmt {
+    FileHoldsContentStmt(
+        "SELECT EXISTS (SELECT 1 FROM files f JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id WHERE d.folder = $1 AND f.path = $2 AND v.root_hash = $3) AS holds",
+        None,
+    )
+}
+impl FileHoldsContentStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql, T3: crate::BytesSql>(
+        &'s self,
+        client: &'c mut C,
+        device: &'a T1,
+        path: &'a T2,
+        root: &'a T3,
+    ) -> BoolQuery<'c, 'a, 's, C, bool, 3> {
+        BoolQuery {
+            client,
+            params: [device, path, root],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row| Ok(row.try_get(0)?),
+            mapper: |it| it,
+        }
+    }
+}
+impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql, T3: crate::BytesSql>
+    crate::client::sync::Params<'c, 'a, 's, FileHoldsContentParams<T1, T2, T3>, BoolQuery<'c, 'a, 's, C, bool, 3>, C>
+    for FileHoldsContentStmt
+{
+    fn params(
+        &'s self,
+        client: &'c mut C,
+        params: &'a FileHoldsContentParams<T1, T2, T3>,
+    ) -> BoolQuery<'c, 'a, 's, C, bool, 3> {
+        self.bind(client, &params.device, &params.path, &params.root)
+    }
+}
+pub struct ContentIsStoredStmt(&'static str, Option<postgres::Statement>);
+pub fn content_is_stored() -> ContentIsStoredStmt {
+    ContentIsStoredStmt("SELECT EXISTS (SELECT 1 FROM versions WHERE root_hash = $1) AS stored", None)
+}
+impl ContentIsStoredStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient, T1: crate::BytesSql>(
+        &'s self,
+        client: &'c mut C,
+        root: &'a T1,
+    ) -> BoolQuery<'c, 'a, 's, C, bool, 1> {
+        BoolQuery {
+            client,
+            params: [root],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row| Ok(row.try_get(0)?),
+            mapper: |it| it,
+        }
+    }
+}
+pub struct SaveFileMetaStmt(&'static str, Option<postgres::Statement>);
+pub fn save_file_meta() -> SaveFileMetaStmt {
+    SaveFileMetaStmt(
+        "INSERT INTO file_meta (root_hash, mime, width, height, taken_at, exif, read_at, kind, duration_ms, codec, lat, lon) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (root_hash) DO UPDATE SET mime = excluded.mime, width = excluded.width, height = excluded.height, taken_at = excluded.taken_at, exif = excluded.exif, read_at = excluded.read_at, kind = excluded.kind, duration_ms = excluded.duration_ms, codec = excluded.codec, lat = excluded.lat, lon = excluded.lon",
+        None,
+    )
+}
+impl SaveFileMetaStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<
+        'c,
+        'a,
+        's,
+        C: GenericClient,
+        T1: crate::BytesSql,
+        T2: crate::StringSql,
+        T3: crate::StringSql,
+        T4: crate::StringSql,
+        T5: crate::StringSql,
+    >(
+        &'s self,
+        client: &'c mut C,
+        root: &'a T1,
+        mime: &'a T2,
+        width: &'a Option<i64>,
+        height: &'a Option<i64>,
+        taken_at: &'a Option<i64>,
+        exif: &'a T3,
+        read_at: &'a i64,
+        kind: &'a T4,
+        duration_ms: &'a Option<i64>,
+        codec: &'a Option<T5>,
+        lat: &'a Option<f64>,
+        lon: &'a Option<f64>,
+    ) -> Result<u64, postgres::Error> {
+        client
+            .execute(self.0, &[root, mime, width, height, taken_at, exif, read_at, kind, duration_ms, codec, lat, lon])
+    }
+}
+impl<
+    'c,
+    'a,
+    's,
+    C: GenericClient,
+    T1: crate::BytesSql,
+    T2: crate::StringSql,
+    T3: crate::StringSql,
+    T4: crate::StringSql,
+    T5: crate::StringSql,
+> crate::client::sync::Params<'c, 'a, 's, SaveFileMetaParams<T1, T2, T3, T4, T5>, Result<u64, postgres::Error>, C>
+    for SaveFileMetaStmt
+{
+    fn params(
+        &'s self,
+        client: &'c mut C,
+        params: &'a SaveFileMetaParams<T1, T2, T3, T4, T5>,
+    ) -> Result<u64, postgres::Error> {
+        self.bind(
+            client,
+            &params.root,
+            &params.mime,
+            &params.width,
+            &params.height,
+            &params.taken_at,
+            &params.exif,
+            &params.read_at,
+            &params.kind,
+            &params.duration_ms,
+            &params.codec,
+            &params.lat,
+            &params.lon,
+        )
     }
 }

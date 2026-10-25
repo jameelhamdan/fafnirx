@@ -11,6 +11,7 @@
 
 use super::ApiError;
 use crate::platform::store::MASTER_FOLDER;
+use crate::repo::Viewer;
 use axum::http::StatusCode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,13 +116,10 @@ impl Access {
         }
     }
 
-    /// SQL for "the device `d` is visible to this user", with the user's id in it as a number (it is ours, not input).
-    pub fn visible_sql(&self) -> String {
-        match self.role {
-            Role::Admin => "TRUE".into(),
-            Role::Normal => format!("(d.kind = 'master' OR d.user_id = {})", self.user_id),
-            Role::Readonly => "d.kind = 'master'".into(),
-        }
+    /// Who is looking, for the queries that list files.
+    pub fn viewer(&self) -> Viewer {
+        let (all, scope_user) = self.scope_args();
+        Viewer { uid: self.user_id, all, scope_user }
     }
 
     /// The two values the queries take to scope devices: whether everything is visible, and the user whose devices are (-1: nobody's).

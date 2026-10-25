@@ -5,6 +5,7 @@
 //! Set `FAFNIRX_STREAM_URL` (for example `http://stream:8090`) and `FAFNIRX_STREAM_TOKEN` (the token the service
 //! was given). Without them streaming is off, and the web app does not offer it.
 
+use crate::repo::files;
 use crate::web::access::Access;
 use crate::web::{ApiError, Shared};
 use axum::body::Body;
@@ -63,18 +64,9 @@ pub fn valid_resource(rest: &str) -> bool {
 
 /// What the service needs to know about a file: where it is in the file tree and which content it holds.
 fn locate(c: &mut postgres::Client, who: &Access, id: i64) -> anyhow::Result<(String, String)> {
-    let row = c
-        .query_opt(
-            "SELECT d.folder, f.path, v.root_hash FROM files f
-             JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id
-             WHERE f.id = $1 AND f.deleted_at IS NULL",
-            &[&id],
-        )?
-        .ok_or_else(|| ApiError::not_found("No such file"))?;
-    let (folder, path): (String, String) = (row.get(0), row.get(1));
+    let (folder, path, root) = files::location(c, id)?.ok_or_else(|| ApiError::not_found("No such file"))?;
     // A file of someone else's device does not exist for this user.
     who.check_see(&folder).map_err(|_| ApiError::not_found("No such file"))?;
-    let root: Vec<u8> = row.get(2);
     // The master files are at the root of the file tree, the files of a device below the folder of the device.
     let located = if folder == crate::platform::store::MASTER_FOLDER { path } else { format!("{folder}/{path}") };
     Ok((located, hex::encode(root)))

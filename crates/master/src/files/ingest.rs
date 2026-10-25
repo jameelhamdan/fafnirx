@@ -8,7 +8,7 @@
 
 use crate::platform::db::{self, Device};
 use crate::platform::store::Store;
-use crate::repo::{devices, events, files, jobs, settings};
+use crate::repo::{devices, events, files, jobs, settings, users};
 use anyhow::Result;
 use fafnirx_common::{unix_now, HASH_LEN};
 use postgres::{Client, GenericClient};
@@ -97,7 +97,7 @@ pub fn check_master_path(conn: &mut impl GenericClient, device: &Device, path: &
         return Ok(());
     }
     let first = path.split('/').next().unwrap_or("").to_lowercase();
-    if conn.query_opt("SELECT 1 FROM users WHERE name = $1", &[&first])?.is_some() {
+    if users::exists(conn, &first)? {
         return Err(crate::web::ApiError::conflict(format!(
             "{first} is the folder of a user: the master files cannot use that name"
         ))

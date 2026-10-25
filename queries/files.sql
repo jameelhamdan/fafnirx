@@ -101,3 +101,26 @@ SELECT v.mtime FROM files f JOIN versions v ON v.id = f.current_version_id WHERE
 --! live_files_below
 SELECT f.path, v.size, v.mtime FROM files f JOIN versions v ON v.id = f.current_version_id
 WHERE f.device_id = :device_id AND f.deleted_at IS NULL AND (:path = '' OR f.path = :path OR f.path LIKE :below);
+
+--! file_location
+-- Where a live file is and which content it holds.
+SELECT d.folder, f.path, v.root_hash FROM files f
+JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id
+WHERE f.id = :id AND f.deleted_at IS NULL;
+
+--! file_holds_content
+-- Whether the path of a device still holds this content.
+SELECT EXISTS (SELECT 1 FROM files f JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id
+               WHERE d.folder = :device AND f.path = :path AND v.root_hash = :root) AS holds;
+
+--! content_is_stored
+-- Whether any version has this content.
+SELECT EXISTS (SELECT 1 FROM versions WHERE root_hash = :root) AS stored;
+
+--! save_file_meta (width?, height?, taken_at?, duration_ms?, codec?, lat?, lon?)
+-- What was read from a content: kind, size, time and place taken, EXIF. Once per content, not per file.
+INSERT INTO file_meta (root_hash, mime, width, height, taken_at, exif, read_at, kind, duration_ms, codec, lat, lon)
+VALUES (:root, :mime, :width, :height, :taken_at, :exif, :read_at, :kind, :duration_ms, :codec, :lat, :lon)
+ON CONFLICT (root_hash) DO UPDATE SET mime = excluded.mime, width = excluded.width, height = excluded.height,
+    taken_at = excluded.taken_at, exif = excluded.exif, read_at = excluded.read_at, kind = excluded.kind,
+    duration_ms = excluded.duration_ms, codec = excluded.codec, lat = excluded.lat, lon = excluded.lon;

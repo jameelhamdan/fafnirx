@@ -108,12 +108,8 @@ pub async fn spawn(db: Db, store: Arc<Store>, data_dir: PathBuf) {
     // A restart interrupts whatever was running, and leaves the staging folders of its mirror runs behind.
     let _ = std::fs::remove_dir_all(data_dir.join("mirror-stage"));
     let _ = db::with(&db, |c| {
-        for table in [Table::Sources, Table::Mirrors] {
-            c.execute(
-                &format!("UPDATE {table} SET last_status = 'failed', last_message = 'interrupted by a restart' WHERE last_status = 'running'"),
-                &[],
-            )?;
-        }
+        sources::fail_interrupted(c)?;
+        mirrors::fail_interrupted(c)?;
         Ok(())
     })
     .await;

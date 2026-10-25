@@ -1036,3 +1036,19 @@ impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql>
         self.bind(client, &params.source_id, &params.remote_id)
     }
 }
+pub struct FailInterruptedSourcesStmt(&'static str, Option<postgres::Statement>);
+pub fn fail_interrupted_sources() -> FailInterruptedSourcesStmt {
+    FailInterruptedSourcesStmt(
+        "UPDATE sources SET last_status = 'failed', last_message = 'interrupted by a restart' WHERE last_status = 'running'",
+        None,
+    )
+}
+impl FailInterruptedSourcesStmt {
+    pub fn prepare<'a, C: GenericClient>(mut self, client: &'a mut C) -> Result<Self, postgres::Error> {
+        self.1 = Some(client.prepare(self.0)?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient>(&'s self, client: &'c mut C) -> Result<u64, postgres::Error> {
+        client.execute(self.0, &[])
+    }
+}

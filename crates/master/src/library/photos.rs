@@ -4,17 +4,20 @@
 //! Everything people say about a file lives in `file_state` and `tags`, next to the file and keyed by it and by
 //! the user: the original is never touched, a corrected date or place can always be taken back, and the master
 //! files, which everybody sees, are each user's own to favorite, archive, tag and describe.
+//!
+//! This module checks what a request says and shapes the answer; what is stored, and how it is found, is in
+//! `repo::library`, `repo::file_state` and `repo::tags`.
 
 use crate::library::meta;
-use crate::platform::db::{self};
-use crate::repo::settings;
+use crate::platform::db;
+use crate::repo::library::{self, Media, Scope};
+use crate::repo::{albums, file_state, settings, snapshot, tags};
 use crate::web::access::Access;
 use crate::web::{done, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
 use fafnirx_common::unix_now;
-use postgres::types::ToSql;
-use postgres::{Client, GenericClient, Row};
+use postgres::{Client, GenericClient};
 use serde::{Deserialize, Deserializer, Serialize};
 
 const DAY: i64 = 86400;
@@ -26,27 +29,13 @@ const MAX_TAGS_PER_FILE: usize = 50;
 const MAX_DESCRIPTION: usize = 5000;
 const TRASH_PAGE: i64 = 500;
 
-/// Files that exist, with the facts about their current content and what this user said about them. It does not
-/// limit the files to those the user may see: that is `Access::visible_sql`.
-pub fn from_sql(who: &Access) -> String {
-    format!(
-        "files f JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id
-         LEFT JOIN file_meta m ON m.root_hash = v.root_hash
-         LEFT JOIN file_state s ON s.file_id = f.id AND s.user_id = {}",
-        who.user_id
-    )
+/// The start of a content hash, which is enough to tell versions of a file apart in a link.
+fn short_hash(root: &[u8]) -> String {
+    hex::encode(&root[..root.len().min(6)])
 }
-/// When it was taken: as people corrected it, else as the camera said, else when the file last changed.
-/// Unix seconds; photos have no time zone, so everything is read as UTC.
-pub const WHEN: &str = "COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000)";
-const LAT: &str = "COALESCE(s.lat, m.lat)";
-const LON: &str = "COALESCE(s.lon, m.lon)";
 
-pub fn asset_columns() -> String {
-    format!(
-        "f.id, d.folder, f.path, v.size, v.root_hash, m.width, m.height, m.duration_ms, {WHEN},
-         COALESCE(s.favorite, false), COALESCE(s.archived, false), s.rating, {LAT}, {LON}"
-    )
+fn file_name(path: &str) -> String {
+    path.rsplit('/').next().unwrap_or(path).to_string()
 }
 
 /// A photo or video as the grid and the viewer need it.
@@ -72,65 +61,30 @@ pub struct Asset {
     pub lon: Option<f64>,
 }
 
-impl Asset {
-    /// From a row of [`asset_columns`].
-    pub fn from_row(r: &Row) -> Self {
-        let path: String = r.get(2);
-        let root: Vec<u8> = r.get(4);
+impl From<library::Asset> for Asset {
+    fn from(a: library::Asset) -> Self {
         Self {
-            id: r.get(0),
-            device: r.get(1),
-            name: path.rsplit('/').next().unwrap_or(&path).to_string(),
-            kind: meta::kind(&path).unwrap_or("image"),
-            size: r.get(3),
-            hash: hex::encode(&root[..root.len().min(6)]),
-            width: r.get(5),
-            height: r.get(6),
-            duration_ms: r.get(7),
-            when: r.get(8),
-            favorite: r.get(9),
-            archived: r.get(10),
-            rating: r.get(11),
-            lat: r.get(12),
-            lon: r.get(13),
-            path,
+            id: a.id,
+            name: file_name(&a.path),
+            kind: meta::kind(&a.path).unwrap_or("image"),
+            hash: short_hash(&a.root_hash),
+            device: a.folder,
+            size: a.size,
+            width: a.width,
+            height: a.height,
+            duration_ms: a.duration_ms,
+            when: a.shown_at,
+            favorite: a.favorite,
+            archived: a.archived,
+            rating: a.rating,
+            lat: a.lat,
+            lon: a.lon,
+            path: a.path,
         }
     }
 }
 
-/// A WHERE clause that is built piece by piece, with its parameters.
-pub struct Where {
-    sql: String,
-    params: Vec<Box<dyn ToSql + Sync + Send>>,
-}
-
-impl Where {
-    pub fn new(first: &str) -> Self {
-        Self { sql: first.to_string(), params: Vec::new() }
-    }
-
-    /// Adds `AND clause`, where `?` stands for `value`.
-    pub fn and(&mut self, clause: &str, value: impl ToSql + Sync + Send + 'static) {
-        self.params.push(Box::new(value));
-        self.sql.push_str(" AND ");
-        self.sql.push_str(&clause.replace('?', &format!("${}", self.params.len())));
-    }
-
-    pub fn and_plain(&mut self, clause: &str) {
-        self.sql.push_str(" AND ");
-        self.sql.push_str(clause);
-    }
-
-    pub fn sql(&self) -> &str {
-        &self.sql
-    }
-
-    pub fn params(&self) -> Vec<&(dyn ToSql + Sync)> {
-        self.params.iter().map(|p| &**p as &(dyn ToSql + Sync)).collect()
-    }
-}
-
-/// Which files a view of the library shows.
+/// Which files a view of the library shows, as the request names them.
 #[derive(Deserialize, Default)]
 pub struct Filter {
     /// timeline (everything not archived), favorites or archive
@@ -144,38 +98,32 @@ pub struct Filter {
 }
 
 impl Filter {
-    fn clause(&self, who: &Access) -> Result<Where, ApiError> {
-        let mut w = Where::new(&format!("f.deleted_at IS NULL AND {}", who.visible_sql()));
-        w.and_plain("f.media IS NOT NULL");
-        match self.scope.as_deref().unwrap_or("timeline") {
-            "timeline" => w.and_plain("COALESCE(s.archived, false) = false"),
-            "favorites" => w.and_plain("COALESCE(s.favorite, false)"),
-            "archive" => w.and_plain("COALESCE(s.archived, false)"),
+    /// The same, checked, in the terms of the repository.
+    fn checked(&self) -> Result<library::Filter<'_>, ApiError> {
+        let scope = match self.scope.as_deref().unwrap_or("timeline") {
+            "timeline" => Scope::Timeline,
+            "favorites" => Scope::Favorites,
+            "archive" => Scope::Archive,
             other => return Err(ApiError::bad(format!("unknown scope {other}"))),
-        }
-        if let Some(device) = self.device.as_deref().filter(|d| !d.is_empty()) {
-            w.and("d.folder = ?", device.to_string());
-        }
-        match self.kind.as_deref().filter(|k| !k.is_empty()) {
-            None => {}
-            Some("image") => w.and_plain("f.media = 'image'"),
-            Some("video") => w.and_plain("f.media = 'video'"),
+        };
+        let kind = match self.kind.as_deref().filter(|k| !k.is_empty()) {
+            None => None,
+            Some("image") => Some(Media::Image),
+            Some("video") => Some(Media::Video),
             Some(other) => return Err(ApiError::bad(format!("unknown kind {other}"))),
-        }
-        if let Some(tag) = self.tag {
-            w.and("EXISTS (SELECT 1 FROM file_tags t WHERE t.file_id = f.id AND t.tag_id = ?)", tag);
-        }
-        if let Some(month) = self.month.as_deref().filter(|m| !m.is_empty()) {
+        };
+        let month = self.month.as_deref().filter(|m| !m.is_empty());
+        if let Some(month) = month {
             valid_month(month)?;
-            w.and(&format!("{} = ?", month_of(WHEN)), month.to_string());
         }
-        Ok(w)
+        Ok(library::Filter {
+            scope,
+            device: self.device.as_deref().filter(|d| !d.is_empty()),
+            kind,
+            tag: self.tag,
+            month,
+        })
     }
-}
-
-/// SQL that turns unix seconds into `YYYY-MM`.
-fn month_of(when: &str) -> String {
-    format!("to_char(to_timestamp({when}) AT TIME ZONE 'UTC', 'YYYY-MM')")
 }
 
 fn valid_month(text: &str) -> Result<(), ApiError> {
@@ -205,35 +153,32 @@ pub struct Buckets {
     total: i64,
 }
 
+/// Groups days (`YYYY-MM-DD`, newest first) into months.
+fn months_of(days: Vec<(String, i64)>) -> Vec<Month> {
+    let mut months: Vec<Month> = Vec::new();
+    for (day, n) in days {
+        let month = day[..day.len().saturating_sub(3)].to_string();
+        match months.last_mut() {
+            Some(m) if m.month == month => {
+                m.count += n;
+                m.days.push(n);
+            }
+            _ => months.push(Month { month, count: n, days: vec![n] }),
+        }
+    }
+    months
+}
+
 /// How many photos and videos each month and day holds, newest first: the skeleton of the timeline.
 pub async fn buckets(
     State(state): State<Shared>,
     Extension(who): Extension<Access>,
     Query(filter): Query<Filter>,
 ) -> Res<Buckets> {
-    let w = filter.clause(&who)?;
-    let from = from_sql(&who);
+    filter.checked()?;
     let out = run(&state, move |c| {
-        let rows = c.query(
-            &format!(
-                "SELECT to_char(to_timestamp({WHEN}) AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, COUNT(*)
-                 FROM {from} WHERE {} GROUP BY 1 ORDER BY 1 DESC",
-                w.sql()
-            ),
-            &w.params(),
-        )?;
-        let mut months: Vec<Month> = Vec::new();
-        for r in &rows {
-            let (day, n): (String, i64) = (r.get(0), r.get(1));
-            let month = day[..day.len().saturating_sub(3)].to_string();
-            match months.last_mut() {
-                Some(m) if m.month == month => {
-                    m.count += n;
-                    m.days.push(n);
-                }
-                _ => months.push(Month { month, count: n, days: vec![n] }),
-            }
-        }
+        let days = library::days(c, who.viewer(), &filter.checked()?)?;
+        let months = months_of(days);
         let total = months.iter().map(|m| m.count).sum();
         Ok(Buckets { months, total })
     })
@@ -255,18 +200,9 @@ pub async fn timeline(
     if filter.month.as_deref().unwrap_or("").is_empty() {
         return Err(ApiError::bad("month is required, like 2024-05"));
     }
-    let w = filter.clause(&who)?;
-    let from = from_sql(&who);
+    filter.checked()?;
     let assets = run(&state, move |c| {
-        let rows = c.query(
-            &format!(
-                "SELECT {} FROM {from} WHERE {} ORDER BY {WHEN} DESC, f.id DESC LIMIT {MAX_ASSETS}",
-                asset_columns(),
-                w.sql()
-            ),
-            &w.params(),
-        )?;
-        Ok(rows.iter().map(Asset::from_row).collect())
+        Ok(library::assets(c, who.viewer(), &filter.checked()?, MAX_ASSETS)?.into_iter().map(Asset::from).collect())
     })
     .await?;
     Ok(Json(Assets { assets }))
@@ -285,19 +221,9 @@ pub async fn by_ids(
     Query(q): Query<IdsQuery>,
 ) -> Res<Assets> {
     let ids: Vec<i64> = q.ids.split(',').filter_map(|s| s.trim().parse().ok()).take(500).collect();
-    let (from, visible) = (from_sql(&who), who.visible_sql());
-    let assets = run(&state, move |c| {
-        let rows = c.query(
-            &format!(
-                "SELECT {} FROM {from} WHERE f.id = ANY($1) AND f.deleted_at IS NULL AND {visible}
-                 ORDER BY {WHEN} DESC, f.id DESC",
-                asset_columns()
-            ),
-            &[&ids],
-        )?;
-        Ok(rows.iter().map(Asset::from_row).collect())
-    })
-    .await?;
+    let assets =
+        run(&state, move |c| Ok(library::by_ids(c, who.viewer(), &ids)?.into_iter().map(Asset::from).collect()))
+            .await?;
     Ok(Json(Assets { assets }))
 }
 
@@ -341,44 +267,27 @@ pub async fn detail(
     Extension(who): Extension<Access>,
     Path(id): Path<i64>,
 ) -> Res<Detail> {
-    let (from, visible, uid) = (from_sql(&who), who.visible_sql(), who.user_id);
     let out = run(&state, move |c| {
-        let row = c
-            .query_opt(
-                &format!(
-                    "SELECT {}, m.mime, COALESCE(s.description, ''), m.taken_at, m.lat, m.lon, s.taken_at IS NOT NULL,
-                            s.lat IS NOT NULL, m.exif, m.codec, v.created_at
-                     FROM {from} WHERE f.id = $1 AND {visible}",
-                    asset_columns()
-                ),
-                &[&id],
-            )?
-            .ok_or_else(|| ApiError::not_found("No such file"))?;
-        let asset = Asset::from_row(&row);
-        let exif: Option<String> = row.get(21);
-        let tags = c
-            .query("SELECT t.id, t.name FROM file_tags ft JOIN tags t ON t.id = ft.tag_id WHERE ft.file_id = $1 AND t.user_id = $2 ORDER BY lower(t.name)", &[&id, &uid])?
-            .iter()
-            .map(|r| TagRef { id: r.get(0), name: r.get(1) })
-            .collect();
-        let albums = c
-            .query("SELECT a.id, a.name FROM album_files af JOIN albums a ON a.id = af.album_id WHERE af.file_id = $1 AND a.user_id = $2 ORDER BY lower(a.name)", &[&id, &uid])?
-            .iter()
-            .map(|r| AlbumRef { id: r.get(0), name: r.get(1) })
-            .collect();
+        let viewer = who.viewer();
+        let not_found = || ApiError::not_found("No such file");
+        let asset = library::by_ids(c, viewer, &[id])?.into_iter().next().ok_or_else(not_found)?;
+        let extras = library::extras(c, viewer.uid, id)?.ok_or_else(not_found)?;
+        let tags = tags::of_file(c, viewer.uid, id)?.into_iter().map(|(id, name)| TagRef { id, name }).collect();
+        let albums = albums::of_file(c, viewer.uid, id)?.into_iter().map(|(id, name)| AlbumRef { id, name }).collect();
+        let asset = Asset::from(asset);
         Ok(Detail {
-            mime: row.get::<_, Option<String>>(14).unwrap_or_else(|| meta::mime(&asset.path)),
-            description: row.get(15),
-            camera_when: row.get(16),
-            camera_lat: row.get(17),
-            camera_lon: row.get(18),
-            when_edited: row.get(19),
-            place_edited: row.get(20),
-            exif: exif.and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(serde_json::Value::Null),
-            codec: row.get(22),
+            mime: extras.mime.unwrap_or_else(|| meta::mime(&asset.path)),
+            description: extras.description,
+            camera_when: extras.camera_when,
+            camera_lat: extras.camera_lat,
+            camera_lon: extras.camera_lon,
+            when_edited: extras.when_edited,
+            place_edited: extras.place_edited,
+            exif: extras.exif.and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(serde_json::Value::Null),
+            codec: extras.codec,
             tags,
             albums,
-            changed: row.get(23),
+            changed: extras.changed,
             preview: meta::can_preview(&asset.path),
             asset,
         })
@@ -421,6 +330,32 @@ pub struct Edit {
     tags: Option<Vec<String>>,
 }
 
+impl Edit {
+    /// Refuses what cannot be stored: a rating out of range, a description too long, a date or place that does not exist.
+    fn check(&self) -> Result<(), ApiError> {
+        if let Some(Some(r)) = self.rating {
+            if !(1..=5).contains(&r) {
+                return Err(ApiError::bad("A rating is 1 to 5 stars"));
+            }
+        }
+        if self.description.as_ref().is_some_and(|d| d.chars().count() > MAX_DESCRIPTION) {
+            return Err(ApiError::bad(format!("A description can have at most {MAX_DESCRIPTION} characters")));
+        }
+        if let Some(Some(t)) = self.taken_at {
+            // Years 1 to 9999: what a date can show.
+            if !(-62_135_596_800..=253_402_300_799).contains(&t) {
+                return Err(ApiError::bad("That date is out of range"));
+            }
+        }
+        if let Some(Some(p)) = &self.location {
+            if meta::valid_position(p.lat, p.lon).is_none() {
+                return Err(ApiError::bad("Latitude is -90 to 90, longitude -180 to 180 (and not 0, 0)"));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Tag names as they will be stored: trimmed, no empty ones, no duplicates (case does not matter).
 fn clean_tags(names: &[String]) -> Result<Vec<String>, ApiError> {
     let mut out: Vec<String> = Vec::new();
@@ -442,108 +377,46 @@ fn clean_tags(names: &[String]) -> Result<Vec<String>, ApiError> {
     Ok(out)
 }
 
-/// The ids of these tags, made when they are new.
-fn tag_ids(tx: &mut impl GenericClient, uid: i64, names: &[String]) -> anyhow::Result<Vec<i64>> {
-    let mut ids = Vec::new();
-    for name in names {
-        ids.push(
-            tx.query_one(
-                "INSERT INTO tags (name, user_id) VALUES ($1, $2)
-                 ON CONFLICT (user_id, (lower(name))) DO UPDATE SET name = tags.name RETURNING id",
-                &[name, &uid],
-            )?
-            .get(0),
-        );
-    }
-    Ok(ids)
+/// The ids of these tags of the user, made when they are new.
+fn tag_ids(tx: &mut impl GenericClient, uid: i64, names: &[String]) -> Result<Vec<i64>, postgres::Error> {
+    names.iter().map(|name| tags::ensure(tx, uid, name)).collect()
 }
 
-fn drop_unused_tags(tx: &mut impl GenericClient) -> Result<(), postgres::Error> {
-    tx.execute("DELETE FROM tags t WHERE NOT EXISTS (SELECT 1 FROM file_tags ft WHERE ft.tag_id = t.id)", &[])?;
-    Ok(())
-}
-
+/// Applies an edit to one file, for the user who made it. The caller's transaction makes it all or nothing.
 fn apply(tx: &mut impl GenericClient, who: &Access, id: i64, e: &Edit) -> anyhow::Result<()> {
     who.require_workspace()?;
     let uid = who.user_id;
-    if let Some(Some(r)) = e.rating {
-        if !(1..=5).contains(&r) {
-            return Err(ApiError::bad("A rating is 1 to 5 stars").into());
-        }
-    }
-    if e.description.as_ref().is_some_and(|d| d.chars().count() > MAX_DESCRIPTION) {
-        return Err(ApiError::bad(format!("A description can have at most {MAX_DESCRIPTION} characters")).into());
-    }
-    if let Some(Some(t)) = e.taken_at {
-        // Years 1 to 9999: what a date can show.
-        if !(-62_135_596_800..=253_402_300_799).contains(&t) {
-            return Err(ApiError::bad("That date is out of range").into());
-        }
-    }
-    if let Some(Some(p)) = &e.location {
-        if meta::valid_position(p.lat, p.lon).is_none() {
-            return Err(ApiError::bad("Latitude is -90 to 90, longitude -180 to 180 (and not 0, 0)").into());
-        }
-    }
-    let tags = e.tags.as_deref().map(clean_tags).transpose()?;
+    e.check()?;
+    let new_tags = e.tags.as_deref().map(clean_tags).transpose()?;
 
-    let exists: bool = tx
-        .query_one(
-            &format!(
-                "SELECT EXISTS (SELECT 1 FROM files f JOIN devices d ON d.id = f.device_id
-                 WHERE f.id = $1 AND f.deleted_at IS NULL AND {})",
-                who.visible_sql()
-            ),
-            &[&id],
-        )?
-        .get(0);
-    if !exists {
+    if !file_state::file_is_visible(tx, who.viewer(), id)? {
         return Err(ApiError::not_found("No such file").into());
     }
     let now = unix_now();
-    tx.execute(
-        "INSERT INTO file_state (file_id, user_id, updated_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, file_id) DO NOTHING",
-        &[&id, &uid, &now],
-    )?;
+    file_state::ensure(tx, uid, id, now)?;
     if let Some(v) = e.favorite {
-        tx.execute("UPDATE file_state SET favorite = $3 WHERE file_id = $1 AND user_id = $2", &[&id, &uid, &v])?;
+        file_state::set_favorite(tx, uid, id, v)?;
     }
     if let Some(v) = e.archived {
-        tx.execute("UPDATE file_state SET archived = $3 WHERE file_id = $1 AND user_id = $2", &[&id, &uid, &v])?;
+        file_state::set_archived(tx, uid, id, v)?;
     }
     if let Some(v) = e.rating {
-        tx.execute("UPDATE file_state SET rating = $3 WHERE file_id = $1 AND user_id = $2", &[&id, &uid, &v])?;
+        file_state::set_rating(tx, uid, id, v)?;
     }
     if let Some(v) = &e.description {
-        tx.execute(
-            "UPDATE file_state SET description = $3 WHERE file_id = $1 AND user_id = $2",
-            &[&id, &uid, &v.trim()],
-        )?;
+        file_state::set_description(tx, uid, id, v.trim())?;
     }
     if let Some(v) = e.taken_at {
-        tx.execute("UPDATE file_state SET taken_at = $3 WHERE file_id = $1 AND user_id = $2", &[&id, &uid, &v])?;
+        file_state::set_taken_at(tx, uid, id, v)?;
     }
     if let Some(v) = &e.location {
-        let (lat, lon) = v.as_ref().map(|p| (p.lat, p.lon)).unzip();
-        tx.execute(
-            "UPDATE file_state SET lat = $3, lon = $4 WHERE file_id = $1 AND user_id = $2",
-            &[&id, &uid, &lat, &lon],
-        )?;
+        file_state::set_place(tx, uid, id, v.as_ref().map(|p| (p.lat, p.lon)))?;
     }
-    tx.execute("UPDATE file_state SET updated_at = $3 WHERE file_id = $1 AND user_id = $2", &[&id, &uid, &now])?;
-    if let Some(names) = tags {
+    file_state::touch(tx, uid, id, now)?;
+    if let Some(names) = new_tags {
         let ids = tag_ids(tx, uid, &names)?;
-        // Only this user's tags are replaced: on a master file the others have theirs.
-        tx.execute(
-            "DELETE FROM file_tags WHERE file_id = $1 AND NOT (tag_id = ANY($2))
-             AND tag_id IN (SELECT id FROM tags WHERE user_id = $3)",
-            &[&id, &ids, &uid],
-        )?;
-        tx.execute(
-            "INSERT INTO file_tags (file_id, tag_id) SELECT $1, unnest($2::bigint[]) ON CONFLICT DO NOTHING",
-            &[&id, &ids],
-        )?;
-        drop_unused_tags(tx)?;
+        tags::replace_on_file(tx, uid, id, &ids)?;
+        tags::drop_unused(tx)?;
     }
     Ok(())
 }
@@ -587,45 +460,21 @@ pub async fn bulk(State(state): State<Shared>, Extension(who): Extension<Access>
     if b.ids.len() > MAX_BULK {
         return Err(ApiError::bad(format!("Select at most {MAX_BULK} files at a time")));
     }
-    let tags = b.add_tags.as_deref().map(clean_tags).transpose()?;
-    let (visible, uid) = (who.visible_sql(), who.user_id);
+    let new_tags = b.add_tags.as_deref().map(clean_tags).transpose()?;
     let changed = run(&state, move |c| {
         let mut tx = c.transaction()?;
-        let now = unix_now();
-        // Files touched by any of the changes asked for: those the user can see.
+        let (viewer, now) = (who.viewer(), unix_now());
+        // The files touched by any of the changes asked for are those the user can see.
         let mut changed = 0;
         if let Some(v) = b.favorite {
-            changed = changed.max(tx.execute(
-                &format!(
-                    "INSERT INTO file_state (file_id, user_id, updated_at, favorite) SELECT f.id, $4, $2, $3
-                     FROM files f JOIN devices d ON d.id = f.device_id
-                     WHERE f.id = ANY($1) AND f.deleted_at IS NULL AND {visible}
-                     ON CONFLICT (user_id, file_id) DO UPDATE SET favorite = excluded.favorite, updated_at = excluded.updated_at"
-                ),
-                &[&b.ids, &now, &v, &uid],
-            )?);
+            changed = changed.max(file_state::bulk_set_favorite(&mut tx, viewer, &b.ids, v, now)?);
         }
         if let Some(v) = b.archived {
-            changed = changed.max(tx.execute(
-                &format!(
-                    "INSERT INTO file_state (file_id, user_id, updated_at, archived) SELECT f.id, $4, $2, $3
-                     FROM files f JOIN devices d ON d.id = f.device_id
-                     WHERE f.id = ANY($1) AND f.deleted_at IS NULL AND {visible}
-                     ON CONFLICT (user_id, file_id) DO UPDATE SET archived = excluded.archived, updated_at = excluded.updated_at"
-                ),
-                &[&b.ids, &now, &v, &uid],
-            )?);
+            changed = changed.max(file_state::bulk_set_archived(&mut tx, viewer, &b.ids, v, now)?);
         }
-        if let Some(names) = tags.filter(|t| !t.is_empty()) {
-            let ids = tag_ids(&mut tx, uid, &names)?;
-            changed = changed.max(tx.execute(
-                &format!(
-                    "INSERT INTO file_tags (file_id, tag_id) SELECT f.id, t
-                     FROM files f JOIN devices d ON d.id = f.device_id CROSS JOIN unnest($2::bigint[]) t
-                     WHERE f.id = ANY($1) AND f.deleted_at IS NULL AND {visible} ON CONFLICT DO NOTHING"
-                ),
-                &[&b.ids, &ids],
-            )?);
+        if let Some(names) = new_tags.filter(|t| !t.is_empty()) {
+            let ids = tag_ids(&mut tx, viewer.uid, &names)?;
+            changed = changed.max(tags::add_to_files(&mut tx, viewer, &b.ids, &ids)?);
         }
         db::notify(&mut tx, "library", "")?;
         tx.commit()?;
@@ -643,21 +492,11 @@ pub struct Tag {
 }
 
 pub async fn tags(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Vec<Tag>> {
-    let (visible, uid) = (who.visible_sql(), who.user_id);
     let out = run(&state, move |c| {
-        Ok(c.query(
-            &format!(
-                "SELECT t.id, t.name, COUNT(d.id) FROM tags t
-                 LEFT JOIN file_tags ft ON ft.tag_id = t.id
-                 LEFT JOIN files f ON f.id = ft.file_id AND f.deleted_at IS NULL
-                 LEFT JOIN devices d ON d.id = f.device_id AND {visible}
-                 WHERE t.user_id = $1 GROUP BY t.id ORDER BY lower(t.name)"
-            ),
-            &[&uid],
-        )?
-        .iter()
-        .map(|r| Tag { id: r.get(0), name: r.get(1), count: r.get(2) })
-        .collect())
+        Ok(tags::counted(c, who.viewer())?
+            .into_iter()
+            .map(|t| Tag { id: t.id, name: t.name, count: t.files })
+            .collect())
     })
     .await?;
     Ok(Json(out))
@@ -668,9 +507,8 @@ pub async fn delete_tag(
     Extension(who): Extension<Access>,
     Path(id): Path<i64>,
 ) -> Res<Done> {
-    let uid = who.user_id;
     run(&state, move |c| {
-        if c.execute("DELETE FROM tags WHERE id = $1 AND user_id = $2", &[&id, &uid])? == 0 {
+        if !tags::delete(c, who.user_id, id)? {
             return Err(ApiError::not_found("No such tag").into());
         }
         db::notify(c, "library", "")?;
@@ -683,7 +521,7 @@ pub async fn delete_tag(
 #[derive(Serialize)]
 pub struct MapPoints {
     /// `[id, latitude, longitude, when]`
-    points: Vec<(i64, f64, f64, i64)>,
+    points: Vec<library::Point>,
     /// More photos have a place than are listed.
     truncated: bool,
 }
@@ -694,20 +532,11 @@ pub async fn map(
     Extension(who): Extension<Access>,
     Query(filter): Query<Filter>,
 ) -> Res<MapPoints> {
-    let mut w = filter.clause(&who)?;
-    w.and_plain(&format!("{LAT} IS NOT NULL"));
-    let from = from_sql(&who);
+    filter.checked()?;
     let out = run(&state, move |c| {
-        let rows = c.query(
-            &format!(
-                "SELECT f.id, {LAT}, {LON}, {WHEN} FROM {from} WHERE {} ORDER BY {WHEN} DESC LIMIT {}",
-                w.sql(),
-                MAX_POINTS + 1
-            ),
-            &w.params(),
-        )?;
-        let truncated = rows.len() as i64 > MAX_POINTS;
-        let points = rows.iter().take(MAX_POINTS as usize).map(|r| (r.get(0), r.get(1), r.get(2), r.get(3))).collect();
+        let mut points = library::map_points(c, who.viewer(), &filter.checked()?, MAX_POINTS + 1)?;
+        let truncated = points.len() as i64 > MAX_POINTS;
+        points.truncate(MAX_POINTS as usize);
         Ok(MapPoints { points, truncated })
     })
     .await?;
@@ -749,102 +578,70 @@ pub async fn trash(
     Extension(who): Extension<Access>,
     Query(q): Query<TrashQuery>,
 ) -> Res<Trash> {
-    let visible = who.visible_sql();
     let out = run(&state, move |c| {
         let retention_days = settings::get_i64(c, "retention_days", 30);
-        let rows = c.query(
-            &format!(
-                "SELECT f.id, d.folder, f.path, v.size, f.deleted_at, v.id, v.root_hash, COUNT(*) OVER ()
-                 FROM files f JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id
-                 WHERE f.deleted_at IS NOT NULL AND {visible}
-                 ORDER BY f.deleted_at DESC, f.id DESC LIMIT $1 OFFSET $2"
-            ),
-            &[&TRASH_PAGE, &q.offset.max(0)],
-        )?;
+        let rows = library::trash(c, who.viewer(), TRASH_PAGE, q.offset.max(0))?;
+        let total = rows.first().map_or(0, |r| r.total);
         let entries = rows
-            .iter()
-            .map(|r| {
-                let path: String = r.get(2);
-                let deleted_at: i64 = r.get(4);
-                let root: Vec<u8> = r.get(6);
-                TrashEntry {
-                    id: r.get(0),
-                    device: r.get(1),
-                    name: path.rsplit('/').next().unwrap_or(&path).to_string(),
-                    size: r.get(3),
-                    deleted_at,
-                    purge_at: deleted_at + retention_days * DAY,
-                    version: r.get(5),
-                    kind: meta::kind(&path),
-                    hash: hex::encode(&root[..root.len().min(6)]),
-                    path,
-                }
+            .into_iter()
+            .map(|r| TrashEntry {
+                id: r.id,
+                name: file_name(&r.path),
+                device: r.folder,
+                size: r.size,
+                deleted_at: r.deleted_at,
+                purge_at: r.deleted_at + retention_days * DAY,
+                version: r.version_id,
+                kind: meta::kind(&r.path),
+                hash: short_hash(&r.root_hash),
+                path: r.path,
             })
             .collect();
-        Ok(Trash { entries, total: rows.first().map_or(0, |r| r.get(7)), retention_days })
+        Ok(Trash { entries, total, retention_days })
     })
     .await?;
     Ok(Json(out))
 }
 
-/// The tables a mirror keeps a copy of, so that albums, tags and favorites survive losing the database.
+/// The tables a mirror keeps a copy of, so that albums, tags and favorites survive losing the database. Everything is
+/// named by user, device folder and path rather than by id, because ids do not survive a restore.
 pub fn snapshot(c: &mut Client) -> anyhow::Result<serde_json::Value> {
-    let files_of =
-        |c: &mut Client, sql: &str| -> anyhow::Result<std::collections::BTreeMap<i64, Vec<serde_json::Value>>> {
-            let mut map: std::collections::BTreeMap<i64, Vec<serde_json::Value>> = Default::default();
-            for r in c.query(sql, &[])? {
-                map.entry(r.get(0))
-                    .or_default()
-                    .push(serde_json::json!({ "device": r.get::<_, String>(1), "path": r.get::<_, String>(2) }));
-            }
-            Ok(map)
-        };
-    let mut album_files = files_of(
-        c,
-        "SELECT af.album_id, d.folder, f.path FROM album_files af JOIN files f ON f.id = af.file_id
-         JOIN devices d ON d.id = f.device_id ORDER BY af.album_id, f.path",
-    )?;
-    let albums: Vec<_> = c
-        .query(
-            "SELECT a.id, a.name, a.description, a.created_at, u.name FROM albums a JOIN users u ON u.id = a.user_id ORDER BY a.id",
-            &[],
-        )?
-        .iter()
-        .map(|r| {
-            let id: i64 = r.get(0);
-            serde_json::json!({ "user": r.get::<_, String>(4), "name": r.get::<_, String>(1),
-                                "description": r.get::<_, String>(2), "created_at": r.get::<_, i64>(3),
-                                "files": album_files.remove(&id).unwrap_or_default() })
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    /// The files of each album or tag, by the id of the album or tag.
+    fn files_by<'a>(rows: impl Iterator<Item = (i64, &'a str, &'a str)>) -> BTreeMap<i64, Vec<serde_json::Value>> {
+        let mut map: BTreeMap<i64, Vec<serde_json::Value>> = BTreeMap::new();
+        for (id, device, path) in rows {
+            map.entry(id).or_default().push(json!({ "device": device, "path": path }));
+        }
+        map
+    }
+
+    let album_files = snapshot::album_files(c)?;
+    let mut files_of_album = files_by(album_files.iter().map(|f| (f.album_id, f.folder.as_str(), f.path.as_str())));
+    let albums: Vec<_> = snapshot::albums(c)?
+        .into_iter()
+        .map(|a| {
+            json!({ "user": a.owner, "name": a.name, "description": a.description, "created_at": a.created_at,
+                    "files": files_of_album.remove(&a.id).unwrap_or_default() })
         })
         .collect();
-    let mut tag_files = files_of(
-        c,
-        "SELECT ft.tag_id, d.folder, f.path FROM file_tags ft JOIN files f ON f.id = ft.file_id
-         JOIN devices d ON d.id = f.device_id ORDER BY ft.tag_id, f.path",
-    )?;
-    let tags: Vec<_> = c
-        .query("SELECT t.id, t.name, u.name FROM tags t JOIN users u ON u.id = t.user_id ORDER BY t.id", &[])?
-        .iter()
-        .map(|r| {
-            serde_json::json!({ "user": r.get::<_, String>(2), "name": r.get::<_, String>(1),
-                                     "files": tag_files.remove(&r.get::<_, i64>(0)).unwrap_or_default() })
+
+    let tag_files = snapshot::tag_files(c)?;
+    let mut files_of_tag = files_by(tag_files.iter().map(|f| (f.tag_id, f.folder.as_str(), f.path.as_str())));
+    let tags: Vec<_> = snapshot::tags(c)?
+        .into_iter()
+        .map(|t| json!({ "user": t.owner, "name": t.name, "files": files_of_tag.remove(&t.id).unwrap_or_default() }))
+        .collect();
+
+    let states: Vec<_> = snapshot::states(c)?
+        .into_iter()
+        .map(|s| {
+            json!({ "user": s.owner, "device": s.folder, "path": s.path, "favorite": s.favorite, "archived": s.archived,
+                    "rating": s.rating, "description": s.description, "taken_at": s.taken_at, "lat": s.lat, "lon": s.lon })
         })
         .collect();
-    let states: Vec<_> = c
-        .query(
-            "SELECT d.folder, f.path, s.favorite, s.archived, s.rating, s.description, s.taken_at, s.lat, s.lon, u.name
-             FROM file_state s JOIN files f ON f.id = s.file_id JOIN devices d ON d.id = f.device_id
-             JOIN users u ON u.id = s.user_id
-             WHERE s.favorite OR s.archived OR s.rating IS NOT NULL OR s.description <> '' OR s.taken_at IS NOT NULL OR s.lat IS NOT NULL
-             ORDER BY d.folder, f.path, u.name",
-            &[],
-        )?
-        .iter()
-        .map(|r| {
-            serde_json::json!({ "user": r.get::<_, String>(9), "device": r.get::<_, String>(0), "path": r.get::<_, String>(1), "favorite": r.get::<_, bool>(2),
-                "archived": r.get::<_, bool>(3), "rating": r.get::<_, Option<i16>>(4), "description": r.get::<_, String>(5),
-                "taken_at": r.get::<_, Option<i64>>(6), "lat": r.get::<_, Option<f64>>(7), "lon": r.get::<_, Option<f64>>(8) })
-        })
-        .collect();
-    Ok(serde_json::json!({ "generated_at_unix": unix_now(), "albums": albums, "tags": tags, "files": states }))
+
+    Ok(json!({ "generated_at_unix": unix_now(), "albums": albums, "tags": tags, "files": states }))
 }

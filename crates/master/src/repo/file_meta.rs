@@ -1,0 +1,52 @@
+//! What was read from the content of a file (kind, size, time and place taken, EXIF), once per content.
+
+use crate::platform::pg::Pg;
+use fafnirx_db::client::Params;
+use fafnirx_db::queries::files as q;
+use postgres::{Error, GenericClient};
+
+/// What was read from one content.
+pub struct Meta<'a> {
+    pub mime: &'a str,
+    pub kind: &'a str,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    /// When it was taken, unix seconds.
+    pub taken_at: Option<i64>,
+    /// The EXIF data as JSON text.
+    pub exif: &'a str,
+    pub duration_ms: Option<i64>,
+    pub codec: Option<&'a str>,
+    pub place: Option<(f64, f64)>,
+}
+
+/// Remembers what was read from a content, replacing what was read before.
+pub fn save(c: &mut impl GenericClient, root: &[u8], m: &Meta, read_at: i64) -> Result<(), Error> {
+    let (lat, lon) = m.place.unzip();
+    let params = q::SaveFileMetaParams {
+        root,
+        mime: m.mime,
+        width: m.width,
+        height: m.height,
+        taken_at: m.taken_at,
+        exif: m.exif,
+        read_at,
+        kind: m.kind,
+        duration_ms: m.duration_ms,
+        codec: m.codec,
+        lat,
+        lon,
+    };
+    q::save_file_meta().params(&mut Pg(c), &params)?;
+    Ok(())
+}
+
+/// Whether any version of any file has this content.
+pub fn content_is_stored(c: &mut impl GenericClient, root: &[u8]) -> Result<bool, Error> {
+    q::content_is_stored().bind(&mut Pg(c), &root).one()
+}
+
+/// Whether the path of a device still holds this content (a job made for it may be out of date).
+pub fn path_holds(c: &mut impl GenericClient, device: &str, path: &str, root: &[u8]) -> Result<bool, Error> {
+    q::file_holds_content().params(&mut Pg(c), &q::FileHoldsContentParams { device, path, root }).one()
+}
