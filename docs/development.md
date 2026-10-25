@@ -54,7 +54,7 @@ Set `FAFNIRX_TOKEN_STORE=file` to avoid the OS keychain while developing.
 | End to end: delete and retention | `node e2e-retention.mjs` | About 2 minutes |
 
 - Database-backed tests create a schema of their own on the test server and drop it afterwards, so they run in parallel.
-- `crates/master/src/web/tests.rs` drives the real router in memory: login, users and roles, devices, chunked upload, browsing,
+- `crates/master/src/web/tests/` (one file per area: auth, devices, files, library, users, and `routes.rs`, which pins the access rule of every route) drives the real router in memory: login, users and roles, devices, chunked upload, browsing,
   range downloads, zip, history, restore and delete, and the photo library (timeline, edits, tags, albums, trash, map). The video parts need `ffmpeg`, which the tests do not: they check the parsing
   of `ffprobe` output and the job lanes instead.
 - The end-to-end scripts start the real `fafnirx-master`, the real client binary and a fake Google Drive. They look for the
@@ -97,7 +97,7 @@ holds its API handlers next to its logic, instead of one folder per kind of file
 | `library` | Photos and videos | `meta.rs` (metadata, previews, job queue), `media.rs` (ffmpeg), `photos.rs` (timeline, map, trash, edits), `albums.rs` |
 | `integrations` | Sources and mirrors | `mod.rs` (scheduler), `gdrive.rs`, `mirror.rs`, `api.rs` |
 | `monitoring` | Watching the system | `api.rs` (dashboard, alerts), `jobs.rs` (scheduled alerts, retention) |
-| `web` | The HTTP shell | `mod.rs` (state, errors, the route table), `auth.rs`, `events.rs` (live updates), `assets.rs` (the embedded web app), `tests.rs` |
+| `web` | The HTTP shell | `mod.rs` (state, errors, the route table), `auth.rs`, `events.rs` (live updates), `assets.rs` (the embedded web app), `tests/` |
 
 Rules of thumb: a new endpoint goes in the `api.rs` of its app and is registered in `web/mod.rs`; apps may use
 `platform` freely and each other's public functions, but `platform` knows nothing of the apps. The SQL is written
@@ -135,13 +135,13 @@ database gets all of them; an existing one only the new ones. To change the sche
 ## Changing the API
 
 Add the handler in the `api.rs` (or, for files, `browse.rs` or `transfer.rs`) of the app it belongs to, register it in `light()` or `heavy()` in `crates/master/src/web/mod.rs` (heavy = moves file
-contents), add the type to `frontend/src/lib/types.ts`, and cover it in `web/tests.rs`. Errors are `ApiError`
+contents), add the type to `frontend/src/lib/types.ts`, and cover it in `web/tests/`. Errors are `ApiError`
 (`bad`, `not_found`, `conflict`) and reach the browser as `{ "error": "..." }`.
 
 Every handler under `/api` gets the user as `Extension<Access>` (the guard in `web/mod.rs` puts it there) and must limit what it
 reads and changes to what that user's role reaches: `access.check_see(folder)` / `check_write(folder)` for one device (a device
 the user may not see answers 404), `access::scope` or `Access::visible_sql()` in a query over files, `require_admin()` for what is
-for administrators, `require_workspace()` for what read-only users do not have. Add a case for each role to `web/tests.rs`.
+for administrators, `require_workspace()` for what read-only users do not have. Add a case for each role in `web/tests/`, and a line for the route in `ROUTES` (`tests/routes.rs`).
 
 ## Changing the device gRPC contract
 
