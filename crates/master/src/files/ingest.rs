@@ -8,7 +8,7 @@
 
 use crate::platform::db::{self, Device};
 use crate::platform::store::Store;
-use crate::repo::{albums, devices, events, files, jobs, settings, users};
+use crate::repo::{albums, devices, events, files, jobs, settings};
 use anyhow::Result;
 use fafnirx_common::{unix_now, HASH_LEN};
 use postgres::{Client, GenericClient};
@@ -95,9 +95,9 @@ pub fn commit_version(conn: &mut Client, store: &Store, staged: &Path, v: &NewVe
     result
 }
 
-/// The master files share the root of `files/` with the folders of the users: a master path cannot start with the
-/// name of a user, whose folder it would be (the other way round is checked when a user is added).
-pub fn check_master_path(conn: &mut impl GenericClient, device: &Device, path: &str) -> Result<()> {
+/// The master files share the root of `files/` with `users/`, which holds the folders of the users: a master path cannot
+/// start with that name.
+pub fn check_master_path(device: &Device, path: &str) -> Result<()> {
     if device.id != MASTER_DEVICE_ID {
         return Ok(());
     }
@@ -108,12 +108,6 @@ pub fn check_master_path(conn: &mut impl GenericClient, device: &Device, path: &
         )
         .into());
     }
-    if users::exists(conn, &first)? {
-        return Err(crate::web::ApiError::conflict(format!(
-            "{first} is the folder of a user: the master files cannot use that name"
-        ))
-        .into());
-    }
     Ok(())
 }
 
@@ -121,7 +115,7 @@ fn commit_inner(conn: &mut Client, store: &Store, staged: &Path, v: &NewVersion)
     let ts = unix_now();
     let root: &[u8] = &v.root;
     let dev = v.device;
-    check_master_path(conn, dev, v.path)?;
+    check_master_path(dev, v.path)?;
     let mut tx = conn.transaction()?;
     // Both paths of a rename, in a fixed order so that two renames cannot wait for each other.
     let mut locked = vec![v.path];
@@ -208,7 +202,7 @@ fn commit_inner(conn: &mut Client, store: &Store, staged: &Path, v: &NewVersion)
 /// moved, not copied, and recorded as a rename of the same content, with the old path vacated like any rename. Devices and
 /// sources are not moved here: their files are theirs to move. The caller checks that the device is changeable.
 pub fn move_path(conn: &mut Client, store: &Store, device: &Device, from: &str, to: &str) -> Result<()> {
-    check_master_path(conn, device, to)?;
+    check_master_path(device, to)?;
     let mut tx = conn.transaction()?;
     let mut locked = [from, to];
     locked.sort_unstable();

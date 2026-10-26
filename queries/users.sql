@@ -9,9 +9,6 @@ SELECT name FROM users;
 --! user_exists
 SELECT 1 FROM users WHERE name = :name;
 
---! master_path_taken
-SELECT EXISTS (SELECT 1 FROM files WHERE device_id = 0 AND lower(split_part(path, '/', 1)) = :name) AS taken;
-
 --! insert_user
 INSERT INTO users (name, role, password_hash, created_at) VALUES (:name, :role, :password_hash, :now);
 

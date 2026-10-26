@@ -186,12 +186,12 @@ fn every_user_has_a_workspace_and_the_master_files_belong_to_everyone() {
         assert_eq!(api.json(Method::POST, "/api/files/delete", delete).await.0, StatusCode::NOT_FOUND);
         let (_, body) = api.get("/api/files?device=_master&path=docs").await;
         assert_eq!(body["entries"][0]["name"], "readme.txt");
-        // A normal user writes to the master files too, but not under the name of a user.
+        // A normal user writes to the master files too, but not under users/, where the folders of the users are kept.
         assert_eq!(try_upload(&api, "_master", "docs/from-bob.txt", b"hi").await, StatusCode::OK);
         assert_eq!(
-            try_upload(&api, "_master", "alice/sneaky.txt", b"no").await,
+            try_upload(&api, "_master", "users/sneaky.txt", b"no").await,
             StatusCode::CONFLICT,
-            "alice is a user's folder"
+            "users/ is where the folders of the users are kept"
         );
         let (_, dash) = api.get("/api/dashboard").await;
         assert_eq!(dash["devices"].as_array().unwrap().len(), 1);
@@ -228,13 +228,9 @@ fn every_user_has_a_workspace_and_the_master_files_belong_to_everyone() {
         let (status, made) = api.json(Method::POST, "/api/devices", json!({"name": "tablet", "user": "bob"})).await;
         assert_eq!((status, made["device"]["folder"].clone()), (StatusCode::OK, json!("bob/tablet")));
 
-        // A user's name cannot be one the master files use.
+        // The folders of the users are in users/, so a user can have the name of a master folder.
         let docs = json!({"name": "docs", "role": "normal", "password": "password-1"});
-        assert_eq!(
-            api.json(Method::POST, "/api/users", docs).await.0,
-            StatusCode::CONFLICT,
-            "the master has a docs folder"
-        );
+        assert_eq!(api.json(Method::POST, "/api/users", docs).await.0, StatusCode::OK);
     });
 }
 

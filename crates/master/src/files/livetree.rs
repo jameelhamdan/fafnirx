@@ -147,8 +147,8 @@ fn user_names(conn: &mut impl GenericClient) -> Result<HashSet<String>> {
     Ok(users::names(conn)?.into_iter().collect())
 }
 
-/// The device and the path inside it that a path of the live tree is about: the first part is the folder of a user (then
-/// the second is a device of that user), or else the path is a master file.
+/// The device and the path inside it that a path of the live tree is about: under `users/<user>/` the next part is a
+/// device of that user, or else the path is a master file.
 fn resolve(conn: &mut Client, store: &Store, rel: &str) -> Result<Option<(Device, String)>> {
     let parts: Vec<&str> = rel.split('/').collect();
     if parts[0].to_lowercase() == USERS_DIR {
@@ -250,7 +250,7 @@ fn sync_subtree(conn: &mut Client, store: &Store, dev: &Device, rel: &str, settl
     let known: HashMap<String, (i64, i64)> =
         files::live_below(conn, dev.id, rel)?.into_iter().map(|(path, size, mtime)| (path, (size, mtime))).collect();
 
-    // The master files share `files/` with the folders of the users, which are not theirs to record.
+    // The master files share `files/` with `users/` (the folders of the users), which is not theirs to record.
     let skip = if dev.id == ingest::MASTER_DEVICE_ID && rel.is_empty() {
         HashSet::from([USERS_DIR.to_string()])
     } else {
