@@ -21,7 +21,7 @@ flowchart LR
 3. It sends the list; the master answers with the chunks it still needs. Interrupted uploads resume. Content the device
    already has under another path (a copy or a rename) needs no data.
 4. The master verifies every chunk, assembles the file, checks the root hash, and moves it to
-   `files/<user>/<device>/<path>`. The file it replaces moves to `versions/<version id>/<user>/<device>/<path>`.
+   `files/users/<user>/<device>/<path>`. The file it replaces moves to `versions/<version id>/<user>/<device>/<path>`.
 5. Deleting on the device only marks the path deleted; the data stays until the retention period passes.
 6. Mirrors copy the current tree, and what changed since the last run, to storage you choose.
 
@@ -46,7 +46,7 @@ flowchart LR
 
 | Piece | What it is |
 |---|---|
-| `fafnirx` | Client: watcher, resumable upload, offline queue, tray, self-update |
+| `fafnirx` | Client: watcher, resumable upload, offline queue, tray, self-update. Android: [fafnirx-android](https://github.com/jameelhamdan/fafnirx-android) (separate repository) |
 | `fafnirx-master` | Device API, web API and app, users, file store, background work |
 | `fafnirx-stream` | Optional: adaptive video streaming ([streaming](streaming.md)) |
 | `fafnirx-sign` | Optional: sign your own client builds |

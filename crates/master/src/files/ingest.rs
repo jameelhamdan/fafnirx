@@ -102,6 +102,12 @@ pub fn check_master_path(conn: &mut impl GenericClient, device: &Device, path: &
         return Ok(());
     }
     let first = path.split('/').next().unwrap_or("").to_lowercase();
+    if first == crate::platform::store::USERS_DIR {
+        return Err(crate::web::ApiError::conflict(
+            "users is where the folders of the users are kept: the master files cannot use that name",
+        )
+        .into());
+    }
     if users::exists(conn, &first)? {
         return Err(crate::web::ApiError::conflict(format!(
             "{first} is the folder of a user: the master files cannot use that name"

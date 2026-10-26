@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Archive, Cog, FolderOpen, GalleryVerticalEnd, HardDrive, Heart, Images, KeyRound, LayoutDashboard, LogOut, MapPin, Menu, Monitor, Moon, Settings, Sun, Trash2, UploadCloud, Users } from 'lucide-react'
+import { Archive, Cog, FolderOpen, GalleryVerticalEnd, HardDrive, Heart, Images, LayoutDashboard, LogOut, MapPin, Menu, Monitor, Moon, Settings, Sun, Trash2, UploadCloud, Users } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
@@ -10,7 +10,6 @@ import { hasWorkspace, useRole, useSession } from '@/lib/session'
 import type { Role, Session } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { UploadPanel } from './files/upload-panel'
-import { ChangePassword } from './change-password'
 import { LanguageMenu } from './language-menu'
 import { Button } from './ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet'
@@ -41,7 +40,7 @@ const NAV: { title: string; items: { to: string; label: string; icon: typeof Ima
       { to: '/queue', label: msg('Processing'), icon: Cog, for: 'all' },
       { to: '/mirrors', label: msg('Mirrors'), icon: HardDrive, for: 'admin' },
       { to: '/users', label: msg('Users'), icon: Users, for: 'admin' },
-      { to: '/settings', label: msg('Settings'), icon: Settings, for: 'admin' },
+      { to: '/settings', label: msg('Settings'), icon: Settings, for: 'all' },
     ],
   },
 ]
@@ -76,6 +75,16 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
         </div>
       ))}
     </nav>
+  )
+}
+
+const REPO = 'https://github.com/jameelhamdan/fafnirx'
+
+function GitHubMark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" className={className}>
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
+    </svg>
   )
 }
 
@@ -114,7 +123,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false)
   const session = useSession()
   const version = session?.version
-  const [password, setPassword] = useState(false)
 
   async function logout() {
     await api.post('/api/logout').catch(() => undefined)
@@ -155,11 +163,11 @@ export function AppShell({ children }: { children: ReactNode }) {
           </span>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={() => setPassword(true)} aria-label={t('Change password')}>
-                <KeyRound className="size-4" />
+              <Button variant="ghost" size="icon" asChild>
+                <a href={REPO} target="_blank" rel="noreferrer" aria-label={t('fafnirx on GitHub')}><GitHubMark className="size-4" /></a>
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{t('Change password')}</TooltipContent>
+            <TooltipContent>{t('fafnirx on GitHub')}</TooltipContent>
           </Tooltip>
           <Button variant="ghost" size="icon" onClick={logout} aria-label={t('Log out')}>
             <LogOut className="size-4" />
@@ -176,7 +184,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Nav onNavigate={() => setOpen(false)} />
         </SheetContent>
       </Sheet>
-      <ChangePassword open={password} onClose={() => setPassword(false)} />
       <UploadPanel />
     </div>
   )

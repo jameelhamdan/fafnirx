@@ -18,7 +18,7 @@ fn users_have_roles_and_the_last_administrator_stays() {
         assert_eq!(api.json(Method::POST, "/api/users", no_role).await.0, StatusCode::BAD_REQUEST);
         let twice = json!({"name": "bob", "role": "normal", "password": "password-1"});
         assert_eq!(api.json(Method::POST, "/api/users", twice).await.0, StatusCode::CONFLICT);
-        assert!(api._dir.path().join("files/bob").is_dir(), "the folder of the user exists from the start");
+        assert!(api._dir.path().join("files/users/bob").is_dir(), "the folder of the user exists from the start");
 
         // Only an administrator manages users, settings and mirrors.
         api.cookie = bob.clone();
@@ -146,7 +146,7 @@ fn every_user_has_a_workspace_and_the_master_files_belong_to_everyone() {
                 api.json(Method::POST, "/api/devices", json!({"name": "phone", "kind": "local"})).await;
             assert_eq!(status, StatusCode::OK, "{made}");
             assert_eq!(made["device"]["folder"], format!("{who}/phone"));
-            assert!(api._dir.path().join(format!("files/{who}/phone")).is_dir());
+            assert!(api._dir.path().join(format!("files/users/{who}/phone")).is_dir());
             assert_eq!(api.json(Method::POST, "/api/devices", json!({"name": "phone"})).await.0, StatusCode::CONFLICT);
             assert_eq!(try_upload(&api, &format!("{who}/phone"), "me.txt", who.as_bytes()).await, StatusCode::OK);
         }

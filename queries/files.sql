@@ -123,13 +123,14 @@ SELECT EXISTS (SELECT 1 FROM files f JOIN devices d ON d.id = f.device_id JOIN v
 -- Whether any version has this content.
 SELECT EXISTS (SELECT 1 FROM versions WHERE root_hash = :root) AS stored;
 
---! save_file_meta (width?, height?, taken_at?, duration_ms?, codec?, lat?, lon?)
+--! save_file_meta (width?, height?, taken_at?, duration_ms?, codec?, lat?, lon?, caption?, keywords?)
 -- What was read from a content: kind, size, time and place taken, EXIF. Once per content, not per file.
-INSERT INTO file_meta (root_hash, mime, width, height, taken_at, exif, read_at, kind, duration_ms, codec, lat, lon)
-VALUES (:root, :mime, :width, :height, :taken_at, :exif, :read_at, :kind, :duration_ms, :codec, :lat, :lon)
+INSERT INTO file_meta (root_hash, mime, width, height, taken_at, exif, read_at, kind, duration_ms, codec, lat, lon, caption, keywords)
+VALUES (:root, :mime, :width, :height, :taken_at, :exif, :read_at, :kind, :duration_ms, :codec, :lat, :lon, :caption, :keywords)
 ON CONFLICT (root_hash) DO UPDATE SET mime = excluded.mime, width = excluded.width, height = excluded.height,
     taken_at = excluded.taken_at, exif = excluded.exif, read_at = excluded.read_at, kind = excluded.kind,
-    duration_ms = excluded.duration_ms, codec = excluded.codec, lat = excluded.lat, lon = excluded.lon;
+    duration_ms = excluded.duration_ms, codec = excluded.codec, lat = excluded.lat, lon = excluded.lon,
+    caption = excluded.caption, keywords = excluded.keywords;
 
 --! files_in_folder
 -- The live files directly in a folder of a device with their content: `prefix` is the folder's path with a slash at the

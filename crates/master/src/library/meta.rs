@@ -2,7 +2,7 @@
 //! video, the EXIF data and GPS position of a photo, and previews. Read by the background queue, shown by the
 //! web API.
 
-use crate::library::{artwork, media};
+use crate::library::{artwork, embedded, media};
 use crate::platform::db::{self, Db};
 use crate::platform::store::Store;
 use crate::repo::{file_meta, files, jobs, settings};
@@ -70,6 +70,9 @@ pub struct Meta {
     pub duration_ms: Option<i64>,
     pub codec: Option<String>,
     pub position: Option<(f64, f64)>,
+    /// The caption written into the file, and its keywords (what photo managers and AI taggers store as tags).
+    pub description: Option<String>,
+    pub keywords: Vec<String>,
 }
 
 /// The EXIF fields worth showing, by tag name.
@@ -93,25 +96,20 @@ const EXIF_FIELDS: [&str; 17] = [
     "ExposureBiasValue",
 ];
 
-/// A latitude and longitude that mean a place: in range, and not the 0,0 that broken cameras write.
+/// A latitude and longitude that mean a place: the latitude in range, the longitude wrapped into -180..180 (some
+/// writers count 0..360), and not the 0,0 that broken cameras write.
 pub fn valid_position(lat: f64, lon: f64) -> Option<(f64, f64)> {
-    let in_range = lat.is_finite() && lon.is_finite() && lat.abs() <= 90.0 && lon.abs() <= 180.0;
-    (in_range && !(lat == 0.0 && lon == 0.0)).then_some((lat, lon))
-}
-
-/// The GPS position of a photo, in degrees (south and west are negative).
-fn gps(data: &exif::Exif) -> Option<(f64, f64)> {
-    let coordinate = |tag, reference| -> Option<f64> {
-        let exif::Value::Rational(parts) = &data.get_field(tag, exif::In::PRIMARY)?.value else { return None };
-        let [deg, min, sec, ..] = parts[..] else { return None };
-        let value = deg.to_f64() + min.to_f64() / 60.0 + sec.to_f64() / 3600.0;
-        let shown = data.get_field(reference, exif::In::PRIMARY)?.display_value().to_string();
-        Some(if shown.contains('S') || shown.contains('W') { -value } else { value })
+    if !lat.is_finite() || !lon.is_finite() || lat.abs() > 90.0 || lon.abs() > 360.0 {
+        return None;
+    }
+    let lon = if lon > 180.0 {
+        lon - 360.0
+    } else if lon < -180.0 {
+        lon + 360.0
+    } else {
+        lon
     };
-    valid_position(
-        coordinate(exif::Tag::GPSLatitude, exif::Tag::GPSLatitudeRef)?,
-        coordinate(exif::Tag::GPSLongitude, exif::Tag::GPSLongitudeRef)?,
-    )
+    (!(lat == 0.0 && lon == 0.0)).then_some((lat, lon))
 }
 
 /// Reads the size and EXIF data of an image. A file without EXIF just has no fields.
@@ -129,9 +127,16 @@ pub fn read(path: &Path) -> Result<Meta> {
         duration_ms: None,
         codec: None,
         position: None,
+        description: None,
+        keywords: Vec::new(),
     };
     let file = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
-    if let Ok(data) = exif::Reader::new().read_from_container(&mut BufReader::new(file)) {
+    let data = exif::Reader::new().read_from_container(&mut BufReader::new(file)).ok();
+    let found = embedded::read(path, data.as_ref());
+    meta.position = found.position;
+    meta.description = found.description;
+    meta.keywords = found.keywords;
+    if let Some(data) = data {
         for field in data.fields() {
             let name = field.tag.to_string();
             if !EXIF_FIELDS.contains(&name.as_str()) || meta.exif.contains_key(&name) {
@@ -143,7 +148,6 @@ pub fn read(path: &Path) -> Result<Meta> {
             }
             meta.exif.insert(name, serde_json::Value::String(shown));
         }
-        meta.position = gps(&data);
         let get = |tag| data.get_field(tag, exif::In::PRIMARY).and_then(|f| f.value.get_uint(0));
         if meta.width.is_none() {
             // Some formats (HEIC) only say their size here.
@@ -174,6 +178,8 @@ fn read_video(path: &Path) -> Meta {
         duration_ms: probe.duration_ms,
         codec: probe.codec,
         position: probe.position,
+        description: None,
+        keywords: Vec::new(),
     }
 }
 
@@ -390,6 +396,7 @@ fn read_job(db: &Db, store: &Store, payload: &str) -> Result<()> {
     let disk = store.live_path(&p.device, &p.path)?;
     let meta = read_any(&p.path, &disk)?;
     let exif = serde_json::Value::Object(meta.exif).to_string();
+    let keywords = serde_json::to_string(&meta.keywords)?;
     file_meta::save(
         &mut *c,
         &root,
@@ -403,6 +410,8 @@ fn read_job(db: &Db, store: &Store, payload: &str) -> Result<()> {
             duration_ms: meta.duration_ms,
             codec: meta.codec.as_deref(),
             place: meta.position,
+            description: meta.description.as_deref(),
+            keywords: &keywords,
         },
         unix_now(),
     )?;
@@ -651,6 +660,8 @@ mod tests {
     fn positions_must_mean_a_place() {
         assert_eq!(valid_position(52.5, 13.4), Some((52.5, 13.4)));
         assert_eq!(valid_position(0.0, 0.0), None);
+        assert_eq!(valid_position(10.0, 190.0), Some((10.0, -170.0)));
+        assert_eq!(valid_position(10.0, 400.0), None);
         assert_eq!(valid_position(91.0, 0.0), None);
         assert_eq!(valid_position(f64::NAN, 1.0), None);
     }

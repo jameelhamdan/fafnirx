@@ -11,7 +11,7 @@ Outbound: Google Drive and mirror endpoints only.
 | Files, versions | `./data` (`FAFNIRX_DATA_DIR`) | A checksumming filesystem (ZFS) |
 
 ```text
-files/<user>/<device>/<path>        current tree; shareable as a network drive
+files/users/<user>/<device>/<path>  current tree; shareable as a network drive
 files/<path>                        master files
 versions/<id>/<user>/<device>/<path> replaced or deleted versions
 tmp/                                uploads being assembled (removed after a day untouched)
@@ -28,16 +28,15 @@ zfs create -o compression=lz4 -o atime=off tank/fafnirx/data
 chown 1000:1000 /tank/fafnirx/pgdata /tank/fafnirx/data
 ```
 
-**Network drive.** Share `<data>/files` over SMB/NFS, writable for `FAFNIRX_UID`; non-user folders are master files. Make
-`files/<user>/` read-only or unshared (share logins are not fafnirx users). Never share `versions/` or `tmp/` writable.
+**Network drive.** Share `<data>/files` over SMB/NFS, writable for `FAFNIRX_UID`. The policy: master files (everything
+outside `files/users/`) are writable over SMB; `files/users/`, which holds every user's folder, is read-only there (share logins
+are not fafnirx users, and a device's files are only changed by the device). Never share `versions/`, `tmp/` or `cache/`.
+`deploy/samba/` has a ready Samba container: one writable share with `files/users` mounted read-only on top of it, one line
+whatever the users. A server that has the older layout (`files/<user>/`) needs the folders moved into `files/users/` once, by hand (`mv`).
 
-```ini
-[fafnirx]
-   path = /tank/fafnirx/data/files
-   read only = no
-   force user = fafnirx
-   create mask = 0644
-   directory mask = 0755
+```sh
+cd deploy/samba && cp .env.example .env     # set SAMBA_PASSWORD and SAMBA_INTERFACE
+docker compose up -d
 ```
 
 ## Reverse proxy with Caddy

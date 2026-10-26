@@ -150,7 +150,7 @@ async function runAndWait(table, name) {
 }
 const livePaths = async (device) =>
   new Set((await schema.rows("SELECT f.path FROM files f JOIN devices d ON d.id = f.device_id WHERE d.folder = $1 AND f.deleted_at IS NULL", [device])).map((r) => r[0]))
-const stored = (device, p) => fs.readFileSync(path.join(data, 'files', device, p))
+const stored = (device, p) => fs.readFileSync(path.join(data, 'files', ...(device === '_master' ? [] : ['users']), device, p))
 const openAlerts = async () => (await admin.get('/api/dashboard')).json.alerts
 
 try {
@@ -231,9 +231,9 @@ try {
   const m1 = await until(() => finished('mirrors', 'offsite'), 90)
   check(m1?.[0] === 'ok', `the first mirror run succeeds (${m1?.[0]}: ${JSON.stringify(m1?.[1])})`)
   let files = tree(path.join(mirrorDir, 'files'))
-  check(files['admin/source-drive/Photos/a.txt']?.toString() === 'second version' && files['admin/source-drive/Photos/big-renamed.bin']?.equals(big), 'the mirror holds the current Drive files as a plain tree')
-  check(files['admin/laptop/docs/x.txt']?.toString() === 'from a device' && files['admin/laptop/docs/deep/y.txt']?.toString() === 'deeper', 'the mirror holds device files under files/<name>/, the same layout as the master')
-  check(!('admin/source-drive/Photos/sub/b.txt' in files) && !('admin/source-drive/Photos/big.bin' in files), 'deleted and renamed-away files are not in the current tree')
+  check(files['users/admin/source-drive/Photos/a.txt']?.toString() === 'second version' && files['users/admin/source-drive/Photos/big-renamed.bin']?.equals(big), 'the mirror holds the current Drive files as a plain tree')
+  check(files['users/admin/laptop/docs/x.txt']?.toString() === 'from a device' && files['users/admin/laptop/docs/deep/y.txt']?.toString() === 'deeper', 'the mirror holds device files under files/users/<user>/<name>/, the same layout as the master')
+  check(!('users/admin/source-drive/Photos/sub/b.txt' in files) && !('users/admin/source-drive/Photos/big.bin' in files), 'deleted and renamed-away files are not in the current tree')
   const stats = JSON.parse(fs.readFileSync(path.join(mirrorDir, 'meta', 'stats.json'), 'utf8'))
   check(stats.files === Object.keys(files).length && new Set(stats.namespaces.map((n) => n.namespace)).size === 2, `stats.json describes the tree (${stats.files} files)`)
   const listing = JSON.parse(fs.readFileSync(path.join(mirrorDir, 'meta', 'admin_laptop.json'), 'utf8'))
@@ -241,7 +241,7 @@ try {
   const library = JSON.parse(fs.readFileSync(path.join(mirrorDir, 'meta', 'library.json'), 'utf8'))
   check(Array.isArray(library.albums) && Array.isArray(library.tags) && Array.isArray(library.files), 'albums, tags and what was said about files are written as JSON too')
   check(
-    Object.entries(files).filter(([k]) => k.startsWith('admin/laptop/')).every(([k, v]) => v.length === listing.files.find((f) => `admin/laptop/${f.path}` === k).size),
+    Object.entries(files).filter(([k]) => k.startsWith('users/admin/laptop/')).every(([k, v]) => v.length === listing.files.find((f) => `users/admin/laptop/${f.path}` === k).size),
     'file list sizes match the mirrored files',
   )
   check(Number((await schema.rows('SELECT last_files FROM mirrors'))[0][0]) === Object.keys(files).length, 'the mirrored file count is recorded')
@@ -255,11 +255,11 @@ try {
   const m2 = await runAndWait('mirrors', 'offsite')
   check(m2[0] === 'ok' && m2[1].startsWith('2 uploaded'), `only the two changed files are uploaded (${m2[1].split('\n')[0]})`)
   files = tree(path.join(mirrorDir, 'files'))
-  check(files['admin/source-drive/Photos/a.txt']?.toString() === 'third version' && files['admin/laptop/docs/x.txt']?.toString() === 'device edit', 'the changes reached the mirror')
-  check(!('admin/source-drive/Photos/new.txt' in files), 'a file deleted at the source is gone from the current tree')
+  check(files['users/admin/source-drive/Photos/a.txt']?.toString() === 'third version' && files['users/admin/laptop/docs/x.txt']?.toString() === 'device edit', 'the changes reached the mirror')
+  check(!('users/admin/source-drive/Photos/new.txt' in files), 'a file deleted at the source is gone from the current tree')
   const kept = Object.fromEntries(Object.entries(tree(path.join(mirrorDir, 'versions'))).map(([k, v]) => [k.split('/').slice(1).join('/'), v]))
-  check(kept['admin/source-drive/Photos/a.txt']?.toString() === 'second version' && kept['admin/laptop/docs/x.txt']?.toString() === 'from a device', 'replaced files are kept under versions/<run>/')
-  check(kept['admin/source-drive/Photos/new.txt']?.toString() === 'fresh', 'removed files are kept under versions/<run>/')
+  check(kept['users/admin/source-drive/Photos/a.txt']?.toString() === 'second version' && kept['users/admin/laptop/docs/x.txt']?.toString() === 'from a device', 'replaced files are kept under versions/<run>/')
+  check(kept['users/admin/source-drive/Photos/new.txt']?.toString() === 'fresh', 'removed files are kept under versions/<run>/')
 
   // --- only the newest runs are kept ------------------------------------------------------------------------------------------------------
   for (let n = 0; n < 5; n++) {
@@ -272,7 +272,7 @@ try {
   check(new Set(dirs).size === 3 && dirs.every((d) => /^\d{8}T\d{6}Z$/.test(d)), 'version directories are UTC timestamps')
 
   // --- bit rot in the stored files is caught before it reaches the mirror ---------------------------------------------------------------------
-  const rotten = path.join(data, 'files', 'admin', 'laptop', 'docs', 'deep', 'y.txt')
+  const rotten = path.join(data, 'files', 'users', 'admin', 'laptop', 'docs', 'deep', 'y.txt')
   const blob = fs.readFileSync(rotten)
   blob[0] ^= 1
   fs.writeFileSync(rotten, blob)
@@ -283,7 +283,7 @@ try {
   }, 90)
   check(partial?.[0] === 'partial' && partial[1].includes('docs/deep/y.txt'), `a corrupt stored file is reported, the rest still mirrors (${partial?.[0]})`)
   check((await openAlerts()).some((a) => a.kind === 'mirror_failed'), 'a partial mirror run raises an alert')
-  check(tree(path.join(mirrorDir, 'files'))['admin/laptop/docs/deep/y.txt']?.toString() === 'deeper', 'the previously good copy on the mirror was not overwritten with corrupt data')
+  check(tree(path.join(mirrorDir, 'files'))['users/admin/laptop/docs/deep/y.txt']?.toString() === 'deeper', 'the previously good copy on the mirror was not overwritten with corrupt data')
 
   // --- a broken target fails loudly ---------------------------------------------------------------------------------------------------------------
   await admin.post('/api/mirrors', { ...form, name: 'broken', remote_type: 'doesnotexist' })

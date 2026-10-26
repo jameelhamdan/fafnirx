@@ -222,6 +222,8 @@ export interface AssetDetail extends Asset {
   work: 'waiting' | 'running' | 'failed' | null
   mime: string
   description: string
+  file_description: string | null
+  file_tags: string[]
   camera_when: number | null
   camera_lat: number | null
   camera_lon: number | null

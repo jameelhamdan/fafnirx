@@ -81,7 +81,7 @@ pub fn add_user(
         .into());
     }
     users::insert(c, name, role.as_str(), password_hash, unix_now())?;
-    let _ = std::fs::create_dir_all(live_root.join(name));
+    let _ = std::fs::create_dir_all(live_root.join(crate::platform::store::USERS_DIR).join(name));
     Ok(())
 }
 

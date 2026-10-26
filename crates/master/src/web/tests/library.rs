@@ -62,7 +62,7 @@ fn streaming_is_for_whoever_can_see_the_file_and_only_when_a_service_is_set_up()
         assert_eq!(headers[header::CONTENT_TYPE], "application/vnd.apple.mpegurl");
         let text = String::from_utf8(body).unwrap();
         assert!(
-            text.contains("720p/index.m3u8 p=admin/videos/trip/clip.mkv h="),
+            text.contains("720p/index.m3u8 p=users/admin/videos/trip/clip.mkv h="),
             "the service is told which file and content: {text}"
         );
         assert!(!text.contains("stream-token"));

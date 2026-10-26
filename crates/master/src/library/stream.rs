@@ -85,7 +85,11 @@ fn locate(c: &mut postgres::Client, who: &Access, id: uuid::Uuid) -> anyhow::Res
     // A file of someone else's device does not exist for this user.
     who.check_see(&folder).map_err(|_| ApiError::not_found("No such file"))?;
     // The master files are at the root of the file tree, the files of a device below the folder of the device.
-    let located = if folder == crate::platform::store::MASTER_FOLDER { path } else { format!("{folder}/{path}") };
+    let located = if folder == crate::platform::store::MASTER_FOLDER {
+        path
+    } else {
+        format!("{}/{folder}/{path}", crate::platform::store::USERS_DIR)
+    };
     Ok((located, hex::encode(root)))
 }
 

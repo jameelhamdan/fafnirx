@@ -244,7 +244,7 @@ export function Viewer({
             draggable={false}
             className="pointer-events-none absolute inset-0 size-full scale-125 object-cover opacity-40 blur-3xl saturate-150"
           />
-          <div key={asset.id} className="animate-in fade-in relative z-[1] grid max-h-full max-w-full place-items-center duration-200 max-sm:size-full">
+          <div key={asset.id} className="animate-in fade-in absolute inset-0 z-[1] flex items-center justify-center duration-200">
             <Media asset={asset} stream={streamOn} />
           </div>
           {before && (

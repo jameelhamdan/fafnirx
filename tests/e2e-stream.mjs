@@ -71,8 +71,8 @@ try {
 
   // A video in a local folder.
   await admin.post('/api/devices', { name: 'videos', kind: 'local' })
-  fs.mkdirSync(path.join(data, 'files', 'admin', 'videos', 'trip'), { recursive: true })
-  fs.writeFileSync(path.join(data, 'files', 'admin', 'videos', 'trip', 'clip.mkv'), 'pretend this is a video')
+  fs.mkdirSync(path.join(data, 'files', 'users', 'admin', 'videos', 'trip'), { recursive: true })
+  fs.writeFileSync(path.join(data, 'files', 'users', 'admin', 'videos', 'trip', 'clip.mkv'), 'pretend this is a video')
   const id = await until(async () => (await schema.rows("SELECT id FROM files WHERE path = 'trip/clip.mkv'"))[0]?.[0], 30, 300)
   check(id, 'the master finds the video')
 
@@ -108,7 +108,7 @@ try {
   check((await direct('videos/..%2F..%2Fsecret', ok)).status === 400 && (await direct('..%2Fx%2Fy', ok)).status === 400, 'the service refuses paths that leave the file tree')
 
   // --- a file that is gone or changed ---------------------------------------------------------------------------------------------
-  fs.writeFileSync(path.join(data, 'files', 'admin', 'videos', 'trip', 'clip.mkv'), 'a different video, another content hash')
+  fs.writeFileSync(path.join(data, 'files', 'users', 'admin', 'videos', 'trip', 'clip.mkv'), 'a different video, another content hash')
   const changed = await until(async () => (await schema.rows("SELECT encode(v.root_hash, 'hex') FROM versions v JOIN files f ON f.id = v.file_id WHERE f.path = 'trip/clip.mkv' ORDER BY v.id")).length >= 2, 30, 300)
   check(changed, 'the master records the new content')
   const before = calledSegments().length

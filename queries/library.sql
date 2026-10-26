@@ -116,12 +116,12 @@ WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
                    OR (a.folder_device_id = f.device_id AND starts_with(f.path, a.folder_prefix))))
 ORDER BY CASE WHEN :by_path::boolean THEN f.path END, shown_at DESC, f.id DESC LIMIT :limit;
 
---! asset_extras : (mime?, camera_when?, camera_lat?, camera_lon?, exif?, codec?)
+--! asset_extras : (mime?, camera_when?, camera_lat?, camera_lon?, exif?, codec?, caption?, keywords?)
 -- What the detail view shows besides the asset itself: what the camera said before any correction, and whether
 -- the user changed the time or the place.
 SELECT m.mime, COALESCE(s.description, '') AS description, m.taken_at AS camera_when, m.lat AS camera_lat,
        m.lon AS camera_lon, s.taken_at IS NOT NULL AS when_edited, s.lat IS NOT NULL AS place_edited,
-       m.exif, m.codec, v.created_at AS changed
+       m.exif, m.codec, m.caption, m.keywords, v.created_at AS changed
 FROM files f
 JOIN versions v ON v.id = f.current_version_id
 LEFT JOIN file_meta m ON m.root_hash = v.root_hash

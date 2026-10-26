@@ -19,7 +19,7 @@ const stored = async (device, p) => {
     [device, p],
   )
   if (!row) return null
-  const file = row[1] === null ? path.join(data, 'files', device, p) : path.join(data, 'versions', String(row[0]), device, p)
+  const file = row[1] === null ? path.join(data, 'files', ...(device === '_master' ? [] : ['users']), device, p) : path.join(data, 'versions', String(row[0]), device, p)
   return fs.existsSync(file) ? fs.readFileSync(file) : null
 }
 const known = async (p) => (await schema.rows('SELECT 1 FROM files WHERE path = $1', [p])).length > 0
@@ -33,7 +33,7 @@ try {
   const token = made.json?.token
   check(made.status === 200 && token?.length >= 40, 'device created through the web API, token shown once')
   check((await admin.get('/api/devices/admin%2Flaptop')).json.token === null, 'the token is not shown again')
-  check(fs.existsSync(path.join(data, 'files', 'admin', 'laptop')), "the device's folder exists from the start, named after it")
+  check(fs.existsSync(path.join(data, 'files', 'users', 'admin', 'laptop')), "the device's folder exists from the start, named after it")
 
   // --- enroll the client over plain http -------------------------------------------------------------
   const cdir = path.join(tmp, 'client')
@@ -94,8 +94,8 @@ try {
   await schema.rows('DELETE FROM versions')
   await schema.rows('DELETE FROM files')
   await schema.rows("UPDATE settings SET value = 'a-different-master' WHERE key = 'master_id'")
-  fs.rmSync(path.join(data, 'files', 'admin', 'laptop'), { recursive: true })
-  fs.mkdirSync(path.join(data, 'files', 'admin', 'laptop'))
+  fs.rmSync(path.join(data, 'files', 'users', 'admin', 'laptop'), { recursive: true })
+  fs.mkdirSync(path.join(data, 'files', 'users', 'admin', 'laptop'))
   await master.start()
   const again2 = c('sync').stdout
   check(again2.includes('5 uploaded') && !again2.includes('0 bytes sent'), `a new master gets everything again, not "nothing changed" (${again2.trim()})`)
@@ -270,11 +270,11 @@ try {
   }
   check((await admin2.post(`/api/uploads/${upload.id}/finish`)).status === 200, 'a chunked upload finishes')
   check((await stored('admin/photos', '2024/p.jpg'))?.equals(photo), 'an uploaded file is stored under files/<name>/ byte for byte')
-  fs.mkdirSync(path.join(data, 'files', 'admin', 'photos', 'dropped'), { recursive: true })
-  fs.writeFileSync(path.join(data, 'files', 'admin', 'photos', 'dropped', 'x.txt'), 'copied straight into the share')
+  fs.mkdirSync(path.join(data, 'files', 'users', 'admin', 'photos', 'dropped'), { recursive: true })
+  fs.writeFileSync(path.join(data, 'files', 'users', 'admin', 'photos', 'dropped', 'x.txt'), 'copied straight into the share')
   check(await until(() => known('dropped/x.txt'), 60), 'a file dropped into files/<name>/ is picked up (file watcher)')
-  fs.mkdirSync(path.join(data, 'files', 'admin', 'newdrive'))
-  fs.writeFileSync(path.join(data, 'files', 'admin', 'newdrive', 'y.txt'), 'in a folder nobody created')
+  fs.mkdirSync(path.join(data, 'files', 'users', 'admin', 'newdrive'))
+  fs.writeFileSync(path.join(data, 'files', 'users', 'admin', 'newdrive', 'y.txt'), 'in a folder nobody created')
   check(await until(() => known('y.txt'), 60), 'a new folder in the folder of a user becomes a device of that user')
   const kind = (await schema.rows("SELECT kind FROM devices WHERE name = 'newdrive'"))[0]?.[0]
   check(kind === 'local', 'and it is a local device')
@@ -306,7 +306,7 @@ try {
   const asked = await admin2.post('/api/files/rescan')
   check(asked.status === 200 && typeof asked.json.started === 'boolean', 'an administrator can ask for a scan')
   check(await until(() => known('scans/asked-for.txt'), 60), 'and the file put there by hand is recorded')
-  fs.unlinkSync(path.join(data, 'files', 'admin', 'photos', 'dropped', 'x.txt'))
+  fs.unlinkSync(path.join(data, 'files', 'users', 'admin', 'photos', 'dropped', 'x.txt'))
   const removed = await until(async () => (await schema.rows("SELECT deleted_at FROM files WHERE path = 'dropped/x.txt'"))[0]?.[0] != null, 60)
   check(removed, 'a file removed from files/<name>/ is marked deleted')
 

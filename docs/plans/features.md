@@ -5,7 +5,7 @@ Nothing here is built; the rest of the documentation describes only what exists.
 ## Features
 
 - **Edit files in local folders** from the web app (move and rename are built; content editing is not). Files a computer or a source sent stay unmovable by design.
-- **Android client** that backs up a phone's photos: [plan](android.md).
+- **Android client** that backs up a phone's photos: [plan](android.md). The app itself lives in [fafnirx-android](https://github.com/jameelhamdan/fafnirx-android).
 - **Scoped API tokens** for the web API (needed by the phone app).
 - **Google Keep source**, through an unofficial library.
 - **Email and webhook alerts.**

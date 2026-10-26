@@ -1,0 +1,35 @@
+# Samba as the network drive of fafnirx: one share, writable everywhere except the folders of the fafnirx users.
+#
+#   cp .env.example .env     # SAMBA_PASSWORD, SAMBA_INTERFACE (the LAN address of this host with its prefix, 192.168.2.12/24)
+#   docker compose up -d
+#
+# Policy: the share is `files/` (never `versions/`, `tmp/` or `cache/`). Master files, everything outside a user's folder,
+# can be added, edited and deleted over SMB: samba writes as the uid of fafnirx (FAFNIRX_UID), so the master sees them as
+# its own. `files/users/` holds the folders of all fafnirx users (`users/<user>/<device>`, devices and sources); it is mounted
+# read-only on top of the share, so SMB can read it but never writes there (a device's files are only changed by the device).
+services:
+  network-drive:
+    image: ghcr.io/servercontainers/samba:latest
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - CAP_NET_ADMIN
+    environment:
+      SAMBA_GLOBAL_CONFIG_server min protocol: SMB2
+      ACCOUNT_admin: ${SAMBA_PASSWORD:?set SAMBA_PASSWORD}
+      UID_admin: ${FAFNIRX_UID:-1000} # the same uid as fafnirx, so files written over SMB belong to it
+      SAMBA_GLOBAL_CONFIG_interfaces: ${SAMBA_INTERFACE:?set SAMBA_INTERFACE} lo
+      SAMBA_GLOBAL_CONFIG_bind interfaces only: "yes"
+      SAMBA_VOLUME_CONFIG_shared: |
+        [shared]
+          path = /mnt/fafnirx
+          valid users = admin
+          read only = no
+          browseable = yes
+          force user = admin
+          create mask = 0644
+          directory mask = 0755
+    volumes:
+      - ${FAFNIRX_DATA_DIR:-/tank/fafnirx/data}/files:/mnt/fafnirx
+      # Read-only on top of the share: the folders of the fafnirx users.
+      - ${FAFNIRX_DATA_DIR:-/tank/fafnirx/data}/files/users:/mnt/fafnirx/users:ro
