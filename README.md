@@ -15,9 +15,9 @@ flowchart LR
 ## Features
 
 - **Client** (Windows, macOS, Linux): watches folders, uploads changes (resumable, verified, deduplicated), tray icon,
-  self-update from GitHub releases.
+  self-update from GitHub releases. **Android:** [fafnirx-android](https://github.com/jameelhamdan/fafnirx-android).
 - **Master**: one Rust binary with the web app built in. Files are stored as plain files in
-  `files/<user>/<device>/<path>`; the newest 5 versions are kept, deleted files are removed after 30 days (both configurable).
+  `files/users/<user>/<device>/<path>`; the newest 5 versions are kept, deleted files are removed after 30 days (both configurable).
 - **File browser**: search, filter, sort, preview, version history, zip download, drag-and-drop upload, delete and restore.
   Photos and videos can be opened in the viewer and rated or favorited from here.
 - **Photo and video library** over the same files: timeline, favorites, archive, trash, albums (a folder can be an album),

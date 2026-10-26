@@ -5,6 +5,7 @@
 
 pub mod albums;
 pub mod artwork;
+pub mod embedded;
 pub mod media;
 pub mod meta;
 pub mod photos;

@@ -56,25 +56,32 @@ function Stars({ value, onChange }: { value: number | null; onChange: (v: number
 }
 
 /** Keyed by the saved text by its parent, so a change made elsewhere replaces the draft. */
-function Description({ id, text }: { id: string; text: string }) {
+function Description({ id, text, fromFile }: { id: string; text: string; fromFile: string | null }) {
   const t = useT()
   const { edit } = useLibraryActions()
   const [draft, setDraft] = useState(text)
   return (
-    <Textarea
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => draft.trim() !== text && edit.mutate({ id, description: draft })}
-      placeholder={t('Add a description')}
-      aria-label={t('Description')}
-      rows={2}
-      maxLength={5000}
-      className="min-h-0 resize-none"
-    />
+    <div className="space-y-1.5">
+      <Textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => draft.trim() !== text && edit.mutate({ id, description: draft })}
+        placeholder={t('Add a description')}
+        aria-label={t('Description')}
+        rows={2}
+        maxLength={5000}
+        className="min-h-0 resize-none"
+      />
+      {fromFile && fromFile !== text && (
+        <p className="text-xs text-muted-foreground">
+          {t('In the file:')} {fromFile}{!text && <> · <button type="button" className="underline" onClick={() => edit.mutate({ id, description: fromFile })}>{t('Use it')}</button></>}
+        </p>
+      )}
+    </div>
   )
 }
 
-function Tags({ id, tags }: { id: string; tags: { id: string; name: string }[] }) {
+function Tags({ id, tags, suggested }: { id: string; tags: { id: string; name: string }[]; suggested: string[] }) {
   const t = useT()
   const { edit } = useLibraryActions()
   const known = useTags()
@@ -100,6 +107,16 @@ function Tags({ id, tags }: { id: string; tags: { id: string; name: string }[] }
             </li>
           ))}
         </ul>
+      )}
+      {suggested.some((n) => !names.some((x) => x.toLowerCase() === n.toLowerCase())) && (
+        <div>
+          <p className="mb-1 text-xs text-muted-foreground">{t('Keywords in the file, click to add')}</p>
+          <ul className="flex flex-wrap gap-1.5">
+            {suggested.filter((n) => !names.some((x) => x.toLowerCase() === n.toLowerCase())).map((n) => (
+              <li key={n}><button type="button" onClick={() => edit.mutate({ id, tags: [...names, n] })} className="rounded-full border border-dashed px-2.5 py-0.5 text-xs hover:bg-accent">{n}</button></li>
+            ))}
+          </ul>
+        </div>
       )}
       <form onSubmit={add}>
         <Input value={text} onChange={(e) => setText(e.target.value)} list={`tags-${id}`} placeholder={t('Add a tag and press Enter')} aria-label={t('Add a tag')} maxLength={64} className="h-8 text-sm" />
@@ -215,9 +232,9 @@ export default function InfoPanel({ id, onClose, embedded }: { id: string; onClo
           <WorkNote work={d.work} />
           {mine ? (
             <>
-              <Description key={`${d.id}:${d.description}`} id={d.id} text={d.description} />
+              <Description key={`${d.id}:${d.description}`} id={d.id} text={d.description} fromFile={d.file_description} />
               <Stars value={d.rating} onChange={(rating) => edit.mutate({ id: d.id, rating })} />
-              <Tags id={d.id} tags={d.tags} />
+              <Tags id={d.id} tags={d.tags} suggested={d.file_tags} />
             </>
           ) : null}
 

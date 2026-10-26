@@ -38,6 +38,7 @@ pub const ALL: &[Migration] = &[
         name: "job_notes_and_rename_cleanup",
         sql: include_str!("../../migrations/0011_job_notes_and_rename_cleanup.sql"),
     },
+    Migration { version: 12, name: "embedded_text", sql: include_str!("../../migrations/0012_embedded_text.sql") },
 ];
 
 const TRACKING: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -210,7 +211,7 @@ mod tests {
         );
         assert_eq!(one(c, "SELECT f.path FROM files f JOIN albums a ON a.cover_file_id = f.id JOIN album_files af ON af.album_id = a.id AND af.file_id = f.id"), "b.jpg");
         assert_eq!(
-            one(c, "SELECT string_agg(payload, ',' ORDER BY seq) FROM jobs"),
+            one(c, "SELECT string_agg(payload, ',' ORDER BY seq) FROM jobs WHERE payload IN ('{}', '{\"n\":2}')"),
             "{},{\"n\":2}",
             "jobs keep their order"
         );

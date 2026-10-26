@@ -29,7 +29,7 @@ flowchart TB
 - **Two APIs, two trust levels.** The device gRPC API (`proto/fafnirx.proto`) has no call that reads, lists or deletes stored
   data; `Negotiate` only reports which chunks of the caller's own file are missing. Reading and deleting is in the web API,
   behind a login and role checks. Different ports, no shared authentication.
-- **Plain files.** A path's current version is stored whole in `files/<user>/<device>/<path>` (`files/<path>` for master
+- **Plain files.** A path's current version is stored whole in `files/users/<user>/<device>/<path>` (`files/<path>` for master
   files). A replaced or deleted version moves to `versions/<version id>/<user>/<device>/<path>`. Chunks exist only on the wire
   and in `tmp/`; there is no cross-file deduplication.
 - **Users own devices; the name is the folder.** `devices.name` is an immutable slug (1-63 of `a-z 0-9 . _ -`, no reserved
@@ -103,7 +103,7 @@ paths never interleave and the watcher never sees a half-done commit.
 
 **Watcher.** `files/livetree.rs` watches `files/`. A path quiet for 5 s is compared with the database: new or changed files
 become versions (`adopt_live`), vanished ones are marked deleted (`forget_absent`), a vanished file matched by a new file of
-the same size and mtime is a rename, a new `files/<user>/<name>` becomes a `local` device. The whole tree is also compared
+the same size and mtime is a rename, a new `files/users/<user>/<name>` becomes a `local` device. The whole tree is also compared
 every 5 minutes or on `POST /api/files/rescan`. A missing device folder deletes nothing.
 
 **Live updates.** `db::notify(topic, key)` runs `pg_notify` in the changing transaction, so it arrives on commit. One

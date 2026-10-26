@@ -227,11 +227,11 @@ stateDiagram-v2
 
 ## Local folders and the network drive
 
-`data/files/` is a plain tree: `files/<user>/<device>/<path>`, master files in `files/<path>`. Share it over SMB/NFS.
+`data/files/` is a plain tree: `files/users/<user>/<device>/<path>`, master files in `files/<path>`. Share it over SMB/NFS.
 
-- Write as `FAFNIRX_UID`. A new `files/<user>/<name>` becomes a local folder of that user; a new folder directly under
+- Write as `FAFNIRX_UID`. A new `files/users/<user>/<name>` becomes a local folder of that user; a new folder directly under
   `files/` is master files.
-- Share user folders read-only or not at all (the share has its own logins). Only local folders are written in place; share
+- Share user folders read-only or not at all (the share has its own logins; `deploy/samba/` does this). Only local folders are written in place; share
   device and source folders read-only (writes there are not recorded).
 - Changes are recorded within seconds (the master watches), or 5 minutes on mounts without events. Administrators can press
   **Scan now** (Files, Settings → File store).
@@ -273,7 +273,7 @@ existing remotes (`crypt`, `b2`, OAuth), put `rclone.conf` in `./config` (or `FA
 master, readable by its owner only) and enter `name:path` as **rclone remote**.
 
 ```text
-files/<user>/<device>/...       current tree per device, local folder, source
+files/users/<user>/<device>/...  current tree per device, local folder, source
 files/<path>                    master files
 versions/<UTC time>/...         what that run replaced or removed
 meta/stats.json, meta/<user>_<device>.json, meta/_master.json   run stats; file lists (path, size, mtime, root hash)
@@ -299,8 +299,8 @@ Dismiss by hand. Collection never pauses automatically. No email or webhook.
 ## Restoring data
 
 Web app: open the file, pick a version, **Download** or **Restore**. Disk: current version
-`<data>/files/<user>/<device>/<path>` (`<data>/files/<path>` for master files); replaced or deleted version
-`<data>/versions/<version id>/<user>/<device>/<path>`. Or copy from a mirror's `files/` tree.
+`<data>/files/users/<user>/<device>/<path>` (`<data>/files/<path>` for master files); replaced or deleted version
+`<data>/versions/<version id>/<user>/<device>/<path>`. Or copy from a mirror's `files/` tree (it has the same layout as the disk).
 
 ## Client updates
 

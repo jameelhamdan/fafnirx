@@ -8,7 +8,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ChangePassword } from '@/components/change-password'
 import { api } from '@/lib/api'
+import { useRole } from '@/lib/session'
 import type { Settings as SettingsData } from '@/lib/types'
 import { useT } from '@/lib/i18n'
 
@@ -48,14 +50,31 @@ function SettingsForm({ data }: { data: SettingsData }) {
   )
 }
 
-export default function Settings() {
+/** Everybody changes their own password; the rest of the page is for administrators. */
+function Account() {
+  const t = useT()
+  const [open, setOpen] = useState(false)
+  return (
+    <Card className="max-w-xl">
+      <CardHeader>
+        <CardTitle>{t('Password')}</CardTitle>
+        <CardDescription>{t('Changing it ends your other logins.')}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Button variant="outline" onClick={() => setOpen(true)}>{t('Change password')}</Button>
+        <ChangePassword open={open} onClose={() => setOpen(false)} />
+      </CardContent>
+    </Card>
+  )
+}
+
+function Administration() {
   const t = useT()
   const { data, error } = useQuery({ queryKey: ['settings'], queryFn: () => api.get<SettingsData>('/api/settings') })
   return (
-    <div>
-      <PageHeader title={t('Settings')} />
+    <>
       {error ? <ErrorNote error={error} /> : !data ? <Skeleton className="h-56 max-w-xl" /> : <SettingsForm data={data} />}
-      <Card className="mt-6 max-w-xl">
+      <Card className="max-w-xl">
         <CardHeader>
           <CardTitle>{t('File store')}</CardTitle>
           <CardDescription>
@@ -64,6 +83,18 @@ export default function Settings() {
         </CardHeader>
         <CardContent><RescanButton /></CardContent>
       </Card>
+    </>
+  )
+}
+
+export default function Settings() {
+  const t = useT()
+  const admin = useRole() === 'admin'
+  return (
+    <div className="space-y-6">
+      <PageHeader title={t('Settings')} />
+      <Account />
+      {admin && <Administration />}
     </div>
   )
 }

@@ -23,7 +23,7 @@ use std::time::Duration;
 use tokio::sync::Semaphore;
 
 pub struct Config {
-    /// The master's data directory: videos are read from `<data>/files/<device>/<path>`.
+    /// The master's data directory: videos are read from `<data>/files/<path>`.
     pub data: PathBuf,
     pub cache: PathBuf,
     /// What the master sends as `Authorization: Bearer`.

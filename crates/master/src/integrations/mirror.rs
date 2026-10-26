@@ -67,12 +67,12 @@ impl LiveFile {
 }
 
 /// Path relative to the `files/` directory, which is the same on the master and on the mirror: the master files are
-/// at its root, the files of a device below the folder of the device.
+/// at its root, the files of a device below `users/<user>/<device>`.
 fn relative(folder: &str, path: &str) -> String {
     if folder == crate::platform::store::MASTER_FOLDER {
         path.to_string()
     } else {
-        format!("{folder}/{path}")
+        format!("{}/{folder}/{path}", crate::platform::store::USERS_DIR)
     }
 }
 

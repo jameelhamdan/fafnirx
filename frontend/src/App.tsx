@@ -70,7 +70,7 @@ export default function App() {
             <Route path="/queue" element={<Queue />} />
             <Route path="/sources" element={<Only allow="workspace" role={role}><Sources /></Only>} />
             <Route path="/mirrors" element={<Only allow="admin" role={role}><Mirrors /></Only>} />
-            <Route path="/settings" element={<Only allow="admin" role={role}><Settings /></Only>} />
+            <Route path="/settings" element={<Settings />} />
             <Route path="/users" element={<Only allow="admin" role={role}><Users /></Only>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

@@ -76,6 +76,8 @@ Windows `fafnirx-setup-<version>.exe`; macOS `fafnirx-<version>-macos-{aarch64,x
 
 Check with `fafnirx status` and `fafnirx folders`; the device shows online within a minute. [Commands](usage.md#the-client).
 
+**Other clients:** for Android, use [fafnirx-android](https://github.com/jameelhamdan/fafnirx-android).
+
 A folder is stored as `<you>/<device>/<name>/`; the name defaults to the folder's own (a second `photos` becomes `photos-2`) or
 use `--name`. Names are compared ignoring case and accents; `add-folder` refuses a clash. **Address:** on a LAN/VPN
 `http://<master>:7443`; over the internet an `https://` address in front of the master (`enroll` warns about plain `http://`).

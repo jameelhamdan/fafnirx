@@ -1,5 +1,5 @@
 //! Plain-file store. The current version of every file lives under its own name:
-//!   files/<user>/<device>/<path>                   the live tree: the files of a device (its "folder" is <user>/<device>)
+//!   files/users/<user>/<device>/<path>             the live tree: the files of a device (its "folder" is <user>/<device>)
 //!   files/<path>                                   master files, which belong to no user (folder `_master`)
 //!   versions/<version id>/<folder>/<path>          what a newer version or a deletion replaced (master: no folder)
 //!   tmp/                                         uploads and downloads that are not complete yet
@@ -14,6 +14,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// The folder name of the master files, those that belong to no user. No user or device can be called this.
 pub const MASTER_FOLDER: &str = "_master";
 
+/// The folder of `files/` that holds the folders of all users, apart from the master files, so that a network share can
+/// make it read-only in one place. Master files cannot start with this name.
+pub const USERS_DIR: &str = "users";
+
 pub struct Store {
     files: PathBuf,
     versions: PathBuf,
@@ -26,7 +30,7 @@ const MAX_CHUNK_INDEX: u32 = 1 << 20;
 impl Store {
     pub fn open(root: &Path) -> Result<Self> {
         let store = Self { files: root.join("files"), versions: root.join("versions"), tmp: root.join("tmp") };
-        fs::create_dir_all(&store.files)?;
+        fs::create_dir_all(store.files.join(USERS_DIR))?;
         fs::create_dir_all(&store.versions)?;
         // Interrupted transfers are removed by
         // `clean_tmp` once nobody has touched them for a day.
@@ -34,12 +38,15 @@ impl Store {
         Ok(store)
     }
 
-    /// `<base>/<folder>`: `<user>/<device>`, or `base` itself for the master files.
-    fn folder_in(base: &Path, folder: &str) -> Result<PathBuf> {
+    /// `<base>/<folder>`: `<user>/<device>` (below `users/` when `nested`), or `base` itself for the master files.
+    fn folder_in(base: &Path, folder: &str, nested: bool) -> Result<PathBuf> {
         if folder == MASTER_FOLDER {
             return Ok(base.to_path_buf());
         }
         let mut out = base.to_path_buf();
+        if nested {
+            out.push(USERS_DIR);
+        }
         let mut parts = 0;
         for part in folder.split('/') {
             parts += 1;
@@ -56,8 +63,8 @@ impl Store {
 
     /// `<base>/<folder>/<path>`. Remote paths are already validated; this refuses what could still
     /// leave the directory on the server's platform.
-    fn resolve(base: &Path, folder: &str, path: &str) -> Result<PathBuf> {
-        let mut out = Self::folder_in(base, folder)?;
+    fn resolve(base: &Path, nested: bool, folder: &str, path: &str) -> Result<PathBuf> {
+        let mut out = Self::folder_in(base, folder, nested)?;
         for part in path.split('/') {
             if part.is_empty()
                 || part == "."
@@ -79,20 +86,20 @@ impl Store {
 
     /// The folder of a device in the live tree (the whole live tree for the master files).
     pub fn live_dir(&self, folder: &str) -> PathBuf {
-        Self::folder_in(&self.files, folder).unwrap_or_else(|_| self.files.join("\0invalid"))
+        Self::folder_in(&self.files, folder, true).unwrap_or_else(|_| self.files.join("\0invalid"))
     }
 
     /// The folder of a user in the live tree.
     pub fn user_dir(&self, user: &str) -> PathBuf {
-        self.files.join(user)
+        self.files.join(USERS_DIR).join(user)
     }
 
     pub fn live_path(&self, device: &str, path: &str) -> Result<PathBuf> {
-        Self::resolve(&self.files, device, path)
+        Self::resolve(&self.files, true, device, path)
     }
 
     pub fn version_path(&self, version_id: i64, device: &str, path: &str) -> Result<PathBuf> {
-        Self::resolve(&self.versions.join(version_id.to_string()), device, path)
+        Self::resolve(&self.versions.join(version_id.to_string()), false, device, path)
     }
 
     /// A new path in `tmp`, unique by its random name.

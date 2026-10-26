@@ -245,6 +245,10 @@ pub struct Detail {
     asset: Asset,
     mime: String,
     description: String,
+    /// The caption written into the file itself (by the camera or a photo manager), when there is one.
+    file_description: Option<String>,
+    /// The keywords written into the file (also where AI taggers put what they recognise): offered as tags.
+    file_tags: Vec<String>,
     /// When the camera (or the video) says it was taken, before any correction.
     camera_when: Option<i64>,
     /// Where the camera says it was, before any correction.
@@ -307,6 +311,8 @@ pub async fn detail(
         Ok(Detail {
             mime: extras.mime.unwrap_or_else(|| meta::mime(&asset.path)),
             description: extras.description,
+            file_description: extras.caption,
+            file_tags: extras.keywords.and_then(|k| serde_json::from_str(&k).ok()).unwrap_or_default(),
             camera_when: extras.camera_when,
             camera_lat: extras.camera_lat,
             camera_lon: extras.camera_lon,

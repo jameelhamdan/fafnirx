@@ -18,6 +18,9 @@ pub struct Meta<'a> {
     pub duration_ms: Option<i64>,
     pub codec: Option<&'a str>,
     pub place: Option<(f64, f64)>,
+    /// The caption and the keywords (a JSON array) written into the file.
+    pub description: Option<&'a str>,
+    pub keywords: &'a str,
 }
 
 /// Remembers what was read from a content, replacing what was read before.
@@ -36,6 +39,8 @@ pub fn save(c: &mut impl GenericClient, root: &[u8], m: &Meta, read_at: i64) -> 
         codec: m.codec,
         lat,
         lon,
+        caption: m.description,
+        keywords: Some(m.keywords),
     };
     q::save_file_meta().params(&mut Pg(c), &params)?;
     Ok(())

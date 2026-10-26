@@ -1,7 +1,7 @@
-//! The live tree (`files/<user>/<device>/<path>`, and the master files straight in `files/`) can also be used as a
+//! The live tree (`files/users/<user>/<device>/<path>`, and the master files straight in `files/`) can also be used as a
 //! network drive, so files appear, change and vanish there without a client. This notices that and brings the
 //! database in line: new and changed files become versions, removed files are marked deleted. Whatever is in
-//! `files/` and is not the folder of a user is a master file. A new folder `files/<user>/<name>` with a valid name
+//! `files/` and is not in `files/users/` is a master file. A new folder `files/users/<user>/<name>` with a valid name
 //! becomes a device of that user (kind `local`).
 //!
 //! A file system watcher queues the paths that were touched; once a path has been quiet for a moment
@@ -11,6 +11,7 @@
 
 use crate::files::ingest::{self, Seen};
 use crate::platform::db::{self, Db, Device};
+use crate::platform::store::USERS_DIR;
 use crate::platform::store::{hash_file, Store, MASTER_FOLDER};
 use crate::repo::{devices, files, users};
 use anyhow::Result;
@@ -150,12 +151,14 @@ fn user_names(conn: &mut impl GenericClient) -> Result<HashSet<String>> {
 /// the second is a device of that user), or else the path is a master file.
 fn resolve(conn: &mut Client, store: &Store, rel: &str) -> Result<Option<(Device, String)>> {
     let parts: Vec<&str> = rel.split('/').collect();
-    if user_names(conn)?.contains(&parts[0].to_lowercase()) {
-        if parts.len() < 2 || parts[0] != parts[0].to_lowercase() {
-            return Ok(None); // the folder of the user itself: its devices are looked at one by one
+    if parts[0].to_lowercase() == USERS_DIR {
+        // users/<user>/<device>/...: shorter paths are the folder of all users or of one user, whose devices are looked at
+        // one by one.
+        if parts.len() < 3 || parts[0] != USERS_DIR || !user_names(conn)?.contains(parts[1]) {
+            return Ok(None);
         }
-        let folder = format!("{}/{}", parts[0], parts[1]);
-        return Ok(device_for_folder(conn, store, &folder)?.map(|dev| (dev, parts[2..].join("/"))));
+        let folder = format!("{}/{}", parts[1], parts[2]);
+        return Ok(device_for_folder(conn, store, &folder)?.map(|dev| (dev, parts[3..].join("/"))));
     }
     Ok(Some((master(), rel.to_string())))
 }
@@ -248,7 +251,11 @@ fn sync_subtree(conn: &mut Client, store: &Store, dev: &Device, rel: &str, settl
         files::live_below(conn, dev.id, rel)?.into_iter().map(|(path, size, mtime)| (path, (size, mtime))).collect();
 
     // The master files share `files/` with the folders of the users, which are not theirs to record.
-    let skip = if dev.id == ingest::MASTER_DEVICE_ID && rel.is_empty() { user_names(conn)? } else { HashSet::new() };
+    let skip = if dev.id == ingest::MASTER_DEVICE_ID && rel.is_empty() {
+        HashSet::from([USERS_DIR.to_string()])
+    } else {
+        HashSet::new()
+    };
     let files = match std::fs::symlink_metadata(&base) {
         Ok(m) if m.is_dir() => walk(&base, rel, &skip),
         Ok(m) if m.is_file() => vec![(rel.to_string(), base)],
@@ -562,7 +569,7 @@ mod tests {
         let mut c = db.get().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();
-        for (path, data) in [("loose.txt", &b"1"[..]), ("scans/2024/a.txt", b"2"), ("admin/laptop/b.txt", b"3")] {
+        for (path, data) in [("loose.txt", &b"1"[..]), ("scans/2024/a.txt", b"2"), ("users/admin/laptop/b.txt", b"3")] {
             let p = store.live_root().join(path);
             fs::create_dir_all(p.parent().unwrap()).unwrap();
             fs::write(p, data).unwrap();
@@ -576,7 +583,7 @@ mod tests {
 
         let (found, rel) = resolve(&mut c, &store, "scans/2024/a.txt").unwrap().unwrap();
         assert_eq!((found.id, rel.as_str()), (0, "scans/2024/a.txt"));
-        assert!(resolve(&mut c, &store, "admin").unwrap().is_none(), "the folder of a user is not a master file");
+        assert!(resolve(&mut c, &store, "users/admin").unwrap().is_none(), "the folder of a user is not a master file");
     }
 
     #[test]

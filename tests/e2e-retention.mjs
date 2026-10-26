@@ -57,7 +57,7 @@ try {
   check((await deletedAt('gone.txt')) != null && (await deletedAt('shared-copy.txt')) != null, 'both deletions are marked')
 
   const expired = [...(await versionFiles('docs/gone.txt')), ...(await versionFiles('docs/shared-copy.txt'))]
-  const keep = path.join(data, 'files', 'admin', 'laptop', 'docs', 'keep.txt')
+  const keep = path.join(data, 'files', 'users', 'admin', 'laptop', 'docs', 'keep.txt')
   check(expired.every(fs.existsSync) && fs.existsSync(keep), 'stored copies are on disk')
 
   const restartAndWaitForCleanup = async () => {
@@ -79,7 +79,7 @@ try {
   const left = (await schema.rows("SELECT COUNT(*) FROM versions v JOIN files f ON f.id = v.file_id WHERE f.path IN ('docs/gone.txt', 'docs/shared-copy.txt')"))[0][0]
   check(Number(left) === 0, 'and so are all their versions')
   check(!expired.some(fs.existsSync), 'the stored copies of expired files are deleted from disk')
-  check(fs.readFileSync(path.join(data, 'files', 'admin', 'laptop', 'docs', 'shared.txt')).toString() === 'identical content in two files', 'an identical file that was never deleted is untouched')
+  check(fs.readFileSync(path.join(data, 'files', 'users', 'admin', 'laptop', 'docs', 'shared.txt')).toString() === 'identical content in two files', 'an identical file that was never deleted is untouched')
   check((await deletedAt('keep.txt')) === null && fs.readFileSync(keep).equals(fs.readFileSync(path.join(src, 'keep.txt'))), 'files that were never deleted are untouched, byte for byte')
 
   console.log(`\nall ${passedChecks()} checks passed`)
