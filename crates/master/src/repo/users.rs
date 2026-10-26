@@ -25,11 +25,6 @@ pub fn exists(c: &mut impl GenericClient, name: &str) -> Result<bool, Error> {
     Ok(q::user_exists().bind(&mut Pg(c), &name).opt()?.is_some())
 }
 
-/// Whether a master file path starts with `name` (compared without regard to case).
-pub fn master_path_taken(c: &mut impl GenericClient, name: &str) -> Result<bool, Error> {
-    q::master_path_taken().bind(&mut Pg(c), &name).one()
-}
-
 pub fn insert(c: &mut impl GenericClient, name: &str, role: &str, password_hash: &str, now: i64) -> Result<(), Error> {
     q::insert_user().bind(&mut Pg(c), &name, &role, &password_hash, &now)?;
     Ok(())

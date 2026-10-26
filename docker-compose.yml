@@ -36,7 +36,7 @@ services:
       - "7443:7443" # devices (gRPC)
       - "8080:8080" # web app and web API
     volumes:
-      # files/ is the live tree: files/<user>/<device>/ for every user, and the master files (which belong to nobody)
+      # files/ is the live tree: files/users/<user>/<device>/ for every user, and the master files (which belong to nobody)
       # straight in files/. It can be shared over SMB or NFS as a network drive.
       - "${FAFNIRX_DATA_DIR:-./data}:/data"
       # rclone.conf, if you use rclone remotes for mirrors (the master writes to it when rclone refreshes a token, so it

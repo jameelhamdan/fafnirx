@@ -39,18 +39,6 @@ pub async fn list(State(state): State<Shared>, Extension(who): Extension<Access>
     Ok(Json(users))
 }
 
-/// Whether `name` cannot be a user because the master files already use it: a folder or file at the root of the live tree
-/// (compared without regard to case, as a network share does) or a master file path that starts with it.
-pub fn taken_by_master(c: &mut impl GenericClient, live_root: &std::path::Path, name: &str) -> anyhow::Result<bool> {
-    let in_db = users::master_path_taken(c, name)?;
-    let on_disk = std::fs::read_dir(live_root)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .any(|e| e.file_name().to_string_lossy().to_lowercase() == name);
-    Ok(in_db || on_disk)
-}
-
 /// Makes sure every user has a folder, so that a network share shows it from the start.
 pub fn ensure_dirs(conn: &mut postgres::Client, store: &crate::platform::store::Store) -> anyhow::Result<()> {
     for name in users::names(conn)? {
@@ -59,7 +47,7 @@ pub fn ensure_dirs(conn: &mut postgres::Client, store: &crate::platform::store::
     Ok(())
 }
 
-/// Adds a user and their folder. A folder or file of that name in the live tree counts as master content.
+/// Adds a user and their folder.
 pub fn add_user(
     c: &mut impl GenericClient,
     live_root: &std::path::Path,
@@ -73,12 +61,6 @@ pub fn add_user(
     let exists = users::exists(c, name)?;
     if exists {
         return Err(ApiError::conflict(format!("There is already a user named {name}")).into());
-    }
-    if taken_by_master(c, live_root, name)? {
-        return Err(ApiError::conflict(format!(
-            "The master files already have something called {name}: rename it first, a user's name is their folder"
-        ))
-        .into());
     }
     users::insert(c, name, role.as_str(), password_hash, unix_now())?;
     let _ = std::fs::create_dir_all(live_root.join(crate::platform::store::USERS_DIR).join(name));

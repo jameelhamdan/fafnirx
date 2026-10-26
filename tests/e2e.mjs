@@ -278,13 +278,13 @@ try {
   check(await until(() => known('y.txt'), 60), 'a new folder in the folder of a user becomes a device of that user')
   const kind = (await schema.rows("SELECT kind FROM devices WHERE name = 'newdrive'"))[0]?.[0]
   check(kind === 'local', 'and it is a local device')
-  // Master files: whatever is in files/ and is not the folder of a user belongs to nobody.
+  // Master files: whatever is in files/ and not in files/users/ belongs to nobody.
   fs.mkdirSync(path.join(data, 'files', 'scans'), { recursive: true })
   fs.writeFileSync(path.join(data, 'files', 'scans', 'loose.txt'), 'dropped on the share, for everybody')
   check(await until(() => known('scans/loose.txt'), 60), 'a file dropped into files/ outside any user folder is picked up')
   const [master0] = await schema.rows("SELECT d.kind, d.user_id IS NULL, d.folder FROM files f JOIN devices d ON d.id = f.device_id WHERE f.path = 'scans/loose.txt'")
   check(master0?.[0] === 'master' && master0[1] === true && master0[2] === '_master', 'it is a master file: no user, no device of anyone')
-  check((await schema.rows("SELECT 1 FROM files WHERE device_id = 0 AND path LIKE 'admin/%'")).length === 0, 'the folder of a user is never part of the master files')
+  check((await schema.rows("SELECT 1 FROM files WHERE device_id = 0 AND path LIKE 'users/%'")).length === 0, 'the folders of the users are never part of the master files')
   const bob = (await admin2.post('/api/users', { name: 'bob', role: 'readonly', password: 'password-1' }))
   check(bob.status === 200, 'a user is added')
   const asBob = await master.admin('bob', 'password-1')
