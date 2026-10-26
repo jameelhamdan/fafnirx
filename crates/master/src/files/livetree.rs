@@ -13,7 +13,7 @@ use crate::files::ingest::{self, Seen};
 use crate::platform::db::{self, Db, Device};
 use crate::platform::store::USERS_DIR;
 use crate::platform::store::{hash_file, Store, MASTER_FOLDER};
-use crate::repo::{devices, files, users};
+use crate::repo::{alerts, devices, files, users};
 use anyhow::Result;
 use fafnirx_common::{clean_remote_path, mode_of, mtime_ns, unix_now, valid_device_name};
 use notify::{RecursiveMode, Watcher};
@@ -226,12 +226,79 @@ pub fn scan(db: &Db, store: &Store, settle: Duration) -> Result<()> {
             }
         }
     }
+    if let Err(e) = check_layout(&mut conn, store) {
+        tracing::error!("check of the layout of the file store failed: {e:#}");
+    }
     for dev in devices {
         match sync_subtree(&mut conn, store, &dev, "", settle) {
             Ok((changed, deleted)) if changed + deleted > 0 => report(&dev.name, changed, deleted),
             Ok(_) => {}
             Err(e) => tracing::error!("comparison of the files of {} failed: {e:#}", dev.name),
         }
+    }
+    Ok(())
+}
+
+/// How many names an alert lists.
+const LISTED: usize = 10;
+
+/// Files and folders in `users/` that are not recorded, because they are not inside a device folder of a user: a file in
+/// `users/` or in the folder of a user, a folder that is not a user, a device folder with a name that cannot be used.
+/// Hidden names (`.DS_Store`, `.Trash`) are not mentioned.
+fn misplaced(store: &Store, names: &HashSet<String>) -> Vec<String> {
+    let entries = |dir: &Path| -> Vec<(String, bool)> {
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| Some((e.file_name().into_string().ok()?, e.file_type().ok()?.is_dir())))
+            .filter(|(name, _)| !name.starts_with('.'))
+            .collect()
+    };
+    let mut out = Vec::new();
+    for (name, is_dir) in entries(&store.live_root().join(USERS_DIR)) {
+        if !is_dir || !names.contains(&name) {
+            out.push(format!("{USERS_DIR}/{name}"));
+            continue;
+        }
+        for (inside, is_dir) in entries(&store.user_dir(&name)) {
+            if !is_dir || !valid_device_name(&inside) {
+                out.push(format!("{USERS_DIR}/{name}/{inside}"));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Tells the administrators about what the layout of `files/` leaves out, with an alert that closes itself when it is put
+/// right: files that are not in a device folder of a user, and master files in the reserved `users/`.
+fn check_layout(conn: &mut Client, store: &Store) -> Result<()> {
+    let names = user_names(conn)?;
+    let list = |items: &[String]| {
+        let shown: Vec<&str> = items.iter().take(LISTED).map(String::as_str).collect();
+        let more = items.len().saturating_sub(LISTED);
+        format!("{}{}", shown.join(", "), if more > 0 { format!(" and {more} more") } else { String::new() })
+    };
+    let stray = misplaced(store, &names);
+    if stray.is_empty() {
+        alerts::resolve(conn, "misplaced_files", USERS_DIR)?;
+    } else {
+        let message = format!(
+            "Not recorded, because they are not inside a device folder (files/users/<user>/<device>/): {}",
+            list(&stray)
+        );
+        alerts::upsert(conn, "misplaced_files", USERS_DIR, &message)?;
+    }
+    let reserved = files::reserved_master_paths(conn)?;
+    if reserved.is_empty() {
+        alerts::resolve(conn, "reserved_master_files", USERS_DIR)?;
+    } else {
+        let message = format!(
+            "The folder users/ is where the folders of the users are kept, so master files cannot be in it: rename them in the web app. {}",
+            list(&reserved)
+        );
+        alerts::upsert(conn, "reserved_master_files", USERS_DIR, &message)?;
     }
     Ok(())
 }
@@ -584,6 +651,47 @@ mod tests {
         let (found, rel) = resolve(&mut c, &store, "scans/2024/a.txt").unwrap().unwrap();
         assert_eq!((found.id, rel.as_str()), (0, "scans/2024/a.txt"));
         assert!(resolve(&mut c, &store, "users/admin").unwrap().is_none(), "the folder of a user is not a master file");
+    }
+
+    #[test]
+    fn what_the_layout_leaves_out_is_reported_until_it_is_put_right() {
+        let db = testing::db();
+        let mut c = db.get().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let live = store.live_root().to_path_buf();
+        let write = |path: &str| {
+            let p = live.join(path);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, b"x").unwrap();
+        };
+        write("users/stray.txt");
+        write("users/ghost/a.txt"); // a folder that is not a user
+        write("users/admin/loose.txt"); // not in a device folder
+        write("users/admin/.DS_Store"); // hidden: not mentioned
+        write("users/admin/Bad Name/b.txt"); // a name no device can have
+        write("users/admin/camera/ok.txt"); // a device: fine
+        c.execute("INSERT INTO files (device_id, path) VALUES (0, $1)", &[&"Users/old.txt"]).unwrap();
+        scan(&db, &store, Duration::ZERO).unwrap();
+
+        let open = |c: &mut Client, kind: &str| -> Option<String> {
+            alerts::open(c).unwrap().into_iter().find(|a| a.kind == kind).map(|a| a.message)
+        };
+        let misplaced = open(&mut c, "misplaced_files").expect("an alert for the files outside device folders");
+        for named in ["users/stray.txt", "users/ghost", "users/admin/loose.txt", "users/admin/Bad Name"] {
+            assert!(misplaced.contains(named), "{named} in: {misplaced}");
+        }
+        assert!(!misplaced.contains("camera") && !misplaced.contains("DS_Store"), "{misplaced}");
+        let reserved = open(&mut c, "reserved_master_files").expect("an alert for master files in users/");
+        assert!(reserved.contains("Users/old.txt"), "{reserved}");
+
+        fs::remove_file(live.join("users/stray.txt")).unwrap();
+        fs::remove_dir_all(live.join("users/ghost")).unwrap();
+        fs::remove_file(live.join("users/admin/loose.txt")).unwrap();
+        fs::remove_dir_all(live.join("users/admin/Bad Name")).unwrap();
+        c.execute("UPDATE files SET deleted_at = 1 WHERE device_id = 0", &[]).unwrap();
+        scan(&db, &store, Duration::ZERO).unwrap();
+        assert_eq!((open(&mut c, "misplaced_files"), open(&mut c, "reserved_master_files")), (None, None));
     }
 
     #[test]

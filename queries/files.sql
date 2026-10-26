@@ -146,3 +146,8 @@ SELECT codec FROM file_meta WHERE root_hash = :root;
 --! version_record
 -- What a version holds, to record the same content under another path.
 SELECT root_hash, size, mtime, mode FROM versions WHERE id = :version_id;
+
+--! reserved_master_paths
+-- Master files whose path starts with `users`, the folder of the users' folders: they cannot be recorded or moved.
+SELECT path FROM files WHERE device_id = 0 AND deleted_at IS NULL AND lower(split_part(path, '/', 1)) = 'users'
+ORDER BY path LIMIT 10;

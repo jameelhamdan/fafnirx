@@ -227,6 +227,11 @@ pub fn current_mtime(c: &mut impl GenericClient, device_id: i64, path: &str) -> 
     q::current_mtime().bind(&mut Pg(c), &device_id, &path).one()
 }
 
+/// Some master files (at most 10) whose path starts with `users/`, which is reserved for the folders of the users.
+pub fn reserved_master_paths(c: &mut impl GenericClient) -> Result<Vec<String>, Error> {
+    q::reserved_master_paths().bind(&mut Pg(c)).all()
+}
+
 /// The live files at or below a path as (path, size, mtime), for comparing with what is on disk.
 pub fn live_below(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<Vec<(String, i64, i64)>, Error> {
     let below = crate::platform::db::like_prefix(&format!("{path}/"));
