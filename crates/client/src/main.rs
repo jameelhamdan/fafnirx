@@ -2,19 +2,11 @@
 
 mod commands;
 mod config;
-mod credentials;
 mod daemon;
-mod guard;
-mod hash;
-mod instance;
 mod net;
-mod release;
-mod scan;
 mod service;
 mod shared;
-mod state;
 mod sync;
-mod throttle;
 #[cfg(feature = "tray")]
 mod tray;
 mod update;
@@ -31,6 +23,9 @@ struct Cli {
     /// Config file (default: per-OS location)
     #[arg(long, global = true)]
     config: Option<PathBuf>,
+    /// Waits for Enter at the end (set when a command is run again as administrator in a window of its own)
+    #[arg(long, global = true, hide = true)]
+    pause: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -93,21 +88,43 @@ enum Cmd {
     /// Stop uploading until `resume`
     Pause,
     Resume,
-    /// Check for a new release and install it
+    /// Install the newest release and restart the client on it
     Update {
         /// Only say whether there is one (`available <version>` or `current <version>`), install nothing
         #[arg(long)]
         check: bool,
     },
-    /// Start automatically at login
+    /// Install the client as a service of this computer: it starts at boot, for every user, and the tray starts at login
     InstallService {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Remove the service (what was backed up, the config and the state stay)
     UninstallService {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Restart the client (the service, when it is installed), which runs the program file as it is now
+    Restart,
+    /// What the Windows Service Control Manager runs
+    #[command(hide = true)]
+    Service,
+}
+
+impl Cmd {
+    /// Whether the command changes the config or the token, or reads the token, which a system-wide install keeps from users.
+    fn needs_admin(&self) -> bool {
+        match self {
+            Cmd::InstallService { dry_run } | Cmd::UninstallService { dry_run } => !dry_run,
+            Cmd::Enroll { .. }
+            | Cmd::AddFolder { .. }
+            | Cmd::RemoveFolder { .. }
+            | Cmd::Sync
+            | Cmd::ReleaseDeletes
+            | Cmd::Shared(_) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -148,7 +165,32 @@ fn init_logging(file: Option<&std::path::Path>) {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let pause = cli.pause;
+    let result = run(cli);
+    if pause {
+        // An administrator's window of its own closes with the command: it is read first.
+        if let Err(e) = &result {
+            eprintln!("Error: {e:#}");
+        }
+        println!("\nPress Enter to close.");
+        let _ = std::io::stdin().read_line(&mut String::new());
+    }
+    result
+}
+
+fn run(cli: Cli) -> Result<()> {
     let config_path = cli.config.clone().unwrap_or_else(default_config_path);
+    // The system-wide install belongs to the computer: what changes it, or reads its token, is done by an administrator.
+    let system = config::is_system_config(&config_path)
+        || matches!(cli.cmd, Cmd::InstallService { .. } | Cmd::UninstallService { .. });
+    if cli.cmd.needs_admin() && system && !service::elevate::is_admin() {
+        use std::io::IsTerminal;
+        let mut args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+        if std::io::stdin().is_terminal() && !cli.pause {
+            args.push("--pause".into());
+        }
+        std::process::exit(service::elevate::rerun(&args)?);
+    }
     match cli.cmd {
         Cmd::Run { log_file, hidden } => {
             if respawn_hidden(hidden, true)? {
@@ -156,8 +198,8 @@ fn main() -> Result<()> {
             }
             let cfg = Config::load(&config_path)?;
             let state_dir = cfg.state_dir(&config_path);
-            std::fs::create_dir_all(&state_dir)?;
-            let log = log_file.then(|| state_dir.join("fafnirx.log"));
+            std::fs::create_dir_all(config::control_dir(&state_dir))?;
+            let log = log_file.then(|| daemon::log_file(&state_dir));
             init_logging(log.as_deref());
             tokio_main(daemon::run(config_path))
         }
@@ -195,8 +237,22 @@ fn main() -> Result<()> {
         Cmd::ReleaseDeletes => commands::release_deletes(&config_path),
         Cmd::Pause => commands::set_paused(&config_path, true),
         Cmd::Resume => commands::set_paused(&config_path, false),
-        Cmd::InstallService { dry_run } => service::install(&config_path, dry_run),
+        Cmd::InstallService { dry_run } => service::install(dry_run),
         Cmd::UninstallService { dry_run } => service::uninstall(dry_run),
+        Cmd::Restart => {
+            init_logging(None);
+            tokio_main(commands::restart(config_path))
+        }
+        Cmd::Service => {
+            let cfg = Config::load(&config_path)?;
+            let state_dir = cfg.state_dir(&config_path);
+            std::fs::create_dir_all(config::control_dir(&state_dir))?;
+            init_logging(Some(&daemon::log_file(&state_dir)));
+            #[cfg(windows)]
+            return service::windows::run(config_path);
+            #[cfg(not(windows))]
+            anyhow::bail!("the service is run by Windows; use afnirx run to run the client by hand")
+        }
     }
 }
 

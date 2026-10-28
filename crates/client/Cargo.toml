@@ -8,7 +8,7 @@ repository.workspace = true
 # Debian package, built by .github/workflows/release.yml with `cargo deb -p fafnirx --no-build`.
 [package.metadata.deb]
 maintainer = "Jameel Hamdan <jameelhamdan@users.noreply.github.com>"
-extended-description = "Backs up folders to your own fafnirx master. After installing, run `fafnirx enroll --server <url>` (it asks for the token), which also starts the client in the background and at login."
+extended-description = "Backs up folders to your own fafnirx master. After installing, run `sudo fafnirx enroll --server <url>` (it asks for the token), which also installs and starts the fafnirx service."
 section = "utils"
 priority = "optional"
 depends = "$auto"
@@ -50,6 +50,10 @@ tao = { version = "0.30", optional = true }
 rfd = { version = "0.15", optional = true }
 tray-icon = { version = "0.19", optional = true }
 resvg = { version = "0.48.1", default-features = false, optional = true }
+
+# The Windows service: runs under the Service Control Manager, and is started, stopped and removed through it.
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
 
 [dev-dependencies]
 tempfile.workspace = true

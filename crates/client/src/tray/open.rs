@@ -1,12 +1,11 @@
 //! Things the tray starts: editors, file managers, the browser, the client itself.
 
 use super::text::clip;
-use crate::{daemon, instance, update};
+use crate::{service, update};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
 
 /// This program's file as it was when the tray started. After an update the file at that path is the new version, while the
 /// operating system may report the running (old) image under another name, so everything the tray starts uses this.
@@ -64,8 +63,13 @@ fn start(config_path: &Path, subcommand: &[&str]) {
     spawn_quiet(&mut c);
 }
 
+/// Starts the client: the service when this computer has one, else the program itself in the background.
 pub fn start_client(config_path: &Path) {
-    start(config_path, &["run", "--log-file"]);
+    if crate::config::is_system_config(config_path) && service::installed() {
+        let _ = service::start();
+    } else {
+        start(config_path, &["run", "--log-file"]);
+    }
 }
 
 fn home() -> PathBuf {
@@ -74,7 +78,10 @@ fn home() -> PathBuf {
 
 /// Whether the job installed by `fafnirx install-service` / the install script exists for this label.
 fn launch_agent(label: &str) -> bool {
-    cfg!(target_os = "macos") && home().join("Library/LaunchAgents").join(format!("{label}.plist")).is_file()
+    let file = format!("{label}.plist");
+    cfg!(target_os = "macos")
+        && (std::path::Path::new("/Library/LaunchAgents").join(&file).is_file()
+            || home().join("Library/LaunchAgents").join(file).is_file())
 }
 
 /// Starts a launchd job again on the program file as it is now (`kickstart -k` ends it first if it is running). This is how a
@@ -84,26 +91,6 @@ fn kickstart(label: &str) -> bool {
     let Ok(uid) = Command::new("id").arg("-u").output() else { return false };
     let target = format!("gui/{}/{label}", String::from_utf8_lossy(&uid.stdout).trim());
     Command::new("launchctl").args(["kickstart", "-k", &target]).status().is_ok_and(|s| s.success())
-}
-
-/// The systemd user unit of the client, if the install script made one.
-fn systemd_unit() -> bool {
-    cfg!(target_os = "linux") && home().join(".config/systemd/user/fafnirx.service").is_file()
-}
-
-/// Starts the client again on the program file as it is now, in the way it is normally started on this computer: through the
-/// launchd job or the systemd unit if there is one, so that it stays supervised, else directly.
-fn restart_client(config_path: &Path) {
-    let supervised = if launch_agent("io.fafnirx.client") {
-        kickstart("io.fafnirx.client")
-    } else if systemd_unit() {
-        Command::new("systemctl").args(["--user", "restart", "fafnirx.service"]).status().is_ok_and(|s| s.success())
-    } else {
-        false
-    };
-    if !supervised {
-        start_client(config_path);
-    }
 }
 
 /// Replaces this tray with a new one and tells it to end. On macOS through its launchd job, elsewhere by starting the new
@@ -126,28 +113,6 @@ pub fn run_cli(config_path: &Path, args: &[std::ffi::OsString]) -> Result<String
     let err = String::from_utf8_lossy(&out.stderr);
     let line = err.lines().map(|l| l.trim()).find(|l| !l.is_empty()).unwrap_or("it failed without saying why");
     Err(line.trim_start_matches("Error: ").to_string())
-}
-
-/// Asks the master, in the background, which shared folders the user can use (and which are their own), and keeps the
-/// answer in `result`. When the master cannot be reached the last answer stays.
-pub fn look_up_shared(config_path: PathBuf, result: Arc<Mutex<Vec<(String, bool)>>>) {
-    std::thread::spawn(move || {
-        if let Ok(out) = run_cli(&config_path, &["shared".into(), "list".into()]) {
-            // `<owner>/<name>`, followed by a tab and `own` for the user's own.
-            let names: Vec<(String, bool)> = out
-                .lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .map(|l| match l.split_once('\t') {
-                    Some((name, _)) => (name.to_string(), true),
-                    None => (l.to_string(), false),
-                })
-                .collect();
-            if let Ok(mut r) = result.lock() {
-                *r = names;
-            }
-        }
-    });
 }
 
 /// A check or an install is going on: pressing the menu entry again meanwhile does nothing.
@@ -218,21 +183,14 @@ pub fn check_for_updates(config_path: PathBuf, updates: Updates) {
     });
 }
 
-/// Installs the version the last check found, and starts everything again on it: the client if it was running, and a new
-/// tray in place of this one. Nothing is downloaded by hand and nothing is left to start.
-pub fn install_update(
-    config_path: PathBuf,
-    state_dir: PathBuf,
-    version: String,
-    client_running: bool,
-    updates: Updates,
-) {
+/// Installs the version the last check found (`fafnirx update`, which also starts the client again on it), and replaces this
+/// tray with a new one. Nothing is downloaded by hand and nothing is left to start.
+pub fn install_update(config_path: PathBuf, version: String, updates: Updates) {
     if UPDATING.swap(true, Ordering::SeqCst) {
         return;
     }
     updates.say(format!("Updates: installing {version}..."));
     std::thread::spawn(move || {
-        // `fafnirx update` replaces the program file: the one that is running goes on until it is stopped below.
         if let Err(e) = run_cli(&config_path, &["update".into()]) {
             updates.say(format!("Updates: could not install {version}: {e}"));
             UPDATING.store(false, Ordering::SeqCst);
@@ -240,19 +198,9 @@ pub fn install_update(
         }
         updates.set_available(None);
         updates.say(format!("Updates: installed {version}, restarting..."));
-        if client_running {
-            let _ = std::fs::write(daemon::stop_marker(&state_dir), b"");
-            // The client looks for the request twice a second; the next one can only start once it let go of its lock.
-            let started = Instant::now();
-            while instance::is_held(&state_dir, "daemon") && started.elapsed() < Duration::from_secs(30) {
-                std::thread::sleep(Duration::from_millis(250));
-            }
-            restart_client(&config_path);
-        }
         restart_tray(&config_path, &updates);
     });
 }
-
 /// The version of the program file on disk, which is not this tray's when the client updated itself in the background
 /// (`auto_update`) while the tray went on running the old one.
 fn installed_version() -> Option<String> {

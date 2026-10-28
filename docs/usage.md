@@ -153,7 +153,7 @@ Progress, speed and time left show on the Dashboard, Devices and the device page
 ## The client
 
 ```sh
-fafnirx enroll --server http://nas.lan:7443     # asks for the token; runs in background and at login
+fafnirx enroll --server http://nas.lan:7443     # asks for the token; installs the service (boot, all users)
 fafnirx add-folder ~/Documents --name documents
 fafnirx remove-folder documents                 # stops collecting; the master keeps its data
 fafnirx folders | pause | resume
@@ -161,12 +161,17 @@ fafnirx status [--json]                         # what the client is doing, shar
 fafnirx sync                                    # one cycle in the foreground
 fafnirx run                                     # the client in the foreground
 fafnirx release-deletes                         # apply held-back deletions now, in every folder
-fafnirx update [--check]                        # install the newest release now, or only look
+fafnirx update [--check]                        # install the newest release and restart on it, or only look
+fafnirx restart                                # restart the service (the client)
 fafnirx shared list | create | attach | detach | keep   # shared folders, below
 fafnirx install-service | uninstall-service | tray
 ```
 
-Config (TOML, made by `enroll`; `--config` selects another): `%APPDATA%\fafnirx\config.toml`, `~/Library/Application Support/fafnirx/config.toml`, `~/.config/fafnirx/config.toml`.
+Config (TOML, made by `enroll`; `--config` selects another): `%ProgramData%\fafnirx\config.toml`, `/Library/Application Support/fafnirx/config.toml`, `/etc/fafnirx/config.toml`. Commands that change it or read the token ask for administrator rights (UAC, `sudo`).
+
+### The service
+
+The client is a service of the computer (Windows **fafnirx** in `services.msc`/Task Manager, systemd `fafnirx.service`, launchd `io.fafnirx.client`), run as LocalSystem/root: one device per machine, and it reads the folders of every user. Config, token and databases are administrator-only; the tray and CLI of any user talk to it through `<data>/control` (markers, `status.json`, log). Failures restart it. The tray starts at login (Windows HKLM Run, `/etc/xdg/autostart`, `/Library/LaunchAgents`). On a Windows service `FAFNIRX_ALLOW_UNPROTECTED_EXE=1` allows a program outside Program Files (development only).
 
 ```toml
 server = "http://nas.lan:7443"  # https://... behind a TLS proxy
@@ -363,16 +368,15 @@ check. Config, token and state stay: same device, nothing resent.
 
 - **Tray:** **Check for updates** only looks; when newer the entry becomes **Update to `<version>`** (download, install,
   restart client and tray). A tray that finds a newer file on disk restarts too.
-- **CLI:** `fafnirx update --check` prints `available <version>` or `current <version>`; `fafnirx update` installs.
+- **CLI:** `fafnirx update --check` prints `available <version>` or `current <version>` (no token needed); `fafnirx update` asks the service to install, then waits until it runs again on the new version. `fafnirx restart` restarts it.
 
-The file is replaced in place: the client's account must be able to write it (Windows setup `%LOCALAPPDATA%\fafnirx`,
-macOS/Linux script `~/.local/bin`).
+The file is replaced by the service, which may write it (Windows `Program Files\fafnirx`, macOS/Linux script `/usr/local/bin`); users cannot.
 
 `.deb` (under `/usr`): updated through the package. **Update** / `fafnirx update` downloads the release `.deb` for this arch,
 verifies `.sha256`, runs `dpkg -i` via `sudo` (terminal) or `pkexec` (tray). If neither can ask: keeps the file and prints
 `sudo dpkg -i <file>`. The background check only reports.
 
-Restart goes through the supervisor: launchd (`launchctl kickstart -k`) on macOS, systemd user unit on Linux, direct on Windows.
+Restart goes through the service manager: SCM on Windows, `launchctl kickstart -k` on macOS, `systemctl restart` on Linux.
 
 The checksum comes from the same release: it guards against bad downloads, not against someone who can publish releases. For
 your own signed builds:

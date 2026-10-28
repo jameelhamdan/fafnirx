@@ -7,12 +7,12 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 /// The locks this process holds, by name.
-static HELD: Mutex<Vec<(&'static str, std::fs::File)>> = Mutex::new(Vec::new());
+static HELD: Mutex<Vec<(String, std::fs::File)>> = Mutex::new(Vec::new());
 
 /// Takes the lock called `name` (a file `<name>.lock` in `state_dir`), waiting `attempts` half-seconds for
 /// a process that is just exiting (a restart starts the new one before the old one is gone). Returns false
 /// when another process holds it.
-pub fn claim(state_dir: &Path, name: &'static str, attempts: u32) -> Result<bool> {
+pub fn claim(state_dir: &Path, name: &str, attempts: u32) -> Result<bool> {
     let file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -21,7 +21,7 @@ pub fn claim(state_dir: &Path, name: &'static str, attempts: u32) -> Result<bool
     for _ in 0..attempts {
         match file.try_lock() {
             Ok(()) => {
-                HELD.lock().unwrap_or_else(|e| e.into_inner()).push((name, file));
+                HELD.lock().unwrap_or_else(|e| e.into_inner()).push((name.to_string(), file));
                 return Ok(true);
             }
             Err(std::fs::TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(500)),
@@ -29,6 +29,17 @@ pub fn claim(state_dir: &Path, name: &'static str, attempts: u32) -> Result<bool
         }
     }
     Ok(false)
+}
+
+/// The name of the user this process runs for, to tell one tray from another where several users share a computer.
+pub fn user_name() -> String {
+    let name = std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_default();
+    let name: String = name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+    if name.is_empty() {
+        "user".into()
+    } else {
+        name
+    }
 }
 
 /// Which installation of the client this is: made the first time it is asked for and kept in the state directory. It tells the

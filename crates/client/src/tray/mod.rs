@@ -7,14 +7,13 @@ mod icon;
 mod open;
 mod text;
 
-use crate::config::{self, Config, Folder, Shared};
+use crate::config::{self, control_dir, Config, Folder, Shared};
 use crate::daemon;
 use anyhow::{Context, Result};
 use fafnirx_common::unix_now;
 use icon::{icon, Light};
 use open::{
-    check_for_updates, install_update, look_up_shared, open_path, open_url, restart_if_updated, run_cli, start_client,
-    Updates,
+    check_for_updates, install_update, open_path, open_url, restart_if_updated, run_cli, start_client, Updates,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -28,7 +27,8 @@ use tray_icon::{TrayIcon, TrayIconBuilder};
 
 const IDLE_REFRESH: Duration = Duration::from_secs(2);
 const BLINK: Duration = Duration::from_millis(450);
-const SHARED_LOOKUP: Duration = Duration::from_secs(60);
+/// How often the tray looks whether the program file on disk is a newer version than the one it runs.
+const UPDATE_LOOKUP: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 enum Action {
@@ -124,13 +124,13 @@ impl Menus {
             (pause.item.id().clone(), Action::TogglePause),
             (sync.item.id().clone(), Action::SyncNow),
             (check.item.id().clone(), Action::CheckUpdates),
-            (downloads.item.id().clone(), Action::OpenUrl(crate::release::releases_page())),
+            (downloads.item.id().clone(), Action::OpenUrl(crate::update::release::releases_page())),
             (client.item.id().clone(), Action::ToggleClient),
             (quit.item.id().clone(), Action::Quit),
             (add_folders.id().clone(), Action::AddFolders),
             (open[0].item.id().clone(), Action::OpenFile(config_path.to_path_buf())),
-            (open[1].item.id().clone(), Action::OpenFile(state_dir.join("fafnirx.log"))),
-            (open[2].item.id().clone(), Action::OpenFolder(state_dir.to_path_buf())),
+            (open[1].item.id().clone(), Action::OpenFile(daemon::log_file(state_dir))),
+            (open[2].item.id().clone(), Action::OpenFolder(control_dir(state_dir))),
             (open[3].item.id().clone(), Action::OpenUrl(cfg.dashboard_url())),
         ];
 
@@ -458,13 +458,7 @@ impl Env {
             Action::SyncNow => Self::touch(daemon::sync_now_marker(&self.state_dir)),
             // The entry checks; once a check found a newer version it installs that one and starts everything again on it.
             Action::CheckUpdates => match self.updates.available() {
-                Some(version) => install_update(
-                    self.config_path.clone(),
-                    self.state_dir.clone(),
-                    version,
-                    !client_stopped,
-                    self.updates.clone(),
-                ),
+                Some(version) => install_update(self.config_path.clone(), version, self.updates.clone()),
                 None => check_for_updates(self.config_path.clone(), self.updates.clone()),
             },
             Action::ToggleClient if client_stopped => start_client(&self.config_path),
@@ -492,12 +486,14 @@ impl Env {
 pub fn run(config_path: PathBuf) -> Result<()> {
     let cfg = Config::load(&config_path)?;
     let state_dir = cfg.state_dir(&config_path);
-    std::fs::create_dir_all(&state_dir)?;
+    let control = control_dir(&state_dir);
+    std::fs::create_dir_all(&control)?;
     // A second tray would put a second icon in the notification area.
     // Fix the path of the program before anything replaces it (see `open::exe`).
     open::exe();
     // A tray that is replaced by a new one after an update starts it first, so it may have to wait for the old one to go.
-    if !crate::instance::claim(&state_dir, "tray", 20)? {
+    // One tray for each user who is logged in: in a system-wide install the control folder is shared.
+    if !crate::service::instance::claim(&control, &format!("tray-{}", crate::service::instance::user_name()), 20)? {
         println!("the fafnirx tray is already running");
         return Ok(());
     }
@@ -565,10 +561,12 @@ pub fn run(config_path: PathBuf) -> Result<()> {
             current = view(status.as_ref(), paused, unix);
             let info = describe(status.as_ref(), &current, unix);
             if now >= next_lookup {
-                // The master is asked now and then, not at every refresh: the list changes rarely.
-                next_lookup = now + SHARED_LOOKUP;
-                look_up_shared(config_path.clone(), env.on_master.clone());
+                next_lookup = now + UPDATE_LOOKUP;
                 restart_if_updated(config_path.clone(), env.updates.clone());
+            }
+            // The client asks the master for the shared folders (it holds the token); the tray only reads what it found.
+            if let (Some(s), Ok(mut listed)) = (&status, env.on_master.lock()) {
+                *listed = s.shared_on_master.clone();
             }
             if let Ok(c) = Config::load(&config_path) {
                 menus.sync_folders(&c.folders);
