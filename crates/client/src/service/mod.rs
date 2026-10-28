@@ -88,6 +88,7 @@ pub fn spawn_detached(args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>
 }
 
 /// Runs a command whose output nobody needs, and says what it printed when it fails.
+#[cfg(windows)]
 pub fn run_quiet(cmd: &str, args: &[&str]) -> Result<()> {
     let out = Command::new(cmd).args(args).output().with_context(|| format!("run {cmd}"))?;
     if !out.status.success() {
@@ -131,6 +132,7 @@ fn write(dry: bool, path: &Path, content: &str) -> Result<()> {
 // --- who may do what -----------------------------------------------------------------------------------------------------------
 
 /// Whether `path` is below `root` (a path on Windows ignores case).
+#[cfg(windows)]
 fn is_under(path: &Path, root: &Path) -> bool {
     let (path, root) = (path.to_string_lossy().replace('/', "\\"), root.to_string_lossy().replace('/', "\\"));
     let root = root.trim_end_matches('\\');
@@ -440,6 +442,7 @@ mod tests {
         assert!(tray_desktop_entry(exe, cfg).contains("fafnirx\" --config \"/etc/fafnirx/config.toml\" tray"));
     }
 
+    #[cfg(windows)]
     #[test]
     fn a_program_is_protected_when_it_is_below_a_folder_of_the_system() {
         let root = Path::new(r"C:\Program Files");
