@@ -1,15 +1,24 @@
 //! What the client is doing, and the deletions it holds back.
 
 use super::wake_client;
-use crate::config::{Config, Shared};
+use crate::config::{self, Config, Shared};
 use crate::daemon;
 use crate::sync::state;
 use anyhow::Result;
 use fafnirx_common::unix_now;
 use std::path::Path;
 
+/// Whether the state databases are the caller's to open. In a system-wide install they are the service's alone, so anyone else
+/// reads what it publishes (status.json).
+fn databases_are_ours(config_path: &Path) -> bool {
+    !config::is_system_config(config_path) || crate::service::elevate::is_admin()
+}
+
 /// What each shared folder is doing, from its own state database: it is all kept there, so this is true with the client stopped.
-fn shared_statuses(cfg: &Config, dir: &Path) -> Vec<daemon::SharedStatus> {
+fn shared_statuses(config_path: &Path, cfg: &Config, dir: &Path) -> Vec<daemon::SharedStatus> {
+    if !databases_are_ours(config_path) {
+        return daemon::read_status(dir).map(|s| s.shared).unwrap_or_default();
+    }
     states_of(cfg, dir)
         .into_iter()
         .filter_map(|(shared, state)| Some(crate::shared::status_of(shared?, &state)))
@@ -30,7 +39,7 @@ fn print_shared(shared: &[daemon::SharedStatus]) {
 pub fn status(config_path: &Path, json: bool) -> Result<()> {
     let cfg = Config::load(config_path)?;
     let dir = cfg.state_dir(config_path);
-    let shared = shared_statuses(&cfg, &dir);
+    let shared = shared_statuses(config_path, &cfg, &dir);
     if json {
         let status = daemon::read_status(&dir);
         let running = status.as_ref().is_some_and(|s| s.fatal.is_empty() && unix_now() - s.updated <= 120);
@@ -46,7 +55,9 @@ pub fn status(config_path: &Path, json: bool) -> Result<()> {
     if daemon::paused_marker(&dir).exists() {
         println!("paused (fafnirx resume to continue)");
     }
-    held_lines(&dir, &cfg).iter().for_each(|l| println!("{l}"));
+    if databases_are_ours(config_path) {
+        held_lines(&dir, &cfg).iter().for_each(|l| println!("{l}"));
+    }
     let version = print_daemon(&dir);
     print_shared(&shared);
     if let Some(version) = version {
@@ -130,6 +141,7 @@ fn held_lines(dir: &Path, cfg: &Config) -> Vec<String> {
 pub fn release_deletes(config_path: &Path) -> Result<()> {
     let cfg = Config::load(config_path)?;
     let dir = cfg.state_dir(config_path);
+    // Needs the databases: for the service, run as administrator (the command asks for it).
     let lines = held_lines(&dir, &cfg);
     if lines.is_empty() {
         println!("no deletions are held");

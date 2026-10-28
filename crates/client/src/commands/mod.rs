@@ -259,10 +259,11 @@ pub async fn restart(config_path: PathBuf) -> Result<()> {
     let cfg = Config::load(&config_path)?;
     let dir = cfg.state_dir(&config_path);
     if config::is_system_config(&config_path) && service::installed() {
-        let asked = unix_now();
+        // The new process is the one with another id: a status that is only newer may be the last write of the old one.
+        let before = daemon::read_status(&dir).map(|s| s.pid);
         service::restart()?;
         let running = wait_for(Duration::from_secs(60), || {
-            daemon::read_status(&dir).filter(|s| s.online && s.updated >= asked && s.fatal.is_empty())
+            daemon::read_status(&dir).filter(|s| s.online && Some(s.pid) != before && s.fatal.is_empty())
         })
         .await;
         match running {
