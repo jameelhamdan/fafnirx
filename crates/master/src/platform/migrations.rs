@@ -39,6 +39,7 @@ pub const ALL: &[Migration] = &[
         sql: include_str!("../../migrations/0011_job_notes_and_rename_cleanup.sql"),
     },
     Migration { version: 12, name: "embedded_text", sql: include_str!("../../migrations/0012_embedded_text.sql") },
+    Migration { version: 13, name: "shared_folders", sql: include_str!("../../migrations/0013_shared_folders.sql") },
 ];
 
 const TRACKING: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (

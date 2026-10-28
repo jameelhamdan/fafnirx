@@ -24,9 +24,17 @@ pub struct Plan {
     pub held: HashMap<String, (usize, i64)>,
 }
 
-/// The folder (first path component) a synced path belongs to.
+/// Which folder a synced path belongs to.
+pub type Grouping = fn(&str) -> &str;
+
+/// The folder is the first path component (the collected folders).
 pub fn folder_of(path: &str) -> &str {
     path.split('/').next().unwrap_or("")
+}
+
+/// All paths are one folder with no name of its own (a shared folder, whose files are at the top).
+pub fn at_the_top(_: &str) -> &str {
+    ""
 }
 
 /// Whether `vanished` of the `synced` files of a folder are too many to delete without waiting.
@@ -39,7 +47,9 @@ pub fn tripped(vanished: usize, synced: usize) -> bool {
 /// - `synced`: files synced per folder, including the vanished ones.
 /// - `holds`: when each folder's current hold began (from a previous cycle).
 /// - `release`: the user asked for held deletes to be applied now.
+/// - `group`: which folder a path belongs to.
 pub fn plan(
+    group: Grouping,
     vanished: Vec<Synced>,
     synced: &HashMap<String, usize>,
     holds: &HashMap<String, i64>,
@@ -47,21 +57,21 @@ pub fn plan(
     hold_secs: i64,
     release: bool,
 ) -> Plan {
-    let mut count: HashMap<&str, usize> = HashMap::new();
+    let mut count: HashMap<String, usize> = HashMap::new();
     for v in &vanished {
-        *count.entry(folder_of(&v.path)).or_default() += 1;
+        *count.entry(group(&v.path).to_string()).or_default() += 1;
     }
     let mut out = Plan::default();
     for (folder, n) in &count {
-        if tripped(*n, synced.get(*folder).copied().unwrap_or(*n)) {
-            let since = holds.get(*folder).copied().unwrap_or(now);
+        if tripped(*n, synced.get(folder).copied().unwrap_or(*n)) {
+            let since = holds.get(folder).copied().unwrap_or(now);
             if !release && now - since < hold_secs {
-                out.held.insert((*folder).to_string(), (*n, since));
+                out.held.insert(folder.clone(), (*n, since));
             }
         }
     }
     for v in vanished {
-        if !out.held.contains_key(folder_of(&v.path)) {
+        if !out.held.contains_key(group(&v.path)) {
             out.send.push(v);
         }
     }
@@ -73,6 +83,39 @@ mod tests {
     use super::*;
 
     const HOUR: i64 = 3600;
+
+    /// A device with one folder per name, as most tests have it.
+    fn plan(
+        vanished: Vec<Synced>,
+        synced: &HashMap<String, usize>,
+        holds: &HashMap<String, i64>,
+        now: i64,
+        hold_secs: i64,
+        release: bool,
+    ) -> Plan {
+        super::plan(folder_of, vanished, synced, holds, now, hold_secs, release)
+    }
+
+    #[test]
+    fn a_shared_folder_is_one_folder_whatever_its_subfolders() {
+        let mut gone: Vec<Synced> = Vec::new();
+        for dir in ["a", "b", "c"] {
+            gone.extend(self::gone(dir, 4));
+        }
+        let all = totals(&[("", 20)]);
+        let top = super::plan(at_the_top, gone.clone(), &all, &HashMap::new(), 0, 12 * HOUR, false);
+        assert_eq!((top.send.len(), top.held[""]), (0, (12, 0)), "12 of 20 files together is a large part");
+        let by_name = super::plan(
+            folder_of,
+            gone,
+            &totals(&[("a", 20), ("b", 20), ("c", 20)]),
+            &HashMap::new(),
+            0,
+            12 * HOUR,
+            false,
+        );
+        assert_eq!(by_name.send.len(), 12, "counted per name, each is below the minimum");
+    }
 
     fn gone(folder: &str, n: usize) -> Vec<Synced> {
         (0..n)

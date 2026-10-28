@@ -1,12 +1,13 @@
 # fafnirx
 
 Collect the files of your computers on a server you own, keep every version, browse them from anywhere, and copy them
-offsite. Data flows one way: devices → master → mirrors. A device only reads its own folders and sends them; the
-master never changes a file on a device, and a device can never read or list what the master holds.
+offsite. Backups flow one way: devices → master → mirrors. The master never changes a file on a device, and a device
+cannot read or list what the master holds, except the shared folders of its own user, which sync both ways.
 
 ```mermaid
 flowchart LR
-    D["Devices<br/>(client: fafnirx)"] -->|"upload only"| M["Master<br/>(fafnirx-master + web app + PostgreSQL)"]
+    D["Devices<br/>(client: fafnirx)"] -->|"upload"| M["Master<br/>(fafnirx-master + web app + PostgreSQL)"]
+    M -.->|"shared folders"| D
     G["Google Drive<br/>(sources)"] --> M
     U["Users, in the browser"] <-->|"browse, upload, download"| M
     M -->|"rclone"| O["Offsite mirrors"]
@@ -16,6 +17,8 @@ flowchart LR
 
 - **Client** (Windows, macOS, Linux): watches folders, uploads changes (resumable, verified, deduplicated), tray icon,
   self-update from GitHub releases. **Android:** [fafnirx-android](https://github.com/jameelhamdan/fafnirx-android).
+- **Shared folders**: a folder that belongs to a user, not to a computer, kept in sync both ways by any of their computers.
+  Other users get access only when the owner adds them.
 - **Master**: one Rust binary with the web app built in. Files are stored as plain files in
   `files/users/<user>/<device>/<path>`; the newest 5 versions are kept, deleted files are removed after 30 days (both configurable).
 - **File browser**: search, filter, sort, preview, version history, zip download, drag-and-drop upload, delete and restore.

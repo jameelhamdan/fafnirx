@@ -8,6 +8,9 @@
 //! | admin    | read, write | read, write  | read, write          | yes                               |
 //! | normal   | read, write | read, write  | no                   | no                                |
 //! | readonly | none        | read         | no                   | no                                |
+//!
+//! On top of that, a shared folder whose owner added the user is theirs to read, and to write when the owner allowed it
+//! (never for a read-only account).
 
 use super::ApiError;
 use crate::platform::store::MASTER_FOLDER;
@@ -46,6 +49,8 @@ pub struct Access {
     pub user_id: i64,
     pub name: String,
     pub role: Role,
+    /// The shared folders of other users this user was added to (`<owner>/<name>`), and whether they may change them.
+    pub shared_with_me: Vec<(String, bool)>,
 }
 
 fn forbidden(what: &str) -> ApiError {
@@ -59,6 +64,9 @@ impl Access {
 
     /// Whether the folder of a device is one this user may look at.
     pub fn can_see(&self, folder: &str) -> bool {
+        if self.shared_with_me.iter().any(|(f, _)| f == folder) {
+            return true;
+        }
         match self.role {
             Role::Admin => true,
             Role::Normal => folder == MASTER_FOLDER || self.owns(folder),
@@ -68,7 +76,12 @@ impl Access {
 
     /// Whether the folder of a device is one this user may add, change or delete files in.
     pub fn can_write(&self, folder: &str) -> bool {
-        self.role != Role::Readonly && self.can_see(folder)
+        match (self.role, self.shared_with_me.iter().find(|(f, _)| f == folder)) {
+            (Role::Readonly, _) => false,
+            (Role::Admin, _) => true,
+            (_, Some((_, may_write))) => *may_write,
+            (_, None) => self.can_see(folder),
+        }
     }
 
     /// Whether the folder is in the workspace of this user (`<name>/<device>`).
@@ -122,12 +135,12 @@ impl Access {
         Viewer { uid: self.user_id, all, scope_user }
     }
 
-    /// The two values the queries take to scope devices: whether everything is visible, and the user whose devices are (-1: nobody's).
+    /// The two values the queries take to scope devices: whether everything is visible, and the user whose devices and shared
+    /// folders are (a read-only account owns no devices, so this only reaches the folders it was added to).
     pub fn scope_args(&self) -> (bool, i64) {
         match self.role {
             Role::Admin => (true, -1),
-            Role::Normal => (false, self.user_id),
-            Role::Readonly => (false, -1),
+            _ => (false, self.user_id),
         }
     }
 }
@@ -137,7 +150,7 @@ mod tests {
     use super::*;
 
     fn access(role: Role) -> Access {
-        Access { user_id: 7, name: "bob".into(), role }
+        Access { user_id: 7, name: "bob".into(), role, shared_with_me: vec![("alice/family".into(), false)] }
     }
 
     #[test]
@@ -148,6 +161,8 @@ mod tests {
             ("bob/laptop", [true, true, false], [true, true, false]),
             ("alice/laptop", [true, false, false], [true, false, false]),
             ("bobby/laptop", [true, false, false], [true, false, false]),
+            // Shared with bob, read-only: seen by him whatever his role, changed by nobody but an administrator.
+            ("alice/family", [true, true, true], [true, false, false]),
         ] {
             let who = [&admin, &normal, &readonly];
             for i in 0..3 {
@@ -156,5 +171,13 @@ mod tests {
             }
         }
         assert!(!readonly.has_workspace() && normal.has_workspace() && admin.is_admin() && !normal.is_admin());
+
+        // The owner can allow writing, to a normal account only.
+        let mut allowed = access(Role::Normal);
+        allowed.shared_with_me = vec![("alice/family".into(), true)];
+        assert!(allowed.can_write("alice/family") && !allowed.can_write("alice/other"));
+        let mut read_only_account = access(Role::Readonly);
+        read_only_account.shared_with_me = vec![("alice/family".into(), true)];
+        assert!(read_only_account.can_see("alice/family") && !read_only_account.can_write("alice/family"));
     }
 }

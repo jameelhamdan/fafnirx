@@ -22,6 +22,7 @@ const ALERT: Record<string, string> = {
   source_failed: msg('Source failed'),
   mirror_failed: msg('Mirror failed'),
   device_conflict: msg('Device used by two computers'),
+  deletions_held: msg('Deletions held back'),
   misplaced_files: msg('Files outside a device folder'),
   reserved_master_files: msg('Master files in a reserved folder'),
 }

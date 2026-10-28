@@ -31,6 +31,23 @@ SELECT f.path FROM files f JOIN versions v ON v.id = f.current_version_id
 WHERE f.device_id = :device_id AND f.deleted_at IS NULL AND v.root_hash = :root
 ORDER BY f.path = :prefer DESC, f.id LIMIT 1;
 
+--! case_clash
+-- A live path that is the same name as `path` spelled differently, other than the one `path` is renamed from (empty for none).
+SELECT f.path FROM files f
+WHERE f.device_id = :device_id AND f.deleted_at IS NULL AND lower(f.path) = lower(:path) AND f.path <> :path
+  AND f.path <> :renamed_from
+  AND NOT EXISTS (SELECT 1 FROM files s WHERE s.device_id = :device_id AND s.path = :path AND s.deleted_at IS NULL)
+LIMIT 1;
+
+--! folder_spellings
+-- The other spellings of a folder (`prefix`, without a trailing slash) that live paths have: the folder part of paths that are
+-- the same name as `prefix` but not spelled the same.
+SELECT DISTINCT left(f.path, char_length(:prefix)) AS spelling FROM files f
+WHERE f.device_id = :device_id AND f.deleted_at IS NULL
+  AND lower(f.path) LIKE lower(replace(replace(replace(:prefix, '\', '\\'), '%', '\%'), '_', '\_')) || '/%'
+  AND left(f.path, char_length(:prefix) + 1) <> :prefix || '/'
+LIMIT 5;
+
 --! deleted_in_web_app
 SELECT 1 FROM files WHERE device_id = :device_id AND path = :path AND deleted_at IS NOT NULL AND deleted_by = 'web';
 
@@ -103,6 +120,15 @@ LEFT JOIN file_meta m ON m.root_hash = v.root_hash WHERE f.id = :id;
 
 --! current_mtime
 SELECT v.mtime FROM files f JOIN versions v ON v.id = f.current_version_id WHERE f.device_id = :device_id AND f.path = :path;
+
+--! changes_since : (root_hash?, size?, mtime?, mode?, deleted_at?, deleted_by?)
+-- The paths of a device that were written or deleted at or after `since` (everything when 0), as they are now: for a
+-- live path its current content, for a path in the trash its deletion. Renames leave the old path deleted.
+SELECT f.path, f.deleted_at, f.deleted_by, v.root_hash, v.size, v.mtime, v.mode
+FROM files f LEFT JOIN versions v ON v.id = f.current_version_id
+WHERE f.device_id = :device_id
+  AND ((f.deleted_at IS NOT NULL AND f.deleted_at >= :since) OR (f.deleted_at IS NULL AND v.created_at >= :since))
+ORDER BY f.path;
 
 --! live_files_below
 SELECT f.path, v.size, v.mtime FROM files f JOIN versions v ON v.id = f.current_version_id

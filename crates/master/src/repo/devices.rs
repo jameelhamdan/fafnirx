@@ -9,6 +9,8 @@ use postgres::{Error, GenericClient};
 pub struct Holder {
     pub id: i64,
     pub folder: String,
+    /// The user who owns the device.
+    pub user_id: i64,
     pub instance: Option<String>,
     pub hostname: Option<String>,
     pub ip: Option<String>,
@@ -17,7 +19,14 @@ pub struct Holder {
 /// The device that owns this token, if it is active: not revoked, a client (not a folder), and of a user who is not disabled.
 pub fn find_by_token(c: &mut impl GenericClient, token_hash: &str) -> Result<Option<Holder>, Error> {
     let found = q::device_by_token().bind(&mut Pg(c), &token_hash).opt()?;
-    Ok(found.map(|d| Holder { id: d.id, folder: d.folder, instance: d.instance_id, hostname: d.hostname, ip: d.ip }))
+    Ok(found.map(|d| Holder {
+        id: d.id,
+        folder: d.folder,
+        user_id: d.user_id,
+        instance: d.instance_id,
+        hostname: d.hostname,
+        ip: d.ip,
+    }))
 }
 
 /// Makes `instance` the holder of the device, unless another instance holds it and was heard from since `lease_start`.
@@ -103,7 +112,7 @@ pub fn summaries(
     all: bool,
     user: i64,
 ) -> Result<Vec<Summary>, Error> {
-    q::device_summaries().bind(&mut Pg(c), &folder, &all, &user).all()
+    q::device_summaries().bind(&mut Pg(c), &folder, &user, &all).all()
 }
 
 /// The id and role of an enabled user, by name.
@@ -121,6 +130,12 @@ pub fn insert(
     now: i64,
 ) -> Result<Option<String>, Error> {
     q::insert_device().bind(&mut Pg(c), &name, &kind, &token_hash, &now, &user_id).opt()
+}
+
+/// Adds a shared folder to a user. It has no token (no computer is it). Returns its folder, or `None` when the user already
+/// has a device or folder of that name.
+pub fn create_shared(c: &mut impl GenericClient, owner: i64, name: &str, now: i64) -> Result<Option<String>, Error> {
+    insert(c, owner, name, "shared", "!", now)
 }
 
 /// A new token for a client; ends a revocation and frees the device for whichever computer connects next.
@@ -167,7 +182,7 @@ pub fn clients_last_seen(c: &mut impl GenericClient) -> Result<Vec<(String, i64)
 
 /// What the visible devices hold together, as of their last sync: (files, bytes, files marked deleted).
 pub fn visible_totals(c: &mut impl GenericClient, all: bool, user: i64) -> Result<(i64, i64, i64), Error> {
-    let t = q::visible_totals().bind(&mut Pg(c), &all, &user).one()?;
+    let t = q::visible_totals().bind(&mut Pg(c), &user, &all).one()?;
     Ok((t.files, t.bytes, t.deleted))
 }
 
@@ -219,6 +234,181 @@ pub fn kind_of_folder(c: &mut impl GenericClient, folder: &str) -> Result<Option
 /// The id and kind of the device with this folder name.
 pub fn id_and_kind(c: &mut impl GenericClient, folder: &str) -> Result<Option<(i64, String)>, Error> {
     Ok(q::device_id_and_kind_by_folder().bind(&mut Pg(c), &folder).opt()?.map(|d| (d.id, d.kind)))
+}
+
+/// A shared folder a user can use, as the web app shows it.
+#[derive(serde::Serialize)]
+pub struct Shared {
+    #[serde(skip)]
+    pub id: i64,
+    pub name: String,
+    /// How the clients name it: `<owner>/<name>`.
+    pub folder: String,
+    /// Their own, not one another user shared with them.
+    pub mine: bool,
+    /// Whether the user may change what is in it.
+    pub can_write: bool,
+    pub created_at: i64,
+}
+
+fn shared_matching(c: &mut impl GenericClient, user_id: i64, key: Option<&str>) -> Result<Vec<Shared>, Error> {
+    Ok(q::shared_folders_for_user()
+        .bind(&mut Pg(c), &user_id, &key)
+        .all()?
+        .into_iter()
+        .map(|s| Shared {
+            id: s.id,
+            name: s.name,
+            folder: s.folder,
+            mine: s.mine,
+            can_write: s.can_write,
+            created_at: s.created_at,
+        })
+        .collect())
+}
+
+/// Every shared folder a user can use: their own, and those shared with them.
+pub fn shared_folders(c: &mut impl GenericClient, user_id: i64) -> Result<Vec<Shared>, Error> {
+    shared_matching(c, user_id, None)
+}
+
+/// The shared folder a user means by `key`: the name of one of their own, or the `<owner>/<name>` of one shared with them.
+pub fn shared_folder(c: &mut impl GenericClient, user_id: i64, key: &str) -> Result<Option<Shared>, Error> {
+    Ok(shared_matching(c, user_id, Some(key))?.into_iter().next())
+}
+
+/// What a computer says about a shared folder attached to it. `name` is the shared folder when a computer is asked, and the
+/// computer when a shared folder is.
+#[derive(serde::Serialize)]
+pub struct SharedState {
+    pub name: String,
+    pub files: i64,
+    pub bytes: i64,
+    /// Unix seconds, 0 before the first cycle.
+    pub last_cycle: i64,
+    pub last_error: String,
+    pub held: i64,
+    pub failing: i64,
+    pub updated_at: i64,
+}
+
+/// Keeps what a computer reports about its shared folders, in place of what it reported before.
+pub fn save_shared_state(
+    c: &mut impl GenericClient,
+    device_id: i64,
+    reported: &[SharedState],
+    now: i64,
+) -> Result<(), Error> {
+    q::clear_shared_state().bind(&mut Pg(c), &device_id)?;
+    for s in reported {
+        q::save_shared_state().bind(
+            &mut Pg(c),
+            &device_id,
+            &s.name,
+            &s.files,
+            &s.bytes,
+            &s.last_cycle,
+            &s.last_error,
+            &s.held,
+            &s.failing,
+            &now,
+        )?;
+    }
+    Ok(())
+}
+
+/// What a computer last said about its shared folders.
+pub fn shared_state_of_device(c: &mut impl GenericClient, device_id: i64) -> Result<Vec<SharedState>, Error> {
+    Ok(q::shared_state_of_device()
+        .bind(&mut Pg(c), &device_id)
+        .all()?
+        .into_iter()
+        .map(|r| SharedState {
+            name: r.shared,
+            files: r.files,
+            bytes: r.bytes,
+            last_cycle: r.last_cycle,
+            last_error: r.last_error,
+            held: r.held,
+            failing: r.failing,
+            updated_at: r.updated_at,
+        })
+        .collect())
+}
+
+/// What the computers that have a shared folder attached say about it: all of them (`all`), or only those of `user`.
+pub fn shared_state_of_folder(
+    c: &mut impl GenericClient,
+    shared: &str,
+    all: bool,
+    user: i64,
+) -> Result<Vec<SharedState>, Error> {
+    Ok(q::shared_state_of_folder()
+        .bind(&mut Pg(c), &shared, &all, &user)
+        .all()?
+        .into_iter()
+        .map(|r| SharedState {
+            name: r.computer,
+            files: r.files,
+            bytes: r.bytes,
+            last_cycle: r.last_cycle,
+            last_error: r.last_error,
+            held: r.held,
+            failing: r.failing,
+            updated_at: r.updated_at,
+        })
+        .collect())
+}
+
+/// A user a shared folder is shared with.
+#[derive(serde::Serialize)]
+pub struct Member {
+    pub user: String,
+    /// Whether they may change what is in it.
+    pub can_write: bool,
+}
+
+pub fn shared_members(c: &mut impl GenericClient, folder_id: i64) -> Result<Vec<Member>, Error> {
+    Ok(q::shared_members()
+        .bind(&mut Pg(c), &folder_id)
+        .all()?
+        .into_iter()
+        .map(|m| Member { user: m.user_name, can_write: m.can_write })
+        .collect())
+}
+
+/// Lets a user use a shared folder (or changes whether they may write to it).
+pub fn add_shared_member(
+    c: &mut impl GenericClient,
+    folder_id: i64,
+    user_id: i64,
+    can_write: bool,
+    now: i64,
+) -> Result<(), Error> {
+    q::add_shared_member().bind(&mut Pg(c), &folder_id, &user_id, &can_write, &now)?;
+    Ok(())
+}
+
+pub fn remove_shared_member(c: &mut impl GenericClient, folder_id: i64, user_id: i64) -> Result<bool, Error> {
+    Ok(q::remove_shared_member().bind(&mut Pg(c), &folder_id, &user_id)? > 0)
+}
+
+/// Removes a shared folder for good with everything left of it: the files in the trash, their versions and their log. Returns
+/// the versions, whose stored copies the caller removes. Refuses (returns `None`) while the folder has files that are not deleted.
+pub fn purge_shared_folder(c: &mut postgres::Client, id: i64) -> Result<Option<Vec<i64>>, Error> {
+    let mut tx = c.transaction()?;
+    // The folder is locked first, so that nothing is written to it between the check and the removal.
+    if lock(&mut tx, id)?.is_none() || q::shared_has_live_files().bind(&mut Pg(&mut tx), &id).one()? {
+        return Ok(None);
+    }
+    let files = q::device_file_ids().bind(&mut Pg(&mut tx), &id).all()?;
+    let versions = super::retention::delete_versions_of(&mut tx, &files)?;
+    super::retention::delete_files(&mut tx, &files)?;
+    q::delete_device_events().bind(&mut Pg(&mut tx), &id)?;
+    clear_progress(&mut tx, id)?;
+    let removed = q::delete_shared_device().bind(&mut Pg(&mut tx), &id)?;
+    tx.commit()?;
+    Ok((removed == 1).then_some(versions))
 }
 
 /// The id of the local folder `name` of a user, made if it is new.

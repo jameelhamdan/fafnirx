@@ -5,7 +5,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
-import { CHUNK, CLIENT, ENV, EXE, MASTER, SIGN, check, clientIn, harness, passedChecks, run, sleep, until } from './lib.mjs'
+import { CHUNK, CLIENT, ENV, EXE, MASTER, SIGN, check, clientIn, harness, isolate, passedChecks, run, sleep, until } from './lib.mjs'
 
 const h = await harness('fafnirx-e2e-', { binaries: [MASTER, CLIENT, SIGN] })
 const { tmp, data, schema, master } = h
@@ -40,7 +40,7 @@ try {
   const { cfg, c } = clientIn(cdir)
   const out = c.enroll(token, server).stdout
   check(out.includes('as device "admin/laptop"'), `enroll connects without TLS (${out.trim().split('\n').pop()})`)
-  fs.writeFileSync(cfg, `state_dir = "${path.join(tmp, 'state').replaceAll('\\', '/')}"\n${fs.readFileSync(cfg, 'utf8')}`)
+  isolate(cfg, path.join(tmp, 'state'), { autoUpdate: true })
   // The enrolling above ran with the default state directory, which counts as one computer; the client of this test keeps
   // its state elsewhere, so it is another. Releasing the device lets that one take it (and exercises the release).
   check((await admin.post('/api/devices/admin%2Flaptop/release')).status === 200, 'a device can be released for another computer')
@@ -210,7 +210,7 @@ try {
   const twin = clientIn(twinDir)
   const twinOut = twin.c.enroll(token, server).stdout
   check(twinOut.includes('device in use'), `a second computer enrolling with the same token is told the device is in use (${twinOut.trim().split('\n').pop()})`)
-  fs.writeFileSync(twin.cfg, `state_dir = "${path.join(tmp, 'twin-state').replaceAll('\\', '/')}"\n${fs.readFileSync(twin.cfg, 'utf8')}`)
+  isolate(twin.cfg, path.join(tmp, 'twin-state'), { autoUpdate: true })
   const twinSrc = path.join(tmp, 'twin-docs')
   fs.mkdirSync(twinSrc, { recursive: true })
   fs.writeFileSync(path.join(twinSrc, 'twin-only.txt'), 'must never arrive')
@@ -350,12 +350,15 @@ try {
   fs.copyFileSync(CLIENT, copy)
   const env = { FAFNIRX_UPDATE_URL: `http://127.0.0.1:${releases.address().port}/latest` }
   // Not `run`: that blocks this process, which has to answer the client's requests meanwhile.
-  const update = (extra) => new Promise((done) => {
-    const child = spawn(copy, ['--config', cfg, 'update'], { env: { ...ENV, ...extra } })
+  const update = (extra, args = ['update']) => new Promise((done) => {
+    const child = spawn(copy, ['--config', cfg, ...args], { env: { ...ENV, ...extra } })
     let stdout = ''
     child.stdout.on('data', (d) => (stdout += d))
     child.on('close', (code) => done({ code, stdout }))
   })
+  // The tray's "Check for updates" only looks; "Update to <version>" then installs.
+  const looked = await update(env, ['update', '--check'])
+  check(looked.code === 0 && looked.stdout.trim() === 'available 99.0.0' && fs.readFileSync(copy).equals(fs.readFileSync(CLIENT)), `"update --check" names the newer version and installs nothing (${looked.stdout.trim()})`)
   const damaged = await update(env)
   check(damaged.code !== 0 && fs.readFileSync(copy).equals(fs.readFileSync(CLIENT)), 'a download that does not match its checksum is refused')
   wrongSum = false

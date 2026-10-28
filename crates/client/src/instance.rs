@@ -60,6 +60,20 @@ pub fn client_id(state_dir: &Path) -> String {
     id
 }
 
+/// Whether another process holds the lock called `name` (the daemon or the tray of this state directory is running).
+pub fn is_held(state_dir: &Path, name: &str) -> bool {
+    let opened = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(state_dir.join(format!("{name}.lock")));
+    match opened {
+        // Taking it proves nobody holds it; closing the file gives it back.
+        Ok(file) => matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+        Err(_) => false,
+    }
+}
+
 /// Lets go of a lock early, so that a process this one starts can take it.
 pub fn release(name: &str) {
     HELD.lock().unwrap_or_else(|e| e.into_inner()).retain(|(n, _)| *n != name);
@@ -80,6 +94,18 @@ mod tests {
         assert!(claim(dir.path(), "daemon", 1).unwrap(), "free again once released");
         release("daemon");
         release("tray");
+    }
+
+    #[test]
+    fn a_held_lock_is_seen_from_outside_and_a_free_one_is_not_taken() {
+        // A name of its own: the locks a process holds are kept by name, and the other tests run at the same time.
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_held(dir.path(), "probe"), "nobody holds it");
+        assert!(!is_held(dir.path(), "probe"), "and looking did not take it");
+        assert!(claim(dir.path(), "probe", 1).unwrap());
+        assert!(is_held(dir.path(), "probe"));
+        release("probe");
+        assert!(!is_held(dir.path(), "probe"), "free again");
     }
 
     #[test]

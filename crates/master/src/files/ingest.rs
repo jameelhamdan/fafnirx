@@ -111,11 +111,52 @@ pub fn check_master_path(device: &Device, path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Rules of the most limited computer: no name Windows cannot keep, no two paths (or folders above them) differing only in
+/// case. Always for shared folders; for local folders and master files (SMB-visible) only with `from_web`. The watcher and
+/// computer backups bypass it. An existing path can always be updated; a rename's source does not count (case-only renames work).
+pub fn check_names(
+    conn: &mut impl GenericClient,
+    device: &Device,
+    path: &str,
+    renamed_from: Option<&str>,
+    from_web: bool,
+) -> Result<()> {
+    let kind = devices::kind_of(conn, device.id)?;
+    let in_ = match kind.as_str() {
+        "shared" => "this shared folder",
+        "master" if from_web => "the master files",
+        "local" if from_web => "this folder",
+        _ => return Ok(()),
+    };
+    let conflict = |what: String| -> Result<()> { Err(crate::web::ApiError::conflict(what).into()) };
+    if let Some(why) = fafnirx_common::not_portable(path) {
+        return Err(crate::web::ApiError::bad(format!("Windows could not keep that: {why}")).into());
+    }
+    if let Some(other) = files::case_clash(conn, device.id, path, renamed_from)? {
+        return conflict(format!("{other} is in {in_} already, and {path} differs from it only by case"));
+    }
+    let parts: Vec<&str> = path.split('/').collect();
+    for depth in 1..parts.len() {
+        let folder = parts[..depth].join("/");
+        // The spelling of this folder that the file is being renamed from is on its way out.
+        let leaving = renamed_from.map(|from| from.split('/').take(depth).collect::<Vec<_>>().join("/"));
+        for spelling in files::folder_spellings(conn, device.id, &folder)? {
+            if Some(&spelling) != leaving.as_ref() {
+                return conflict(format!(
+                    "the folder {spelling} is in {in_} already, and {folder} differs from it only by case"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn commit_inner(conn: &mut Client, store: &Store, staged: &Path, v: &NewVersion) -> Result<u64> {
     let ts = unix_now();
     let root: &[u8] = &v.root;
     let dev = v.device;
     check_master_path(dev, v.path)?;
+    check_names(conn, dev, v.path, v.renamed_from, false)?;
     let mut tx = conn.transaction()?;
     // Both paths of a rename, in a fixed order so that two renames cannot wait for each other.
     let mut locked = vec![v.path];
@@ -203,6 +244,7 @@ fn commit_inner(conn: &mut Client, store: &Store, staged: &Path, v: &NewVersion)
 /// sources are not moved here: their files are theirs to move. The caller checks that the device is changeable.
 pub fn move_path(conn: &mut Client, store: &Store, device: &Device, from: &str, to: &str) -> Result<()> {
     check_master_path(device, to)?;
+    check_names(conn, device, to, Some(from), true)?;
     let mut tx = conn.transaction()?;
     let mut locked = [from, to];
     locked.sort_unstable();
@@ -473,6 +515,79 @@ mod tests {
         commit(&mut c, &store, "Else/where/S1/a.mkv", b"a", Some("Show 3/S1/a.mkv")).unwrap();
         commit(&mut c, &store, "Else/where/S1/b.mkv", b"b", Some("Show 3/S1/b.mkv")).unwrap();
         assert_eq!(follows(&mut c), ("Show 3/".into(), "My show".into()));
+    }
+
+    #[test]
+    fn a_shared_folder_refuses_paths_that_not_every_kind_of_computer_can_hold() {
+        let db = testing::db_with_device();
+        let mut c = db.get().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let refusal = |r: anyhow::Result<u64>| r.unwrap_err().downcast::<crate::web::ApiError>().unwrap();
+
+        // The device of the test is an ordinary one: it keeps whatever it is sent, two spellings included.
+        commit(&mut c, &store, "Notes.txt", b"one", None).unwrap();
+        commit(&mut c, &store, "notes.txt", b"two", None).unwrap();
+
+        c.execute("UPDATE devices SET kind = 'shared' WHERE id = 1", &[]).unwrap();
+        let clash = refusal(commit(&mut c, &store, "NOTES.TXT", b"x", None));
+        assert_eq!(clash.0, axum::http::StatusCode::CONFLICT, "{}", clash.1);
+        let windows = refusal(commit(&mut c, &store, "what?.txt", b"x", None));
+        assert_eq!(windows.0, axum::http::StatusCode::BAD_REQUEST, "{}", windows.1);
+        commit(&mut c, &store, "fine.txt", b"x", None).unwrap();
+        // A path that is in the folder can be updated even though a twin of it is there too.
+        commit(&mut c, &store, "Notes.txt", b"updated", None).unwrap();
+        assert_eq!(live(&store, "Notes.txt").unwrap(), b"updated");
+
+        // A file can be renamed to another case; what it is renamed from does not count as a clash.
+        commit(&mut c, &store, "Readme.md", b"r", None).unwrap();
+        commit(&mut c, &store, "readme.md", b"r", Some("Readme.md")).unwrap();
+        assert_eq!(refusal(commit(&mut c, &store, "README.md", b"x", None)).0, axum::http::StatusCode::CONFLICT);
+
+        // The same goes for the folders above a path: one spelling at a time, and a folder is renamed file by file.
+        commit(&mut c, &store, "Docs/a.txt", b"a", None).unwrap();
+        commit(&mut c, &store, "Docs/b.txt", b"b", None).unwrap();
+        let folder = refusal(commit(&mut c, &store, "docs/new.txt", b"x", None));
+        assert_eq!(folder.0, axum::http::StatusCode::CONFLICT, "{}", folder.1);
+        assert!(folder.1.contains("folder Docs"), "{}", folder.1);
+        commit(&mut c, &store, "docs/a.txt", b"a", Some("Docs/a.txt")).unwrap();
+        commit(&mut c, &store, "docs/b.txt", b"b", Some("Docs/b.txt")).unwrap();
+        commit(&mut c, &store, "docs/new.txt", b"x", None).expect("nothing is left under the old spelling");
+        assert_eq!(refusal(commit(&mut c, &store, "DOCS/other.txt", b"x", None)).0, axum::http::StatusCode::CONFLICT);
+        // Deeper folders too.
+        commit(&mut c, &store, "docs/Sub/x.txt", b"x", None).unwrap();
+        assert_eq!(refusal(commit(&mut c, &store, "docs/sub/y.txt", b"y", None)).0, axum::http::StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn a_local_folder_and_the_master_files_check_names_only_for_what_people_add() {
+        let db = testing::db_with_device();
+        let mut c = db.get().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let device = testing::device();
+        let refused = |r: anyhow::Result<()>| r.unwrap_err().downcast::<crate::web::ApiError>().unwrap().0;
+        c.execute("UPDATE devices SET kind = 'local' WHERE id = 1", &[]).unwrap();
+
+        // What is on disk is taken as it is: the watcher cannot refuse a file, and a clash that was there stays.
+        commit(&mut c, &store, "Notes.txt", b"one", None).unwrap();
+        commit(&mut c, &store, "notes.txt", b"two", None).expect("not a web upload: the watcher's file is recorded");
+        // What a person adds in the web app follows the rules of the computers the folder is shown to over SMB.
+        assert_eq!(refused(check_names(&mut *c, &device, "NOTES.txt", None, true)), axum::http::StatusCode::CONFLICT);
+        assert_eq!(
+            refused(check_names(&mut *c, &device, "docs/a:b.txt", None, true)),
+            axum::http::StatusCode::BAD_REQUEST
+        );
+        check_names(&mut *c, &device, "fresh.txt", None, true).unwrap();
+        check_names(&mut *c, &device, "Notes.txt", None, true).expect("a file that is there can be replaced");
+        assert_eq!(
+            refused(move_path(&mut c, &store, &device, "Notes.txt", "NOTES.txt")),
+            axum::http::StatusCode::CONFLICT
+        );
+
+        // A computer's backup keeps what the computer has.
+        c.execute("UPDATE devices SET kind = 'device' WHERE id = 1", &[]).unwrap();
+        check_names(&mut *c, &device, "NOTES.TXT", None, true).unwrap();
     }
 
     #[test]

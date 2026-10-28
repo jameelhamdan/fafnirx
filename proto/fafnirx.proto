@@ -2,10 +2,11 @@ syntax = "proto3";
 
 package fafnirx.v1;
 
-// Data path between clients and the master. Every call is authenticated
-// with the device token in the `authorization: Bearer <token>` metadata.
-// A client can only add data; there is no call that reads or lists what is stored on the master, or removes it
-// (MarkDeleted only marks a path; the data stays until retention). Update downloads are the one thing it reads.
+// Device API. Auth: `authorization: Bearer <token>` metadata.
+// Additive: no call reads, lists or removes what is stored for the caller's device (MarkDeleted only marks; data stays until
+// retention). Reads: update downloads, and shared folders of the caller's user (ListShared, ListChanges, DownloadShared,
+// WatchShared). Negotiate, UploadChunks, Commit and MarkDeleted act on a shared folder when `x-fafnirx-shared:
+// <owner>/<name>` is set (bare `<name>` = the user's own).
 service Collector {
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
 
@@ -31,6 +32,22 @@ service Collector {
   // Client binary updates, hosted by the master and signed off-box.
   rpc GetUpdateInfo(UpdateInfoRequest) returns (UpdateInfo);
   rpc DownloadUpdate(UpdateInfoRequest) returns (stream UpdateChunk);
+
+  // The shared folders of the user of the calling device.
+  rpc ListShared(ListSharedRequest) returns (ListSharedResponse);
+
+  // Makes a shared folder for the user of the calling device. Succeeds when it exists already.
+  rpc CreateShared(CreateSharedRequest) returns (CreateSharedResponse);
+
+  // The paths of a shared folder written or deleted since `since`, as they are now: the cursor first, then the paths.
+  rpc ListChanges(ListChangesRequest) returns (stream ChangeEvent);
+
+  // The current content of a file of a shared folder.
+  rpc DownloadShared(DownloadSharedRequest) returns (stream FileData);
+
+  // Says when one of the named shared folders changed, so that a computer need not poll: once for each folder when the call
+  // starts (look now), then whenever a file in it was written or deleted. Folders the caller cannot use are left out.
+  rpc WatchShared(WatchSharedRequest) returns (stream SharedChanged);
 }
 
 message HeartbeatRequest {
@@ -48,6 +65,18 @@ message HeartbeatRequest {
   uint64 bytes_done = 11;      // of bytes_total, this cycle
   uint64 bytes_total = 12;
   uint64 speed_bps = 13;       // upload speed, bytes per second
+  repeated SharedState shared = 14;  // the shared folders attached here, all of them on every beat
+}
+
+// What one shared folder attached to a computer is doing.
+message SharedState {
+  string name = 1;             // <owner>/<name>
+  uint64 files = 2;            // in step with the master
+  uint64 bytes = 3;
+  int64 last_cycle = 4;        // unix seconds, 0 before the first cycle
+  string last_error = 5;       // empty when the last cycle went well
+  uint32 held = 6;             // deletions held back
+  uint32 failing = 7;          // files waiting for a retry
 }
 
 message IdentifyRequest {}
@@ -117,4 +146,60 @@ message UpdateInfo {
 
 message UpdateChunk {
   bytes data = 1;
+}
+
+message ListSharedRequest {}
+
+message ListSharedResponse {
+  repeated string names = 1;    // every shared folder the user can use, as <owner>/<name>
+  repeated string mine = 2;     // those of the names that are the user's own
+}
+
+message CreateSharedRequest {
+  string name = 1;              // a device-style name: lowercase letters, digits, '.', '_' and '-'
+}
+
+message CreateSharedResponse {}
+
+message ListChangesRequest {
+  string shared = 1;
+  int64 since = 2;              // a cursor from an earlier answer; 0 lists every path
+}
+
+message ChangeEvent {
+  oneof item {
+    int64 cursor = 1;           // sent first: pass it as `since` next time
+    Change change = 2;
+    // Sent second, when the paths that follow are every live path of the folder, not only what changed since `since`: the
+    // master no longer remembers all deletions since then (it was asked from the start, or the caller was away longer than
+    // deleted files are kept). A path the caller has and that is not listed was deleted.
+    bool complete = 3;
+  }
+}
+
+message Change {
+  string path = 1;
+  bool deleted = 2;             // the other fields are set only when it is not
+  bytes root_hash = 3;
+  uint64 size = 4;
+  int64 mtime = 5;              // unix nanoseconds
+  uint32 mode = 6;
+  bool from_web = 7;            // a deletion made in the web app: deliberate, and in the Trash to restore, so it is not held
+}
+
+message DownloadSharedRequest {
+  string shared = 1;
+  string path = 2;
+}
+
+message FileData {
+  bytes data = 1;
+}
+
+message WatchSharedRequest {
+  repeated string shared = 1;   // as in `x-fafnirx-shared`
+}
+
+message SharedChanged {
+  string shared = 1;            // as the caller named it
 }

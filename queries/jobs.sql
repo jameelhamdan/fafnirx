@@ -38,7 +38,7 @@ DELETE FROM jobs WHERE status = 'done' AND finished_at < :before;
 SELECT j.kind, j.status, COUNT(*) AS n FROM jobs j
 WHERE (j.status <> 'done' OR j.finished_at >= :since)
   AND (:all::boolean OR (j.payload::jsonb ->> 'device') IN
-       (SELECT d.folder FROM devices d WHERE d.kind = 'master' OR d.user_id = :scope_user::bigint))
+       (SELECT d.folder FROM devices d WHERE visible(d, :scope_user::bigint, false)))
 GROUP BY j.kind, j.status;
 
 --! queue_items : (started_at?, finished_at?, error?, note?)
@@ -47,7 +47,7 @@ SELECT j.id, j.kind, j.status, j.attempts, j.run_after, j.created_at, j.started_
 FROM jobs j
 WHERE (j.status <> 'done' OR j.finished_at >= :since)
   AND (:all::boolean OR (j.payload::jsonb ->> 'device') IN
-       (SELECT d.folder FROM devices d WHERE d.kind = 'master' OR d.user_id = :scope_user::bigint))
+       (SELECT d.folder FROM devices d WHERE visible(d, :scope_user::bigint, false)))
 ORDER BY CASE j.status WHEN 'running' THEN 0 WHEN 'failed' THEN 1 WHEN 'queued' THEN 2 ELSE 3 END,
          CASE WHEN j.status = 'done' THEN -j.finished_at ELSE j.seq END
 LIMIT :limit;

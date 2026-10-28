@@ -1,6 +1,6 @@
 // Shapes of the master's web API (`web`, `devices`, `files`, ... in crates/master/src).
 
-export type DeviceKind = 'device' | 'local' | 'source'
+export type DeviceKind = 'device' | 'local' | 'source' | 'shared'
 
 export interface Activity {
   phase: string
@@ -45,9 +45,24 @@ export interface Recent {
   device: string
 }
 
+/** What a computer says about one shared folder attached to it (`name` is the folder, or on a folder's page the computer). */
+export interface SharedState {
+  name: string
+  files: number
+  bytes: number
+  /** Unix seconds; 0 before the first cycle. */
+  last_cycle: number
+  last_error: string
+  held: number
+  failing: number
+  updated_at: number
+}
+
 export interface DeviceDetail {
   device: DeviceSummary
   events: Recent[]
+  /** The shared folders attached to the computer. */
+  shared: SharedState[]
   token: string | null
 }
 
@@ -173,6 +188,20 @@ export interface UserInfo {
   disabled: boolean
   created_at: number
   devices: number
+}
+
+/** A folder that belongs to a user, not to a computer, and that their computers keep in step. */
+export interface SharedFolder {
+  /** `<owner>/<name>`: how the clients name it. */
+  folder: string
+  name: string
+  mine: boolean
+  can_write: boolean
+  created_at: number
+  /** The other users who use it (only for its owner). */
+  members: { user: string; can_write: boolean }[]
+  /** The computers that have it attached: all for its owner, the user's own otherwise. */
+  computers: SharedState[]
 }
 
 export interface Session {

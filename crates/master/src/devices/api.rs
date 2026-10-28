@@ -108,6 +108,8 @@ pub async fn list(State(state): State<Shared>, Extension(who): Extension<Access>
 pub struct DeviceDetail {
     device: DeviceSummary,
     events: Vec<Recent>,
+    /// The shared folders attached to the computer, as it last said (empty for anything but a client).
+    shared: Vec<devices::SharedState>,
     /// Only when a token was just made: shown once.
     token: Option<String>,
 }
@@ -117,7 +119,11 @@ fn detail_of(c: &mut Client, who: &Access, folder: &str, token: Option<String>) 
         .into_iter()
         .find(|d| d.kind != "source")
         .ok_or_else(|| ApiError::not_found("No such device"))?;
-    Ok(DeviceDetail { device, events: recent(c, who, 50, Some(folder))?, token })
+    let shared = match devices::by_folder(c, folder)? {
+        Some((id, _)) => devices::shared_state_of_device(c, id)?,
+        None => Vec::new(),
+    };
+    Ok(DeviceDetail { device, events: recent(c, who, 50, Some(folder))?, shared, token })
 }
 
 /// A device is named by its folder (`<user>/<name>`) in the address, with the slash encoded.

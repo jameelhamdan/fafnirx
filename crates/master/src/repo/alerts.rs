@@ -14,6 +14,15 @@ pub fn upsert(c: &mut impl GenericClient, kind: &str, key: &str, message: &str) 
     notify(c, "alerts", key)
 }
 
+/// Like `upsert` for something reported again and again (with every heartbeat): nobody is told unless the alert is new or
+/// its message changed.
+pub fn raise(c: &mut impl GenericClient, kind: &str, key: &str, message: &str) -> Result<(), Error> {
+    if q::touch_alert().bind(&mut Pg(&mut *c), &unix_now(), &kind, &key, &message)? > 0 {
+        return Ok(());
+    }
+    upsert(c, kind, key, message)
+}
+
 /// Closes the open alert of this kind and key, if there is one.
 pub fn resolve(c: &mut impl GenericClient, kind: &str, key: &str) -> Result<(), Error> {
     if q::resolve_alert().bind(&mut Pg(&mut *c), &unix_now(), &kind, &key)? > 0 {
@@ -47,9 +56,10 @@ pub fn dismiss(c: &mut impl GenericClient, id: Uuid) -> Result<(), Error> {
     notify(c, "alerts", "")
 }
 
-/// Clients report an error again every time they retry, so an upload error that went quiet has been fixed.
-pub fn expire_upload_errors(c: &mut impl GenericClient, quiet_since: i64) -> Result<(), Error> {
-    q::expire_upload_errors().bind(&mut Pg(c), &unix_now(), &quiet_since)?;
+/// Closes the open alerts of a kind that were last raised before `quiet_since`. Whoever raises such an alert does it again
+/// every time it still holds (a client with every heartbeat), so one that went quiet has been fixed or is no longer reported.
+pub fn expire_quiet(c: &mut impl GenericClient, kind: &str, quiet_since: i64) -> Result<(), Error> {
+    q::expire_quiet_alerts().bind(&mut Pg(c), &unix_now(), &kind, &quiet_since)?;
     Ok(())
 }
 

@@ -38,6 +38,28 @@ export function check(cond, msg) {
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+/** Writes a file below dir, making the folders. */
+export const writeIn = (dir, p, text) => {
+  fs.mkdirSync(path.dirname(path.join(dir, p)), { recursive: true })
+  fs.writeFileSync(path.join(dir, p), text)
+}
+/** The text of a file below dir, or null when it is not there. */
+export const readIn = (dir, p) => (fs.existsSync(path.join(dir, p)) ? fs.readFileSync(path.join(dir, p), 'utf8') : null)
+/** The names in a folder, sorted. */
+export const namesIn = (dir) => fs.readdirSync(dir).sort()
+
+const daemons = new Set()
+/** Runs the client of client in the background; it is stopped by stopDaemon or at the end of the run. */
+export function startDaemon(client) {
+  const daemon = spawn(CLIENT, ['--config', client.cfg, 'run'], { env: ENV, stdio: 'ignore' })
+  daemons.add(daemon)
+  return daemon
+}
+export function stopDaemon(daemon) {
+  daemon.kill()
+  daemons.delete(daemon)
+}
+
 /** Polls `fn` until it returns something truthy, for at most `seconds`. */
 export async function until(fn, seconds = 30, every = 250) {
   const end = Date.now() + seconds * 1000
@@ -171,6 +193,13 @@ export class Master {
       post: (u, b = {}) => call('POST', u, b),
       put: (u, b) => call('PUT', u, b),
       delete: (u) => call('DELETE', u),
+      /** Uploads a file through the web API (start, bytes, finish); returns the status of finishing it. */
+      upload: async (device, p, text) => {
+        const body = Buffer.from(text)
+        const started = (await call('POST', '/api/uploads', { device, path: p, size: body.length })).json
+        await fetch(`${this.base}/api/uploads/${started.id}?offset=0`, { method: 'PUT', headers: { cookie, 'x-requested-with': 'e2e' }, body })
+        return (await call('POST', `/api/uploads/${started.id}/finish`, {})).status
+      },
       /** Raw bytes of a download. */
       bytes: async (u, headers = {}) => {
         const r = await fetch(this.base + u, { headers: { cookie, ...headers } })
@@ -212,6 +241,7 @@ export async function harness(prefix = 'fafnirx-e2e-', { binaries = [MASTER, CLI
     master,
     /** Stops the master, drops the schema and removes the temp directory (unless FAFNIRX_KEEP=1). */
     async cleanup() {
+      daemons.forEach(stopDaemon)
       await master.stop()
       await schema.drop()
       if (process.env.FAFNIRX_KEEP === '1') console.log('kept', tmp)
@@ -220,12 +250,24 @@ export async function harness(prefix = 'fafnirx-e2e-', { binaries = [MASTER, CLI
   }
 }
 
-/** Creates a device through the web API and enrolls a client for it, keeping the client's state inside `tmp`. */
-export async function enrollDevice({ tmp, master }, admin, name = 'laptop', dir = 'client', user = undefined) {
+/**
+ * Gives the client of a config file a state directory of its own, as a second computer has. By default it also turns self-update
+ * off: a client that updates itself would fetch the newest real release and replace the binary under test.
+ */
+export function isolate(cfg, stateDir, { autoUpdate = false } = {}) {
+  const text = fs.readFileSync(cfg, 'utf8')
+  fs.writeFileSync(cfg, `state_dir = "${stateDir.replaceAll('\\', '/')}"\n${autoUpdate ? text : text.replace('auto_update = true', 'auto_update = false')}`)
+}
+
+/**
+ * Creates a device through the web API and enrolls a client for it, keeping the client's state in `state` inside `tmp`.
+ * `admin` is the API session that makes it: the administrator (for any user), or the user themself.
+ */
+export async function enrollDevice({ tmp, master }, admin, name = 'laptop', dir = 'client', user = undefined, state = 'state') {
   const token = (await admin.post('/api/devices', { name, ...(user ? { user } : {}) })).json.token
   const client = clientIn(path.join(tmp, dir))
   client.c.enroll(token, `http://127.0.0.1:${master.grpc}`)
-  fs.writeFileSync(client.cfg, `state_dir = "${path.join(tmp, 'state').replaceAll('\\', '/')}"\n${fs.readFileSync(client.cfg, 'utf8')}`)
+  isolate(client.cfg, path.join(tmp, state))
   // Enrolling ran with the default state directory, which is one computer; the client of the test keeps its state in
   // `tmp`, which is another. Release the device so that this one can have it.
   const folder = encodeURIComponent((await admin.get('/api/devices')).json.find((d) => d.name === name && (!user || d.user === user))?.folder ?? `admin/${name}`)
