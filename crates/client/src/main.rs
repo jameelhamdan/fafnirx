@@ -150,6 +150,8 @@ enum SharedCmd {
 fn init_logging(file: Option<&std::path::Path>) {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
     let builder = tracing_subscriber::fmt().with_env_filter(filter);
+    // A background program has no console to print a panic to: it goes to the log, with where it happened.
+    std::panic::set_hook(Box::new(|info| tracing::error!("panic: {info}")));
     if let Some(path) = file {
         // Start a fresh file when the old one gets large.
         if std::fs::metadata(path).map(|m| m.len() > 5 << 20).unwrap_or(false) {
