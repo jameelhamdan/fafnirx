@@ -60,9 +60,10 @@ Download from the [latest release](https://github.com/jameelhamdan/fafnirx/relea
 Windows `fafnirx-setup-<version>.exe`; macOS `fafnirx-<version>-macos-{aarch64,x86_64}.tar.gz`; Debian/Ubuntu
 `fafnirx_<version>-1_{amd64,arm64}.deb`; other Linux `fafnirx-<version>-linux-{x86_64,aarch64}.tar.gz`.
 
-- **Windows:** run the setup (SmartScreen: *More info* → *Run anyway*; it asks for administrator rights once). It asks for
-  `http://<server>:7443`, the token and a folder, then enrolls and installs the **fafnirx** service (see it in `services.msc` and
-  Task Manager) and starts it. Silent:
+- **Windows:** run the setup (SmartScreen: *More info* → *Run anyway*; no administrator rights are needed). It installs into
+  your profile (`%LocalAppData%\Programs\fafnirx`), asks for `http://<server>:7443`, the token and a folder, enrolls, and starts
+  the client and its tray, which start again whenever you log in. An older version installed a service of the computer: remove
+  that version first (*Apps* → *fafnirx*). Silent:
   `fafnirx-setup-<version>.exe /VERYSILENT /SERVER=nas.lan /TOKEN=<token> /FOLDER="C:\Users\me\Documents"`.
 - **macOS, Linux:**
   ```sh
@@ -76,10 +77,12 @@ Windows `fafnirx-setup-<version>.exe`; macOS `fafnirx-<version>-macos-{aarch64,x
 - **Debian, Ubuntu:** `sudo apt install ./fafnirx_<version>-1_amd64.deb`, then `sudo fafnirx enroll --server http://<server>:7443`
   (asks for the token; it starts the service) and `sudo fafnirx add-folder ~/Documents`.
 
-The client is **a service of the computer**: it starts at boot, is started again when it fails, reads the folders of every user,
-and its tray starts when a user logs in. Its config, token and state are in `%ProgramData%\fafnirx` (Windows),
-`/etc/fafnirx` and `/var/lib/fafnirx` (Linux), `/Library/Application Support/fafnirx` (macOS), where only administrators can
-change them; commands that change them ask for administrator rights (UAC, `sudo`).
+On Linux and macOS the client is **a service of the computer**: it starts at boot, is started again when it fails, reads the
+folders of every user, and its tray starts when a user logs in. Its config, token and state are in `/etc/fafnirx` and
+`/var/lib/fafnirx` (Linux), `/Library/Application Support/fafnirx` (macOS), where only administrators can change them; commands
+that change them ask for administrator rights (`sudo`). On Windows the client is **yours**: it and its tray start when you log
+in, and its config (`%LocalAppData%\fafnirx\config.toml`), token (Credential Manager) and state are in your profile, so the tray
+and the commands change them without asking for anything.
 
 Check with `fafnirx status` and `fafnirx folders`; the device shows online within a minute. [Commands](usage.md#the-client).
 

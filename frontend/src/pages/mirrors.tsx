@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { ErrorNote, PageHeader } from '@/components/common'
 import { Confirm } from '@/components/confirm'
 import { JobList } from '@/components/job-list'
+import { ScopePicker } from '@/components/scope-picker'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -16,7 +17,7 @@ import { bytes, count } from '@/lib/format'
 import type { JobState } from '@/lib/types'
 import { useT } from '@/lib/i18n'
 
-const BLANK = { name: '', remote: '', remote_type: 's3', options: '', remote_path: '', interval_hours: '72', keep_runs: '3' }
+const BLANK = { name: '', remote: '', remote_type: 's3', options: '', remote_path: '', scope: '', interval_hours: '72', keep_runs: '3' }
 
 function AddMirror() {
   const t = useT()
@@ -41,8 +42,12 @@ function AddMirror() {
         <form onSubmit={submit} className="space-y-4">
           <DialogHeader>
             <DialogTitle>{t('Add an offsite mirror')}</DialogTitle>
-            <DialogDescription>{t('The master copies files/ and what changed since the last run to any storage rclone supports.')}</DialogDescription>
+            <DialogDescription>{t('The master copies the files you choose, and what changed since the last run, to any storage rclone supports.')}</DialogDescription>
           </DialogHeader>
+          <div className="space-y-2">
+            <Label>{t('What to mirror')}</Label>
+            <ScopePicker value={form.scope} onChange={(scope) => setForm({ ...form, scope })} />
+          </div>
           <div className="space-y-2">
             <Label htmlFor="m-remote">{t('rclone remote (optional)')}</Label>
             <Input id="m-remote" placeholder="b2crypt:fafnirx" value={form.remote} onChange={set('remote')} />
@@ -99,7 +104,7 @@ export default function Mirrors() {
     <div>
       <PageHeader
         title={t('Mirrors')}
-        description={t('Offsite copies of everything the master holds, as plain files you can restore with any tool. Without one, the master is the only copy.')}
+        description={t('Offsite copies of everything the master holds, or of the folders you choose, as plain files you can restore with any tool. Without one, the master is the only copy.')}
         actions={<AddMirror />}
       />
       {error ? <ErrorNote error={error} /> : !data ? <Skeleton className="h-40" /> : (
@@ -110,7 +115,7 @@ export default function Mirrors() {
           emptyText={t('Add one so that a failed disk does not lose your files.')}
           summary={(j) => (
             <>
-              {j.detail.remote ? String(j.detail.remote) : `${String(j.detail.remote_type)}:${String(j.detail.remote_path || '')}`} · {t('keeps {count} runs', { count: String(j.detail.keep_runs) })}
+              {j.detail.scope ? String(j.detail.scope) : t('Everything')} → {j.detail.remote ? String(j.detail.remote) : `${String(j.detail.remote_type)}:${String(j.detail.remote_path || '')}`} · {t('keeps {count} runs', { count: String(j.detail.keep_runs) })}
               {j.detail.files !== null && <> · {t('last run {files} files, {size}', { files: count(Number(j.detail.files)), size: bytes(Number(j.detail.bytes)) })}</>}
             </>
           )}

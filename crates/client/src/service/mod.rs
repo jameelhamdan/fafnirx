@@ -10,7 +10,9 @@ pub mod instance;
 #[cfg(windows)]
 pub mod windows;
 
-use crate::config::{control_dir, is_system_config, same_path, system_config_path, system_data_dir, system_state_dir};
+use crate::config::{
+    control_dir, is_system_config, same_path, system_config_path, system_data_dir, system_state_dir, Config,
+};
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 use std::process::Command;
@@ -21,8 +23,10 @@ const MAC_DAEMON: &str = "/Library/LaunchDaemons/io.fafnirx.client.plist";
 const MAC_TRAY: &str = "/Library/LaunchAgents/io.fafnirx.tray.plist";
 #[cfg(not(windows))]
 const MAC_TARGET: &str = "system/io.fafnirx.client";
-/// Started for every user who logs in.
+/// Started for every user who logs in (a service of the computer, installed by an older version).
 const WINDOWS_RUN_KEY: &str = r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run";
+/// Started when the user who installed the client logs in.
+const WINDOWS_USER_RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 
 /// The systemd unit of the client. It is restarted when it exits with an error (a crash, or `daemon::restart` after an
 /// update), and left alone when it exits cleanly: that is the "stop".
@@ -280,11 +284,45 @@ fn console_user() -> Option<String> {
     (!uid.is_empty() && uid != "0").then_some(uid)
 }
 
+/// The command lines that start the client and its tray when the user logs in (Windows, a client of one user).
+fn windows_user_commands(exe: &Path, config: &Path) -> (String, String) {
+    let base = format!("\"{}\" --config \"{}\"", exe.display(), config.display());
+    (format!("{base} run --log-file --hidden"), format!("{base} tray --hidden"))
+}
+
+/// Windows: the client of the user who runs this. It starts when they log in, needs no administrator, and keeps its config, token
+/// and state in their profile. A service of the computer is for the config of the computer (`install`).
+fn install_for_user(dry: bool, exe: &Path, config: &Path) -> Result<()> {
+    if !dry && !config.exists() {
+        bail!("there is no config yet: run `fafnirx enroll --server <url>` first");
+    }
+    let (client, tray) = windows_user_commands(exe, config);
+    run(dry, "reg", &["add", WINDOWS_USER_RUN_KEY, "/v", "fafnirx", "/t", "REG_SZ", "/d", &client, "/f"])?;
+    if cfg!(feature = "tray") {
+        run(dry, "reg", &["add", WINDOWS_USER_RUN_KEY, "/v", "fafnirx-tray", "/t", "REG_SZ", "/d", &tray, "/f"])?;
+    }
+    if !dry {
+        let state = Config::load(config)?.state_dir(config);
+        restart_background(config, &state)?;
+        #[cfg(feature = "tray")]
+        {
+            // One that already runs for this config keeps its lock, and this one ends.
+            let _ = Command::new(exe).arg("--config").arg(config).args(["tray", "--hidden"]).spawn();
+        }
+    }
+    println!("the client runs in the background now and starts when you log in");
+    Ok(())
+}
+
 /// Installs the service and the tray of every user, and starts the service. Needs an administrator; the config of the computer
-/// (`fafnirx enroll`) comes first, because the service starts with it.
-pub fn install(dry: bool) -> Result<()> {
+/// (`fafnirx enroll`) comes first, because the service starts with it. On Windows the client of a user is installed instead,
+/// unless the computer has the config of an older version's service.
+pub fn install(config_path: &Path, dry: bool) -> Result<()> {
     let exe = std::env::current_exe()?;
     let exe = fafnirx_common::plain_path(&exe);
+    if cfg!(windows) && !is_system_config(config_path) {
+        return install_for_user(dry, &exe, config_path);
+    }
     let config = system_config_path();
     if !dry {
         if !config.exists() {
@@ -302,6 +340,9 @@ pub fn install(dry: bool) -> Result<()> {
         if cfg!(feature = "tray") {
             let tray = format!("\"{}\" --config \"{}\" tray --hidden", exe.display(), config.display());
             run(dry, "reg", &["add", WINDOWS_RUN_KEY, "/v", "fafnirx-tray", "/t", "REG_SZ", "/d", &tray, "/f"])?;
+            // Best effort, as on macOS: without the user's rights (this runs as an administrator), or the tray starts the next time
+            // they log in. One that already runs for the computer's config keeps its lock, and this one ends.
+            let _ = run(dry, "runas", &["/trustlevel:0x20000", &tray]);
         }
     } else if cfg!(target_os = "linux") {
         write(dry, Path::new(SYSTEMD_UNIT), &systemd_unit(&exe, &config))?;
@@ -327,8 +368,18 @@ pub fn install(dry: bool) -> Result<()> {
 }
 
 /// Removes the service and the trays. What was backed up, the config and the state stay.
-pub fn uninstall(dry: bool) -> Result<()> {
-    if cfg!(windows) {
+pub fn uninstall(config_path: &Path, dry: bool) -> Result<()> {
+    if cfg!(windows) && !is_system_config(config_path) {
+        for name in ["fafnirx", "fafnirx-tray"] {
+            let _ = run(dry, "reg", &["delete", WINDOWS_USER_RUN_KEY, "/v", name, "/f"]);
+        }
+        if !dry {
+            if let Ok(cfg) = Config::load(config_path) {
+                let _ = std::fs::write(crate::daemon::stop_marker(&cfg.state_dir(config_path)), b"");
+            }
+        }
+        println!("A tray that is running stays until it is closed.");
+    } else if cfg!(windows) {
         #[cfg(windows)]
         if !dry {
             windows::uninstall()?;
@@ -440,6 +491,21 @@ mod tests {
                 && tray.contains("<key>KeepAlive</key><false/>")
         );
         assert!(tray_desktop_entry(exe, cfg).contains("fafnirx\" --config \"/etc/fafnirx/config.toml\" tray"));
+    }
+
+    #[test]
+    fn the_client_of_a_user_starts_with_their_config_when_they_log_in() {
+        let (exe, cfg) = (Path::new("/apps/fafnirx"), Path::new("/me/config.toml"));
+        let (client, tray) = windows_user_commands(exe, cfg);
+        assert_eq!(client, "\"/apps/fafnirx\" --config \"/me/config.toml\" run --log-file --hidden");
+        assert_eq!(tray, "\"/apps/fafnirx\" --config \"/me/config.toml\" tray --hidden");
+    }
+
+    #[test]
+    fn installing_for_a_user_needs_their_config_and_a_dry_run_changes_nothing() {
+        let (exe, cfg) = (Path::new("fafnirx"), Path::new("no-such-dir/config.toml"));
+        assert!(install_for_user(false, exe, cfg).is_err(), "enroll comes first");
+        install_for_user(true, exe, cfg).unwrap();
     }
 
     #[cfg(windows)]

@@ -6,6 +6,8 @@
 //!   meta/*.json                             statistics and a file list per namespace
 //!   meta/library.json                       albums, tags, favorites and corrected dates and places
 //!
+//! A mirror holds the whole tree or, with a `scope`, one folder of it at the same place below `files/`.
+//!
 //! Each run uploads only files whose content changed since the last successful run. Changed files are
 //! linked (or copied) from the file store into a staging directory in batches, so extra disk use is bounded.
 //! Backend options reach rclone through environment variables, never through the command line. A mirror can instead
@@ -210,8 +212,8 @@ fn stage_file(store: &Store, dest: &Path, f: &LiveFile) -> Result<()> {
     Ok(())
 }
 
-fn load_live(conn: &mut Client) -> Result<Vec<LiveFile>> {
-    Ok(mirrors::live_files(conn)?
+fn load_live(conn: &mut Client, scope: &str) -> Result<Vec<LiveFile>> {
+    Ok(mirrors::live_files(conn, scope)?
         .into_iter()
         .map(|f| LiveFile {
             device_id: f.device_id,
@@ -295,6 +297,7 @@ fn metadata(m: &MirrorRow, live: &[LiveFile], stamp: &str, run: &MirrorOutcome) 
         "stats.json".into(),
         serde_json::json!({
             "mirror": m.name,
+            "scope": m.scope,
             "run": stamp,
             "generated_at_unix": unix_now(),
             "files": live.len(),
@@ -355,8 +358,9 @@ impl Job {
         // Fail early, before touching any data, if the remote is unusable.
         self.rc.run(&["mkdir", &self.remotes.root], &[]).await.context("cannot reach the mirror")?;
 
-        let mirror_id = self.m.id;
-        let (live, mirrored) = db::with(&self.db, move |c| Ok((load_live(c)?, load_mirrored(c, mirror_id)?))).await?;
+        let (mirror_id, scope) = (self.m.id, self.m.scope.clone());
+        let (live, mirrored) =
+            db::with(&self.db, move |c| Ok((load_live(c, &scope)?, load_mirrored(c, mirror_id)?))).await?;
         let diff = diff(&live, &mirrored);
         let mut out = MirrorOutcome { total_files: live.len(), ..Default::default() };
 
@@ -467,9 +471,12 @@ impl Job {
         for (name, value) in metadata(&self.m, live, &self.stamp, out) {
             std::fs::write(dir.join(name), serde_json::to_vec_pretty(&value)?)?;
         }
-        // Albums, tags, favorites and corrected dates live in the database only: keep a readable copy.
-        let library = db::with(&self.db, crate::library::photos::snapshot).await?;
-        std::fs::write(dir.join("library.json"), serde_json::to_vec_pretty(&library)?)?;
+        // Albums, tags, favorites and corrected dates live in the database only: keep a readable copy. It names files all
+        // over the tree, so a mirror of one folder leaves it out.
+        if self.m.scope.is_empty() {
+            let library = db::with(&self.db, crate::library::photos::snapshot).await?;
+            std::fs::write(dir.join("library.json"), serde_json::to_vec_pretty(&library)?)?;
+        }
         let args = [
             "copy",
             &dir.to_string_lossy(),
@@ -511,6 +518,7 @@ mod tests {
             remote_type: "s3".into(),
             options: options.into(),
             remote_path: "bucket/prefix/".into(),
+            scope: String::new(),
             remote: String::new(),
             keep_runs: 3,
         }

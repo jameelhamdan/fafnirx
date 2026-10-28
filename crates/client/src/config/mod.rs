@@ -318,8 +318,8 @@ impl Config {
 }
 
 /// Detaches a shared folder from this computer. The files stay in the local folder and on the master. It can be named in full
-/// (`<owner>/<name>`) or, when that is not ambiguous, by its name alone.
-pub fn detach_shared_from_file(config_path: &Path, name: &str) -> Result<()> {
+/// (`<owner>/<name>`) or, when that is not ambiguous, by its name alone. Returns the name in full.
+pub fn detach_shared_from_file(config_path: &Path, name: &str) -> Result<String> {
     let full = Config::load(config_path)?.shared_named(name)?.name.clone();
     let mut doc: toml_edit::DocumentMut = std::fs::read_to_string(config_path)?.parse()?;
     if let Some(list) = doc.get_mut("shared").and_then(|s| s.as_array_of_tables_mut()) {
@@ -328,8 +328,10 @@ pub fn detach_shared_from_file(config_path: &Path, name: &str) -> Result<()> {
             doc.remove("shared");
         }
     }
-    write_atomic(config_path, &doc.to_string())
+    write_atomic(config_path, &doc.to_string())?;
+    Ok(full)
 }
+
 /// Removes a folder from the config file. Data already uploaded stays on the master.
 pub fn remove_folder_from_file(config_path: &Path, name: &str) -> Result<()> {
     Config::load(config_path)?;
@@ -504,7 +506,7 @@ watch = false
         assert!(Config::load(&cfg).unwrap().shared.is_empty(), "a config without the table has none attached");
         let new = attach_shared_to_file(&cfg, "fresh", &dir.path().join("not/there/yet")).unwrap();
         assert!(new.path.is_dir(), "a folder that does not exist is made");
-        detach_shared_from_file(&cfg, "fresh").unwrap();
+        assert_eq!(detach_shared_from_file(&cfg, "fresh").unwrap(), "fresh", "it says which folder it detached");
         add_folder_to_file(&cfg, &dir.path().join("c"), None).unwrap();
         attach_shared_to_file(&cfg, "family", &dir.path().join("a")).unwrap();
         attach_shared_to_file(&cfg, "work", &dir.path().join("b")).unwrap();

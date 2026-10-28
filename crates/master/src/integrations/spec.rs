@@ -26,6 +26,8 @@ pub struct MirrorSpec {
     /// rclone backend options (`access_key_id`, `region`, ...), as rclone's lowercase names.
     pub options: BTreeMap<String, Value>,
     pub interval_hours: f64,
+    /// The folder it holds, like `ana/laptop/Documents` or `_master`; empty for everything (`scope`).
+    pub scope: String,
     /// Runs of history (replaced and removed files) kept on the mirror.
     pub keep_runs: i64,
 }
@@ -85,6 +87,7 @@ impl MirrorSpec {
             }
             self.options = options;
         }
+        self.scope = crate::integrations::scope::normalize(&self.scope)?;
         self.interval_hours = hours_to_secs(self.interval_hours).map_err(|e| anyhow!(e.1))? as f64 / 3600.0;
         if !(1..=100).contains(&self.keep_runs) {
             bail!("keep_runs must be between 1 and 100");
@@ -105,6 +108,7 @@ mod tests {
             remote_path: " bucket/x ".into(),
             options: [("Access-Key".to_string(), Value::from(1))].into(),
             interval_hours: 72.0,
+            scope: " /ana/laptop/ ".into(),
             keep_runs: 3,
         }
     }
@@ -121,6 +125,7 @@ mod tests {
         m.normalize().unwrap();
         assert_eq!((m.remote_type.as_str(), m.remote_path.as_str()), ("s3", "bucket/x"));
         assert_eq!(m.options["access_key"], Value::from("1"));
+        assert_eq!(m.scope, "ana/laptop");
         let mut bad = spec();
         bad.keep_runs = 0;
         assert!(bad.normalize().is_err());
