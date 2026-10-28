@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/common", "crates/db", "crates/master", "crates/client", "crates/sign", "crates/stream"]
 
 [workspace.package]
-version = "3.7.0"
+version = "3.9.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/jameelhamdan/fafnirx"
