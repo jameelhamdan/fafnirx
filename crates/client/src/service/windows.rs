@@ -112,11 +112,13 @@ fn host() -> Result<()> {
             report(ServiceState::StopPending, 0, ServiceControlAccept::empty());
             exit_with(0);
         }
-        if let Ok(result) = done_rx.try_recv() {
-            match result {
-                Ok(()) => exit_with(0),
-                Err(e) => bail!("{e}"),
-            }
+        match done_rx.try_recv() {
+            Ok(Ok(())) => exit_with(0),
+            Ok(Err(e)) => bail!("{e}"),
+            // The client's thread ended without an answer: it panicked (the hook logged where). Ending with an error makes the
+            // Service Control Manager start it again, instead of a service that runs and does nothing.
+            Err(mpsc::TryRecvError::Disconnected) => bail!("the client stopped after an error (see above)"),
+            Err(mpsc::TryRecvError::Empty) => {}
         }
     }
 }
