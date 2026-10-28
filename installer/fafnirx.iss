@@ -17,9 +17,10 @@ VersionInfoVersion={#AppVersion}
 VersionInfoProductVersion={#AppVersion}
 VersionInfoProductName=fafnirx
 VersionInfoDescription=fafnirx client setup
-DefaultDirName={localappdata}\fafnirx
+DefaultDirName={autopf}\fafnirx
 DisableProgramGroupPage=yes
-PrivilegesRequired=lowest
+; The client is a service of the computer, for every user: it is installed by an administrator, into a folder that users cannot change.
+PrivilegesRequired=admin
 OutputDir=..\dist
 OutputBaseFilename=fafnirx-setup-{#AppVersion}
 Compression=lzma2
@@ -30,13 +31,17 @@ ChangesEnvironment=yes
 UninstallDisplayName=fafnirx {#AppVersion}
 
 [Tasks]
-Name: addpath; Description: "Add fafnirx to the user PATH"; Flags: checkedonce
+Name: addpath; Description: "Add fafnirx to the PATH"; Flags: checkedonce
 
 [Files]
 Source: "{#ExePath}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Registry]
-Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addpath; Check: NeedsPath(ExpandConstant('{app}'))
+Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addpath; Check: NeedsPath(ExpandConstant('{app}'))
+
+[Run]
+; The tray of the person who ran the setup; everyone else's starts when they log in.
+Filename: "{app}\fafnirx.exe"; Parameters: "tray --hidden"; Flags: nowait runasoriginaluser; Check: IsEnrolled
 
 [UninstallRun]
 Filename: "{app}\fafnirx.exe"; Parameters: "uninstall-service"; Flags: runhidden; RunOnceId: "UninstallService"
@@ -52,14 +57,19 @@ var
 
 function ConfigFile: string;
 begin
-  Result := ExpandConstant('{userappdata}\fafnirx\config.toml');
+  Result := ExpandConstant('{commonappdata}\fafnirx\config.toml');
+end;
+
+function IsEnrolled: Boolean;
+begin
+  Result := FileExists(ConfigFile);
 end;
 
 function NeedsPath(Dir: string): Boolean;
 var
   Paths: string;
 begin
-  if not RegQueryStringValue(HKCU, 'Environment', 'Path', Paths) then
+  if not RegQueryStringValue(HKLM, 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment', 'Path', Paths) then
     Paths := '';
   Result := Pos(';' + Lowercase(Dir) + ';', ';' + Lowercase(Paths) + ';') = 0;
 end;
@@ -148,6 +158,9 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Code: Integer;
 begin
+  // The service is stopped through the Service Control Manager, which waits for it, so that it is not started again; what is left
+  // (the trays of the users) is ended.
+  Exec(ExpandConstant('{sys}\net.exe'), 'stop fafnirx', '', SW_HIDE, ewWaitUntilTerminated, Code);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM fafnirx.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
   Sleep(500);
   Result := '';
@@ -171,7 +184,7 @@ begin
     Exit;
   if Trim(ServerEdit.Text) = '' then
   begin
-    // Upgrade of an enrolled device: keep its settings and register the client again.
+    // Upgrade of an enrolled device: keep its settings and register the service again.
     if FileExists(ConfigFile) then
       RunClient('install-service', ExpandConstant('{tmp}\fafnirx-setup.log'));
     Exit;
@@ -205,20 +218,20 @@ begin
   if CurUninstallStep = usUninstall then
   begin
     // Make sure no client still holds fafnirx.exe open when the files are removed.
-    Exec(ExpandConstant('{sys}	askkill.exe'), '/F /IM fafnirx.exe', '', SW_HIDE, ewWaitUntilTerminated, P);
+    Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM fafnirx.exe', '', SW_HIDE, ewWaitUntilTerminated, P);
     Sleep(1000);
     Exit;
   end;
   if CurUninstallStep <> usPostUninstall then
     Exit;
   Dir := ExpandConstant('{app}');
-  if RegQueryStringValue(HKCU, 'Environment', 'Path', Paths) then
+  if RegQueryStringValue(HKLM, 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment', 'Path', Paths) then
   begin
     P := Pos(';' + Lowercase(Dir), ';' + Lowercase(Paths));
     if P > 0 then
     begin
       Delete(Paths, P, Length(Dir) + 1);
-      RegWriteExpandStringValue(HKCU, 'Environment', 'Path', Paths);
+      RegWriteExpandStringValue(HKLM, 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment', 'Path', Paths);
     end;
   end;
 end;

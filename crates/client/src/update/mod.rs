@@ -7,6 +7,8 @@
 //! Only the program file is replaced. The config, the token in the keychain and the state directory (with the
 //! installation id) stay, so the updated client is the same device and goes on where the old one stopped.
 
+pub mod release;
+
 use crate::config::Config;
 use crate::net::Client;
 use anyhow::{anyhow, bail, Context, Result};
@@ -53,15 +55,17 @@ pub fn verify(public_key_b64: &str, message: &str, signature: &[u8]) -> Result<(
 
 /// The version an update would install, if one is available; nothing is downloaded. From the master the offer must carry a
 /// valid signature to count, the same as for installing it.
-pub async fn check(client: &mut Client, cfg: &Config) -> Result<Option<String>> {
+pub async fn check(client: Option<&mut Client>, cfg: &Config) -> Result<Option<String>> {
     let platform = platform();
     if let Some(public_key) = cfg.update_public_key.as_deref() {
+        let client = client.context("builds you signed are offered by the master: this needs its device token")?;
         return Ok(offer(client, public_key).await?.map(|info| info.version));
     }
-    let found =
-        tokio::task::spawn_blocking(move || crate::release::latest(&crate::release::agent(), &platform, VERSION))
-            .await
-            .context("the check stopped")??;
+    let found = tokio::task::spawn_blocking(move || {
+        crate::update::release::latest(&crate::update::release::agent(), &platform, VERSION)
+    })
+    .await
+    .context("the check stopped")??;
     Ok(found.map(|f| f.version))
 }
 
@@ -84,74 +88,11 @@ pub fn installed_by_dpkg() -> bool {
     false
 }
 
-/// How a `.deb` is installed by someone who is not root.
-#[derive(Debug, PartialEq)]
-pub enum Installer {
-    /// This process is root.
-    Direct,
-    /// `sudo`, asking in the terminal this was started in.
-    Sudo,
-    /// `pkexec`, asking in a window (polkit).
-    Pkexec,
-    /// Neither can ask: the person is told the command.
-    Manual,
-}
-
-/// What decides how a package is installed.
-pub struct Facts {
-    pub root: bool,
-    /// Standard input is a terminal, so a password can be typed.
-    pub terminal: bool,
-    /// A graphical session (X11 or Wayland) is there, so a window can ask.
-    pub graphical: bool,
-    pub sudo: bool,
-    pub pkexec: bool,
-}
-
-/// Whoever is at the keyboard is asked where they are: in the terminal if there is one, else in a window.
-pub fn choose_installer(f: &Facts) -> Installer {
-    if f.root {
-        Installer::Direct
-    } else if f.terminal && f.sudo {
-        Installer::Sudo
-    } else if f.graphical && f.pkexec {
-        Installer::Pkexec
-    } else {
-        Installer::Manual
-    }
-}
-
-fn on_path(program: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
-}
-
 /// Installs a `.deb` that was downloaded and checked, asking for permission the way the situation allows.
 fn install_deb(package: &Path) -> Result<()> {
-    use std::io::IsTerminal;
-    let root = std::process::Command::new("id").arg("-u").output().is_ok_and(|o| o.stdout.trim_ascii() == b"0");
-    let facts = Facts {
-        root,
-        terminal: std::io::stdin().is_terminal(),
-        graphical: std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some(),
-        sudo: on_path("sudo"),
-        pkexec: on_path("pkexec"),
-    };
-    let (program, args): (&str, Vec<&std::ffi::OsStr>) = match choose_installer(&facts) {
-        Installer::Direct => ("dpkg", vec!["-i".as_ref(), package.as_os_str()]),
-        Installer::Sudo => ("sudo", vec!["dpkg".as_ref(), "-i".as_ref(), package.as_os_str()]),
-        Installer::Pkexec => ("pkexec", vec!["dpkg".as_ref(), "-i".as_ref(), package.as_os_str()]),
-        Installer::Manual => bail!(
-            "installing needs root and nothing here can ask for it. The package is checked and kept: run `sudo dpkg -i {}`",
-            package.display()
-        ),
-    };
-    let status = std::process::Command::new(program).args(args).status().with_context(|| format!("run {program}"))?;
-    if !status.success() {
-        bail!("{program} could not install the package ({status}); it is kept at {}", package.display());
-    }
-    Ok(())
+    crate::service::elevate::run("dpkg", &["-i", &package.to_string_lossy()])
+        .with_context(|| format!("the package is checked and kept at {}", package.display()))
 }
-
 #[cfg(unix)]
 fn set_mode(path: &Path, mode: u32) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -161,12 +102,13 @@ fn set_mode(path: &Path, mode: u32) -> Result<()> {
 /// Updates a package install: downloads the `.deb` of the newest release, checks it, and has it installed. The background check
 /// does not do this (`interactive` is false): it cannot ask for permission, so it only says that there is a newer version.
 async fn from_package(work_dir: &Path, interactive: bool) -> Result<bool> {
-    let arch = crate::release::deb_arch().context("there is no package for this kind of computer")?;
+    let arch = crate::update::release::deb_arch().context("there is no package for this kind of computer")?;
     if !interactive {
-        let found =
-            tokio::task::spawn_blocking(move || crate::release::latest_deb(&crate::release::agent(), arch, VERSION))
-                .await
-                .context("the check stopped")??;
+        let found = tokio::task::spawn_blocking(move || {
+            crate::update::release::latest_deb(&crate::update::release::agent(), arch, VERSION)
+        })
+        .await
+        .context("the check stopped")??;
         if let Some(found) = found {
             tracing::info!("version {} is available; this install is updated from the tray's Update entry or with `fafnirx update`", found.version);
         }
@@ -180,7 +122,7 @@ async fn from_package(work_dir: &Path, interactive: bool) -> Result<bool> {
     #[cfg(unix)]
     set_mode(&dir, 0o700)?;
     let _ = std::fs::remove_file(&package); // one kept from a failed install is read-only
-    let version = tokio::task::spawn_blocking(move || crate::release::download_deb(arch, VERSION, &work))
+    let version = tokio::task::spawn_blocking(move || crate::update::release::download_deb(arch, VERSION, &work))
         .await
         .context("the download stopped")??;
     let Some(version) = version else { return Ok(false) };
@@ -215,7 +157,7 @@ pub async fn check_and_apply(client: &mut Client, cfg: &Config, work_dir: &Path,
     std::fs::create_dir_all(work_dir)?;
     let tmp = work_dir.join("update.new");
     let (platform, work) = (platform(), tmp.clone());
-    let version = tokio::task::spawn_blocking(move || crate::release::download(&platform, VERSION, &work))
+    let version = tokio::task::spawn_blocking(move || crate::update::release::download(&platform, VERSION, &work))
         .await
         .context("the download stopped")??;
     let Some(version) = version else { return Ok(false) };
@@ -282,23 +224,6 @@ async fn from_master(client: &mut Client, public_key: &str, work_dir: &Path) -> 
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
-
-    #[test]
-    fn a_package_is_installed_by_whoever_can_ask_for_permission_where_they_are() {
-        let f = |root, terminal, graphical, sudo, pkexec| {
-            choose_installer(&Facts { root, terminal, graphical, sudo, pkexec })
-        };
-        assert_eq!(f(true, false, false, false, false), Installer::Direct, "root needs nobody's permission");
-        assert_eq!(f(false, true, true, true, true), Installer::Sudo, "at a terminal, the terminal asks");
-        assert_eq!(f(false, false, true, true, true), Installer::Pkexec, "from the tray, a window asks");
-        assert_eq!(
-            f(false, true, false, false, true),
-            Installer::Manual,
-            "a terminal without sudo cannot ask, and no window is there"
-        );
-        assert_eq!(f(false, false, false, true, true), Installer::Manual, "a background client cannot ask at all");
-        assert_eq!(f(false, false, true, true, false), Installer::Manual, "no polkit");
-    }
 
     #[test]
     fn version_ordering() {

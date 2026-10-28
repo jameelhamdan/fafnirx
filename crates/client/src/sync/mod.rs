@@ -1,14 +1,20 @@
 //! One collection cycle: scan, detect renames and deletes, upload what changed.
 //! Upload only: nothing here asks the master for data. A shared folder receives first (`shared`) and then sends with this engine.
 
+pub mod guard;
+pub mod hash;
+pub mod scan;
+pub mod state;
+pub mod throttle;
+
 use crate::config::{Config, Folder};
 use crate::daemon::Activity;
-use crate::guard::{self, folder_of, Grouping};
-use crate::hash::{hash_file, stat, Hashed};
 use crate::net::Client;
-use crate::scan::{scan_folder, Entry};
-use crate::state::{may_attempt, State, Synced, BACKOFF_SECS};
-use crate::throttle::Limiter;
+use crate::sync::guard::{folder_of, Grouping};
+use crate::sync::hash::{hash_file, stat, Hashed};
+use crate::sync::scan::{scan_folder, Entry};
+use crate::sync::state::{may_attempt, State, Synced, BACKOFF_SECS};
+use crate::sync::throttle::Limiter;
 use fafnirx_common::{chunk_hash, pb, unix_now, CHUNK_SIZE};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

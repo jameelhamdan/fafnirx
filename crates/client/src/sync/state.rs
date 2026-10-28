@@ -81,7 +81,7 @@ impl State {
     }
 
     /// Files synced per folder.
-    pub fn synced_per_folder(&self, group: crate::guard::Grouping) -> Result<HashMap<String, usize>> {
+    pub fn synced_per_folder(&self, group: crate::sync::guard::Grouping) -> Result<HashMap<String, usize>> {
         let mut counts = HashMap::new();
         for s in self.all_synced()? {
             *counts.entry(group(&s.path).to_string()).or_default() += 1;

@@ -60,19 +60,26 @@ Download from the [latest release](https://github.com/jameelhamdan/fafnirx/relea
 Windows `fafnirx-setup-<version>.exe`; macOS `fafnirx-<version>-macos-{aarch64,x86_64}.tar.gz`; Debian/Ubuntu
 `fafnirx_<version>-1_{amd64,arm64}.deb`; other Linux `fafnirx-<version>-linux-{x86_64,aarch64}.tar.gz`.
 
-- **Windows:** run the setup (SmartScreen: *More info → Run anyway*; no admin rights). It asks for `http://<server>:7443`, the
-  token and a folder, then enrolls and starts the client now and at login. Silent:
+- **Windows:** run the setup (SmartScreen: *More info* → *Run anyway*; it asks for administrator rights once). It asks for
+  `http://<server>:7443`, the token and a folder, then enrolls and installs the **fafnirx** service (see it in `services.msc` and
+  Task Manager) and starts it. Silent:
   `fafnirx-setup-<version>.exe /VERYSILENT /SERVER=nas.lan /TOKEN=<token> /FOLDER="C:\Users\me\Documents"`.
 - **macOS, Linux:**
   ```sh
   curl -fsSL https://raw.githubusercontent.com/jameelhamdan/fafnirx/master/installer/get.sh | sh -s -- \
       --server http://<server>:7443 --folder ~/Documents
   ```
-  It downloads the release, checks the `.sha256`, installs to `~/.local/bin`, enrolls (asks for the token; or
-  `FAFNIRX_TOKEN`, `FAFNIRX_VERSION`), adds folders (repeat `--folder`) and starts at login (LaunchAgent / systemd user unit).
-  From a tarball run `sh install.sh ...`. Linux without a login session: `loginctl enable-linger $USER`. macOS blocking the
-  binary: `xattr -d com.apple.quarantine ~/.local/bin/fafnirx`.
-- **Debian, Ubuntu:** `sudo apt install ./fafnirx_<version>-1_amd64.deb`, then `fafnirx enroll --server http://<server>:7443` and `fafnirx add-folder ~/Documents`.
+  It downloads the release, checks the `.sha256`, installs to `/usr/local/bin` (asks for the administrator password), enrolls
+  (asks for the token; or `FAFNIRX_TOKEN`, `FAFNIRX_VERSION`), adds folders (repeat `--folder`) and starts the service (systemd
+  unit / LaunchDaemon). From a tarball run `sh install.sh ...`. macOS blocking the binary:
+  `sudo xattr -d com.apple.quarantine /usr/local/bin/fafnirx`.
+- **Debian, Ubuntu:** `sudo apt install ./fafnirx_<version>-1_amd64.deb`, then `sudo fafnirx enroll --server http://<server>:7443`
+  (asks for the token; it starts the service) and `sudo fafnirx add-folder ~/Documents`.
+
+The client is **a service of the computer**: it starts at boot, is started again when it fails, reads the folders of every user,
+and its tray starts when a user logs in. Its config, token and state are in `%ProgramData%\fafnirx` (Windows),
+`/etc/fafnirx` and `/var/lib/fafnirx` (Linux), `/Library/Application Support/fafnirx` (macOS), where only administrators can
+change them; commands that change them ask for administrator rights (UAC, `sudo`).
 
 Check with `fafnirx status` and `fafnirx folders`; the device shows online within a minute. [Commands](usage.md#the-client).
 
@@ -82,7 +89,7 @@ A folder is stored as `<you>/<device>/<name>/`; the name defaults to the folder'
 use `--name`. Names are compared ignoring case and accents; `add-folder` refuses a clash. **Address:** on a LAN/VPN
 `http://<master>:7443`; over the internet an `https://` address in front of the master (`enroll` warns about plain `http://`).
 
-**Uninstall:** Windows *Apps → fafnirx*; Linux/macOS `fafnirx uninstall-service` and delete `~/.local/bin/fafnirx` (or
+**Uninstall:** Windows *Apps* → *fafnirx*; Linux/macOS `sudo fafnirx uninstall-service` and delete `/usr/local/bin/fafnirx` (or
 `sudo apt remove fafnirx`). Data on the master stays. **From source:** [Development](development.md#build-and-run).
 
 ## Troubleshooting

@@ -1,16 +1,19 @@
 //! The long running client: heartbeat, watcher, periodic scan and update checks.
 
-use crate::config::Config;
-use crate::credentials;
+mod status;
+
+pub use status::*;
+
+use crate::config::credentials;
+use crate::config::{control_dir, Config};
 use crate::net::{self, Client};
-use crate::state::State;
+use crate::sync::state::State;
+use crate::sync::throttle::Limiter;
 use crate::sync::{Engine, Report, SyncError};
-use crate::throttle::Limiter;
 use crate::update;
 use anyhow::Result;
 use fafnirx_common::{pb, unix_now};
 use notify::{RecursiveMode, Watcher};
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,178 +26,6 @@ const UPDATE_CHECK_SECS: u64 = 6 * 3600;
 /// How soon files that failed are tried again.
 const RETRY_SECS: u64 = 600;
 const DEBOUNCE: Duration = Duration::from_secs(2);
-
-/// What the engine is doing right now, shared with the status writer.
-#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
-#[serde(default)]
-pub struct Activity {
-    /// idle | scanning | hashing | uploading
-    pub phase: String,
-    /// Remote path of the file being worked on.
-    pub current: String,
-    pub done: usize,
-    pub total: usize,
-    /// Bytes sent so far in this cycle.
-    pub bytes: u64,
-    /// Sizes of the files to upload this cycle, and of those already finished before the current one.
-    pub total_bytes: u64,
-    pub base_bytes: u64,
-    /// Size of the current file, and the cycle's sent counter when it started.
-    pub file_size: u64,
-    pub file_start: u64,
-    /// Filled in by the status writer: progress of the current file, of the whole cycle, and upload speed.
-    pub file_bytes: u64,
-    pub done_bytes: u64,
-    pub speed_bps: u64,
-}
-
-/// What one shared folder attached to this computer is doing, for `status`, the tray and the master.
-#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
-#[serde(default)]
-pub struct SharedStatus {
-    /// `<owner>/<name>`.
-    pub name: String,
-    pub path: String,
-    /// Files and bytes in step with the master.
-    pub files: usize,
-    pub bytes: u64,
-    /// When the last cycle for this folder finished (unix seconds), 0 before the first.
-    pub last_cycle: i64,
-    /// The last problem of that cycle, empty when it went well.
-    pub last_error: String,
-    /// Deletions held back (not applied here, or not sent), see the delete guard.
-    pub held: usize,
-    /// Files waiting for a retry.
-    pub failing: usize,
-}
-
-impl SharedStatus {
-    /// One line for `status` and the tray: whether it is in step, how much, how long ago, and what needs attention.
-    pub fn summary(&self, now: i64) -> String {
-        let mut parts = Vec::new();
-        if self.last_cycle == 0 {
-            parts.push("waiting for the first sync".to_string());
-        } else {
-            let ok = self.last_error.is_empty() && self.failing == 0;
-            parts.push(if ok { "in step" } else { "needs attention" }.to_string());
-            parts.push(format!("{} files", self.files));
-            parts.push(format!("synced {} ago", age(now - self.last_cycle)));
-        }
-        if self.held > 0 {
-            parts.push(format!("{} deletions held back", self.held));
-        }
-        if self.failing > 0 {
-            parts.push(format!("{} files waiting for a retry", self.failing));
-        }
-        if !self.last_error.is_empty() {
-            parts.push(format!("last problem: {}", self.last_error.chars().take(120).collect::<String>()));
-        }
-        parts.join(", ")
-    }
-}
-
-/// `45s`, `12m`, `3h`, `2d`.
-pub fn age(seconds: i64) -> String {
-    match seconds.max(0) {
-        s if s < 60 => format!("{s}s"),
-        s if s < 3600 => format!("{}m", s / 60),
-        s if s < 86_400 => format!("{}h", s / 3600),
-        s => format!("{}d", s / 86_400),
-    }
-}
-
-#[derive(Serialize, Deserialize, Default, Clone)]
-#[serde(default)]
-pub struct Status {
-    pub version: String,
-    pub pid: u32,
-    /// When the daemon started (unix seconds).
-    pub started: i64,
-    pub server: String,
-    /// Device name on the master, as confirmed by the last heartbeat.
-    pub device: String,
-    pub online: bool,
-    /// Why the master is unreachable, when it is.
-    pub message: String,
-    pub last_cycle: i64,
-    /// True while a collection cycle (scan and upload) is running.
-    pub syncing: bool,
-    pub activity: Activity,
-    /// The last finished cycle.
-    pub last: Report,
-    pub folders: usize,
-    /// Everything the master has from this device, as of the last cycle.
-    pub synced_files: usize,
-    pub synced_bytes: u64,
-    /// Files that failed and are waiting to be retried.
-    pub failing: usize,
-    /// Totals since the daemon started.
-    pub session_files: usize,
-    pub session_bytes: u64,
-    /// When the next periodic scan is due (unix seconds).
-    pub next_scan: i64,
-    pub bandwidth_limit_kbps: u64,
-    pub last_error: String,
-    /// Why the client could not start or had to stop. Written as it exits, since nobody sees the output of a
-    /// hidden client; the tray shows it until the next start clears it.
-    pub fatal: String,
-    /// True until every file of the collected folders has been sent once: the first sync of a new install.
-    pub initial_sync: bool,
-    /// The shared folders attached here.
-    pub shared: Vec<SharedStatus>,
-    pub updated: i64,
-}
-
-pub struct StatusFile {
-    path: PathBuf,
-    inner: Mutex<Status>,
-}
-
-impl StatusFile {
-    pub fn new(path: PathBuf) -> Self {
-        let status = Status {
-            version: update::VERSION.into(),
-            pid: std::process::id(),
-            started: unix_now(),
-            ..Default::default()
-        };
-        Self { path, inner: Mutex::new(status) }
-    }
-
-    pub fn snapshot(&self) -> Status {
-        self.inner.lock().map(|s| s.clone()).unwrap_or_default()
-    }
-
-    pub fn edit(&self, f: impl FnOnce(&mut Status)) {
-        let Ok(mut s) = self.inner.lock() else { return };
-        f(&mut s);
-        s.updated = unix_now();
-        if let Ok(json) = serde_json::to_vec_pretty(&*s) {
-            let tmp = self.path.with_extension("tmp");
-            if std::fs::write(&tmp, json).is_ok() {
-                let _ = std::fs::rename(&tmp, &self.path);
-            }
-        }
-    }
-}
-
-pub fn read_status(state_dir: &Path) -> Option<Status> {
-    serde_json::from_slice(&std::fs::read(state_dir.join("status.json")).ok()?).ok()
-}
-
-pub fn paused_marker(state_dir: &Path) -> PathBuf {
-    state_dir.join("paused")
-}
-
-/// Created by the tray (or by hand) to start a cycle now. The daemon removes it.
-pub fn sync_now_marker(state_dir: &Path) -> PathBuf {
-    state_dir.join("sync-now")
-}
-
-/// Created to ask the daemon to exit. The daemon removes it.
-pub fn stop_marker(state_dir: &Path) -> PathBuf {
-    state_dir.join("stop")
-}
 
 /// The master refused this client because another computer is using the same device: it must not send anything.
 #[derive(Debug)]
@@ -324,23 +155,11 @@ impl Identity {
     }
 }
 
-/// How a client exits to be started again by systemd or launchd, which restart one that exits with an error and leave
-/// one that exits cleanly (the tray's "stop") alone.
-#[cfg(not(windows))]
-const RESTART_EXIT_CODE: i32 = 75;
-
-/// Starts the executable again and exits, to run a new version or pick up a new enrollment. Only the daemon itself can do this on Windows
-/// (the Run key only fires at logon); systemd and launchd restart it when it exits with an error.
+/// Ends the client to be started again, to run a new version or pick up a new enrollment.
 fn restart() -> ! {
     // The new process needs the instance lock.
-    crate::instance::release("daemon");
-    #[cfg(windows)]
-    {
-        let _ = crate::service::spawn_detached(std::env::args_os().skip(1));
-        std::process::exit(0)
-    }
-    #[cfg(not(windows))]
-    std::process::exit(RESTART_EXIT_CODE)
+    crate::service::instance::release("daemon");
+    crate::service::exit_to_be_restarted()
 }
 
 /// Handles requests from the tray (sync now, stop) and copies what the engine is doing into the status file.
@@ -358,8 +177,8 @@ fn spawn_control(shared: Shared, activity: Arc<Mutex<Activity>>, sent: Arc<Atomi
             if std::fs::remove_file(stop_marker(&dir)).is_ok() {
                 tracing::info!("stop requested, exiting");
                 // No status file means "not running" to the tray and to `fafnirx status`.
-                let _ = std::fs::remove_file(dir.join("status.json"));
-                std::process::exit(0);
+                let _ = std::fs::remove_file(status_file(&dir));
+                crate::service::exit_clean();
             }
             let mut now = activity.lock().map(|a| a.clone()).unwrap_or_default();
             let total_sent = sent.load(Ordering::Relaxed);
@@ -388,6 +207,7 @@ fn spawn_control(shared: Shared, activity: Arc<Mutex<Activity>>, sent: Arc<Atomi
 /// Keeps the master informed and notices when it is reachable again.
 fn spawn_heartbeat(shared: Shared, mut client: Client, config_path: PathBuf, identity: Identity) {
     tokio::spawn(async move {
+        let mut beats = 0u32;
         loop {
             if let Ok(cfg) = Config::load(&config_path) {
                 // Re-enrolling changes the token or the server; connections already made keep the old ones.
@@ -401,6 +221,15 @@ fn spawn_heartbeat(shared: Shared, mut client: Client, config_path: PathBuf, ide
                             tracing::info!("connected to {}", cfg.server);
                             shared.wake.notify_one();
                         }
+                        // The list of shared folders changes rarely: it is asked for every third beat.
+                        if beats.is_multiple_of(3) {
+                            if let Ok(listed) = client.list_shared(pb::ListSharedRequest {}).await {
+                                let listed = listed.into_inner();
+                                let names = listed.names.iter().map(|n| (n.clone(), listed.mine.contains(n))).collect();
+                                shared.status.edit(|s| s.shared_on_master = names);
+                            }
+                        }
+                        beats = beats.wrapping_add(1);
                         shared.status.edit(|s| {
                             s.online = true;
                             s.message.clear();
@@ -492,6 +321,37 @@ fn spawn_updater(mut client: Client, config_path: PathBuf, work_dir: PathBuf) {
     });
 }
 
+/// Answers `fafnirx update`: the program file is where only the service may change it, so the service does the update, says how
+/// it went in `update_result_file`, and starts again on the new version.
+fn spawn_update_requests(mut client: Client, config_path: PathBuf, state_dir: PathBuf) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let marker = update_marker(&state_dir);
+            // Empty while the request is being written.
+            let Some(nonce) = std::fs::read_to_string(&marker).ok().filter(|n| !n.is_empty()) else { continue };
+            let _ = std::fs::remove_file(&marker);
+            let (answer, restart_now) = match Config::load(&config_path) {
+                Err(e) => (format!("failed: {e:#}"), false),
+                Ok(cfg) => match update::check(Some(&mut client), &cfg).await {
+                    Err(e) => (format!("failed: {e:#}"), false),
+                    Ok(None) => (format!("current {}", update::VERSION), false),
+                    Ok(Some(version)) => match update::check_and_apply(&mut client, &cfg, &state_dir, true).await {
+                        Ok(true) => (format!("updated {version}"), true),
+                        Ok(false) => (format!("current {}", update::VERSION), false),
+                        Err(e) => (format!("failed: {e:#}"), false),
+                    },
+                },
+            };
+            let _ = std::fs::write(update_result_file(&state_dir), format!("{nonce}\n{answer}"));
+            if restart_now {
+                tracing::info!("restarting to run the new version");
+                restart();
+            }
+        }
+    });
+}
+
 /// Writes the outcome of one cycle into the status file.
 fn record_cycle(shared: &Shared, result: Result<Report, SyncError>) {
     match result {
@@ -524,25 +384,26 @@ pub async fn run(config_path: PathBuf) -> Result<()> {
     let cfg = Config::load(&config_path)?;
     let state_dir = cfg.state_dir(&config_path);
     std::fs::create_dir_all(&state_dir)?;
-    if !crate::instance::claim(&state_dir, "daemon", 20)? {
+    std::fs::create_dir_all(control_dir(&state_dir))?;
+    if !crate::service::instance::claim(&state_dir, "daemon", 20)? {
         println!("fafnirx is already running for {}", config_path.display());
         return Ok(());
     }
     let result = serve(config_path, cfg, state_dir.clone()).await;
     if let Err(e) = &result {
-        StatusFile::new(state_dir.join("status.json")).edit(|s| s.fatal = format!("{e:#}"));
+        StatusFile::new(status_file(&state_dir)).edit(|s| s.fatal = format!("{e:#}"));
     }
     result
 }
 
 async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Result<()> {
     let token = credentials::load(&cfg.server, &config_path, cfg.token.as_deref())?;
-    let client = net::client(&cfg, &token, &crate::instance::client_id(&state_dir))?;
+    let client = net::client(&cfg, &token, &crate::service::instance::client_id(&state_dir))?;
     let identity = Identity::load(&cfg, &config_path)?;
     let marker = paused_marker(&state_dir);
 
     let shared = Shared {
-        status: Arc::new(StatusFile::new(state_dir.join("status.json"))),
+        status: Arc::new(StatusFile::new(status_file(&state_dir))),
         wake: Arc::new(Notify::new()),
         online: Arc::new(AtomicBool::new(false)),
         errors: Arc::new(Mutex::new(Vec::new())),
@@ -565,6 +426,7 @@ async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Res
     spawn_control(shared.clone(), engine.activity.clone(), engine.sent.clone(), state_dir.clone());
     spawn_heartbeat(shared.clone(), client.clone(), config_path.clone(), identity);
     spawn_shared_watch(shared.clone(), client.clone(), config_path.clone());
+    spawn_update_requests(client.clone(), config_path.clone(), state_dir.clone());
     spawn_updater(client, config_path.clone(), state_dir.clone());
 
     let mut watched: Vec<PathBuf> = Vec::new();

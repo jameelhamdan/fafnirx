@@ -5,7 +5,7 @@
 //! which is long enough to be sure it was meant. The master keeps the data of deleted files for its retention period in
 //! any case; this keeps them in its live tree and web app meanwhile. Small deletes are never held.
 
-use crate::state::Synced;
+use crate::sync::state::Synced;
 use std::collections::HashMap;
 
 /// A folder trips the guard when at least this many of its synced files vanished...

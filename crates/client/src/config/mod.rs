@@ -1,5 +1,10 @@
 //! TOML configuration and the per-OS locations of config, state and secrets.
 
+pub mod credentials;
+mod paths;
+
+pub use paths::*;
+
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -68,7 +73,7 @@ fn default_scan() -> u64 {
     3600
 }
 fn default_hold() -> u64 {
-    crate::guard::DEFAULT_HOLD_HOURS
+    crate::sync::guard::DEFAULT_HOLD_HOURS
 }
 
 impl Config {
@@ -191,7 +196,7 @@ fn write_atomic(path: &Path, text: &str) -> Result<()> {
     std::fs::rename(&tmp, path).with_context(|| format!("replace {}", path.display()))
 }
 
-fn same_path(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
     if cfg!(windows) {
         a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
     } else {
@@ -347,38 +352,6 @@ pub fn remove_folder_from_file(config_path: &Path, name: &str) -> Result<()> {
         folders.remove(i);
     }
     write_atomic(config_path, &doc.to_string())
-}
-
-fn env_dir(var: &str) -> Option<PathBuf> {
-    std::env::var_os(var).filter(|v| !v.is_empty()).map(PathBuf::from)
-}
-
-fn home() -> PathBuf {
-    env_dir("HOME").or_else(|| env_dir("USERPROFILE")).unwrap_or_else(|| PathBuf::from("."))
-}
-
-pub fn default_config_path() -> PathBuf {
-    let dir = if cfg!(windows) {
-        env_dir("APPDATA").unwrap_or_else(|| home().join("AppData/Roaming"))
-    } else if cfg!(target_os = "macos") {
-        home().join("Library/Application Support")
-    } else {
-        env_dir("XDG_CONFIG_HOME").unwrap_or_else(|| home().join(".config"))
-    };
-    dir.join("fafnirx").join("config.toml")
-}
-
-pub fn default_state_dir(config_path: &Path) -> PathBuf {
-    let dir = if cfg!(windows) {
-        env_dir("LOCALAPPDATA").unwrap_or_else(|| home().join("AppData/Local"))
-    } else if cfg!(target_os = "macos") {
-        home().join("Library/Application Support")
-    } else {
-        env_dir("XDG_STATE_HOME").unwrap_or_else(|| home().join(".local/state"))
-    };
-    // Different config files get different state, so several instances never share a database.
-    let key = hex::encode(&fafnirx_common::chunk_hash(config_path.to_string_lossy().as_bytes())[..4]);
-    dir.join("fafnirx").join(key)
 }
 
 #[cfg(test)]
