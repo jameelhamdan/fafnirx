@@ -72,56 +72,128 @@ impl State {
 
     /// Asks for held deletes to be sent at the next cycle (`fafnirx release-deletes`; the daemon is another process).
     pub fn request_release(&self) -> Result<()> {
-        self.conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('release_deletes', '1')", [])?;
-        Ok(())
+        self.set_meta("release_deletes", "1")
     }
 
     /// Whether a release was asked for; the request is used up.
     pub fn take_release(&self) -> Result<bool> {
-        Ok(self.conn.execute("DELETE FROM meta WHERE key = 'release_deletes'", [])? > 0)
+        self.delete_meta("release_deletes")
     }
 
     /// Files synced per folder.
-    pub fn synced_per_folder(&self) -> Result<HashMap<String, usize>> {
+    pub fn synced_per_folder(&self, group: crate::guard::Grouping) -> Result<HashMap<String, usize>> {
         let mut counts = HashMap::new();
         for s in self.all_synced()? {
-            *counts.entry(crate::guard::folder_of(&s.path).to_string()).or_default() += 1;
+            *counts.entry(group(&s.path).to_string()).or_default() += 1;
         }
         Ok(counts)
+    }
+
+    pub fn meta(&self, key: &str) -> Result<Option<String>> {
+        Ok(self.conn.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0)).optional()?)
+    }
+
+    pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![key, value])?;
+        Ok(())
+    }
+
+    /// Whether held deletes were asked to be sent, without using the request up.
+    pub fn release_requested(&self) -> Result<bool> {
+        Ok(self.meta("release_deletes")?.is_some())
+    }
+
+    fn delete_meta(&self, key: &str) -> Result<bool> {
+        Ok(self.conn.execute("DELETE FROM meta WHERE key = ?1", [key])? > 0)
+    }
+
+    /// Deletions of the master that are held back here (a shared folder): how many, and since when. They are kept until a
+    /// person decides (`release_deletes` applies them, `keep` keeps the files), so this is what `status` shows when the client
+    /// is not running.
+    pub fn pull_hold(&self) -> Result<Option<(usize, i64)>> {
+        let held = self.meta("pull_held")?;
+        Ok(held.and_then(|h| {
+            let (files, since) = h.split_once(':')?;
+            Some((files.parse().ok()?, since.parse().ok()?))
+        }))
+    }
+
+    /// Holds back `files` deletions; the time it began is kept from the first time.
+    pub fn hold_pull(&self, files: usize, now: i64) -> Result<()> {
+        let since = self.pull_hold()?.map_or(now, |(_, since)| since);
+        self.set_meta("pull_held", &format!("{files}:{since}"))
+    }
+
+    /// How many deletions are held back in this state, sent or received.
+    pub fn held_files(&self) -> usize {
+        let sent: usize = self.holds().map(|h| h.values().map(|(n, _)| n).sum()).unwrap_or(0);
+        sent + self.pull_hold().ok().flatten().map_or(0, |(n, _)| n)
+    }
+
+    pub fn clear_pull_hold(&self) -> Result<()> {
+        self.delete_meta("pull_held")?;
+        Ok(())
+    }
+
+    /// Asks that the files whose deletion is held back are kept (`fafnirx shared keep`).
+    pub fn request_keep(&self) -> Result<()> {
+        self.set_meta("keep_deletes", "1")
+    }
+
+    /// Whether keeping was asked for; the request is used up.
+    pub fn take_keep(&self) -> Result<bool> {
+        self.delete_meta("keep_deletes")
+    }
+
+    /// How the last cycle of a shared folder ended: when, and the last problem (empty if it went well).
+    pub fn set_outcome(&self, last_cycle: i64, error: &str) -> Result<()> {
+        self.set_meta("last_cycle", &last_cycle.to_string())?;
+        self.set_meta("last_error", error)
+    }
+
+    pub fn outcome(&self) -> Result<(i64, String)> {
+        let last = self.meta("last_cycle")?.and_then(|v| v.parse().ok()).unwrap_or(0);
+        Ok((last, self.meta("last_error")?.unwrap_or_default()))
     }
 
     /// Ties this record to one master. When `master_id` is not the one the record was made against, what it
     /// says was sent no longer holds, so it is cleared and everything is collected again. Returns how many
     /// files that made pending.
     pub fn adopt_master(&mut self, master_id: &str) -> Result<usize> {
-        let stored: Option<String> =
-            self.conn.query_row("SELECT value FROM meta WHERE key = 'master_id'", [], |r| r.get(0)).optional()?;
-        if stored.as_deref() == Some(master_id) {
+        self.adopt("master_id", master_id)
+    }
+
+    /// What the records belong to besides the master: a shared folder's records are about one local folder, so another one
+    /// starts from nothing (the old ones would make every file of the new folder look deleted).
+    pub fn adopt_folder(&mut self, path: &str) -> Result<usize> {
+        self.adopt("folder", path)
+    }
+
+    /// Keeps `key` = `value` in the meta; when it was something else, everything recorded is cleared first.
+    fn adopt(&mut self, key: &str, value: &str) -> Result<usize> {
+        if self.meta(key)?.as_deref() == Some(value) {
             return Ok(0);
         }
         let tx = self.conn.transaction()?;
         let cleared = tx.execute("DELETE FROM synced", [])?;
         tx.execute("DELETE FROM retry", [])?;
         tx.execute("DELETE FROM held", [])?;
-        tx.execute("DELETE FROM meta WHERE key IN ('initial_sync_done', 'release_deletes')", [])?;
-        tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('master_id', ?1)", [master_id])?;
+        tx.execute(
+            "DELETE FROM meta WHERE key IN ('initial_sync_done', 'release_deletes', 'shared_cursor', 'pull_held', 'keep_deletes')",
+            [],
+        )?;
+        tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", [key, value])?;
         tx.commit()?;
         Ok(cleared)
     }
 
     /// Whether every file of the collected folders has been sent once to this master.
     pub fn initial_sync_done(&self) -> bool {
-        self.conn
-            .query_row("SELECT 1 FROM meta WHERE key = 'initial_sync_done'", [], |_| Ok(()))
-            .optional()
-            .ok()
-            .flatten()
-            .is_some()
+        self.meta("initial_sync_done").ok().flatten().is_some()
     }
 
     pub fn mark_initial_sync_done(&self) -> Result<()> {
-        self.conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('initial_sync_done', '1')", [])?;
-        Ok(())
+        self.set_meta("initial_sync_done", "1")
     }
 
     pub fn synced(&self, path: &str) -> Result<Option<Synced>> {
@@ -239,5 +311,18 @@ mod tests {
         assert!(!st.initial_sync_done(), "and the first sync is to be done again");
         assert!(st.synced("a").unwrap().is_none() && st.retry("b").unwrap().is_none());
         assert_eq!(st.adopt_master("two").unwrap(), 0);
+    }
+
+    #[test]
+    fn what_was_synced_only_counts_for_the_folder_it_was_synced_with() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut st = State::open(&dir.path().join("s.db")).unwrap();
+        assert_eq!(st.adopt_folder("/home/a/Family").unwrap(), 0);
+        st.set_synced(&Synced { path: "a".into(), size: 1, mtime_ns: 2, root_hash: vec![0; 32] }).unwrap();
+        st.set_meta("shared_cursor", "100").unwrap();
+        assert_eq!(st.adopt_folder("/home/a/Family").unwrap(), 0, "the same folder: kept");
+        assert!(st.synced("a").unwrap().is_some());
+        assert_eq!(st.adopt_folder("/home/a/Family2").unwrap(), 1, "another folder: nothing carries over");
+        assert!(st.synced("a").unwrap().is_none() && st.meta("shared_cursor").unwrap().is_none());
     }
 }

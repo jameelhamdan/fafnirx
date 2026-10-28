@@ -92,10 +92,11 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("listen on {addr}"))?;
     tracing::info!("web app on http://{addr}");
     let trusted = state.trusted.clone();
+    let events = state.events.clone();
     let app = web::router(state).into_make_service_with_connect_info::<SocketAddr>();
     servers.spawn(async move { axum::serve(listener, app).await.context("web server") });
 
-    let svc = devices::grpc::Service { db, store, updates_dir: data_dir.join("updates"), trusted };
+    let svc = devices::grpc::Service { db, store, updates_dir: data_dir.join("updates"), trusted, events };
     let addr = address("FAFNIRX_LISTEN", "0.0.0.0:7443")?;
     tracing::info!("fafnirx-master listening for devices on {addr}");
     servers.spawn(async move {

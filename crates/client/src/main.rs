@@ -11,6 +11,7 @@ mod net;
 mod release;
 mod scan;
 mod service;
+mod shared;
 mod state;
 mod sync;
 mod throttle;
@@ -60,6 +61,9 @@ enum Cmd {
     },
     /// List the collected folders
     Folders,
+    /// Shared folders: folders of your user that any of your computers can attach, synced in both directions
+    #[command(subcommand)]
+    Shared(SharedCmd),
     /// Run in the foreground: watch, upload, stay connected
     Run {
         /// Also write the log to a file in the state directory
@@ -79,14 +83,22 @@ enum Cmd {
     /// Run one collection cycle and exit
     Sync,
     /// Show what the running client is doing
-    Status,
+    Status {
+        /// Print it as JSON, for scripts and monitoring
+        #[arg(long)]
+        json: bool,
+    },
     /// Send now the deletions that are held back because a large part of a folder's files disappeared
     ReleaseDeletes,
     /// Stop uploading until `resume`
     Pause,
     Resume,
     /// Check for a new release and install it
-    Update,
+    Update {
+        /// Only say whether there is one (`available <version>` or `current <version>`), install nothing
+        #[arg(long)]
+        check: bool,
+    },
     /// Start automatically at login
     InstallService {
         #[arg(long)]
@@ -96,6 +108,26 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum SharedCmd {
+    /// List the shared folders on the master
+    List,
+    /// Make a shared folder
+    Create { name: String },
+    /// Sync a local folder with a shared folder
+    Attach {
+        name: String,
+        path: PathBuf,
+        /// Make the shared folder first when there is none of that name
+        #[arg(long)]
+        create: bool,
+    },
+    /// Stop syncing a shared folder on this computer (nothing is deleted)
+    Detach { name: String },
+    /// Keep the files whose deletion on the master is held back (instead of `release-deletes`, which deletes them here)
+    Keep { name: String },
 }
 
 fn init_logging(file: Option<&std::path::Path>) {
@@ -140,9 +172,9 @@ fn main() -> Result<()> {
             init_logging(None);
             tokio_main(commands::sync_once(config_path))
         }
-        Cmd::Update => {
+        Cmd::Update { check } => {
             init_logging(None);
-            tokio_main(commands::update_now(config_path))
+            tokio_main(commands::update_now(config_path, check))
         }
         Cmd::Enroll { server, no_service } => {
             init_logging(None);
@@ -152,7 +184,14 @@ fn main() -> Result<()> {
         Cmd::AddFolder { paths, name } => commands::add_folders(&config_path, &paths, name.as_deref()),
         Cmd::RemoveFolder { name } => commands::remove_folder(&config_path, &name),
         Cmd::Folders => commands::list_folders(&config_path),
-        Cmd::Status => commands::status(&config_path),
+        Cmd::Shared(SharedCmd::List) => tokio_main(commands::shared_list(config_path)),
+        Cmd::Shared(SharedCmd::Create { name }) => tokio_main(commands::shared_create(config_path, name)),
+        Cmd::Shared(SharedCmd::Attach { name, path, create }) => {
+            tokio_main(commands::shared_attach(config_path, name, path, create))
+        }
+        Cmd::Shared(SharedCmd::Detach { name }) => commands::shared_detach(&config_path, &name),
+        Cmd::Shared(SharedCmd::Keep { name }) => commands::shared_keep(&config_path, &name),
+        Cmd::Status { json } => commands::status(&config_path, json),
         Cmd::ReleaseDeletes => commands::release_deletes(&config_path),
         Cmd::Pause => commands::set_paused(&config_path, true),
         Cmd::Resume => commands::set_paused(&config_path, false),

@@ -152,8 +152,8 @@ export default function Files() {
   )
   const total = listing.data?.pages[0]?.total ?? 0
   const searching = listing.data?.pages[0]?.searching ?? false
-  // The master says what the web app may do here: the master files and local folders can be changed, what a device or a
-  // source sends cannot.
+  // The master says what the web app may do here: the master files, local folders and shared folders can be changed, what
+  // a device or a source sends cannot.
   const canUpload = listing.data?.pages[0]?.writable ?? false
 
   const open = (e: Entry) => {
@@ -234,7 +234,7 @@ export default function Files() {
                     <Button variant="outline" disabled={!canUpload} onClick={() => folderInput.current?.click()}>{t('Upload folder')}</Button>
                   </span>
                 </TooltipTrigger>
-                {!canUpload && <TooltipContent>{t('Uploads go to local folders. Devices and sources are filled by their own sending.')}</TooltipContent>}
+                {!canUpload && <TooltipContent>{t('Uploads go to local and shared folders. Devices and sources are filled by their own sending.')}</TooltipContent>}
               </Tooltip>
             )}
           </>

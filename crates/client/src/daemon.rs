@@ -48,6 +48,61 @@ pub struct Activity {
     pub speed_bps: u64,
 }
 
+/// What one shared folder attached to this computer is doing, for `status`, the tray and the master.
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct SharedStatus {
+    /// `<owner>/<name>`.
+    pub name: String,
+    pub path: String,
+    /// Files and bytes in step with the master.
+    pub files: usize,
+    pub bytes: u64,
+    /// When the last cycle for this folder finished (unix seconds), 0 before the first.
+    pub last_cycle: i64,
+    /// The last problem of that cycle, empty when it went well.
+    pub last_error: String,
+    /// Deletions held back (not applied here, or not sent), see the delete guard.
+    pub held: usize,
+    /// Files waiting for a retry.
+    pub failing: usize,
+}
+
+impl SharedStatus {
+    /// One line for `status` and the tray: whether it is in step, how much, how long ago, and what needs attention.
+    pub fn summary(&self, now: i64) -> String {
+        let mut parts = Vec::new();
+        if self.last_cycle == 0 {
+            parts.push("waiting for the first sync".to_string());
+        } else {
+            let ok = self.last_error.is_empty() && self.failing == 0;
+            parts.push(if ok { "in step" } else { "needs attention" }.to_string());
+            parts.push(format!("{} files", self.files));
+            parts.push(format!("synced {} ago", age(now - self.last_cycle)));
+        }
+        if self.held > 0 {
+            parts.push(format!("{} deletions held back", self.held));
+        }
+        if self.failing > 0 {
+            parts.push(format!("{} files waiting for a retry", self.failing));
+        }
+        if !self.last_error.is_empty() {
+            parts.push(format!("last problem: {}", self.last_error.chars().take(120).collect::<String>()));
+        }
+        parts.join(", ")
+    }
+}
+
+/// `45s`, `12m`, `3h`, `2d`.
+pub fn age(seconds: i64) -> String {
+    match seconds.max(0) {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s < 86_400 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86_400),
+    }
+}
+
 #[derive(Serialize, Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct Status {
@@ -85,6 +140,8 @@ pub struct Status {
     pub fatal: String,
     /// True until every file of the collected folders has been sent once: the first sync of a new install.
     pub initial_sync: bool,
+    /// The shared folders attached here.
+    pub shared: Vec<SharedStatus>,
     pub updated: i64,
 }
 
@@ -173,6 +230,19 @@ pub async fn send_heartbeat(
         bytes_done: status.activity.done_bytes,
         bytes_total: status.activity.total_bytes,
         speed_bps: status.activity.speed_bps,
+        shared: status
+            .shared
+            .iter()
+            .map(|s| pb::SharedState {
+                name: s.name.clone(),
+                files: s.files as u64,
+                bytes: s.bytes,
+                last_cycle: s.last_cycle,
+                last_error: s.last_error.chars().take(300).collect(),
+                held: s.held as u32,
+                failing: s.failing as u32,
+            })
+            .collect(),
     };
     match tokio::time::timeout(Duration::from_secs(15), client.heartbeat(req)).await {
         Ok(Ok(resp)) => Ok(resp.into_inner().device_name),
@@ -366,13 +436,49 @@ fn spawn_heartbeat(shared: Shared, mut client: Client, config_path: PathBuf, ide
     });
 }
 
+/// Keeps a call open that tells when another computer changed one of the shared folders attached here, and wakes the sync
+/// loop. Without it (a master that does not know the call, a connection that drops) the folders are still asked every minute.
+fn spawn_shared_watch(shared: Shared, mut client: Client, config_path: PathBuf) {
+    let attached = |path: &Path| -> Vec<String> {
+        Config::load(path).map(|c| c.shared.into_iter().map(|s| s.name).collect()).unwrap_or_default()
+    };
+    tokio::spawn(async move {
+        loop {
+            let names = attached(&config_path);
+            if !names.is_empty() && shared.online.load(Ordering::SeqCst) {
+                match client.watch_shared(pb::WatchSharedRequest { shared: names.clone() }).await {
+                    Ok(response) => {
+                        let mut stream = response.into_inner();
+                        loop {
+                            tokio::select! {
+                                message = stream.message() => match message {
+                                    Ok(Some(_)) => shared.wake.notify_one(),
+                                    _ => break,
+                                },
+                                // A folder attached or detached meanwhile: ask for the right ones.
+                                _ = tokio::time::sleep(Duration::from_secs(15)) => {
+                                    if attached(&config_path) != names {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => tracing::debug!("cannot watch the shared folders: {}", e.message()),
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+    });
+}
+
 /// Checks for a new release now and then.
 fn spawn_updater(mut client: Client, config_path: PathBuf, work_dir: PathBuf) {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(30)).await;
         loop {
             if let Some(cfg) = Config::load(&config_path).ok().filter(|c| c.auto_update) {
-                match update::check_and_apply(&mut client, &cfg, &work_dir).await {
+                match update::check_and_apply(&mut client, &cfg, &work_dir, false).await {
                     Ok(true) => {
                         tracing::info!("restarting to run the new version");
                         restart();
@@ -410,7 +516,7 @@ fn record_cycle(shared: &Shared, result: Result<Report, SyncError>) {
                 s.message = format!("upload interrupted: {m}");
             });
         }
-        Err(SyncError::File(m)) => shared.status.edit(|s| s.last_error = m),
+        Err(SyncError::File(m) | SyncError::Refused(m)) => shared.status.edit(|s| s.last_error = m),
     }
 }
 
@@ -458,9 +564,11 @@ async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Res
     shared.status.edit(|s| s.initial_sync = !engine.state.initial_sync_done());
     spawn_control(shared.clone(), engine.activity.clone(), engine.sent.clone(), state_dir.clone());
     spawn_heartbeat(shared.clone(), client.clone(), config_path.clone(), identity);
+    spawn_shared_watch(shared.clone(), client.clone(), config_path.clone());
     spawn_updater(client, config_path.clone(), state_dir.clone());
 
     let mut watched: Vec<PathBuf> = Vec::new();
+    let mut attached: Vec<crate::shared::Attached> = Vec::new();
     let mut _watcher: Option<notify::RecommendedWatcher> = None;
     let mut delay = Duration::from_secs(1);
     tracing::info!("fafnirx {} running, config {}", update::VERSION, config_path.display());
@@ -482,7 +590,7 @@ async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Res
             Ok(c) => cfg = c,
             Err(e) => shared.status.edit(|s| s.last_error = format!("config: {e:#}")),
         }
-        let folders: Vec<PathBuf> = cfg.folders.iter().map(|f| f.path.clone()).collect();
+        let folders: Vec<PathBuf> = cfg.paths().map(|(_, p)| p.to_path_buf()).collect();
         if cfg.watch && folders != watched {
             _watcher = spawn_watcher(&folders, state_dir.clone(), shared.wake.clone());
             watched = folders;
@@ -492,16 +600,29 @@ async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Res
         }
 
         shared.status.edit(|s| s.syncing = true);
-        let result = engine.cycle(&cfg).await;
+        let mut result = engine.cycle(&cfg).await;
+        sync_attached(&mut attached, &cfg, &token, &state_dir, &shared, &mut result).await;
         engine.set_activity("idle", "", 0, 0, 0);
-        let (synced_files, synced_bytes) = engine.state.totals().unwrap_or((0, 0));
-        let failing = engine.state.pending_failures().unwrap_or(0);
+        let (mut synced_files, mut synced_bytes) = engine.state.totals().unwrap_or((0, 0));
+        let mut failing = engine.state.pending_failures().unwrap_or(0);
+        let shared_status: Vec<SharedStatus> = attached.iter().map(|a| a.status()).collect();
+        for s in &shared_status {
+            synced_files += s.files;
+            synced_bytes += s.bytes;
+            failing += s.failing as i64;
+        }
         let initial_done = engine.state.initial_sync_done();
         delay = next_delay(&cfg, failing > 0);
+        if !cfg.shared.is_empty() {
+            // The master tells a running client when another computer changed a shared folder (`spawn_shared_watch`); this is
+            // for when that call is not there (an older master) or a message was lost.
+            delay = delay.min(SHARED_POLL);
+        }
         shared.status.edit(|s| {
+            s.shared = shared_status;
             s.syncing = false;
             s.activity = Activity::default();
-            s.folders = cfg.folders.len();
+            s.folders = cfg.folders.len() + cfg.shared.len();
             s.synced_files = synced_files;
             s.synced_bytes = synced_bytes;
             s.failing = failing as usize;
@@ -509,6 +630,55 @@ async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Res
             s.next_scan = unix_now() + delay.as_secs() as i64;
         });
         record_cycle(&shared, result);
+    }
+}
+
+/// How often a computer with shared folders asks the master what the others changed.
+const SHARED_POLL: Duration = Duration::from_secs(60);
+
+/// Syncs the shared folders attached to this computer, both ways, after the device's own folders. A problem with one
+/// folder is shown and the next one goes on; a master that cannot be reached ends the cycle.
+async fn sync_attached(
+    attached: &mut Vec<crate::shared::Attached>,
+    cfg: &Config,
+    token: &str,
+    state_dir: &Path,
+    daemon: &Shared,
+    result: &mut Result<Report, SyncError>,
+) {
+    attached.retain(|a| cfg.shared.iter().any(|s| a.is(s)));
+    if matches!(result, Err(SyncError::Offline(_) | SyncError::Paused)) {
+        return;
+    }
+    for s in &cfg.shared {
+        if attached.iter().any(|a| a.is(s)) {
+            continue;
+        }
+        match crate::shared::Attached::open(cfg, token, state_dir, s, daemon.errors.clone()) {
+            Ok(a) => attached.push(a),
+            Err(e) => daemon.status.edit(|st| st.last_error = format!("{}: {e:#}", s.name)),
+        }
+    }
+    for a in attached.iter_mut() {
+        let name = a.name().to_string();
+        match a.cycle(cfg).await {
+            Ok(r) => {
+                log_report(&r);
+                if let Ok(total) = result {
+                    total.add(&r);
+                }
+            }
+            Err(SyncError::Paused) => break,
+            Err(SyncError::File(m) | SyncError::Refused(m)) => {
+                daemon.status.edit(|st| st.last_error = format!("{name}: {m}"));
+            }
+            Err(offline) => {
+                if result.is_ok() {
+                    *result = Err(offline);
+                }
+                break;
+            }
+        }
     }
 }
 

@@ -4,12 +4,23 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A folder that is only uploaded (a backup): the client never writes to it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Folder {
     pub path: PathBuf,
     /// Top-level directory of this folder inside the device namespace.
     pub name: String,
+}
+
+/// A local folder attached to a shared folder of the user on the master: changes go both ways. It is not also uploaded
+/// to this device. Absent from a config written before shared folders existed, which then loads unchanged.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Shared {
+    /// The shared folder on the master.
+    pub name: String,
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +57,8 @@ pub struct Config {
     pub web_url: Option<String>,
     #[serde(default, rename = "folders")]
     pub folders: Vec<Folder>,
+    #[serde(default, rename = "shared", skip_serializing_if = "Vec::is_empty")]
+    pub shared: Vec<Shared>,
 }
 
 fn yes() -> bool {
@@ -73,6 +86,7 @@ impl Config {
             state_dir: None,
             web_url: None,
             folders: Vec::new(),
+            shared: Vec::new(),
         }
     }
 
@@ -99,7 +113,7 @@ impl Config {
             if f.name.is_empty() || f.name.contains(['/', '\\']) || f.name == "." || f.name == ".." {
                 bail!("folder name {:?} must be a single path component", f.name);
             }
-            if !names.insert(fold(&f.name)) {
+            if !names.insert(fafnirx_common::fold_path(&f.name)) {
                 bail!(
                     "two folders are called {:?}: the master keeps them side by side under this name, and names that differ \
                      only in case or accents are the same there. Give one a different name, for example {:?}",
@@ -108,7 +122,29 @@ impl Config {
                 );
             }
         }
+        let mut shared = std::collections::HashSet::new();
+        for s in &self.shared {
+            // The name of one's own folder, or `<owner>/<name>` for one another user shared.
+            let (owner, name) = s.name.split_once('/').unwrap_or(("a", &s.name));
+            if !fafnirx_common::valid_device_name(owner) || !fafnirx_common::valid_device_name(name) {
+                bail!("shared folder name {:?} must be lowercase letters, digits, '.', '_' and '-'", s.name);
+            }
+            if !shared.insert(s.name.as_str()) {
+                bail!(
+                    "the shared folder {:?} is attached twice; a shared folder is attached to one folder of a computer",
+                    s.name
+                );
+            }
+        }
         Ok(())
+    }
+
+    /// Every local directory the client collects or syncs.
+    pub fn paths(&self) -> impl Iterator<Item = (&str, &Path)> {
+        self.folders
+            .iter()
+            .map(|f| (f.name.as_str(), f.path.as_path()))
+            .chain(self.shared.iter().map(|s| (s.name.as_str(), s.path.as_path())))
     }
 
     /// The host of the server URL, if it is an http(s) URL.
@@ -139,12 +175,6 @@ impl Config {
     }
 }
 
-/// What the master tells folder names apart by: letters in any case and any Unicode form (é as one character or as e and
-/// an accent) are the same name, because a file system or a share on the way may not tell them apart.
-fn fold(name: &str) -> String {
-    fafnirx_common::nfc(name).to_lowercase()
-}
-
 /// Hosts that are not reachable from the internet: names without a dot, `.local`/`.lan`/`.internal`
 /// names, loopback, link-local and private IPv4 ranges.
 fn is_private_host(host: &str) -> bool {
@@ -173,25 +203,7 @@ fn same_path(a: &Path, b: &Path) -> bool {
 /// The name defaults to the directory's own name, made unique. Returns the folder as stored.
 pub fn add_folder_to_file(config_path: &Path, dir: &Path, name: Option<&str>) -> Result<Folder> {
     let cfg = Config::load(config_path).context("run `fafnirx enroll` first")?;
-    let path = fafnirx_common::plain_path(
-        &std::fs::canonicalize(dir).with_context(|| format!("cannot read {}", dir.display()))?,
-    );
-    if !path.is_dir() {
-        bail!("{} is not a directory", path.display());
-    }
-    for f in &cfg.folders {
-        if same_path(&f.path, &path) {
-            bail!("{} is already collected as \"{}\"", path.display(), f.name);
-        }
-        if path.starts_with(&f.path) || f.path.starts_with(&path) {
-            bail!(
-                "{} overlaps {} (collected as \"{}\"); collect one of them",
-                path.display(),
-                f.path.display(),
-                f.name
-            );
-        }
-    }
+    let path = free_directory(&cfg, dir)?;
     let name = match name {
         Some(n) => n.to_string(),
         None => {
@@ -200,10 +212,11 @@ pub fn add_folder_to_file(config_path: &Path, dir: &Path, name: Option<&str>) ->
                 .map(|n| n.to_string_lossy().into_owned())
                 .filter(|n| !n.is_empty())
                 .context("this folder has no name of its own; choose one with --name")?;
-            let taken: std::collections::HashSet<String> = cfg.folders.iter().map(|f| fold(&f.name)).collect();
+            let taken: std::collections::HashSet<String> =
+                cfg.folders.iter().map(|f| fafnirx_common::fold_path(&f.name)).collect();
             let mut candidate = base.clone();
             let mut n = 2;
-            while taken.contains(&fold(&candidate)) {
+            while taken.contains(&fafnirx_common::fold_path(&candidate)) {
                 candidate = format!("{base}-{n}");
                 n += 1;
             }
@@ -234,6 +247,84 @@ pub fn add_folder_to_file(config_path: &Path, dir: &Path, name: Option<&str>) ->
     Ok(folder)
 }
 
+/// The directory as the client keeps it, if it can be collected or synced: it exists and is not, contain or lie inside
+/// a directory that already is.
+fn free_directory(cfg: &Config, dir: &Path) -> Result<PathBuf> {
+    let path = fafnirx_common::plain_path(
+        &std::fs::canonicalize(dir).with_context(|| format!("cannot read {}", dir.display()))?,
+    );
+    if !path.is_dir() {
+        bail!("{} is not a directory", path.display());
+    }
+    for (name, other) in cfg.paths() {
+        if same_path(other, &path) {
+            bail!("{} is already collected as \"{}\"", path.display(), name);
+        }
+        if path.starts_with(other) || other.starts_with(&path) {
+            bail!("{} overlaps {} (collected as \"{}\"); collect one of them", path.display(), other.display(), name);
+        }
+    }
+    Ok(path)
+}
+
+/// Attaches a local folder to the shared folder `name`, keeping everything else in the file as it is. The folder is made if
+/// it is not there yet: the usual way to set up another computer is to attach a new, empty folder and let it fill.
+pub fn attach_shared_to_file(config_path: &Path, name: &str, dir: &Path) -> Result<Shared> {
+    let cfg = Config::load(config_path).context("run `fafnirx enroll` first")?;
+    std::fs::create_dir_all(dir).with_context(|| format!("cannot make {}", dir.display()))?;
+    let shared = Shared { name: name.to_string(), path: free_directory(&cfg, dir)? };
+    let mut check = cfg;
+    check.shared.push(shared.clone());
+    check.validate()?;
+
+    let text = std::fs::read_to_string(config_path)?;
+    let mut doc: toml_edit::DocumentMut = text.parse().with_context(|| format!("parse {}", config_path.display()))?;
+    let list = doc
+        .entry("shared")
+        .or_insert(toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()))
+        .as_array_of_tables_mut()
+        .context("`shared` in the config must be a list of [[shared]] tables")?;
+    let mut table = toml_edit::Table::new();
+    table["name"] = toml_edit::value(shared.name.clone());
+    table["path"] = toml_edit::value(shared.path.to_string_lossy().into_owned());
+    list.push(table);
+    write_atomic(config_path, &doc.to_string())?;
+    Ok(shared)
+}
+
+/// Whether `name`, as a person types it, means the shared folder `full` (`<owner>/<name>`): in full, or by its name alone.
+pub fn names_shared(full: &str, name: &str) -> bool {
+    full == name || (!name.contains('/') && full.rsplit('/').next() == Some(name))
+}
+
+impl Config {
+    /// The shared folder a person means by `name`: in full, or by its name alone when only one has it.
+    pub fn shared_named(&self, name: &str) -> Result<&Shared> {
+        let found: Vec<&Shared> = self.shared.iter().filter(|s| names_shared(&s.name, name)).collect();
+        match found.as_slice() {
+            [one] => Ok(one),
+            [] => bail!("no shared folder named \"{name}\" is attached"),
+            many => bail!(
+                "\"{name}\" could be any of {}: name one in full",
+                many.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
+            ),
+        }
+    }
+}
+
+/// Detaches a shared folder from this computer. The files stay in the local folder and on the master. It can be named in full
+/// (`<owner>/<name>`) or, when that is not ambiguous, by its name alone.
+pub fn detach_shared_from_file(config_path: &Path, name: &str) -> Result<()> {
+    let full = Config::load(config_path)?.shared_named(name)?.name.clone();
+    let mut doc: toml_edit::DocumentMut = std::fs::read_to_string(config_path)?.parse()?;
+    if let Some(list) = doc.get_mut("shared").and_then(|s| s.as_array_of_tables_mut()) {
+        list.retain(|t| t.get("name").and_then(|n| n.as_str()) != Some(full.as_str()));
+        if list.is_empty() {
+            doc.remove("shared");
+        }
+    }
+    write_atomic(config_path, &doc.to_string())
+}
 /// Removes a folder from the config file. Data already uploaded stays on the master.
 pub fn remove_folder_from_file(config_path: &Path, name: &str) -> Result<()> {
     Config::load(config_path)?;
@@ -427,5 +518,48 @@ watch = false
         cfg.server = "https://x".into();
         cfg.folders.push(Folder { path: "a".into(), name: "a/b".into() });
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn shared_folders_are_attached_and_detached_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.toml");
+        std::fs::write(&cfg, "# notes\nserver = \"http://x:7443\"\n").unwrap();
+        for d in ["a", "b", "a/inner", "c"] {
+            std::fs::create_dir_all(dir.path().join(d)).unwrap();
+        }
+        assert!(Config::load(&cfg).unwrap().shared.is_empty(), "a config without the table has none attached");
+        let new = attach_shared_to_file(&cfg, "fresh", &dir.path().join("not/there/yet")).unwrap();
+        assert!(new.path.is_dir(), "a folder that does not exist is made");
+        detach_shared_from_file(&cfg, "fresh").unwrap();
+        add_folder_to_file(&cfg, &dir.path().join("c"), None).unwrap();
+        attach_shared_to_file(&cfg, "family", &dir.path().join("a")).unwrap();
+        attach_shared_to_file(&cfg, "work", &dir.path().join("b")).unwrap();
+        let loaded = Config::load(&cfg).unwrap();
+        assert_eq!(loaded.shared.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["family", "work"]);
+        assert_eq!(loaded.folders.len(), 1, "the backup folders are not touched");
+        assert!(std::fs::read_to_string(&cfg).unwrap().contains("# notes"), "comments survive");
+
+        let err = |r: Result<Shared>| format!("{:#}", r.unwrap_err());
+        assert!(err(attach_shared_to_file(&cfg, "family", &dir.path().join("a"))).contains("already collected"));
+        assert!(err(attach_shared_to_file(&cfg, "other", &dir.path().join("a/inner"))).contains("overlaps"));
+        assert!(
+            err(attach_shared_to_file(&cfg, "other", &dir.path().join("c"))).contains("already collected"),
+            "not a folder that is backed up either"
+        );
+        std::fs::create_dir_all(dir.path().join("d")).unwrap();
+        assert!(err(attach_shared_to_file(&cfg, "family", &dir.path().join("d"))).contains("attached twice"));
+        assert!(err(attach_shared_to_file(&cfg, "Bad Name", &dir.path().join("d"))).contains("lowercase"));
+
+        // Folders of two owners with one name: the short name is ambiguous, the full one is not.
+        attach_shared_to_file(&cfg, "bob/work", &dir.path().join("d")).unwrap();
+        let ambiguous = format!("{:#}", detach_shared_from_file(&cfg, "work").unwrap_err());
+        assert!(ambiguous.contains("work, bob/work"), "{ambiguous}");
+        detach_shared_from_file(&cfg, "bob/work").unwrap();
+        detach_shared_from_file(&cfg, "family").unwrap();
+        assert_eq!(Config::load(&cfg).unwrap().shared.len(), 1);
+        detach_shared_from_file(&cfg, "work").unwrap();
+        assert!(!std::fs::read_to_string(&cfg).unwrap().contains("shared"), "the empty table is removed");
+        assert!(detach_shared_from_file(&cfg, "work").is_err());
     }
 }

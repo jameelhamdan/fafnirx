@@ -53,7 +53,7 @@ FAFNIRX_IMAGE=jameelh99/fafnirx-master:3.0.1   # pin to upgrade on purpose
 
 **Install → enroll → add folders.** The client only reads the folders it collects.
 
-First, in the web app: **Devices → Add device**. The name (`a-z 0-9 . _ -`) becomes the folder `files/<you>/<name>/` and cannot
+First, in the web app: **Devices → Add device**. The name (`a-z 0-9 . _ -`) becomes the folder `files/users/<you>/<name>/` and cannot
 change; the token is shown **once**. Administrators can add devices for other users.
 
 Download from the [latest release](https://github.com/jameelhamdan/fafnirx/releases/latest) (each file has a `.sha256`):

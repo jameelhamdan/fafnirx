@@ -1,6 +1,6 @@
 //! The HTTP API (JSON under `/api`) and the web app that uses it. Separate from the device gRPC
-//! API: devices can only add data, everything here (browsing, downloading, deleting, configuring)
-//! needs a login, and what a user can reach depends on their role (see `access`).
+//! API: devices reach only their own uploads and their user's shared folders, everything here (browsing,
+//! downloading, deleting, configuring) needs a login, and what a user can reach depends on their role (see `access`).
 //!
 //! The routes are split by cost: `light` routes are quick JSON calls, `heavy` routes move file contents
 //! (downloads, uploads, zip) and have no body size limit.
@@ -162,6 +162,10 @@ fn light() -> Router<Shared> {
         .route("/api/devices/:name/token", post(devices::api::rotate_token))
         .route("/api/devices/:name/release", post(devices::api::release))
         .route("/api/devices/:name/revoke", post(devices::api::revoke))
+        .route("/api/shared", get(devices::shared::list).post(devices::shared::create))
+        .route("/api/shared/:name", delete(devices::shared::delete))
+        .route("/api/shared/:name/members", post(devices::shared::add_member))
+        .route("/api/shared/:name/members/:user", delete(devices::shared::remove_member))
         .route("/api/files", get(files::browse::list))
         .route("/api/files/info", get(files::browse::info))
         .route("/api/files/delete", post(files::browse::remove))

@@ -3,19 +3,39 @@
 use super::*;
 use crate::net;
 use fafnirx_common::pb::collector_server::{Collector, CollectorServer};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use tonic::{Request, Response, Status, Streaming};
 
+/// What the recording master was told, and what it answers: the paths it lists as changed and the content it serves for a shared folder.
 #[derive(Default)]
-struct Calls {
-    commits: Vec<(String, String)>,
-    deleted: Vec<String>,
+pub(crate) struct Calls {
+    /// Paths committed by the client, with the path each was renamed from (empty if none).
+    pub commits: Vec<(String, String)>,
+    pub deleted: Vec<String>,
     /// Paths for which the master says it already holds the content.
-    already: Vec<String>,
+    pub already: Vec<String>,
+    /// What a shared folder lists as changed.
+    pub changes: Vec<pb::Change>,
+    /// The listing is every live path, as when the computer was away longer than deletions are remembered.
+    pub complete: bool,
+    /// The content a shared folder serves.
+    pub files: HashMap<String, Vec<u8>>,
 }
 
-struct Recorder(Arc<Mutex<Calls>>);
+pub(crate) struct Recorder(pub Arc<Mutex<Calls>>);
+
+/// Serves a Recorder on a free port and returns its address.
+pub(crate) async fn serve(calls: Arc<Mutex<Calls>>) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(
+        tonic::transport::Server::builder()
+            .add_service(CollectorServer::new(Recorder(calls)))
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
+    );
+    format!("http://{addr}")
+}
 
 #[tonic::async_trait]
 impl Collector for Recorder {
@@ -58,6 +78,47 @@ impl Collector for Recorder {
     ) -> Result<Response<Self::DownloadUpdateStream>, Status> {
         Err(Status::unimplemented("not under test"))
     }
+    async fn list_shared(&self, _: Request<pb::ListSharedRequest>) -> Result<Response<pb::ListSharedResponse>, Status> {
+        Err(Status::unimplemented("not under test"))
+    }
+    async fn create_shared(
+        &self,
+        _: Request<pb::CreateSharedRequest>,
+    ) -> Result<Response<pb::CreateSharedResponse>, Status> {
+        Err(Status::unimplemented("not under test"))
+    }
+    type ListChangesStream = tokio_stream::Iter<std::vec::IntoIter<Result<pb::ChangeEvent, Status>>>;
+    async fn list_changes(
+        &self,
+        _: Request<pb::ListChangesRequest>,
+    ) -> Result<Response<Self::ListChangesStream>, Status> {
+        use pb::change_event::Item;
+        let calls = self.0.lock().unwrap();
+        let mut events = vec![Ok(pb::ChangeEvent { item: Some(Item::Cursor(42)) })];
+        if calls.complete {
+            events.push(Ok(pb::ChangeEvent { item: Some(Item::Complete(true)) }));
+        }
+        for change in &calls.changes {
+            events.push(Ok(pb::ChangeEvent { item: Some(Item::Change(change.clone())) }));
+        }
+        Ok(Response::new(tokio_stream::iter(events)))
+    }
+    type WatchSharedStream = tokio_stream::Empty<Result<pb::SharedChanged, Status>>;
+    async fn watch_shared(
+        &self,
+        _: Request<pb::WatchSharedRequest>,
+    ) -> Result<Response<Self::WatchSharedStream>, Status> {
+        Err(Status::unimplemented("not under test"))
+    }
+    type DownloadSharedStream = tokio_stream::Iter<std::vec::IntoIter<Result<pb::FileData, Status>>>;
+    async fn download_shared(
+        &self,
+        r: Request<pb::DownloadSharedRequest>,
+    ) -> Result<Response<Self::DownloadSharedStream>, Status> {
+        let data = self.0.lock().unwrap().files.get(&r.get_ref().path).cloned();
+        let data = data.ok_or_else(|| Status::not_found("no such file"))?;
+        Ok(Response::new(tokio_stream::iter(vec![Ok(pb::FileData { data })])))
+    }
 }
 
 struct Rig {
@@ -71,16 +132,9 @@ struct Rig {
 impl Rig {
     async fn new() -> Self {
         let calls = Arc::new(Mutex::new(Calls::default()));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let service = CollectorServer::new(Recorder(calls.clone()));
-        tokio::spawn(
-            tonic::transport::Server::builder()
-                .add_service(service)
-                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
-        );
+        let url = serve(calls.clone()).await;
         let (folder, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let mut cfg = Config::new(format!("http://{addr}"));
+        let mut cfg = Config::new(url);
         cfg.folders.push(Folder { path: folder.path().to_path_buf(), name: "docs".into() });
         let engine = Engine::new(
             net::client(&cfg, "token", "instance").unwrap(),

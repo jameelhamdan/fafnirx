@@ -1,12 +1,13 @@
 # Overview
 
 fafnirx collects the files of your devices into one server you own (the **master**), keeps their versions, lets you browse
-them and copy them offsite. Scale: 3-5 devices, hundreds of thousands of files, files up to 5 GB. Preserving the original
-data comes first: nothing a device does can delete or overwrite data the master already holds.
+them and copy them offsite. Scale: 3-5 devices, hundreds of thousands of files, files up to 5 GB. Original data comes
+first: replaced and deleted files stay as versions until retention ends.
 
 ```mermaid
 flowchart LR
-    D["Devices<br/>(client)"] -->|"upload only<br/>gRPC :7443"| M["Master"]
+    D["Devices<br/>(client)"] -->|"upload<br/>gRPC :7443"| M["Master"]
+    M -.->|"shared folders"| D
     G["Google Drive"] -->|"collected by the master"| M
     A["Browser"] <-->|"web app and API :8080"| M
     M --- PG[("PostgreSQL<br/>metadata")]
@@ -27,18 +28,20 @@ flowchart LR
 
 ## Rules that do not change
 
-- **One way.** The client only reads the files it collects. Nothing is ever sent back to a device. Restoring is a download.
+- **Backups are one way.** The client only reads the folders it collects. Nothing is sent back to them; restoring is a
+  download. The exception is a [shared folder](usage.md#shared-folders-sync-both-ways), which the user chooses to sync both ways.
 - **The device is the source of truth.** A change, rename or delete on a device is applied on the master (a rename without
   re-sending; a delete as "marked deleted", recoverable until retention ends). A mass deletion is held back by the
   client for hours ([delete guard](usage.md#the-delete-guard)).
 - **The master changes only its own files**, never a file on a device. Files a device or source sent cannot be edited or
-  renamed on the master; only local folders and master files can.
-- **Deleting in the web app hides, never erases.** The file goes to the Trash; the device is not asked for it again.
+  renamed on the master; only local folders, shared folders and master files can.
+- **Deleting in the web app hides, never erases.** The file goes to the Trash; the device is not asked for it again. In a
+  shared folder, computers delete it too.
 - **Roles.** Administrator: everything. Normal: master files and own folders, read and write. Read only: reads master files.
 
 ## Not in scope
 
-- Not a sync tool: nothing flows back to devices.
+- Not a general sync tool: only shared folders sync both ways.
 - Not encryption: use an encrypted disk, and an rclone `crypt` remote for mirrors.
 - Not enterprise access control: three roles and a workspace per user.
 

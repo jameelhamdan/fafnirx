@@ -563,6 +563,7 @@ pub async fn finish_upload(
         let (root, size) = crate::platform::store::hash_file(&upload.file)?;
         // Checked again: the user may have lost the right while the file was on its way.
         let dev = find_device_to_change(c, &who, &upload.device)?;
+        ingest::check_names(c, &dev, &upload.path, None, true)?;
         ingest::commit_version(
             c,
             &store,

@@ -16,6 +16,8 @@ const DISK_ALERT_PERCENT: f64 = 80.0;
 const STALE_UPLOAD: Duration = Duration::from_secs(24 * 3600);
 /// An upload error that the client has not reported again for this long is considered gone.
 const UPLOAD_ERROR_TTL_SECS: i64 = 48 * 3600;
+/// A computer says every 20 seconds that it holds deletions back; after this long without it the alert is closed.
+const HELD_ALERT_TTL_SECS: i64 = 15 * 60;
 /// The change log and the alerts that were resolved are only for looking at recent activity.
 const EVENT_KEEP_DAYS: i64 = 90;
 
@@ -52,7 +54,7 @@ fn minute(db: &Db, data_dir: &std::path::Path) {
     };
     let conn = &mut *conn;
     if let Err(e) =
-        offline_alerts(conn).and_then(|_| disk_alert(conn, data_dir)).and_then(|_| expire_upload_errors(conn))
+        offline_alerts(conn).and_then(|_| disk_alert(conn, data_dir)).and_then(|_| expire_quiet_alerts(conn))
     {
         tracing::error!("alert job failed: {e}");
     }
@@ -62,9 +64,11 @@ fn minute(db: &Db, data_dir: &std::path::Path) {
     }
 }
 
-/// Clients report an error again every time they retry, so one that went quiet has been fixed.
-fn expire_upload_errors(conn: &mut impl GenericClient) -> Result<(), postgres::Error> {
-    alerts::expire_upload_errors(conn, unix_now() - UPLOAD_ERROR_TTL_SECS)?;
+/// Clients report an error, and deletions they hold back, again with every retry or heartbeat, so one that went quiet has
+/// been fixed (or the folder is no longer attached).
+fn expire_quiet_alerts(conn: &mut impl GenericClient) -> Result<(), postgres::Error> {
+    alerts::expire_quiet(conn, "upload_error", unix_now() - UPLOAD_ERROR_TTL_SECS)?;
+    alerts::expire_quiet(conn, "deletions_held", unix_now() - HELD_ALERT_TTL_SECS)?;
     Ok(())
 }
 
@@ -127,6 +131,10 @@ fn retention(conn: &mut Client) -> Result<Vec<i64>> {
     let (expired, device_ids) = retention::lock_expired_files(&mut tx, cutoff)?;
     let mut removed = retention::delete_versions_of(&mut tx, &expired)?;
     let files = retention::delete_files(&mut tx, &expired)?;
+    // Deletions before this time are no longer all known: a computer that was last in step before it has to be sent the whole
+    // list of files instead of the changes (`devices::grpc::list_changes`). It only moves forward.
+    let known_from = settings::get_i64(&mut tx, settings::DELETIONS_KNOWN_FROM, 0).max(cutoff);
+    settings::set(&mut tx, settings::DELETIONS_KNOWN_FROM, &known_from.to_string())?;
     devices::mark_totals_stale(&mut tx, &device_ids)?;
     let pruned = retention::delete_pruned_versions(&mut tx, cutoff)?;
     events::purge(&mut tx, unix_now() - EVENT_KEEP_DAYS * 86400)?;
@@ -170,6 +178,18 @@ mod tests {
         assert_eq!(paths, ["fresh", "live"]);
         let versions: i64 = c.query_one("SELECT COUNT(*) FROM versions", &[]).unwrap().get(0);
         assert_eq!(versions, 2);
+
+        // The master notes how far back it knows every deletion, and that only moves forward.
+        let known_from = settings::get_i64(&mut *c, settings::DELETIONS_KNOWN_FROM, 0);
+        let thirty_days_ago = unix_now() - 30 * 86400;
+        assert!((thirty_days_ago - 5..=thirty_days_ago + 5).contains(&known_from), "{known_from}");
+        settings::set(&mut *c, "retention_days", "90").unwrap();
+        retention(&mut c).unwrap();
+        assert_eq!(
+            settings::get_i64(&mut *c, settings::DELETIONS_KNOWN_FROM, 0),
+            known_from,
+            "a longer period does not go back"
+        );
     }
 
     #[test]
@@ -188,20 +208,30 @@ mod tests {
         };
 
         age(c, "upload_error", 47);
-        expire_upload_errors(c).unwrap();
+        expire_quiet_alerts(c).unwrap();
         assert_eq!(testing::open_alerts(c), 2, "47 hours: still open");
 
         age(c, "upload_error", 49);
         age(c, "disk_usage", 500);
-        expire_upload_errors(c).unwrap();
+        expire_quiet_alerts(c).unwrap();
         assert_eq!(testing::open_alerts(c), 1, "49 hours: the upload error is gone, other alerts are untouched");
 
         // The client reporting the same error again keeps (and reopens) it.
         alerts::upsert(c, "upload_error", "d", "disk full").unwrap();
         age(c, "upload_error", 47);
         alerts::upsert(c, "upload_error", "d", "disk full").unwrap();
-        expire_upload_errors(c).unwrap();
+        expire_quiet_alerts(c).unwrap();
         assert_eq!(testing::open_alerts(c), 2, "a repeated report refreshes the alert");
+
+        // Held deletions are reported with every heartbeat, so they go quiet much sooner.
+        alerts::upsert(c, "deletions_held", "alice/laptop|alice/family", "12 deletions held back").unwrap();
+        age(c, "deletions_held", 0);
+        expire_quiet_alerts(c).unwrap();
+        assert_eq!(testing::open_alerts(c), 3, "just reported");
+        c.execute("UPDATE alerts SET updated_at = $1 WHERE kind = 'deletions_held'", &[&(unix_now() - 20 * 60)])
+            .unwrap();
+        expire_quiet_alerts(c).unwrap();
+        assert_eq!(testing::open_alerts(c), 2, "20 minutes without a report: the computer no longer holds them");
     }
 
     #[test]

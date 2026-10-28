@@ -1,9 +1,9 @@
 //! One collection cycle: scan, detect renames and deletes, upload what changed.
-//! Upload only: nothing here ever asks the master for data.
+//! Upload only: nothing here asks the master for data. A shared folder receives first (`shared`) and then sends with this engine.
 
 use crate::config::{Config, Folder};
 use crate::daemon::Activity;
-use crate::guard::{self, folder_of};
+use crate::guard::{self, folder_of, Grouping};
 use crate::hash::{hash_file, stat, Hashed};
 use crate::net::Client;
 use crate::scan::{scan_folder, Entry};
@@ -28,13 +28,16 @@ pub enum SyncError {
     Offline(String),
     /// A problem with this one file.
     File(String),
+    /// The master refuses the folder (a shared folder that is read-only for this user): its cycle ends, with nothing recorded
+    /// against any file, so a change of mind on the master takes effect at once. Nothing else is affected.
+    Refused(String),
     Paused,
 }
 
 impl std::fmt::Display for SyncError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SyncError::Offline(m) | SyncError::File(m) => f.write_str(m),
+            SyncError::Offline(m) | SyncError::File(m) | SyncError::Refused(m) => f.write_str(m),
             SyncError::Paused => f.write_str("paused"),
         }
     }
@@ -48,6 +51,7 @@ impl From<tonic::Status> for SyncError {
             // PermissionDenied: another computer is using this device. Stop; the heartbeat says why.
             Unavailable | DeadlineExceeded | Cancelled | Unknown | Unauthenticated | PermissionDenied
             | ResourceExhausted | Internal => SyncError::Offline(msg),
+            FailedPrecondition => SyncError::Refused(msg),
             _ => SyncError::File(msg),
         }
     }
@@ -72,6 +76,24 @@ pub struct Report {
     pub deleted: usize,
     pub failed: usize,
     pub bytes: u64,
+    /// Files received from a shared folder, and files of this computer kept under another name because both sides changed.
+    #[serde(default)]
+    pub downloaded: usize,
+    #[serde(default)]
+    pub conflicts: usize,
+}
+
+impl Report {
+    /// Adds what another part of the cycle did.
+    pub fn add(&mut self, other: &Report) {
+        self.uploaded += other.uploaded;
+        self.renamed += other.renamed;
+        self.deleted += other.deleted;
+        self.failed += other.failed;
+        self.bytes += other.bytes;
+        self.downloaded += other.downloaded;
+        self.conflicts += other.conflicts;
+    }
 }
 
 impl std::fmt::Display for Report {
@@ -80,7 +102,11 @@ impl std::fmt::Display for Report {
             f,
             "{} uploaded, {} renamed, {} deleted, {} failed",
             self.uploaded, self.renamed, self.deleted, self.failed
-        )
+        )?;
+        if self.downloaded > 0 || self.conflicts > 0 {
+            write!(f, ", {} downloaded, {} conflicts", self.downloaded, self.conflicts)?;
+        }
+        Ok(())
     }
 }
 
@@ -98,6 +124,10 @@ pub struct Engine {
     pub sent: Arc<AtomicU64>,
     /// The client's own state folder, which is never collected.
     pub exclude: Option<PathBuf>,
+    /// Which folder a synced path belongs to, for the delete guard.
+    pub group: Grouping,
+    /// The last problem reported (errors are drained by the heartbeat), for the status of a shared folder.
+    last_issue: Mutex<String>,
     logged_skips: HashSet<String>,
 }
 
@@ -127,8 +157,15 @@ impl Engine {
             activity: Arc::new(Mutex::new(Activity::default())),
             sent: Arc::new(AtomicU64::new(0)),
             exclude: None,
+            group: folder_of,
+            last_issue: Mutex::new(String::new()),
             logged_skips: HashSet::new(),
         }
+    }
+
+    /// The last problem reported since this was last asked; empty if there was none.
+    pub fn take_last_issue(&self) -> String {
+        self.last_issue.lock().map(|mut i| std::mem::take(&mut *i)).unwrap_or_default()
     }
 
     pub fn set_activity(&self, phase: &str, current: &str, done: usize, total: usize, bytes: u64) {
@@ -153,8 +190,11 @@ impl Engine {
         }
     }
 
-    fn report_error(&self, msg: String) {
+    pub(crate) fn report_error(&self, msg: String) {
         tracing::warn!("{msg}");
+        if let Ok(mut last) = self.last_issue.lock() {
+            last.clone_from(&msg);
+        }
         if let Ok(mut e) = self.errors.lock() {
             if e.len() < 50 {
                 e.push(msg);
@@ -171,7 +211,7 @@ impl Engine {
     }
 
     /// Makes sure what this client remembers sending was sent to the master it is talking to now.
-    async fn check_master(&mut self) -> Result<(), SyncError> {
+    pub async fn check_master(&mut self) -> Result<(), SyncError> {
         let master_id = self.client.identify(pb::IdentifyRequest {}).await?.into_inner().master_id;
         let cleared = self.state.adopt_master(&master_id)?;
         if cleared > 0 {
@@ -263,7 +303,9 @@ impl Engine {
             .all_synced()?
             .into_iter()
             .filter(|s| {
-                scanned.contains(folder_of(&s.path)) && !seen.contains(s.path.as_str()) && !unreadable.contains(&s.path)
+                scanned.contains((self.group)(&s.path))
+                    && !seen.contains(s.path.as_str())
+                    && !unreadable.contains(&s.path)
             })
             .collect();
         Ok((changed, vanished))
@@ -381,8 +423,9 @@ impl Engine {
         let before = self.state.holds()?;
         let since: HashMap<String, i64> = before.iter().map(|(f, (_, since))| (f.clone(), *since)).collect();
         let plan = guard::plan(
+            self.group,
             vanished,
-            &self.state.synced_per_folder()?,
+            &self.state.synced_per_folder(self.group)?,
             &since,
             now,
             (cfg.delete_hold_hours * 3600) as i64,
@@ -541,4 +584,4 @@ async fn send_group(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
