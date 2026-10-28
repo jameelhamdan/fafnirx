@@ -1,5 +1,6 @@
 //! Mirrors: offsite copies of the whole tree, kept up to date by rclone on a schedule, and what each one holds.
 
+use crate::integrations::scope::Place;
 use crate::platform::pg::Pg;
 use fafnirx_db::client::Params;
 use fafnirx_db::queries::mirrors as q;
@@ -26,6 +27,7 @@ pub struct New<'a> {
     pub remote_type: &'a str,
     pub options: &'a str,
     pub remote_path: &'a str,
+    pub scope: &'a str,
     pub interval_secs: i64,
     pub keep_runs: i64,
 }
@@ -38,6 +40,7 @@ pub fn insert(c: &mut impl GenericClient, m: &New, now: i64) -> Result<bool, Err
         remote_type: m.remote_type,
         options: m.options,
         remote_path: m.remote_path,
+        scope: m.scope,
         interval_secs: m.interval_secs,
         keep_runs: m.keep_runs,
         now,
@@ -90,9 +93,9 @@ pub fn set_totals(c: &mut impl GenericClient, id: i64, files: i64, bytes: i64) -
     Ok(())
 }
 
-/// Every live file of every device, in the order they are uploaded.
-pub fn live_files(c: &mut impl GenericClient) -> Result<Vec<Live>, Error> {
-    q::live_files_for_mirror().bind(&mut Pg(c)).all()
+/// Every live file at or below the folder `scope` (everything when it is empty), in the order they are uploaded.
+pub fn live_files(c: &mut impl GenericClient, scope: &str) -> Result<Vec<Live>, Error> {
+    q::live_files_for_mirror().bind(&mut Pg(c), &scope).all()
 }
 
 /// What a mirror holds, as (device id, path, root hash).
@@ -124,6 +127,21 @@ pub fn forget_item(c: &mut impl GenericClient, mirror_id: i64, device_id: i64, p
 /// The folder of every device, by id.
 pub fn device_folders(c: &mut impl GenericClient) -> Result<Vec<(i64, String)>, Error> {
     Ok(q::device_folders().bind(&mut Pg(c)).all()?.into_iter().map(|d| (d.id, d.folder)).collect())
+}
+
+/// Every device, folder and source, with the kind, for choosing what a mirror holds.
+pub fn places(c: &mut impl GenericClient) -> Result<Vec<Place>, Error> {
+    Ok(q::scope_places()
+        .bind(&mut Pg(c))
+        .all()?
+        .into_iter()
+        .map(|p| Place { id: p.id, folder: p.folder, kind: p.kind })
+        .collect())
+}
+
+/// The folders directly inside `prefix` (`a/b/`, or empty) among the live files of a device.
+pub fn folders_below(c: &mut impl GenericClient, device_id: i64, prefix: &str) -> Result<Vec<String>, Error> {
+    q::folders_below().bind(&mut Pg(c), &prefix, &device_id).all()
 }
 
 /// Marks the mirrors that were running when the master stopped as failed.

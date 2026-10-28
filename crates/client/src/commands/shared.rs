@@ -59,11 +59,12 @@ pub async fn shared_list(config_path: PathBuf) -> Result<()> {
 
 pub async fn shared_create(config_path: PathBuf, name: String) -> Result<()> {
     let mut client = connect(&config_path)?.client;
-    if shared_names(&mut client).await?.find(&name).is_some() {
-        bail!("there is a shared folder called \"{name}\" already");
+    if let Some(full) = shared_names(&mut client).await?.find(&name) {
+        bail!("there is a shared folder called \"{full}\" already");
     }
     create_shared(&mut client, &name).await?;
-    println!("made the shared folder \"{name}\"");
+    let full = shared_names(&mut client).await?.find(&name).unwrap_or(name);
+    println!("made the shared folder \"{full}\"");
     Ok(())
 }
 
@@ -86,8 +87,8 @@ pub async fn shared_attach(config_path: PathBuf, name: String, dir: PathBuf, cre
 }
 
 pub fn shared_detach(config_path: &Path, name: &str) -> Result<()> {
-    config::detach_shared_from_file(config_path, name)?;
-    println!("\"{name}\" is no longer synced here; the files stay in the folder and on the master");
+    let full = config::detach_shared_from_file(config_path, name)?;
+    println!("\"{full}\" is no longer synced here; the files stay in the folder and on the master");
     Ok(())
 }
 

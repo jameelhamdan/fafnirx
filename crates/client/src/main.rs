@@ -184,7 +184,7 @@ fn run(cli: Cli) -> Result<()> {
     let config_path = cli.config.clone().unwrap_or_else(default_config_path);
     // The system-wide install belongs to the computer: what changes it, or reads its token, is done by an administrator.
     let system = config::is_system_config(&config_path)
-        || matches!(cli.cmd, Cmd::InstallService { .. } | Cmd::UninstallService { .. });
+        || (!cfg!(windows) && matches!(cli.cmd, Cmd::InstallService { .. } | Cmd::UninstallService { .. }));
     if cli.cmd.needs_admin() && system && !service::elevate::is_admin() {
         use std::io::IsTerminal;
         let mut args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
@@ -239,8 +239,8 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::ReleaseDeletes => commands::release_deletes(&config_path),
         Cmd::Pause => commands::set_paused(&config_path, true),
         Cmd::Resume => commands::set_paused(&config_path, false),
-        Cmd::InstallService { dry_run } => service::install(dry_run),
-        Cmd::UninstallService { dry_run } => service::uninstall(dry_run),
+        Cmd::InstallService { dry_run } => service::install(&config_path, dry_run),
+        Cmd::UninstallService { dry_run } => service::uninstall(&config_path, dry_run),
         Cmd::Restart => {
             init_logging(None);
             tokio_main(commands::restart(config_path))

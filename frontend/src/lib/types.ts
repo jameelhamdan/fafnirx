@@ -190,14 +190,26 @@ export interface UserInfo {
   devices: number
 }
 
+/** A folder a mirror can be told to hold, inside the one being looked at. */
+export interface ScopeChoice {
+  name: string
+  /** `user`, `master`, a device kind or `folder`. */
+  kind: string
+}
+
 /** A folder that belongs to a user, not to a computer, and that their computers keep in step. */
 export interface SharedFolder {
   /** `<owner>/<name>`: how the clients name it. */
   folder: string
   name: string
+  owner: string
   mine: boolean
   can_write: boolean
   created_at: number
+  files: number
+  bytes: number
+  /** When a file in it last changed. */
+  changed_at: number | null
   /** The other users who use it (only for its owner). */
   members: { user: string; can_write: boolean }[]
   /** The computers that have it attached: all for its owner, the user's own otherwise. */

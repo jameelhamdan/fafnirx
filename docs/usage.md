@@ -167,11 +167,11 @@ fafnirx shared list | create | attach | detach | keep   # shared folders, below
 fafnirx install-service | uninstall-service | tray
 ```
 
-Config (TOML, made by `enroll`; `--config` selects another): `%ProgramData%\fafnirx\config.toml`, `/Library/Application Support/fafnirx/config.toml`, `/etc/fafnirx/config.toml`. Commands that change it or read the token ask for administrator rights (UAC, `sudo`).
+Config (TOML, made by `enroll`; `--config` selects another): `%LocalAppData%\fafnirx\config.toml` (Windows, yours), `/Library/Application Support/fafnirx/config.toml`, `/etc/fafnirx/config.toml`. On macOS and Linux commands that change it or read the token ask for administrator rights (`sudo`); on Windows they do not. A Windows computer that still has `%ProgramData%\fafnirx\config.toml` from an older version keeps using it, with administrator rights (UAC), until that version is removed.
 
 ### The service
 
-The client is a service of the computer (Windows **fafnirx** in `services.msc`/Task Manager, systemd `fafnirx.service`, launchd `io.fafnirx.client`), run as LocalSystem/root: one device per machine, and it reads the folders of every user. Config, token and databases are administrator-only; the tray and CLI of any user talk to it through `<data>/control` (markers, `status.json`, log). Failures restart it. The tray starts at login (Windows HKLM Run, `/etc/xdg/autostart`, `/Library/LaunchAgents`). On a Windows service `FAFNIRX_ALLOW_UNPROTECTED_EXE=1` allows a program outside Program Files (development only).
+On Windows the client is a program of your user: `fafnirx install-service` (the setup and `enroll` do it) adds it and the tray to your login (`HKCU\...\Run`) and starts it; `uninstall-service` removes them. Failures of the client are not restarted by the system. On Linux and macOS the client is a service of the computer (systemd `fafnirx.service`, launchd `io.fafnirx.client`), run as root: one device per machine, and it reads the folders of every user. Config, token and databases are administrator-only; the tray and CLI of any user talk to it through `<data>/control` (markers, `status.json`, log). Failures restart it. The tray starts at login (`/etc/xdg/autostart`, `/Library/LaunchAgents`).
 
 ```toml
 server = "http://nas.lan:7443"  # https://... behind a TLS proxy
@@ -224,14 +224,17 @@ Make and attach from the tray (**Shared folders**) or the CLI:
 
 ```sh
 fafnirx shared list                          # <owner>/<name>, your own marked "own"
-fafnirx shared create family
-fafnirx shared attach family ~/Family        # --create makes it first; the folder is made if it is not there
-fafnirx shared detach family                 # keeps the files, here and on the master
-fafnirx shared keep family                   # keep files whose deletion on the master is held back (see Deletes)
+fafnirx shared create family                 # made as <you>/family
+fafnirx shared attach ana/family ~/Family    # --create makes it first; the folder is made if it is not there
+fafnirx shared detach ana/family             # keeps the files, here and on the master
+fafnirx shared keep ana/family               # keep files whose deletion on the master is held back (see Deletes)
+
+A folder is named `<owner>/<name>` everywhere: tray, config (`[[shared]] name`), `status`, Files and the web page. The commands
+also take the short name when only one attached folder has it.
 ```
 
-Tray: **Shared folders** lists every usable folder as `<owner>/<name>` (own: short name); **New shared folder from a
-folder...** names it after the picked folder. Stored on the master as `files/users/<owner>/<name>/` with versions, trash,
+Tray: **Shared folders** lists every usable folder as `<owner>/<name>`; **New shared folder from a folder...** names it
+after the picked folder. Stored on the master as `files/users/<owner>/<name>/` with versions, trash,
 mirrors. The attached folder is not also backed up to the computer's device.
 
 - **Cycle.** Receive, then send. The master notifies a running client of changes (syncs within seconds); fallback poll every
@@ -252,9 +255,11 @@ mirrors. The attached folder is not also backed up to the computer's device.
 - **Status.** `fafnirx status` "shared folders" section (works with the client stopped; `--json` key `shared`): per folder
   in step or not, files, last sync, held deletions, last problem. Tray: a line per folder. Web: computer page; the owner's
   folder page lists every attached computer.
-- **Other users.** Own folders work on all your computers. To share: **Shared folders** → add user, read-only or read and
-  change. Members see `<you>/<name>` in tray and Files (read-only: browse, download). Only the owner manages access.
-  Removing a member ends access at once; their local files stay.
+- **Web page.** **Shared folders** lists yours and those shared with you (filter, search): files, size, last change, the
+  computers that have it and how each is doing, and the command to attach it. The owner adds users (read-only or read and
+  change), changes their access and removes them; a member can **Leave**.
+- **Other users.** Own folders work on all your computers. Members see `<owner>/<name>` in tray and Files (read-only: browse,
+  download). Only the owner manages access. Removing a member or leaving ends access at once; local files stay.
 - **Deleting a folder.** Delete its files first; deleting the folder then removes trash, history and disk copy. Attached
   computers are told and keep their files; `detach` them.
 - Receiving writes `.fafnirx-part-*` beside the target, renamed once verified; never uploaded.
@@ -311,8 +316,11 @@ retention. The key is never shown again.
 
 ## Mirrors: offsite copies
 
-**Mirrors → Add mirror** (administrators): name, rclone backend type, options, remote path, interval (72 h), runs kept (3).
-A mirror pushes everything: all users' files and master files.
+**Mirrors → Add mirror** (administrators): what to mirror, name, rclone backend type, options, remote path, interval (72 h),
+runs kept (3). A mirror pushes everything (all users' files and master files) or one folder you pick by going down the tree:
+`_master` or `_master/<folder>`, `<user>`, `<user>/<device>` or `<user>/<shared folder>`, then any folder inside. The files
+keep their place below `files/` on the remote, so a restore is a copy back. A mirror of one folder leaves out
+`meta/library.json` (it names files of the whole tree). The folder cannot be changed later: add another mirror.
 
 ```text
 # type: s3
@@ -370,13 +378,13 @@ check. Config, token and state stay: same device, nothing resent.
   restart client and tray). A tray that finds a newer file on disk restarts too.
 - **CLI:** `fafnirx update --check` prints `available <version>` or `current <version>` (no token needed); `fafnirx update` asks the service to install, then waits until it runs again on the new version. `fafnirx restart` restarts it.
 
-The file is replaced by the service, which may write it (Windows `Program Files\fafnirx`, macOS/Linux script `/usr/local/bin`); users cannot.
+The file is replaced by the client, which may write it (Windows `%LocalAppData%\Programs\fafnirx`, macOS/Linux script `/usr/local/bin`; there other users cannot).
 
 `.deb` (under `/usr`): updated through the package. **Update** / `fafnirx update` downloads the release `.deb` for this arch,
 verifies `.sha256`, runs `dpkg -i` via `sudo` (terminal) or `pkexec` (tray). If neither can ask: keeps the file and prints
 `sudo dpkg -i <file>`. The background check only reports.
 
-Restart goes through the service manager: SCM on Windows, `launchctl kickstart -k` on macOS, `systemctl restart` on Linux.
+Restart ends the client and starts it again on Windows (a client of the user); on macOS it is `launchctl kickstart -k`, on Linux `systemctl restart`.
 
 The checksum comes from the same release: it guards against bad downloads, not against someone who can publish releases. For
 your own signed builds:

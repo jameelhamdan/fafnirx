@@ -189,7 +189,8 @@ fn top_level(c: &mut Client, who: &Access, path: String, retention_days: i64) ->
     entries.extend(device_summaries(c, who, None)?.into_iter().filter(|d| d.kind != "source" || d.files > 0).map(
         |d| Entry {
             kind: "device",
-            name: if d.user == who.name { d.name.clone() } else { d.folder.clone() },
+            // A shared folder is always named with its owner, like the clients name it.
+            name: if d.user == who.name && d.kind != "shared" { d.name.clone() } else { d.folder.clone() },
             writable: editable_kind(&d.kind) && who.can_write(&d.folder),
             device_kind: Some(d.kind),
             device: d.folder,

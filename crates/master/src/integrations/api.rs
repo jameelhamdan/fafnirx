@@ -6,6 +6,7 @@
 use crate::devices::api::NAME_RULE;
 use crate::files::browse::expand;
 use crate::files::ingest;
+use crate::integrations::scope;
 use crate::integrations::spec::MirrorSpec;
 use crate::integrations::Table;
 use crate::platform::db;
@@ -112,6 +113,7 @@ fn mirror_states(c: &mut Client) -> Result<Vec<JobState>, postgres::Error> {
                 "remote": r.remote,
                 "remote_type": r.remote_type,
                 "remote_path": r.remote_path,
+                "scope": r.scope,
                 "keep_runs": r.keep_runs,
                 "option_keys": keys,
                 "files": r.last_files,
@@ -402,6 +404,9 @@ pub struct NewMirror {
     options: String,
     #[serde(default)]
     remote_path: String,
+    /// The folder to hold, like `ana/laptop/Documents`; everything when empty.
+    #[serde(default)]
+    scope: String,
     #[serde(default = "three_days")]
     interval_hours: f64,
     #[serde(default = "three")]
@@ -427,6 +432,7 @@ pub async fn create_mirror(
         remote_type: b.remote_type,
         remote_path: b.remote_path,
         options: parse_options(&b.options)?.into_iter().collect(),
+        scope: b.scope,
         interval_hours: b.interval_hours,
         keep_runs: b.keep_runs,
     };
@@ -434,12 +440,16 @@ pub async fn create_mirror(
     let secs = hours_to_secs(mirror.interval_hours)?;
     let options = Value::Object(mirror.options.into_iter().collect()).to_string();
     run(&state, move |c| {
+        if !scope::exists(&mirrors::places(c)?, &mirror.scope) {
+            return Err(ApiError::bad(format!("There is nothing called {} to mirror", mirror.scope)).into());
+        }
         let new = mirrors::New {
             name: &mirror.name,
             remote: &mirror.remote,
             remote_type: &mirror.remote_type,
             options: &options,
             remote_path: &mirror.remote_path,
+            scope: &mirror.scope,
             interval_secs: secs,
             keep_runs: mirror.keep_runs,
         };
@@ -451,6 +461,35 @@ pub async fn create_mirror(
     })
     .await?;
     done()
+}
+
+#[derive(Deserialize)]
+pub struct ScopeQuery {
+    #[serde(default)]
+    path: String,
+}
+
+/// The folders a mirror can be told to hold inside `path` (the top when empty), for the form that adds one.
+pub async fn mirror_scope(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    axum::extract::Query(q): axum::extract::Query<ScopeQuery>,
+) -> Res<Vec<scope::Choice>> {
+    who.require_admin()?;
+    let path = scope::normalize(&q.path).map_err(|e| ApiError::bad(format!("{e:#}")))?;
+    let choices = run(&state, move |c| {
+        let places = mirrors::places(c)?;
+        let mut failed = None;
+        let found = scope::choices(&places, &path, |device, prefix| {
+            mirrors::folders_below(c, device, prefix).unwrap_or_else(|e| {
+                failed = Some(e);
+                Vec::new()
+            })
+        });
+        failed.map_or(Ok(found), Err).map_err(Into::into)
+    })
+    .await?;
+    Ok(Json(choices))
 }
 
 /// Forget what was uploaded: the next run re-sends everything (use after emptying the remote).

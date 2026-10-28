@@ -115,7 +115,8 @@ every 5 minutes or on `POST /api/files/rescan`. A missing device folder deletes 
 
 A shared folder is a `devices` row of kind `shared`: owned by a user, no token, folder `<owner>/<name>`. Versions, trash,
 retention, mirrors, the watcher and the web file browser treat it like a local folder. `shared_members` lists the other users
-the owner added, each read-write or read-only. Clients reach it like this:
+the owner added, each read-write or read-only; a member leaves with `POST /api/shared/leave`. The web app and the clients
+name it `<owner>/<name>`. Clients reach it like this:
 
 - **Writes.** `Negotiate`, `UploadChunks`, `Commit` and `MarkDeleted` act on the shared folder instead of the calling device
   when the call has `x-fafnirx-shared: <owner>/<name>` (the owner may use the bare name). The caller still authenticates as its
@@ -241,7 +242,7 @@ JSON under `/api` behind the login cookie (random token, hash stored, `SameSite=
 | Albums | `GET/POST /api/albums` (a `folder` body makes or returns the folder's album), `GET/PATCH/DELETE /api/albums/:id`, `POST .../files` and `.../files/remove` (by `ids` or `items` of `{device, path}`) |
 | Streaming | `GET /api/stream/:id/{master.m3u8,<quality>/index.m3u8,<quality>/seg<n>.ts,subtitles.json,subtitles/<n>.vtt}` |
 | Processing | `GET /api/queue`; admin: `POST /api/queue/pause`, `/retry`, `/cancel`, `/rebuild` |
-| Integrations | `GET/POST /api/sources` + `/:user/:name`, `/run`, `/toggle`; admin: `GET/POST /api/mirrors` + `/:name`, `/run`, `/toggle`, `/resync` |
+| Integrations | `GET/POST /api/sources` + `/:user/:name`, `/run`, `/toggle`; admin: `GET/POST /api/mirrors` + `/:name`, `/run`, `/toggle`, `/resync`, `GET /api/mirrors/scope?path=` (folders to pick from) |
 | Settings | `GET/PUT /api/settings` |
 
 Browser uploads are chunked: pieces are `PUT` at an offset (409 with the expected offset if misaligned); `finish` verifies the

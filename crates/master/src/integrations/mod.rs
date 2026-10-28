@@ -7,6 +7,7 @@
 pub mod api;
 pub mod gdrive;
 pub mod mirror;
+pub mod scope;
 pub mod spec;
 
 use crate::platform::db::{self, Db, Device};
@@ -58,6 +59,8 @@ pub struct MirrorRow {
     pub remote_path: String,
     /// A remote of the rclone config file ("name:path"); when set, the type, options and path are not used.
     pub remote: String,
+    /// The folder it holds (see `scope`); empty for everything.
+    pub scope: String,
     pub keep_runs: i64,
 }
 
@@ -166,6 +169,7 @@ fn claim_mirror(db: &Db) -> Option<MirrorRow> {
         remote_type: m.remote_type,
         options: m.options,
         remote_path: m.remote_path,
+        scope: m.scope,
         keep_runs: m.keep_runs,
         remote: m.remote,
     })

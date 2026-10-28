@@ -79,8 +79,8 @@ pub async fn enroll(config_path: PathBuf, server: String, token: String, start_s
     }
     if start_service {
         // Enrolling is the last step of setting a device up, so it also makes the client run from now on.
-        match service::install(false) {
-            Ok(()) => println!("the client runs in the background now, as a service, and starts at boot"),
+        match service::install(&config_path, false) {
+            Ok(()) => println!("the client runs in the background now and starts again with the computer"),
             Err(e) => println!(
                 "warning: could not start the client as a service ({e:#}); run `fafnirx install-service` to retry"
             ),

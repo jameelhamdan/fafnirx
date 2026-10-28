@@ -255,7 +255,8 @@ try {
   check(!fs.existsSync(path.join(data, 'files', 'users', 'alice', 'family')) && (await schema.rows("SELECT 1 FROM devices WHERE folder = 'alice/family'")).length === 0, 'it takes its trash and its place on disk with it')
   const gone = laptop.c.try('sync')
   check(gone.code !== 0 && `${gone.stdout}${gone.stderr}`.includes('no shared folder'), 'a computer that still has it attached is told it is gone')
-  laptop.c('shared', 'detach', 'family')
+  const detached = laptop.c('shared', 'detach', 'family').stdout
+  check(detached.includes('"alice/family"'), `detaching by the short name says which folder it was (${detached.trim()})`)
   check(read(dirL, 'a.txt') === 'D', 'and keeps its files when it lets go')
 
   console.log(`\nall ${passedChecks()} checks passed`)

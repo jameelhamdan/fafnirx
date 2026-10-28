@@ -246,6 +246,20 @@ try {
   )
   check(Number((await schema.rows('SELECT last_files FROM mirrors'))[0][0]) === Object.keys(files).length, 'the mirrored file count is recorded')
 
+  // --- a mirror of one folder holds only that folder, at the same place below files/ ---------------------------------------------
+  const scopedDir = path.join(tmp, 'offsite-docs')
+  const scoped = { ...form, name: 'docs-only', remote_path: scopedDir.replaceAll('\\', '/'), scope: 'admin/laptop/docs' }
+  check((await admin.post('/api/mirrors', { ...scoped, name: 'nowhere', scope: 'admin/nope' })).status === 400, 'a folder that does not exist cannot be mirrored')
+  check((await admin.get('/api/mirrors/scope?path=admin%2Flaptop')).json.some((c) => c.name === 'docs' && c.kind === 'folder'), 'the folders of a device are offered to pick from')
+  check((await admin.post('/api/mirrors', scoped)).status === 200, 'a mirror of one folder is added')
+  const m3 = await until(() => finished('mirrors', 'docs-only'), 90)
+  check(m3?.[0] === 'ok', `the mirror of one folder succeeds (${m3?.[0]}: ${JSON.stringify(m3?.[1])})`)
+  check(
+    Object.keys(tree(path.join(scopedDir, 'files'))).sort().join() === 'users/admin/laptop/docs/deep/y.txt,users/admin/laptop/docs/x.txt',
+    'it holds only the files of that folder, with the same paths as the master',
+  )
+  check(fs.existsSync(path.join(scopedDir, 'meta', 'stats.json')) && !fs.existsSync(path.join(scopedDir, 'meta', 'library.json')), 'it leaves out the library file, which names files of the whole tree')
+
   // --- an incremental run uploads only what changed; replaced and removed files go to versions/ ---------------------------------
   fs.writeFileSync(path.join(docs, 'x.txt'), 'device edit')
   c('sync')

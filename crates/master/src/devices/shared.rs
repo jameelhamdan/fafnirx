@@ -116,6 +116,31 @@ fn remove_if_only_folders(dir: &std::path::Path) {
 }
 
 #[derive(Deserialize)]
+pub struct Leave {
+    /// The folder as `<owner>/<name>`.
+    folder: String,
+}
+
+/// A user stops using a folder that another user shared with them.
+pub async fn leave(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    Json(body): Json<Leave>,
+) -> Res<Done> {
+    who.require_workspace()?;
+    run(&state, move |c| {
+        let folder = devices::shared_folder(c, who.user_id, &body.folder)?
+            .filter(|s| !s.mine)
+            .ok_or_else(|| ApiError::not_found("No folder is shared with you under that name"))?;
+        devices::remove_shared_member(c, folder.id, who.user_id)?;
+        db::notify(c, "devices", &folder.folder)?;
+        Ok(())
+    })
+    .await?;
+    done()
+}
+
+#[derive(Deserialize)]
 pub struct MemberBody {
     user: String,
     /// Read only unless said otherwise.

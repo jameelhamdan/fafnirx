@@ -51,13 +51,16 @@ pub fn control_dir(state_dir: &Path) -> PathBuf {
     }
 }
 
-/// The config of this computer: the system-wide one on Windows, where it was installed on Linux and macOS (and for root, who
-/// installs it), else the one of the current user.
+/// The config of this computer: the system-wide one where it was installed (on Windows only by an older version) and for root
+/// on Linux and macOS, who installs it, else the one of the current user. A Windows client belongs to the user, so that nothing
+/// in it needs administrator rights.
 pub fn default_config_path() -> PathBuf {
-    if cfg!(windows) || system_config_path().exists() || (cfg!(unix) && crate::service::elevate::is_admin()) {
+    if system_config_path().exists() || (cfg!(unix) && crate::service::elevate::is_admin()) {
         return system_config_path();
     }
-    let dir = if cfg!(target_os = "macos") {
+    let dir = if cfg!(windows) {
+        env_dir("LOCALAPPDATA").unwrap_or_else(|| home().join("AppData/Local"))
+    } else if cfg!(target_os = "macos") {
         home().join("Library/Application Support")
     } else {
         env_dir("XDG_CONFIG_HOME").unwrap_or_else(|| home().join(".config"))

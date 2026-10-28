@@ -61,7 +61,7 @@ Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targ
 | `web` | HTTP shell, logins, roles | `mod.rs` (state, errors, routes), `auth.rs`, `access.rs`, `users.rs`, `events.rs`, `assets.rs`, `tests/` |
 | `files` | Content in and out | `ingest.rs` (commit, delete, rename, move), `livetree.rs`, `browse.rs`, `transfer.rs`, `zip.rs` |
 | `library` | Photos and videos | `meta.rs` (jobs, pictures), `media.rs` (ffmpeg), `artwork.rs`, `photos.rs`, `albums.rs`, `stream.rs` |
-| `integrations` | Sources, mirrors | `mod.rs`, `gdrive.rs`, `mirror.rs`, `api.rs` |
+| `integrations` | Sources, mirrors | `mod.rs`, `gdrive.rs`, `mirror.rs`, `scope.rs`, `api.rs` |
 | `monitoring` | Dashboard, schedules, queue | `api.rs`, `jobs.rs`, `queue.rs` |
 
 New endpoints go in the app's `api.rs` and are registered in `web/mod.rs`. Apps use `platform` and each other's public

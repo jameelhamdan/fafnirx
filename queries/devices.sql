@@ -94,14 +94,16 @@ SELECT kind FROM devices WHERE folder = :folder;
 --! device_id_and_kind_by_folder
 SELECT id, kind FROM devices WHERE folder = :folder;
 
---! shared_folders_for_user (key?)
+--! shared_folders_for_user (key?) : (last_collected?)
 -- The shared folders a user can use: their own, and those whose owner added them. A read-only account never writes.
 -- `key` narrows it to one: the name of one of their own, or the folder (<owner>/<name>) of any they can use.
-SELECT d.id, d.name, d.folder, TRUE AS mine, u.role <> 'readonly' AS can_write, d.created_at
+SELECT d.id, d.name, d.folder, TRUE AS mine, u.role <> 'readonly' AS can_write, d.created_at, d.file_count, d.total_bytes,
+       d.last_collected
 FROM devices d JOIN users u ON u.id = d.user_id
 WHERE d.kind = 'shared' AND d.user_id = :user_id AND (:key::text IS NULL OR d.name = :key OR d.folder = :key)
 UNION ALL
-SELECT d.id, d.name, d.folder, FALSE, m.can_write AND u.role <> 'readonly', d.created_at
+SELECT d.id, d.name, d.folder, FALSE, m.can_write AND u.role <> 'readonly', d.created_at, d.file_count, d.total_bytes,
+       d.last_collected
 FROM shared_members m JOIN devices d ON d.id = m.folder_id JOIN users o ON o.id = d.user_id JOIN users u ON u.id = m.user_id
 WHERE d.kind = 'shared' AND m.user_id = :user_id AND o.disabled_at IS NULL AND (:key::text IS NULL OR d.folder = :key)
 ORDER BY 3;

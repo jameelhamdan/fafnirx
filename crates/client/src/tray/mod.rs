@@ -7,7 +7,7 @@ mod icon;
 mod open;
 mod text;
 
-use crate::config::{self, control_dir, Config, Folder, Shared};
+use crate::config::{control_dir, Config, Folder, Shared};
 use crate::daemon;
 use anyhow::{Context, Result};
 use fafnirx_common::unix_now;
@@ -367,8 +367,24 @@ fn attach_existing_shared(config_path: &Path, name: &str) {
     }
 }
 
-/// Makes a shared folder named after a folder chosen by the user, and syncs that folder with it.
-fn new_shared(config_path: &Path, on_master: &[(String, bool)]) {
+/// A shared folder as people read it, with the user it belongs to in front: `ana/family`. Without the user (not known before
+/// the client first reached the master) it is the bare name.
+fn with_owner(owner: &str, name: &str) -> String {
+    if owner.is_empty() || name.contains('/') {
+        name.to_string()
+    } else {
+        format!("{owner}/{name}")
+    }
+}
+
+/// The user this computer belongs to, from the name of the device (`<user>/<device>`) the client last got from the master.
+fn owner_of(status: Option<&daemon::Status>) -> &str {
+    status.and_then(|s| s.device.split_once('/')).map_or("", |(owner, _)| owner)
+}
+
+/// Makes a shared folder named after a folder chosen by the user, and syncs that folder with it. `owner` is the user, to
+/// show the folder the way the master names it.
+fn new_shared(config_path: &Path, on_master: &[(String, bool)], owner: &str) {
     let Some(dir) = rfd::FileDialog::new().set_title("Choose the folder to share").pick_folder() else { return };
     let Some(name) = shared_name_of(&dir) else {
         message(
@@ -382,17 +398,18 @@ fn new_shared(config_path: &Path, on_master: &[(String, bool)]) {
         return;
     };
     // Only the user's own folders can clash with the name: another user's is `<owner>/<name>`.
-    if on_master.iter().any(|(n, own)| *own && n.rsplit('/').next() == Some(name.as_str())) {
+    let existing = on_master.iter().find(|(n, own)| *own && n.rsplit('/').next() == Some(name.as_str()));
+    if let Some((full, _)) = existing {
         let text = format!(
-            "There is a shared folder called \"{name}\" already.\n\nSync {} with it? Files from both are merged.",
+            "There is a shared folder called \"{full}\" already.\n\nSync {} with it? Files from both are merged.",
             dir.display()
         );
         if ask_yes_no(rfd::MessageLevel::Info, text) {
-            attach_shared_dialog(config_path, &name, &dir, false);
+            attach_shared_dialog(config_path, full, &dir, false);
         }
     } else if ask_yes_no(
         rfd::MessageLevel::Info,
-        format!("Make the shared folder \"{name}\" and keep {} in sync with it?", dir.display()),
+        format!("Make the shared folder \"{}\" and keep {} in sync with it?", with_owner(owner, &name), dir.display()),
     ) {
         attach_shared_dialog(config_path, &name, &dir, true);
     }
@@ -400,7 +417,7 @@ fn new_shared(config_path: &Path, on_master: &[(String, bool)]) {
 
 fn detach_shared_dialog(config_path: &Path, name: &str) {
     let text = format!("Stop syncing \"{name}\" on this computer?\n\nNothing is deleted: the files stay in the folder and on the server.");
-    confirm_then(text, || config::detach_shared_from_file(config_path, name));
+    confirm_then(text, || cli_change(config_path, &["shared".into(), "detach".into(), name.into()]));
 }
 
 fn message(level: rfd::MessageLevel, text: String) -> rfd::MessageDialog {
@@ -413,22 +430,25 @@ fn add_folders_dialog(config_path: &Path) -> bool {
     let Some(picked) = rfd::FileDialog::new().set_title("Choose the folders to collect").pick_folders() else {
         return false;
     };
-    let problems: Vec<String> = picked
-        .iter()
-        .filter_map(|dir| {
-            config::add_folder_to_file(config_path, dir, None).err().map(|e| format!("{}\n{e:#}", dir.display()))
-        })
-        .collect();
-    if !problems.is_empty() {
-        message(rfd::MessageLevel::Warning, format!("Some folders were not added:\n\n{}", problems.join("\n\n")))
-            .show();
+    // Through the command: the config of a system-wide install is the administrators', and the command asks for their rights.
+    if let Err(e) = run_cli(config_path, &add_folder_args(&picked)) {
+        message(rfd::MessageLevel::Warning, format!("Some folders were not added:\n\n{e}")).show();
     }
     true
 }
 
+/// Changes the config through the command, which asks for administrator rights when the config needs them.
+fn cli_change(config_path: &Path, args: &[std::ffi::OsString]) -> anyhow::Result<()> {
+    run_cli(config_path, args).map(drop).map_err(anyhow::Error::msg)
+}
+
+fn add_folder_args(dirs: &[PathBuf]) -> Vec<std::ffi::OsString> {
+    std::iter::once("add-folder".into()).chain(dirs.iter().map(|d| d.as_os_str().to_owned())).collect()
+}
+
 fn remove_folder_dialog(config_path: &Path, name: &str) {
     let text = format!("Stop collecting \"{name}\"?\n\nFiles already uploaded stay on the server.");
-    confirm_then(text, || config::remove_folder_from_file(config_path, name));
+    confirm_then(text, || cli_change(config_path, &["remove-folder".into(), name.into()]));
 }
 
 /// Everything an action needs to do its work.
@@ -475,7 +495,7 @@ impl Env {
             Action::AttachShared(name) => attach_existing_shared(&self.config_path, &name),
             Action::NewShared => {
                 let known = self.on_master.lock().map(|l| l.clone()).unwrap_or_default();
-                new_shared(&self.config_path, &known);
+                new_shared(&self.config_path, &known, owner_of(daemon::read_status(&self.state_dir).as_ref()));
             }
             Action::DetachShared(name) => detach_shared_dialog(&self.config_path, &name),
         }
@@ -598,4 +618,31 @@ pub fn run(config_path: PathBuf) -> Result<()> {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_shared_folder_is_shown_with_its_owner() {
+        assert_eq!(with_owner("ana", "family"), "ana/family");
+        assert_eq!(with_owner("ana", "bo/trip"), "bo/trip", "already named in full");
+        assert_eq!(with_owner("", "family"), "family", "before the master has said who the user is");
+    }
+
+    #[test]
+    fn the_owner_is_the_user_part_of_the_device_name() {
+        let status = |device: &str| daemon::Status { device: device.into(), ..Default::default() };
+        assert_eq!(owner_of(Some(&status("ana/laptop"))), "ana");
+        assert_eq!(owner_of(Some(&status(""))), "");
+        assert_eq!(owner_of(None), "");
+    }
+
+    #[test]
+    fn folders_picked_in_the_tray_are_added_by_one_command() {
+        let args = add_folder_args(&[PathBuf::from("C:/a b"), PathBuf::from("D:/c")]);
+        let words: Vec<_> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(words, ["add-folder", "C:/a b", "D:/c"], "one command, so one request for administrator rights");
+    }
 }

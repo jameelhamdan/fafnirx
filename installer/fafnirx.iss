@@ -19,8 +19,8 @@ VersionInfoProductName=fafnirx
 VersionInfoDescription=fafnirx client setup
 DefaultDirName={autopf}\fafnirx
 DisableProgramGroupPage=yes
-; The client is a service of the computer, for every user: it is installed by an administrator, into a folder that users cannot change.
-PrivilegesRequired=admin
+; The client belongs to the user who installs it: its program, config and state are in their profile, so nothing needs an administrator.
+PrivilegesRequired=lowest
 OutputDir=..\dist
 OutputBaseFilename=fafnirx-setup-{#AppVersion}
 Compression=lzma2
@@ -37,11 +37,7 @@ Name: addpath; Description: "Add fafnirx to the PATH"; Flags: checkedonce
 Source: "{#ExePath}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Registry]
-Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addpath; Check: NeedsPath(ExpandConstant('{app}'))
-
-[Run]
-; The tray of the person who ran the setup; everyone else's starts when they log in.
-Filename: "{app}\fafnirx.exe"; Parameters: "tray --hidden"; Flags: nowait runasoriginaluser; Check: IsEnrolled
+Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addpath; Check: NeedsPath(ExpandConstant('{app}'))
 
 [UninstallRun]
 Filename: "{app}\fafnirx.exe"; Parameters: "uninstall-service"; Flags: runhidden; RunOnceId: "UninstallService"
@@ -57,19 +53,14 @@ var
 
 function ConfigFile: string;
 begin
-  Result := ExpandConstant('{commonappdata}\fafnirx\config.toml');
-end;
-
-function IsEnrolled: Boolean;
-begin
-  Result := FileExists(ConfigFile);
+  Result := ExpandConstant('{localappdata}\fafnirx\config.toml');
 end;
 
 function NeedsPath(Dir: string): Boolean;
 var
   Paths: string;
 begin
-  if not RegQueryStringValue(HKLM, 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment', 'Path', Paths) then
+  if not RegQueryStringValue(HKCU, 'Environment', 'Path', Paths) then
     Paths := '';
   Result := Pos(';' + Lowercase(Dir) + ';', ';' + Lowercase(Paths) + ';') = 0;
 end;
@@ -158,9 +149,7 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Code: Integer;
 begin
-  // The service is stopped through the Service Control Manager, which waits for it, so that it is not started again; what is left
-  // (the trays of the users) is ended.
-  Exec(ExpandConstant('{sys}\net.exe'), 'stop fafnirx', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  // The client and the tray are ended so that the program file can be replaced; the setup starts them again.
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM fafnirx.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
   Sleep(500);
   Result := '';
@@ -184,7 +173,7 @@ begin
     Exit;
   if Trim(ServerEdit.Text) = '' then
   begin
-    // Upgrade of an enrolled device: keep its settings and register the service again.
+    // Upgrade of an enrolled device: keep its settings and start the client and the tray again.
     if FileExists(ConfigFile) then
       RunClient('install-service', ExpandConstant('{tmp}\fafnirx-setup.log'));
     Exit;
@@ -225,13 +214,13 @@ begin
   if CurUninstallStep <> usPostUninstall then
     Exit;
   Dir := ExpandConstant('{app}');
-  if RegQueryStringValue(HKLM, 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment', 'Path', Paths) then
+  if RegQueryStringValue(HKCU, 'Environment', 'Path', Paths) then
   begin
     P := Pos(';' + Lowercase(Dir), ';' + Lowercase(Paths));
     if P > 0 then
     begin
       Delete(Paths, P, Length(Dir) + 1);
-      RegWriteExpandStringValue(HKLM, 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment', 'Path', Paths);
+      RegWriteExpandStringValue(HKCU, 'Environment', 'Path', Paths);
     end;
   end;
 end;

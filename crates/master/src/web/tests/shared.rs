@@ -143,3 +143,44 @@ fn the_owner_makes_a_shared_folder_and_lets_other_users_in_one_by_one() {
         assert_eq!(api.json(Method::POST, "/api/shared", json!({"name": "family"})).await.0, StatusCode::OK);
     });
 }
+
+#[test]
+fn a_shared_folder_is_named_with_its_owner_and_a_member_can_leave_it() {
+    let mut api = Api::new();
+    block(async {
+        let bob = add_user(&mut api, "bob", "normal").await;
+        let alice = add_user(&mut api, "alice", "normal").await;
+
+        api.cookie = bob.clone();
+        api.json(Method::POST, "/api/shared", json!({"name": "family"})).await;
+        assert_eq!(try_upload(&api, "bob/family", "a.txt", b"hello").await, StatusCode::OK);
+        api.json(Method::POST, "/api/shared/family/members", json!({"user": "alice"})).await;
+        let (_, listed) = api.get("/api/shared").await;
+        assert_eq!((listed[0]["owner"].clone(), listed[0]["name"].clone()), (json!("bob"), json!("family")));
+        assert!(listed[0]["files"].is_number() && listed[0]["bytes"].is_number(), "what is in it is listed");
+        assert!(listed[0].get("changed_at").is_some());
+        // Its owner finds it by its full name in the folders too, not by the bare name a device has.
+        let (_, top) = api.get("/api/files").await;
+        let names: Vec<_> = top["entries"].as_array().unwrap().iter().map(|e| e["name"].clone()).collect();
+        assert!(names.contains(&json!("bob/family")), "{names:?}");
+        assert!(!names.contains(&json!("family")), "{names:?}");
+
+        // Only a member leaves; the owner deletes. A folder that is not shared with the user is not there for them.
+        let leave = json!({"folder": "bob/family"});
+        assert_eq!(
+            api.json(Method::POST, "/api/shared/leave", leave.clone()).await.0,
+            StatusCode::NOT_FOUND,
+            "his own"
+        );
+        api.cookie = alice.clone();
+        assert_eq!(
+            api.json(Method::POST, "/api/shared/leave", json!({"folder": "bob/none"})).await.0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(api.json(Method::POST, "/api/shared/leave", leave.clone()).await.0, StatusCode::OK);
+        assert_eq!(api.get("/api/shared").await.1, json!([]));
+        assert_eq!(api.json(Method::POST, "/api/shared/leave", leave).await.0, StatusCode::NOT_FOUND, "already gone");
+        api.cookie = bob.clone();
+        assert_eq!(api.get("/api/shared").await.1[0]["members"], json!([]), "and the owner sees it");
+    });
+}

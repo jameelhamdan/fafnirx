@@ -244,11 +244,18 @@ pub struct Shared {
     pub name: String,
     /// How the clients name it: `<owner>/<name>`.
     pub folder: String,
+    /// The user it belongs to.
+    pub owner: String,
     /// Their own, not one another user shared with them.
     pub mine: bool,
     /// Whether the user may change what is in it.
     pub can_write: bool,
     pub created_at: i64,
+    /// What is in it now (not live: see `devices::totals`).
+    pub files: i64,
+    pub bytes: i64,
+    /// When a file in it last changed, in unix seconds.
+    pub changed_at: Option<i64>,
 }
 
 fn shared_matching(c: &mut impl GenericClient, user_id: i64, key: Option<&str>) -> Result<Vec<Shared>, Error> {
@@ -258,11 +265,15 @@ fn shared_matching(c: &mut impl GenericClient, user_id: i64, key: Option<&str>) 
         .into_iter()
         .map(|s| Shared {
             id: s.id,
+            owner: s.folder.split_once('/').map_or_else(String::new, |(owner, _)| owner.to_string()),
             name: s.name,
             folder: s.folder,
             mine: s.mine,
             can_write: s.can_write,
             created_at: s.created_at,
+            files: s.file_count,
+            bytes: s.total_bytes,
+            changed_at: s.last_collected,
         })
         .collect())
 }
