@@ -1301,7 +1301,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx"
-version = "3.4.0"
+version = "3.5.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1338,7 +1338,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx-common"
-version = "3.4.0"
+version = "3.5.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1355,7 +1355,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx-db"
-version = "3.4.0"
+version = "3.5.0"
 dependencies = [
  "cornucopia",
  "postgres",
@@ -1366,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx-master"
-version = "3.4.0"
+version = "3.5.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1408,7 +1408,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx-sign"
-version = "3.4.0"
+version = "3.5.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1422,7 +1422,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx-stream"
-version = "3.4.0"
+version = "3.5.0"
 dependencies = [
  "anyhow",
  "axum",
