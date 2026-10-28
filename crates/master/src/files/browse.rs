@@ -95,10 +95,10 @@ pub struct Listing {
     retention_days: i64,
 }
 
-/// Whether the web app changes the files of a device of this kind: the master files and local folders. What a device or
-/// a source sends is theirs to change; here it can be read, downloaded and brought back from the trash.
+/// Whether the web app changes the files of a device of this kind: the master files, local folders and shared folders. What
+/// a device or a source sends is theirs to change; here it can be read, downloaded and brought back from the trash.
 pub fn editable_kind(kind: &str) -> bool {
-    matches!(kind, "local" | "master")
+    matches!(kind, "local" | "master" | "shared")
 }
 
 /// The device with this folder, if `who` may look at it: a device someone else owns does not exist for them.

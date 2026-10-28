@@ -22,7 +22,7 @@ pub fn activity_by_day(
     user: i64,
 ) -> Result<Vec<(i64, String, i64)>, Error> {
     Ok(q::activity_by_day()
-        .bind(&mut Pg(c), &since, &all, &user)
+        .bind(&mut Pg(c), &since, &user, &all)
         .all()?
         .into_iter()
         .map(|d| (d.day, d.action, d.n))
@@ -38,7 +38,7 @@ pub fn recent(
     limit: i64,
 ) -> Result<Vec<Recent>, Error> {
     Ok(q::recent_events()
-        .bind(&mut Pg(c), &folder, &all, &user, &limit)
+        .bind(&mut Pg(c), &folder, &user, &all, &limit)
         .all()?
         .into_iter()
         .map(|e| Recent { id: e.id, ts: e.ts, action: e.action, path: e.path, detail: e.detail, device: e.device })

@@ -21,7 +21,7 @@ JOIN versions v ON v.id = f.current_version_id
 LEFT JOIN file_meta m ON m.root_hash = v.root_hash
 LEFT JOIN file_state s ON s.file_id = f.id AND s.user_id = :uid
 WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
-  AND (:all::boolean OR d.kind = 'master' OR d.user_id = :scope_user::bigint)
+  AND visible(d, :scope_user::bigint, :all::boolean)
   AND CASE :scope::text
         WHEN 'timeline' THEN NOT COALESCE(s.archived, false)
         WHEN 'favorites' THEN COALESCE(s.favorite, false)
@@ -46,7 +46,7 @@ JOIN versions v ON v.id = f.current_version_id
 LEFT JOIN file_meta m ON m.root_hash = v.root_hash
 LEFT JOIN file_state s ON s.file_id = f.id AND s.user_id = :uid
 WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
-  AND (:all::boolean OR d.kind = 'master' OR d.user_id = :scope_user::bigint)
+  AND visible(d, :scope_user::bigint, :all::boolean)
   AND CASE :scope::text
         WHEN 'timeline' THEN NOT COALESCE(s.archived, false)
         WHEN 'favorites' THEN COALESCE(s.favorite, false)
@@ -69,7 +69,7 @@ JOIN versions v ON v.id = f.current_version_id
 LEFT JOIN file_meta m ON m.root_hash = v.root_hash
 LEFT JOIN file_state s ON s.file_id = f.id AND s.user_id = :uid
 WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
-  AND (:all::boolean OR d.kind = 'master' OR d.user_id = :scope_user::bigint)
+  AND visible(d, :scope_user::bigint, :all::boolean)
   AND CASE :scope::text
         WHEN 'timeline' THEN NOT COALESCE(s.archived, false)
         WHEN 'favorites' THEN COALESCE(s.favorite, false)
@@ -95,7 +95,7 @@ JOIN versions v ON v.id = f.current_version_id
 LEFT JOIN file_meta m ON m.root_hash = v.root_hash
 LEFT JOIN file_state s ON s.file_id = f.id AND s.user_id = :uid
 WHERE f.id = ANY(:ids) AND f.deleted_at IS NULL
-  AND (:all::boolean OR d.kind = 'master' OR d.user_id = :scope_user::bigint)
+  AND visible(d, :scope_user::bigint, :all::boolean)
 ORDER BY shown_at DESC, f.id DESC;
 
 --! album_assets : Asset(width?, height?, duration_ms?, rating?, lat?, lon?)
@@ -110,7 +110,7 @@ JOIN versions v ON v.id = f.current_version_id
 LEFT JOIN file_meta m ON m.root_hash = v.root_hash
 LEFT JOIN file_state s ON s.file_id = f.id AND s.user_id = :uid
 WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
-  AND (:all::boolean OR d.kind = 'master' OR d.user_id = :scope_user::bigint)
+  AND visible(d, :scope_user::bigint, :all::boolean)
   AND EXISTS (SELECT 1 FROM albums a WHERE a.id = :album_id
               AND (EXISTS (SELECT 1 FROM album_files af WHERE af.album_id = a.id AND af.file_id = f.id)
                    OR (a.folder_device_id = f.device_id AND starts_with(f.path, a.folder_prefix))))
@@ -135,13 +135,13 @@ SELECT f.id, d.folder, f.path, v.size, f.deleted_at AS deleted_at, v.id AS versi
 FROM files f
 JOIN devices d ON d.id = f.device_id
 JOIN versions v ON v.id = f.current_version_id
-WHERE f.deleted_at IS NOT NULL AND f.deleted_by IS DISTINCT FROM 'rename' AND (:all::boolean OR d.kind = 'master' OR d.user_id = :scope_user::bigint)
+WHERE f.deleted_at IS NOT NULL AND f.deleted_by IS DISTINCT FROM 'rename' AND visible(d, :scope_user::bigint, :all::boolean)
 ORDER BY f.deleted_at DESC, f.id DESC LIMIT :limit OFFSET :offset;
 
 --! visible_file_exists
 SELECT EXISTS (SELECT 1 FROM files f JOIN devices d ON d.id = f.device_id
                WHERE f.id = :id AND f.deleted_at IS NULL
-                 AND (:all::boolean OR d.kind = 'master' OR d.user_id = :scope_user::bigint)) AS visible;
+                 AND visible(d, :scope_user::bigint, :all::boolean)) AS visible;
 
 -- What a user says about a file: favorite, archived, rating, description, corrected time and place. One row per
 -- user and file, made the first time they say anything.
@@ -174,19 +174,19 @@ UPDATE file_state SET updated_at = :now WHERE file_id = :file_id AND user_id = :
 -- The same favorite for many files at once: those the user can see. Returns how many.
 INSERT INTO file_state (file_id, user_id, updated_at, favorite)
 SELECT f.id, :uid, :now, :value FROM files f JOIN devices d ON d.id = f.device_id
-WHERE f.id = ANY(:ids) AND f.deleted_at IS NULL AND (:all::boolean OR d.kind = 'master' OR d.user_id = :scope_user::bigint)
+WHERE f.id = ANY(:ids) AND f.deleted_at IS NULL AND visible(d, :scope_user::bigint, :all::boolean)
 ON CONFLICT (user_id, file_id) DO UPDATE SET favorite = excluded.favorite, updated_at = excluded.updated_at;
 
 --! bulk_set_archived
 INSERT INTO file_state (file_id, user_id, updated_at, archived)
 SELECT f.id, :uid, :now, :value FROM files f JOIN devices d ON d.id = f.device_id
-WHERE f.id = ANY(:ids) AND f.deleted_at IS NULL AND (:all::boolean OR d.kind = 'master' OR d.user_id = :scope_user::bigint)
+WHERE f.id = ANY(:ids) AND f.deleted_at IS NULL AND visible(d, :scope_user::bigint, :all::boolean)
 ON CONFLICT (user_id, file_id) DO UPDATE SET archived = excluded.archived, updated_at = excluded.updated_at;
 
 --! bulk_add_tags
 INSERT INTO file_tags (file_id, tag_id)
 SELECT f.id, t FROM files f JOIN devices d ON d.id = f.device_id CROSS JOIN unnest(:tag_ids::uuid[]) t
-WHERE f.id = ANY(:ids) AND f.deleted_at IS NULL AND (:all::boolean OR d.kind = 'master' OR d.user_id = :scope_user::bigint)
+WHERE f.id = ANY(:ids) AND f.deleted_at IS NULL AND visible(d, :scope_user::bigint, :all::boolean)
 ON CONFLICT DO NOTHING;
 
 -- Tags belong to the user who made them.
@@ -215,7 +215,7 @@ DELETE FROM tags t WHERE NOT EXISTS (SELECT 1 FROM file_tags ft WHERE ft.tag_id 
 SELECT t.id, t.name, COUNT(d.id) AS files FROM tags t
 LEFT JOIN file_tags ft ON ft.tag_id = t.id
 LEFT JOIN files f ON f.id = ft.file_id AND f.deleted_at IS NULL
-LEFT JOIN devices d ON d.id = f.device_id AND (:all::boolean OR d.kind = 'master' OR d.user_id = :scope_user::bigint)
+LEFT JOIN devices d ON d.id = f.device_id AND visible(d, :scope_user::bigint, :all::boolean)
 WHERE t.user_id = :uid GROUP BY t.id ORDER BY lower(t.name);
 
 --! delete_tag
@@ -260,5 +260,5 @@ JOIN versions v ON v.id = f.current_version_id
 LEFT JOIN file_meta m ON m.root_hash = v.root_hash
 LEFT JOIN file_state s ON s.file_id = f.id AND s.user_id = :uid
 WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
-  AND (:all::boolean OR d.kind = 'master' OR d.user_id = :scope_user::bigint)
+  AND visible(d, :scope_user::bigint, :all::boolean)
 ORDER BY f.path LIMIT :limit;

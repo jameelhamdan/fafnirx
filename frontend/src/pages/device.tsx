@@ -5,6 +5,7 @@ import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ActivityView, ErrorNote, Fact, KindBadge, PageHeader, StatusDot } from '@/components/common'
 import { EnrollDialog } from '@/components/enroll-dialog'
+import { SharedStateList } from '@/components/shared-state'
 import { Confirm } from '@/components/confirm'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -107,6 +108,13 @@ export default function DeviceDetailPage() {
           </CardContent>
         </Card>
       </div>
+
+      {data.shared.length > 0 && (
+        <Card className="mt-6">
+          <CardHeader><CardTitle>{t('Shared folders')}</CardTitle></CardHeader>
+          <CardContent><SharedStateList rows={data.shared} folders /></CardContent>
+        </Card>
+      )}
 
       <Confirm
         open={confirm === 'rotate'}

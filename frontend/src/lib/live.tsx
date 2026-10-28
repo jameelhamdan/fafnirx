@@ -18,7 +18,7 @@ function staleKeys(change: Change): string[][] {
     case 'activity':
       return [['dashboard'], ['device']]
     case 'devices':
-      return [['devices'], ['device'], ['dashboard'], ['files']]
+      return [['devices'], ['device'], ['dashboard'], ['files'], ['shared']]
     case 'alerts':
       return [['dashboard']]
     case 'jobs':

@@ -11,6 +11,7 @@ icon in the top bar. Pages update live.
 | Files | Browse, search, preview, download, upload, move, delete; open media in the viewer |
 | Processing | Background work ([details](#processing)) |
 | Devices, Sources, Mirrors | Computers that send; Google Drive folders; offsite copies |
+| Shared folders | Make, share with users, delete (not for read-only users) |
 | Users, Settings | Administrators only |
 
 ## Users and roles
@@ -25,7 +26,7 @@ icon in the top bar. Pages update live.
   deleted or renamed (the name is the folder). Disabling ends their logins and device uploads. One administrator always remains.
 - A device belongs to the user who adds it; names are unique per user (`bob/laptop`, `alice/laptop`).
 - Favorites, archive, ratings, descriptions, tags, albums, corrected dates and places are per user, also on master files.
-- A master path cannot start with a user's name, and a user cannot take a name a master path uses.
+- Master path `users/...` is refused: `files/users/` holds the user folders. User names and master folders may be equal.
 
 ## IDs and links
 
@@ -52,15 +53,15 @@ local folders, if your role may write) or **Read-only** (computers and sources: 
   new newest version and loses nothing).
 - **Photos and videos** also have **Open in viewer** (or the play icon in the list) and **In the library**: favorite, archive,
   albums, rating, description, tags, date, place: the same data as the Timeline. Read-only users can view, not change.
-- **Move or rename** (one file or folder): local folders and master files only, to any path on the same device. A folder
+- **Move or rename** (one file or folder): local folders, shared folders and master files only, to any path on the same device. A folder
   moves with its contents; nothing moves if a name is in the way. One `rename` event, no Trash; albums showing the folder
   follow it. Files a computer or source sent return 409: they are theirs to move.
 - **Still processing:** a photo or video whose details are unread shows a spinner (Timeline, albums, viewer, file list); its
   details say waiting, running or failed, linking to Processing.
 - **Upload** into a local folder or the master files by drag and drop (8 MiB pieces, parallel, resumable). **New local folder** is on the top level.
 
-Delete in the web app moves a file to the Trash and keeps its data until retention ends. For a file a device sent, the
-device's own file is untouched and it is not asked for it again.
+Delete in the web app moves a file to the Trash; data stays until retention ends. Computer or source files: theirs stay
+untouched and are not re-fetched. Shared folders: deleted on every computer ([Deletes](#shared-folders-sync-both-ways)).
 
 ## Photos and videos
 
@@ -103,9 +104,9 @@ Details come from `<video>.nfo` (or `movie.nfo` for a lone video): `title`, `sho
 
 ## Processing
 
-A live queue of the background work started after files arrive. It handles **photos and videos only** (by extension; images
-`jpg jpeg png gif webp bmp tif tiff heic heif avif`, videos `mp4 mov mkv avi webm m4v wmv mts 3gp mpg mpeg`). Other files are
-never read. Originals are not modified; nothing is sent outside.
+Live queue of background work, **photos and videos only** (by extension; images `jpg jpeg png gif webp bmp tif tiff heic heif
+avif`, videos `mp4 mov mkv avi webm m4v wmv mts 3gp mpg mpeg`). Other files are never read; originals never modified;
+nothing leaves the host.
 
 | Job | Does | Reads | Result |
 |---|---|---|---|
@@ -138,7 +139,7 @@ Dashboard and device pages list what happened to files. Nothing else is logged; 
 
 A rename is one event on the new path. The old path is not a delete: no event, no Trash, not counted as deleted or listed
 with **Deleted**; it is hidden until retention removes it with its old versions. The chart counts the four events separately.
-Metadata/picture work, retention and sign-ins are not events. Upgrading corrected old renames (wrong deletes removed from the log and Trash).
+Metadata/picture work, retention and sign-ins are not events.
 
 ## Devices
 
@@ -155,11 +156,13 @@ Progress, speed and time left show on the Dashboard, Devices and the device page
 fafnirx enroll --server http://nas.lan:7443     # asks for the token; runs in background and at login
 fafnirx add-folder ~/Documents --name documents
 fafnirx remove-folder documents                 # stops collecting; the master keeps its data
-fafnirx folders | status | pause | resume
+fafnirx folders | pause | resume
+fafnirx status [--json]                         # what the client is doing, shared folders included (also when stopped)
 fafnirx sync                                    # one cycle in the foreground
 fafnirx run                                     # the client in the foreground
-fafnirx release-deletes                         # send held-back deletions now
-fafnirx update                                  # install the newest release now
+fafnirx release-deletes                         # apply held-back deletions now, in every folder
+fafnirx update [--check]                        # install the newest release now, or only look
+fafnirx shared list | create | attach | detach | keep   # shared folders, below
 fafnirx install-service | uninstall-service | tray
 ```
 
@@ -175,6 +178,7 @@ auto_update = true              # check GitHub releases every 6 hours
 update_public_key = "..."       # only for your own signed builds
 web_url = "http://nas.lan:8080" # tray link
 [[folders]]                     # written by add-folder
+[[shared]]                      # written by shared attach: name = "<owner>/<name>", path = "..."
 ```
 
 The token is in the OS keychain (`FAFNIRX_TOKEN_STORE=file` uses a file beside the config).
@@ -189,7 +193,8 @@ to `a-z 0-9 . _ -`. Unstable files retry after 10 min, 1 h, 1 day. While the mas
 
 If at least 10 files of a folder are gone and they are over 20% of what was sent from it, the client holds the deletions,
 raises an alert and keeps uploading. If the files return, nothing is deleted; after `delete_hold_hours` they are sent;
-`fafnirx release-deletes` sends them now. Smaller deletions pass at once.
+`fafnirx release-deletes` sends them now. Smaller deletions pass at once. `fafnirx status` lists held deletions (also with
+the client stopped).
 
 ### The first sync
 
@@ -200,9 +205,54 @@ master: if the master's database is replaced it notices (every cycle asks the ma
 
 ### The tray
 
-`fafnirx tray`: green online, red error, amber paused, grey not running. The menu shows phase, last sync, totals, last error;
-pause/resume, sync now, **Check for updates** (GitHub releases, or the master if `update_public_key` is set), **Downloads on
-GitHub** (latest release page), config/log/folder/web links.
+`fafnirx tray`: green online, red error, amber paused, grey not running. The menu shows phase, last sync, totals and last
+error, and has pause/resume, sync now, the **Folders** and **Shared folders** submenus, and links to the config, log, client
+data folder and web app. **Check for updates** looks for a newer version; when there is one the entry becomes
+**Update to `<version>`** (see [Client updates](#client-updates)).
+
+## Shared folders: sync both ways
+
+`add-folder` folders are backup: up only, never written by the client. A **shared folder** belongs to a user, not a
+computer: any computer of that user attaches a local folder, changes reach the others. Android and `add-folder` stay one-way.
+
+Make and attach from the tray (**Shared folders**) or the CLI:
+
+```sh
+fafnirx shared list                          # <owner>/<name>, your own marked "own"
+fafnirx shared create family
+fafnirx shared attach family ~/Family        # --create makes it first; the folder is made if it is not there
+fafnirx shared detach family                 # keeps the files, here and on the master
+fafnirx shared keep family                   # keep files whose deletion on the master is held back (see Deletes)
+```
+
+Tray: **Shared folders** lists every usable folder as `<owner>/<name>` (own: short name); **New shared folder from a
+folder...** names it after the picked folder. Stored on the master as `files/users/<owner>/<name>/` with versions, trash,
+mirrors. The attached folder is not also backed up to the computer's device.
+
+- **Cycle.** Receive, then send. The master notifies a running client of changes (syncs within seconds); fallback poll every
+  minute. Same on both sides: untouched; changed on one: copied; rename: rename.
+- **Names.** Rules of the most limited computer. Paths differing only in case or Unicode form are one name (folders too).
+  Names Windows cannot store (`: ? * " < > |`, trailing dot/space, `CON`, `NUL`, `COM1`...) are neither sent nor received.
+  The master refuses a new path breaking either rule and tells the sender. Same two rules for web upload/move into local
+  folders and master files (SMB-visible); watcher and computer backups are taken as is. Case-only rename of a file or folder
+  is a rename. Existing clashes: a computer keeps the first in sorted order, skips the rest with a message.
+- **Conflicts.** Changed on both sides: nothing overwritten. This computer's version becomes
+  `name (conflict <computer> <date>).ext` and is sent as a new file; the master's takes the name. Edited here but deleted on
+  the master, or edited while it is received or deleted: same. Replaced versions stay in history.
+- **Deletes.** Web app deletes apply on every computer at once; Trash keeps a version (restore returns it everywhere).
+  Deletes by other computers pass the [delete guard](#the-delete-guard) both ways. A large one is held on this computer,
+  no timeout: `fafnirx release-deletes` deletes here, `fafnirx shared keep <name>` keeps the files and re-sends them. A held
+  deletion raises **Deletions held back** (see Alerts). A computer offline longer than trash retention gets the full file
+  list: in-step paths not listed count as deleted (same guard); changed files become conflict copies.
+- **Status.** `fafnirx status` "shared folders" section (works with the client stopped; `--json` key `shared`): per folder
+  in step or not, files, last sync, held deletions, last problem. Tray: a line per folder. Web: computer page; the owner's
+  folder page lists every attached computer.
+- **Other users.** Own folders work on all your computers. To share: **Shared folders** → add user, read-only or read and
+  change. Members see `<you>/<name>` in tray and Files (read-only: browse, download). Only the owner manages access.
+  Removing a member ends access at once; their local files stay.
+- **Deleting a folder.** Delete its files first; deleting the folder then removes trash, history and disk copy. Attached
+  computers are told and keep their files; `detach` them.
+- Receiving writes `.fafnirx-part-*` beside the target, renamed once verified; never uploaded.
 
 ## Settings and retention
 
@@ -293,6 +343,9 @@ the offsite copy of 3-2-1 and does not contain the database ([backups](deploymen
 | Disk usage | Data disk over 80% | Usage drops |
 | Source / Mirror failed | Run fails or is partial | A good run |
 | Device used by two computers | A second computer uses the token | It stops |
+| Deletions held back | A computer holds a large deletion (delete guard, shared folders) | Dealt with (`release-deletes`, `shared keep`), or 15 min without a heartbeat reporting it |
+| Files outside a device folder | Files in `files/users/` not under `<user>/<device>/` (not recorded) | Moved or removed |
+| Master files in a reserved folder | Master files under `users/` | Renamed in the web app |
 
 Dismiss by hand. Collection never pauses automatically. No email or webhook.
 
@@ -304,10 +357,22 @@ Web app: open the file, pick a version, **Download** or **Restore**. Disk: curre
 
 ## Client updates
 
-Every 6 hours, on `fafnirx update`, or from the tray, the client asks the project's GitHub releases for the latest version; if
-newer it downloads `fafnirx-<version>-<os>-<arch>` (`.exe` on Windows), checks the `.sha256` beside it, replaces its own file
-and restarts. A bad download is refused. `auto_update = false` stops the automatic checks. Config, token and state directory
-are untouched, so the device stays the same and nothing is resent or missed (also after a new installer or a reinstall).
+The client checks GitHub releases every 6 h. If newer: downloads `fafnirx-<version>-<os>-<arch>` (`.exe` on Windows),
+verifies the `.sha256` beside it, replaces its own file, restarts. Bad download: refused. `auto_update = false` disables the
+check. Config, token and state stay: same device, nothing resent.
+
+- **Tray:** **Check for updates** only looks; when newer the entry becomes **Update to `<version>`** (download, install,
+  restart client and tray). A tray that finds a newer file on disk restarts too.
+- **CLI:** `fafnirx update --check` prints `available <version>` or `current <version>`; `fafnirx update` installs.
+
+The file is replaced in place: the client's account must be able to write it (Windows setup `%LOCALAPPDATA%\fafnirx`,
+macOS/Linux script `~/.local/bin`).
+
+`.deb` (under `/usr`): updated through the package. **Update** / `fafnirx update` downloads the release `.deb` for this arch,
+verifies `.sha256`, runs `dpkg -i` via `sudo` (terminal) or `pkexec` (tray). If neither can ask: keeps the file and prints
+`sudo dpkg -i <file>`. The background check only reports.
+
+Restart goes through the supervisor: launchd (`launchctl kickstart -k`) on macOS, systemd user unit on Linux, direct on Windows.
 
 The checksum comes from the same release: it guards against bad downloads, not against someone who can publish releases. For
 your own signed builds:

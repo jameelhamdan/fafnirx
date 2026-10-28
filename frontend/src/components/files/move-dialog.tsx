@@ -9,8 +9,8 @@ import { useT } from '@/lib/i18n'
 import { useRefreshLibrary } from '@/lib/library'
 
 /**
- * Renames or moves a file, or a folder with what is in it, within a device the master owns (a local folder or the master
- * files). The new place is a full path on the same device; folders in it are made as needed.
+ * Renames or moves a file, or a folder with what is in it, within a device the master owns (a local or shared folder, or the
+ * master files). The new place is a full path on the same device; folders in it are made as needed.
  */
 export function MoveDialog({ device, path, onClose, onMoved }: { device: string; path: string; onClose: () => void; onMoved: () => void }) {
   const t = useT()

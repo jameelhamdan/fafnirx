@@ -4,7 +4,7 @@
 //! the moment the row goes: when the user logs out, is disabled, or gets a new password.
 
 use super::access::{Access, Role};
-use crate::repo::{sessions, users};
+use crate::repo::{devices, sessions, users};
 use crate::web::{done, run, ApiError, Done, Res, Shared};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
@@ -102,8 +102,16 @@ fn cookie_token(headers: &HeaderMap) -> Option<String> {
 /// The user a session cookie belongs to, if the session is there, has not expired and the user is not disabled.
 pub fn user_of_session(conn: &mut impl GenericClient, headers: &HeaderMap) -> anyhow::Result<Option<Access>> {
     let Some(token) = cookie_token(headers) else { return Ok(None) };
-    let found = sessions::user_of(conn, &token_hash(&token), unix_now())?;
-    Ok(found.and_then(|(user_id, name, role)| Some(Access { user_id, name, role: Role::parse(&role)? })))
+    let Some((user_id, name, role)) = sessions::user_of(conn, &token_hash(&token), unix_now())? else {
+        return Ok(None);
+    };
+    let Some(role) = Role::parse(&role) else { return Ok(None) };
+    let shared_with_me = devices::shared_folders(conn, user_id)?
+        .into_iter()
+        .filter(|s| !s.mine)
+        .map(|s| (s.folder, s.can_write))
+        .collect();
+    Ok(Some(Access { user_id, name, role, shared_with_me }))
 }
 
 #[derive(Deserialize)]

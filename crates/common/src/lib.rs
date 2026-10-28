@@ -146,6 +146,36 @@ pub fn nfc(name: &str) -> String {
     name.nfc().collect()
 }
 
+/// What decides whether two paths are the same name: composed and lowercase. Some file systems (Windows, macOS) cannot hold
+/// two paths that differ only in case, so a shared folder, which every kind of computer must be able to hold, treats them as one
+/// name on all of them.
+pub fn fold_path(path: &str) -> String {
+    nfc(path).to_lowercase()
+}
+
+/// Why a path cannot be kept by every kind of computer, if it cannot: a character Windows does not allow in a name, a name
+/// that ends in a space or a dot, or a name Windows reserves. Shared folders refuse such paths everywhere, so that a file does
+/// not exist on one computer and fail to arrive on another.
+pub fn not_portable(path: &str) -> Option<String> {
+    for part in path.split('/') {
+        if let Some(c) = part.chars().find(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*' | '\\')) {
+            return Some(format!("{part:?} contains {c:?}, which Windows does not allow in a name"));
+        }
+        if part.ends_with([' ', '.']) {
+            return Some(format!("{part:?} ends with a space or a dot, which Windows does not allow"));
+        }
+        let stem = part.split('.').next().unwrap_or(part).to_ascii_lowercase();
+        let device = matches!(stem.as_str(), "con" | "prn" | "aux" | "nul")
+            || (stem.len() == 4
+                && (stem.starts_with("com") || stem.starts_with("lpt"))
+                && stem.ends_with(|c: char| c.is_ascii_digit()));
+        if device {
+            return Some(format!("{part:?} is a name Windows reserves"));
+        }
+    }
+    None
+}
+
 /// Seconds in a day.
 pub const DAY_SECS: i64 = 86_400;
 
@@ -204,11 +234,11 @@ pub fn clean_remote_path(path: &str) -> Result<String> {
 mod tests {
     use super::*;
 
-    /// The one-way rule: a device can put data on the master and say what it deleted, and the master can answer with
-    /// nothing but its identity, the signed client update and a name. There is no call that reads or lists the master's
-    /// files, so a new call in the contract has to be added here on purpose.
+    /// A device can send data and say what it deleted. What it can read is the client update and the shared folders of its
+    /// user; there is no call that reads or lists the files of a device or the master files. A new call in the contract has
+    /// to be added here on purpose.
     #[test]
-    fn the_device_protocol_only_lets_devices_send() {
+    fn the_device_protocol_reads_nothing_but_updates_and_shared_folders() {
         let proto = include_str!("../../../proto/fafnirx.proto");
         let rpcs: Vec<&str> =
             proto.lines().filter_map(|l| l.trim().strip_prefix("rpc ")).map(|l| l.split('(').next().unwrap()).collect();
@@ -222,16 +252,54 @@ mod tests {
                 "Commit",
                 "MarkDeleted",
                 "GetUpdateInfo",
-                "DownloadUpdate"
+                "DownloadUpdate",
+                "ListShared",
+                "CreateShared",
+                "ListChanges",
+                "DownloadShared",
+                "WatchShared"
             ]
         );
-        // The only streams from the master to a device carry the client update.
+        // The only streams from the master to a device carry the client update and the shared folders.
         let returning_streams: Vec<&str> = proto
             .lines()
             .filter(|l| l.contains("returns (stream"))
             .map(|l| l.trim().strip_prefix("rpc ").unwrap().split('(').next().unwrap())
             .collect();
-        assert_eq!(returning_streams, ["DownloadUpdate"]);
+        assert_eq!(returning_streams, ["DownloadUpdate", "ListChanges", "DownloadShared", "WatchShared"]);
+    }
+
+    #[test]
+    fn paths_are_one_name_when_they_differ_only_in_case_or_unicode_form() {
+        assert_eq!(fold_path("Docs/README.md"), fold_path("docs/readme.MD"));
+        assert_eq!(fold_path("caf\u{e9}"), fold_path("cafe\u{301}"), "an accent as one character or two");
+        assert_ne!(fold_path("a/b"), fold_path("a/c"));
+    }
+
+    #[test]
+    fn names_windows_cannot_keep_are_not_portable() {
+        for ok in ["a/b.txt", "Report 2026.pdf", "notes.tar.gz", "console.txt", "com.txt", "lpt10.txt", "caf\u{e9}"] {
+            assert!(not_portable(ok).is_none(), "{ok}");
+        }
+        for bad in [
+            "a:b.txt",
+            "what?.txt",
+            "a/b*c",
+            "x<y",
+            "pipe|d",
+            "q\"uote",
+            "trailing.",
+            "trailing ",
+            "dir./f",
+            "CON",
+            "con.txt",
+            "a/AUX.tar.gz",
+            "Com1",
+            "lpt9.log",
+            "nul",
+        ] {
+            assert!(not_portable(bad).is_some(), "{bad}");
+        }
     }
 
     #[test]
