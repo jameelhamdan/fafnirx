@@ -53,7 +53,7 @@ VALUES (:name, :description, :now, :now, :user_id, :folder_device_id, :folder_pr
 -- Puts files in the album: those the user can see. Returns how many were added.
 INSERT INTO album_files (album_id, file_id, added_at)
 SELECT :album_id, f.id, :now FROM files f JOIN devices d ON d.id = f.device_id
-WHERE f.id = ANY(:ids) AND f.deleted_at IS NULL AND (:all::boolean OR d.kind = 'master' OR d.user_id = :scope_user::bigint)
+WHERE f.id = ANY(:ids) AND f.deleted_at IS NULL AND visible(d, :scope_user::bigint, :all::boolean)
 ON CONFLICT DO NOTHING;
 
 --! add_place_to_album
@@ -63,7 +63,7 @@ INSERT INTO album_files (album_id, file_id, added_at)
 SELECT :album_id, f.id, :now FROM files f JOIN devices d ON d.id = f.device_id
 WHERE d.folder = :device AND f.deleted_at IS NULL AND f.media IS NOT NULL
   AND (:path = '' OR f.path = :path OR starts_with(f.path, :path || '/'))
-  AND (:all::boolean OR d.kind = 'master' OR d.user_id = :scope_user::bigint)
+  AND visible(d, :scope_user::bigint, :all::boolean)
 ON CONFLICT DO NOTHING;
 
 --! rename_album

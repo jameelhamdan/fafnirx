@@ -190,10 +190,10 @@ fn report(name: &str, changed: usize, deleted: usize) {
 /// valid name, in the folder of a user who can have devices, becomes a `local` device of the user; anything else
 /// that is not a device is ignored.
 fn device_for_folder(conn: &mut Client, store: &Store, folder: &str) -> Result<Option<Device>> {
-    // Only a local folder is written to in place. What a device or a source sends is a copy of theirs and is not
+    // Only a local or shared folder is written to in place. What a device or a source sends is a copy of theirs and is not
     // changed from here: edits made inside such a folder are not recorded.
     if let Some((id, kind)) = devices::id_and_kind(conn, folder)? {
-        return Ok((kind == "local").then(|| Device { id, name: folder.to_string() }));
+        return Ok(matches!(kind.as_str(), "local" | "shared").then(|| Device { id, name: folder.to_string() }));
     }
     let Some((user, name)) = folder.split_once('/') else { return Ok(None) };
     if !valid_device_name(name) || !store.live_dir(folder).is_dir() {

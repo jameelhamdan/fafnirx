@@ -33,6 +33,8 @@ pub struct Scan {
 /// Fails when the folder itself cannot be read; callers must then not treat
 /// its files as deleted.
 /// `exclude` is the client's own state folder: if a collected folder contains it, it is not collected.
+/// A folder with no name is a shared folder, which every kind of computer must be able to hold: names Windows cannot keep
+/// are skipped.
 pub fn scan_folder(folder: &Folder, exclude: Option<&Path>) -> Result<Scan> {
     let root = &folder.path;
     match std::fs::metadata(root) {
@@ -75,10 +77,20 @@ pub fn scan_folder(folder: &Folder, exclude: Option<&Path>) -> Result<Scan> {
             skipped.push(format!("{}: not a regular file", path.display()));
             continue;
         }
+        // A file of a shared folder that is being received.
+        if top.is_empty()
+            && path.file_name().is_some_and(|n| n.to_string_lossy().starts_with(crate::shared::PART_PREFIX))
+        {
+            continue;
+        }
         let Some(remote) = remote_path(&top, root, path) else {
             skipped.push(format!("{}: name is not valid unicode", path.display()));
             continue;
         };
+        if let Some(why) = top.is_empty().then(|| fafnirx_common::not_portable(&remote)).flatten() {
+            skipped.push(format!("{}: {why}", path.display()));
+            continue;
+        }
         let meta = match dirent.metadata() {
             Ok(m) => m,
             Err(e) => {
@@ -112,7 +124,7 @@ pub fn scan_folder(folder: &Folder, exclude: Option<&Path>) -> Result<Scan> {
 fn drop_case_conflicts(entries: &mut Vec<Entry>, skipped: &mut Vec<String>) {
     let mut seen = std::collections::HashSet::new();
     entries.retain(|e| {
-        let unique = seen.insert(e.remote.to_lowercase());
+        let unique = seen.insert(fafnirx_common::fold_path(&e.remote));
         if !unique {
             skipped.push(format!("{}: path differs only by case from another file", e.local.display()));
         }
@@ -122,7 +134,8 @@ fn drop_case_conflicts(entries: &mut Vec<Entry>, skipped: &mut Vec<String>) {
 
 fn remote_path(top: &str, root: &Path, path: &Path) -> Option<String> {
     let rel = path.strip_prefix(root).ok()?;
-    let mut parts = vec![top.to_string()];
+    // A shared folder has no name of its own in its paths: its files are at the top.
+    let mut parts = if top.is_empty() { Vec::new() } else { vec![top.to_string()] };
     for c in rel.components() {
         parts.push(c.as_os_str().to_str()?.nfc().collect::<String>());
     }
@@ -167,6 +180,26 @@ mod tests {
     fn missing_folder_is_an_error() {
         let d = tempfile::tempdir().unwrap();
         assert!(scan_folder(&folder(&d.path().join("gone")), None).is_err());
+    }
+
+    /// Such names exist only on Linux and macOS, so only there can they be made for the test.
+    #[cfg(unix)]
+    #[test]
+    fn a_shared_folder_skips_the_names_windows_cannot_keep_and_a_backup_does_not() {
+        let d = tempfile::tempdir().unwrap();
+        for name in ["fine.txt", "a:b.txt", "CON.txt"] {
+            fs::write(d.path().join(name), "x").unwrap();
+        }
+        let names = |name: &str| -> Vec<String> {
+            let scan = scan_folder(&Folder { path: d.path().to_path_buf(), name: name.into() }, None).unwrap();
+            scan.entries.iter().map(|e| e.remote.clone()).collect()
+        };
+        assert_eq!(
+            names("docs"),
+            ["docs/CON.txt", "docs/a:b.txt", "docs/fine.txt"],
+            "a backup keeps everything the computer has"
+        );
+        assert_eq!(names(""), ["fine.txt"], "a shared folder only what every kind of computer can hold");
     }
 
     #[test]

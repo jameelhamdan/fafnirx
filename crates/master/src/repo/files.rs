@@ -100,6 +100,22 @@ pub fn live_path_with_root(
     q::live_path_with_root().bind(&mut Pg(c), &device_id, &root, &prefer.unwrap_or("")).opt()
 }
 
+/// A live path of the device that is the same name as `path` but spelled differently (another case), unless `path` is itself
+/// there. The path `path` is renamed from does not count: it is on its way out.
+pub fn case_clash(
+    c: &mut impl GenericClient,
+    device_id: i64,
+    path: &str,
+    renamed_from: Option<&str>,
+) -> Result<Option<String>, Error> {
+    q::case_clash().bind(&mut Pg(c), &device_id, &path, &renamed_from.unwrap_or("")).opt()
+}
+
+/// The spellings of the folder `prefix` (no trailing slash) that live paths have, other than `prefix` itself.
+pub fn folder_spellings(c: &mut impl GenericClient, device_id: i64, prefix: &str) -> Result<Vec<String>, Error> {
+    q::folder_spellings().bind(&mut Pg(c), &prefix, &device_id).all()
+}
+
 /// Whether the path was deleted in the web app.
 pub fn deleted_in_web_app(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<bool, Error> {
     Ok(q::deleted_in_web_app().bind(&mut Pg(c), &device_id, &path).opt()?.is_some())
@@ -113,6 +129,39 @@ pub fn live_content(
 ) -> Result<Option<([u8; HASH_LEN], u64)>, Error> {
     let found = q::live_content().bind(&mut Pg(c), &device_id, &path).opt()?;
     Ok(found.and_then(|v| Some((v.root_hash.try_into().ok()?, v.size as u64))))
+}
+
+/// A path of a device that was written or deleted since some time, as it is now.
+pub struct Change {
+    pub path: String,
+    /// The content hash of a live path; `None` for a deleted one (and then the rest is zero).
+    pub root: Option<[u8; HASH_LEN]>,
+    pub size: u64,
+    /// Unix nanoseconds.
+    pub mtime: i64,
+    pub mode: u32,
+    /// A deletion made in the web app.
+    pub from_web: bool,
+}
+/// The paths of a device written or deleted at or after `since` (unix seconds; 0 for everything). Needs no history:
+/// it reads the state of the files, so it works however long the client was away, as long as the trash keeps the deletion.
+pub fn changes_since(c: &mut impl GenericClient, device_id: i64, since: i64) -> Result<Vec<Change>, Error> {
+    let rows = q::changes_since().bind(&mut Pg(c), &device_id, &since).all()?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let root = if r.deleted_at.is_none() { r.root_hash.and_then(|h| h.try_into().ok()) } else { None };
+            let live = root.is_some();
+            Change {
+                path: r.path,
+                root,
+                size: if live { r.size.unwrap_or(0) as u64 } else { 0 },
+                mtime: if live { r.mtime.unwrap_or(0) } else { 0 },
+                mode: if live { r.mode.unwrap_or(0) as u32 } else { 0 },
+                from_web: !live && r.deleted_by.as_deref() == Some("web"),
+            }
+        })
+        .collect())
 }
 
 /// Marks a live path deleted. Returns the version that was current (0 when there was none), or `None` when the

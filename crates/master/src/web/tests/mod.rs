@@ -20,6 +20,7 @@ mod devices;
 mod files;
 mod library;
 mod routes;
+mod shared;
 mod users;
 
 /// The database pool must be made and dropped outside the runtime, so the tests are plain functions.

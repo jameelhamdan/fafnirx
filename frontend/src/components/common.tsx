@@ -20,6 +20,9 @@ export function Fact({ label, children }: { label: string; children: ReactNode }
 
 const PHASE: Record<string, string> = { scanning: msg('Scanning'), hashing: msg('Hashing'), uploading: msg('Uploading') }
 
+/** The look of a native `<select>` in forms. */
+export const SELECT = 'h-9 rounded-md border bg-background px-2 text-sm'
+
 export function PageHeader({ title, description, actions }: { title: string; description?: ReactNode; actions?: ReactNode }) {
   useEffect(() => {
     document.title = `${title} · fafnirx`
@@ -76,10 +79,11 @@ export function StatusDot({ status, label }: { status: string; label?: string })
   )
 }
 
+const KIND: Record<string, string> = { device: msg('Device'), local: msg('Local folder'), shared: msg('Shared folder') }
+
 export function KindBadge({ kind }: { kind: string }) {
   const t = useT()
-  const text = kind === 'device' ? t('Device') : kind === 'local' ? t('Local folder') : t('Source')
-  return <Badge variant="secondary">{text}</Badge>
+  return <Badge variant="secondary">{t(KIND[kind] ?? msg('Source'))}</Badge>
 }
 
 /** What a device is doing right now: phase, file, a progress bar, speed and time left. */

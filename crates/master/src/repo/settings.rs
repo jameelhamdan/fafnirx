@@ -4,6 +4,9 @@ use crate::platform::pg::Pg;
 use fafnirx_db::queries::settings as q;
 use postgres::{Error, GenericClient};
 
+/// The time (unix seconds) from which the master still knows every deletion: older ones may have been removed by retention.
+pub const DELETIONS_KNOWN_FROM: &str = "deletions_known_from";
+
 pub fn get(c: &mut impl GenericClient, key: &str) -> Result<Option<String>, Error> {
     q::get_setting().bind(&mut Pg(c), &key).opt()
 }

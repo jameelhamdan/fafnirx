@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
-import { Empty, ErrorNote, PageHeader } from '@/components/common'
+import { Empty, ErrorNote, PageHeader, SELECT } from '@/components/common'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
@@ -21,8 +21,6 @@ const ROLES: [Role, string, string][] = [
   ['normal', msg('Normal'), msg('Devices and files of their own, and read and write on the master files.')],
   ['readonly', msg('Read only'), msg('Reads the master files. No devices, albums or favorites.')],
 ]
-
-const SELECT = 'h-9 rounded-md border bg-background px-2 text-sm'
 
 function RoleSelect({ id, value, onChange }: { id?: string; value: Role; onChange: (role: Role) => void }) {
   const t = useT()

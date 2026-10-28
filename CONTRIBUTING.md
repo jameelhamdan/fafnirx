@@ -24,7 +24,8 @@ cd frontend && npx tsc -b && npx oxlint && npm run i18n -- --check
 
 - Match the surrounding code: sparse comments that say *why*, plain names.
 - A behaviour change comes with a test; remove what it makes unused; update the docs it touches.
-- Keep the one-way rule: the device API never gains a call that reads, lists or deletes stored data, and stays additive.
+- The device API reads nothing but client updates and shared folders, and stays additive. A new call that reads, lists or
+  deletes stored data changes the security model: say so in the pull request and in the test in `crates/common`.
 - Log what happened exactly once and accurately: a rename is a `rename`, never a `delete` ([what a file operation means](docs/architecture.md#what-a-file-operation-means)).
 
 By contributing you agree that your contribution is licensed under the [MIT license](LICENSE).

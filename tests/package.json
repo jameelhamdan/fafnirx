@@ -5,10 +5,11 @@
   "description": "End-to-end tests: the real master, the real client binaries and a real PostgreSQL.",
   "scripts": {
     "e2e": "node e2e.mjs",
+    "shared": "node e2e-shared.mjs",
     "retention": "node e2e-retention.mjs",
     "io": "node e2e-io.mjs",
     "stream": "node e2e-stream.mjs",
-    "all": "node e2e.mjs && node e2e-retention.mjs && node e2e-io.mjs && node e2e-stream.mjs"
+    "all": "node e2e.mjs && node e2e-shared.mjs && node e2e-retention.mjs && node e2e-io.mjs && node e2e-stream.mjs"
   },
   "dependencies": {
     "pg": "^8.13.0"

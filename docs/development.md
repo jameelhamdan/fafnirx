@@ -33,6 +33,7 @@ cargo run -p fafnirx -- enroll --no-service --server http://127.0.0.1:7443   # t
 | E2E: Drive (fake) and mirrors | `node e2e-io.mjs` | `rclone` (`FAFNIRX_RCLONE`) |
 | E2E: streaming | `node e2e-stream.mjs` | `fafnirx-stream` built |
 | E2E: delete and retention | `node e2e-retention.mjs` | ~2 min |
+| E2E: shared folders (several clients, two users) | `node e2e-shared.mjs` | Built binaries, test DB |
 
 Database tests use a schema of their own, so they run in parallel. `crates/master/src/web/tests/` drives the real router in
 memory; `routes.rs` pins the access rule of every route. Video parts need ffmpeg, which tests do not: they check parsing and
@@ -56,7 +57,7 @@ Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targ
 |---|---|---|
 | `platform` | What apps build on | `db.rs` (pool, locks, `NOTIFY`), `migrations.rs`, `pg.rs`, `store.rs`, `id.rs` (UUID ↔ short id), `proxy.rs` |
 | `repo` | Storage; the only code that knows tables | One module per aggregate, and `listing.rs` (the one query built at run time) |
-| `devices` | Clients, tokens | `grpc.rs` (upload-only), `api.rs`, `totals.rs` |
+| `devices` | Clients, tokens, shared folders | `grpc.rs` (device API), `api.rs`, `shared.rs`, `totals.rs` |
 | `web` | HTTP shell, logins, roles | `mod.rs` (state, errors, routes), `auth.rs`, `access.rs`, `users.rs`, `events.rs`, `assets.rs`, `tests/` |
 | `files` | Content in and out | `ingest.rs` (commit, delete, rename, move), `livetree.rs`, `browse.rs`, `transfer.rs`, `zip.rs` |
 | `library` | Photos and videos | `meta.rs` (jobs, pictures), `media.rs` (ffmpeg), `artwork.rs`, `photos.rs`, `albums.rs`, `stream.rs` |
@@ -89,7 +90,7 @@ Synchronous `postgres` behind an `r2d2` pool.
 - Changing a path: `db::lock_path` first, move files before the transaction ends, `db::notify` in the same transaction
   (`ingest::commit_version` is the model).
 - A rename is `commit_version` with `renamed_from` (clients, sources), `adopt_live` with `renamed_from` (watcher) or
-  `move_path` (web app; only `local` and `master` devices). Each logs one `rename`, calls `files::vacate_renamed` (never
+  `move_path` (web app; only `local`, `shared` and `master` devices). Each logs one `rename`, calls `files::vacate_renamed` (never
   `delete_path`) and `albums::follow_folder_move`.
 - A job returns `Ok(Some(note))` to show a note in Processing.
 
@@ -106,8 +107,9 @@ test in `web/tests/`; a line in `ROUTES` (`routes.rs`). Errors are `ApiError` (`
 (others' devices answer 404), `viewer()`/`scope_args()` for file queries, `require_admin()`, `require_workspace()`. Parse ids
 with `Id` and check visibility like any input. Test each role.
 
-**Device contract.** Edit `proto/fafnirx.proto` (types regenerate). Keep it additive; never add a call that reads, lists or
-deletes stored data.
+**Device contract.** Edit `proto/fafnirx.proto` (types regenerate). Keep it additive. Reads are limited to client updates
+and the user's shared folders; any other call that reads, lists or deletes stored data changes the security model (see
+[CONTRIBUTING](../CONTRIBUTING.md)).
 
 **A source.** Model: `integrations/gdrive.rs`. A `sources` row plus a `source-<name>` device (`integrations/api.rs`), claimed
 by `integrations::claim_source`, dispatched by `kind`; plan by comparing the remote listing with `source_items` and live

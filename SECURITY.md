@@ -12,8 +12,10 @@ fafnirx is meant for a home network, a VPN, or the internet behind a TLS proxy. 
 threat model is in [docs/architecture.md](docs/architecture.md#security-model), the hardening checklist in
 [docs/deployment.md](docs/deployment.md#security-checklist). By design:
 
-- A device token can only add data: it cannot read, list or delete. One installation holds a device at a time, so a copied
-  token cannot run beside the original (the owner is alerted). A leaked token still needs revoking or rotating.
+- A device token adds data to its own device and cannot read, list or delete it. It can read and write the shared folders of
+  its user, and those another user shared with them (replaced files stay as versions). One installation holds a device at a
+  time, so a copied token cannot run beside the original (the owner is alerted). A leaked token still needs revoking or
+  rotating.
 - A user's login protects everything else. Roles: administrator, normal, read only. Users see only their own devices and the
   master files; administrators see everything. SMB/NFS shares of `files/` have their own logins and are outside these roles.
 - Ids (UUIDs) are not secrets: access is checked on every request.

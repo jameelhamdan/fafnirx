@@ -1,5 +1,5 @@
 --! device_by_token : (instance_id?, hostname?, ip?)
-SELECT d.id, d.folder, d.instance_id, d.hostname, d.ip
+SELECT d.id, d.folder, d.user_id, d.instance_id, d.hostname, d.ip
 FROM devices d JOIN users u ON u.id = d.user_id
 WHERE d.token_hash = :token_hash AND d.revoked_at IS NULL AND d.kind = 'device' AND u.disabled_at IS NULL;
 
@@ -30,7 +30,7 @@ SELECT d.name, d.kind, d.created_at, d.revoked_at, d.hostname, d.os, d.ip, d.cli
 FROM devices d
 JOIN users u ON u.id = d.user_id
 LEFT JOIN device_activity a ON a.device_id = d.id
-WHERE (:folder::text IS NULL OR d.folder = :folder) AND (:all::boolean OR d.kind = 'master' OR d.user_id = :user::bigint)
+WHERE (:folder::text IS NULL OR d.folder = :folder) AND visible(d, :user::bigint, :all::boolean)
 ORDER BY u.name, d.name;
 
 --! user_for_device : (id, role)
@@ -74,7 +74,7 @@ SELECT folder, last_seen FROM devices WHERE kind = 'device' AND revoked_at IS NU
 --! visible_totals
 SELECT COALESCE(SUM(file_count), 0)::BIGINT AS files, COALESCE(SUM(total_bytes), 0)::BIGINT AS bytes,
        COALESCE(SUM(deleted_files), 0)::BIGINT AS deleted
-FROM devices d WHERE (:all::boolean OR d.kind = 'master' OR d.user_id = :user::bigint);
+FROM devices d WHERE visible(d, :user::bigint, :all::boolean);
 
 --! mark_totals_stale
 UPDATE devices SET totals_stale = TRUE WHERE id = ANY(:ids);
@@ -93,6 +93,61 @@ SELECT kind FROM devices WHERE folder = :folder;
 
 --! device_id_and_kind_by_folder
 SELECT id, kind FROM devices WHERE folder = :folder;
+
+--! shared_folders_for_user (key?)
+-- The shared folders a user can use: their own, and those whose owner added them. A read-only account never writes.
+-- `key` narrows it to one: the name of one of their own, or the folder (<owner>/<name>) of any they can use.
+SELECT d.id, d.name, d.folder, TRUE AS mine, u.role <> 'readonly' AS can_write, d.created_at
+FROM devices d JOIN users u ON u.id = d.user_id
+WHERE d.kind = 'shared' AND d.user_id = :user_id AND (:key::text IS NULL OR d.name = :key OR d.folder = :key)
+UNION ALL
+SELECT d.id, d.name, d.folder, FALSE, m.can_write AND u.role <> 'readonly', d.created_at
+FROM shared_members m JOIN devices d ON d.id = m.folder_id JOIN users o ON o.id = d.user_id JOIN users u ON u.id = m.user_id
+WHERE d.kind = 'shared' AND m.user_id = :user_id AND o.disabled_at IS NULL AND (:key::text IS NULL OR d.folder = :key)
+ORDER BY 3;
+
+--! clear_shared_state
+DELETE FROM device_shared_state WHERE device_id = :device_id;
+
+--! save_shared_state
+INSERT INTO device_shared_state (device_id, shared, files, bytes, last_cycle, last_error, held, failing, updated_at)
+VALUES (:device_id, :shared, :files, :bytes, :last_cycle, :last_error, :held, :failing, :now)
+ON CONFLICT (device_id, shared) DO UPDATE SET files = EXCLUDED.files, bytes = EXCLUDED.bytes, last_cycle = EXCLUDED.last_cycle,
+  last_error = EXCLUDED.last_error, held = EXCLUDED.held, failing = EXCLUDED.failing, updated_at = EXCLUDED.updated_at;
+
+--! shared_state_of_device
+SELECT shared, files, bytes, last_cycle, last_error, held, failing, updated_at
+FROM device_shared_state WHERE device_id = :device_id ORDER BY shared;
+
+--! shared_state_of_folder
+-- The computers that have a shared folder attached: all of them for the owner, otherwise those of `user`.
+SELECT d.folder AS computer, s.files, s.bytes, s.last_cycle, s.last_error, s.held, s.failing, s.updated_at
+FROM device_shared_state s JOIN devices d ON d.id = s.device_id
+WHERE s.shared = :shared AND (:all::boolean OR d.user_id = :user::bigint)
+ORDER BY d.folder;
+
+--! shared_members
+SELECT u.name AS user_name, m.can_write FROM shared_members m JOIN users u ON u.id = m.user_id
+WHERE m.folder_id = :folder_id ORDER BY u.name;
+
+--! add_shared_member
+INSERT INTO shared_members (folder_id, user_id, can_write, created_at) VALUES (:folder_id, :user_id, :can_write, :now)
+ON CONFLICT (folder_id, user_id) DO UPDATE SET can_write = EXCLUDED.can_write;
+
+--! remove_shared_member
+DELETE FROM shared_members WHERE folder_id = :folder_id AND user_id = :user_id;
+
+--! shared_has_live_files
+SELECT EXISTS (SELECT 1 FROM files WHERE device_id = :id AND deleted_at IS NULL) AS live;
+
+--! device_file_ids
+SELECT id FROM files WHERE device_id = :id;
+
+--! delete_device_events
+DELETE FROM events WHERE device_id = :id;
+
+--! delete_shared_device
+DELETE FROM devices WHERE id = :id AND kind = 'shared';
 
 --! ensure_local_device
 INSERT INTO devices (name, kind, token_hash, created_at, user_id) VALUES (:name, 'local', '!', :now, :user_id)
