@@ -11,6 +11,7 @@ pub use open::ensure_tray;
 
 use crate::config::{control_dir, Config, Folder, Shared};
 use crate::daemon::{self, requests::Request};
+use crate::service::disk_access;
 use anyhow::{Context, Result};
 use fafnirx_common::unix_now;
 use icon::{icon, Light};
@@ -40,6 +41,8 @@ enum Action {
     SyncNow,
     CheckUpdates,
     ToggleClient,
+    /// Open the page of System Settings where Full Disk Access is given (macOS).
+    AllowDiskAccess,
     OpenFile(PathBuf),
     OpenFolder(PathBuf),
     OpenUrl(String),
@@ -90,6 +93,8 @@ struct Menus {
     /// "Check for updates", which becomes "Update to <version>" once a check found one.
     check: Line,
     client: Line,
+    /// macOS: where Full Disk Access is given; it asks for it when the client lacks it.
+    access: Line,
     folders: Submenu,
     add_folders: MenuItem,
     /// Actions of the fixed items. The folder entries come and go, so their actions are kept apart.
@@ -114,6 +119,7 @@ impl Menus {
         let updates = info("Updates: not checked");
         let downloads = control("Downloads on GitHub...");
         let client = control("Stop client");
+        let access = control("Full Disk Access settings...");
         let quit = control("Quit tray");
         let add_folders = MenuItem::new("Add folders...", true, None);
         let open = [
@@ -130,6 +136,7 @@ impl Menus {
             (downloads.item.id().clone(), Action::OpenUrl(crate::update::release::releases_page())),
             (client.item.id().clone(), Action::ToggleClient),
             (quit.item.id().clone(), Action::Quit),
+            (access.item.id().clone(), Action::AllowDiskAccess),
             (add_folders.id().clone(), Action::AddFolders),
             (open[0].item.id().clone(), Action::OpenFile(config_path.to_path_buf())),
             (open[1].item.id().clone(), Action::OpenFile(daemon::log_file(state_dir))),
@@ -167,10 +174,11 @@ impl Menus {
             &open[1].item,
             &open[2].item,
             &open[3].item,
-            &sep(),
-            &client.item,
-            &quit.item,
         ])?;
+        if cfg!(target_os = "macos") {
+            menu.append(&access.item)?;
+        }
+        menu.append_items(&[&sep(), &client.item, &quit.item])?;
         Ok(Self {
             menu,
             title,
@@ -185,6 +193,7 @@ impl Menus {
             updates,
             check,
             client,
+            access,
             folders,
             add_folders,
             actions,
@@ -214,6 +223,14 @@ impl Menus {
         self.pause.set(if paused { "Resume" } else { "Pause" });
         self.client.set(if stopped { "Start client" } else { "Stop client" });
         self.updates.set(update_text);
+    }
+
+    /// The entry for Full Disk Access says so when a folder is blocked for want of it.
+    fn show_access(&mut self, blocked: Option<&Path>) {
+        match blocked {
+            Some(p) => self.access.set(&format!("Allow Full Disk Access (needed for {})...", p.display())),
+            None => self.access.set("Full Disk Access settings..."),
+        }
     }
 
     /// Rebuilds the folder list when the config file changed (by the tray, the CLI or by hand).
@@ -331,9 +348,40 @@ fn shared_name_of(dir: &Path) -> Option<String> {
 
 /// Asks for a folder and syncs it with the shared folder `name`, made first when `create` is set.
 fn attach_shared_dialog(config_path: &Path, name: &str, dir: &Path, create: bool) {
+    warn_before_attaching(config_path, &[dir.to_path_buf()]);
     let request = Request::AttachShared { name: name.into(), path: dir.into(), create };
     if let Err(e) = change_folders(config_path, &request) {
         message(rfd::MessageLevel::Error, format!("Could not sync \"{name}\":\n\n{e}")).show();
+    }
+}
+
+/// The first folder of `config` that the client cannot reach for want of Full Disk Access (macOS).
+fn blocked_folder(status: Option<&daemon::Status>, config: &Config) -> Option<PathBuf> {
+    let paths = config.folders.iter().map(|f| f.path.as_path()).chain(config.shared.iter().map(|s| s.path.as_path()));
+    disk_access::first_blocked(status.and_then(|s| s.full_disk_access), paths).map(Path::to_path_buf)
+}
+
+/// Tells the user once, when the tray finds a folder that is blocked, and offers to open the settings. It runs apart from the
+/// menu, which must go on working.
+fn ask_for_disk_access(blocked: &Path) {
+    static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if ASKED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let text = format!("{}\n\nOpen the settings now?", disk_access::blocked_text(blocked));
+    std::thread::spawn(move || {
+        if ask_yes_no(rfd::MessageLevel::Warning, text) {
+            disk_access::open_settings();
+        }
+    });
+}
+
+/// Before folders are attached: when one is where macOS blocks the client, says so and offers the settings. The folders are
+/// attached anyway; they sync once the permission is given and the client restarted.
+fn warn_before_attaching(config_path: &Path, dirs: &[PathBuf]) {
+    let Some(warning) = dirs.iter().find_map(|d| disk_access::warning_for(config_path, d)) else { return };
+    if ask_yes_no(rfd::MessageLevel::Warning, format!("{warning}\n\nOpen the settings now?")) {
+        disk_access::open_settings();
     }
 }
 
@@ -430,6 +478,7 @@ fn add_folders_dialog(config_path: &Path) -> bool {
     let Some(picked) = rfd::FileDialog::new().set_title("Choose the folders to collect").pick_folders() else {
         return false;
     };
+    warn_before_attaching(config_path, &picked);
     // The config of a system-wide install is the administrators': the service makes the change for this user.
     if let Err(e) = change_folders(config_path, &Request::AddFolder { paths: picked }) {
         message(rfd::MessageLevel::Warning, format!("Some folders were not added:\n\n{e}")).show();
@@ -481,6 +530,7 @@ impl Env {
             Action::OpenFile(p) => open_path(&p, true),
             Action::OpenFolder(p) => open_path(&p, false),
             Action::OpenUrl(u) => open_url(&u),
+            Action::AllowDiskAccess => crate::service::disk_access::open_settings(),
             Action::AddFolders => {
                 if add_folders_dialog(&self.config_path) {
                     Self::touch(daemon::sync_now_marker(&self.state_dir));
@@ -575,7 +625,13 @@ pub fn run(config_path: PathBuf) -> Result<()> {
             let status = daemon::read_status(&state_dir);
             let unix = unix_now();
             current = view(status.as_ref(), paused, unix);
-            let info = describe(status.as_ref(), &current, unix);
+            let cfg_now = Config::load(&config_path).ok();
+            let blocked = cfg_now.as_ref().and_then(|c| blocked_folder(status.as_ref(), c));
+            let mut info = describe(status.as_ref(), &current, unix);
+            if let Some(p) = &blocked {
+                info.error = text::clip(&format!("Needs Full Disk Access: {}", p.display()));
+                ask_for_disk_access(p);
+            }
             if now >= next_lookup {
                 next_lookup = now + UPDATE_LOOKUP;
                 restart_if_updated(config_path.clone(), env.updates.clone());
@@ -588,7 +644,8 @@ pub fn run(config_path: PathBuf) -> Result<()> {
             if let (Some(s), Ok(mut listed)) = (&status, env.on_master.lock()) {
                 *listed = s.shared_on_master.clone();
             }
-            if let Ok(c) = Config::load(&config_path) {
+            menus.show_access(blocked.as_deref());
+            if let Some(c) = &cfg_now {
                 menus.sync_folders(&c.folders);
                 let on_master: Vec<String> =
                     env.on_master.lock().map(|l| l.iter().map(|(n, _)| n.clone()).collect()).unwrap_or_default();

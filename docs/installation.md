@@ -74,6 +74,10 @@ Windows `fafnirx-setup-<version>.exe`; macOS `fafnirx-<version>-macos-{aarch64,x
   (asks for the token; or `FAFNIRX_TOKEN`, `FAFNIRX_VERSION`), adds folders (repeat `--folder`) and starts the service (systemd
   unit / LaunchDaemon). From a tarball run `sh install.sh ...`. macOS blocking the binary:
   `sudo xattr -d com.apple.quarantine /usr/local/bin/fafnirx`.
+  **macOS Full Disk Access.** To sync folders in Documents, Desktop, Downloads, iCloud Drive or on another volume, give the
+  client Full Disk Access: *System Settings* → *Privacy & Security* → *Full Disk Access* → `+` → `/usr/local/bin/fafnirx`, switch it
+  on, then `sudo fafnirx restart`. The installer says so at the end; without it these folders fail with `Operation not permitted`
+  (see Troubleshooting).
 - **Debian, Ubuntu:** `sudo apt install ./fafnirx_<version>-1_amd64.deb`, then `sudo fafnirx enroll --server http://<server>:7443`
   (asks for the token; it starts the service) and `sudo fafnirx add-folder ~/Documents`.
 
@@ -104,6 +108,7 @@ use `--name`. Names are compared ignoring case and accents; `add-folder` refuses
 | `unknown or revoked device token` | Token rotated or device revoked: enroll again |
 | `status` says holding deletions | A large part of a folder vanished: [delete guard](usage.md#the-delete-guard) |
 | `add-folder`/`shared attach`: `... overlaps ... collect one of them` | A folder cannot sit inside, or contain, another collected folder. To share a folder inside one you collect, `remove-folder` the outer one and `add-folder` its other subfolders (the master keeps its data) |
+| macOS: `cannot replace the file: Operation not permitted` (or the tray says `Needs Full Disk Access`) | The client lacks Full Disk Access for a folder in Documents, Desktop, Downloads, iCloud Drive or another volume: *Privacy & Security* → *Full Disk Access* → add `/usr/local/bin/fafnirx`, then `sudo fafnirx restart`. If it is not that: the file is locked (`ls -lO` shows `uchg`; `sudo chflags nouchg <file>`) |
 | Master: `cannot connect to the database` | PostgreSQL unreachable, or password differs from the first start's |
 | Device shown offline | No heartbeat for 60 s: check `fafnirx status` |
 | Files copied into `data/files/` take minutes | Mount reports no changes; the master compares the tree every 5 minutes |

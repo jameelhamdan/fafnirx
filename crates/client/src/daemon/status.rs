@@ -124,6 +124,8 @@ pub struct Status {
     pub fatal: String,
     /// True until every file of the collected folders has been sent once: the first sync of a new install.
     pub initial_sync: bool,
+    /// Whether the client has Full Disk Access (macOS only, `None` elsewhere): without it the folders macOS protects fail.
+    pub full_disk_access: Option<bool>,
     /// The shared folders attached here.
     pub shared: Vec<SharedStatus>,
     /// The shared folders the user can use on the master, with whether each is their own: what the tray offers to attach.

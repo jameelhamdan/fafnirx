@@ -80,6 +80,9 @@ pub async fn shared_attach(config_path: PathBuf, name: String, dir: PathBuf, cre
         }
         None => bail!("there is no shared folder called \"{name}\"; `fafnirx shared create {name}` makes it"),
     };
+    if let Some(warning) = crate::service::disk_access::warning_for(&config_path, &dir) {
+        eprintln!("warning: {warning}");
+    }
     let shared = config::attach_shared_to_file(&config_path, &full, &dir)?;
     println!("{} is shared as \"{}\"", shared.path.display(), shared.name);
     wake_client(&config_path);
