@@ -162,7 +162,7 @@ fafnirx sync                                    # one cycle in the foreground
 fafnirx run                                     # the client in the foreground
 fafnirx release-deletes                         # apply held-back deletions now, in every folder
 fafnirx update [--check]                        # install the newest release and restart on it, or only look
-fafnirx restart                                # restart the service (the client)
+fafnirx restart                                # restart the client and the tray
 fafnirx shared list | create | attach | detach | keep   # shared folders, below
 fafnirx install-service | uninstall-service | tray
 ```
@@ -343,7 +343,7 @@ check. Config, token and state stay: same device, nothing resent.
 
 - **Tray:** **Check for updates** only looks; when newer the entry becomes **Update to `<version>`** (download, install,
   restart client and tray). A tray that finds a newer file on disk restarts too.
-- **CLI:** `fafnirx update --check` prints `available <version>` or `current <version>` (no token needed); `fafnirx update` asks the service to install, then waits until it runs again on the new version. `fafnirx restart` restarts it.
+- **CLI:** `fafnirx update --check` prints `available <version>` or `current <version>` (no token needed); `fafnirx update` asks the service to install, then waits until it runs again on the new version. `fafnirx restart` restarts it and the tray: a running tray starts over, and one is started at your desktop if none runs.
 
 The file is replaced by the client, which may write it (Windows `%LocalAppData%\Programs\fafnirx`, macOS/Linux script `/usr/local/bin`; there other users cannot).
 

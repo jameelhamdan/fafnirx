@@ -253,8 +253,19 @@ async fn wait_for<T>(limit: Duration, mut check: impl FnMut() -> Option<T>) -> O
     }
 }
 
-/// Restarts the client: the service when it is installed, which runs the program file as it is now; else the client that runs
-/// by itself.
+/// Restarts what runs of the client: the client (the service when it is installed, which runs the program file as it is now,
+/// else the client that runs by itself) and the trays, which start over or are started if this desktop has none.
+fn restart_trays(config_path: &Path, state_dir: &Path) {
+    let _ = std::fs::write(daemon::restart_tray_marker(state_dir), b"");
+    #[cfg(feature = "tray")]
+    if crate::tray::ensure_tray(config_path, &control_dir(state_dir)) {
+        println!("tray started");
+    }
+    #[cfg(not(feature = "tray"))]
+    let _ = config_path;
+}
+
+/// Restarts the client and the trays.
 pub async fn restart(config_path: PathBuf) -> Result<()> {
     let cfg = Config::load(&config_path)?;
     let dir = cfg.state_dir(&config_path);
@@ -270,9 +281,11 @@ pub async fn restart(config_path: PathBuf) -> Result<()> {
             Some(s) => println!("restarted: fafnirx {} is running", s.version),
             None => bail!("restarted, but the client is not online yet: check `fafnirx status`"),
         }
+        restart_trays(&config_path, &dir);
         return Ok(());
     }
     service::restart_background(&config_path, &dir)?;
+    restart_trays(&config_path, &dir);
     println!("restarted");
     Ok(())
 }
