@@ -6,7 +6,6 @@ import { ErrorNote, PageHeader } from '@/components/common'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { api } from '@/lib/api'
 import { msg, useT } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
@@ -74,50 +73,37 @@ export default function Plugins() {
         <ErrorNote error={installed.error} />
       ) : (
         <>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t('Plugin')}</TableHead>
-                <TableHead>{t('Version')}</TableHead>
-                <TableHead>{t('State')}</TableHead>
-                <TableHead />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {ids.map((id) => {
-                const plugin = have.get(id)
-                const latest = newest.get(id)
-                const state = plugin && STATE[plugin.state]
-                return (
-                  <TableRow key={id}>
-                    <TableCell>
-                      <p className="font-medium">{id}</p>
-                      {ABOUT[id] && <p className="text-xs text-muted-foreground">{t(ABOUT[id])}</p>}
-                      {plugin?.problem && <p className="text-xs text-destructive">{plugin.problem}</p>}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{plugin?.version ?? latest}</TableCell>
-                    <TableCell>{state ? <Badge variant={state.variant}>{t(state.label)}</Badge> : <span className="text-muted-foreground">{t('Not installed')}</span>}</TableCell>
-                    <TableCell className="text-end">
-                      <div className="flex justify-end gap-2">
-                        {latest && plugin?.state !== 'external' && (!plugin || plugin.version !== latest) && (
-                          <Button size="sm" disabled={busy} onClick={() => install.mutate(id)}>
-                            <Download className="size-4" />
-                            {plugin ? t('Update to {version}', { version: latest }) : t('Install')}
-                          </Button>
-                        )}
-                        {plugin && plugin.state !== 'external' && (
-                          <Button size="sm" variant="outline" disabled={busy} onClick={() => remove.mutate(id)}>
-                            <Trash2 className="size-4" />
-                            {t('Remove')}
-                          </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
+          <ul className="divide-y rounded-lg border bg-card">
+            {ids.map((id) => {
+              const plugin = have.get(id)
+              const latest = newest.get(id)
+              const state = plugin && STATE[plugin.state]
+              return (
+                <li key={id} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
+                  <div className="min-w-0 flex-1 basis-56">
+                    <p className="font-medium">{id} <span className="text-sm font-normal text-muted-foreground">{plugin?.version ?? latest}</span></p>
+                    {ABOUT[id] && <p className="text-xs text-muted-foreground">{t(ABOUT[id])}</p>}
+                    {plugin?.problem && <p className="text-xs text-destructive">{plugin.problem}</p>}
+                  </div>
+                  {state ? <Badge variant={state.variant}>{t(state.label)}</Badge> : <span className="text-sm text-muted-foreground">{t('Not installed')}</span>}
+                  <div className="flex gap-2">
+                    {latest && plugin?.state !== 'external' && (!plugin || plugin.version !== latest) && (
+                      <Button size="sm" disabled={busy} onClick={() => install.mutate(id)}>
+                        <Download className="size-4" />
+                        {plugin ? t('Update to {version}', { version: latest }) : t('Install')}
+                      </Button>
+                    )}
+                    {plugin && plugin.state !== 'external' && (
+                      <Button size="sm" variant="outline" disabled={busy} onClick={() => remove.mutate(id)}>
+                        <Trash2 className="size-4" />
+                        {t('Remove')}
+                      </Button>
+                    )}
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
           {offered.error && <p className="text-sm text-muted-foreground">{t('The plugins that can be installed could not be listed: {error}', { error: offered.error.message })}</p>}
         </>
       )}
