@@ -9,7 +9,7 @@
 mod plugins;
 mod proxy;
 
-pub use plugins::{Offer, Plugins, Status as PluginStatus};
+pub use plugins::{Plugins, Status as PluginStatus};
 pub use proxy::{proxy, ui};
 
 use anyhow::{bail, Context, Result};
@@ -247,6 +247,7 @@ pub fn start(registry: Arc<Registry>, plugins: Arc<Plugins>, files: PathBuf) {
         return;
     }
     plugins.tidy();
+    tokio::spawn(plugins.clone().ensure());
     tokio::spawn(async move {
         let mut tick = 0u32;
         loop {

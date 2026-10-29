@@ -16,7 +16,7 @@ files/<path>                        master files
 versions/<id>/<user>/<device>/<path> replaced or deleted versions
 tmp/                                uploads being assembled (removed after a day untouched)
 cache/thumbs/                       pictures (30 days unused)
-plugins/<id>/                       installed plugins (the Plugins page installs and removes them; not user data)
+plugins/<id>/                       plugins (FAFNIRX_PLUGINS installs them; not user data)
 updates/<platform>/                 your own signed client builds (optional)
 ```
 

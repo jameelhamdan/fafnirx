@@ -1,4 +1,4 @@
-// End-to-end test of plugins: the real master starts, feeds, updates and removes the real fafnirx-video service from a bundle in
+// End-to-end test of plugins: the real master starts, feeds and updates (FAFNIRX_PLUGINS) the real fafnirx-video service from a bundle in
 // <data>/plugins, installs a bundle from a stand-in release (a local server), refuses damaged and wrong bundles, and passes the
 // module's web app files on to the browser.
 //
@@ -93,7 +93,8 @@ const bundleFiles = (version, { id = 'video' } = {}) => ({
 const bundle = (version, options) => zip(bundleFiles(version, options))
 
 // --- a stand-in for the releases --------------------------------------------------------------------------------------
-const release = { version: '3.12.0', zip: bundle('3.12.0'), sha: null, missing: false }
+const VERSION = fs.readFileSync(new URL('../Cargo.toml', import.meta.url), 'utf8').match(/^version = "(.+)"/m)[1] // the plugin must match the master's own
+const release = { version: VERSION, zip: bundle(VERSION), sha: null, missing: false }
 const sha = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex')
 const port = await freePort()
 const asset = `fafnirx-plugin-video-${release.version}-${platform}.zip`
@@ -159,45 +160,51 @@ try {
   await admin.post('/api/devices', { name: 'videos', kind: 'local' })
   check(await until(async () => (await schema.rows("SELECT 1 FROM file_meta WHERE kind = 'video' AND duration_ms = 14500")).length, 40, 300), 'the master reads a new video through the plugin')
 
-  // The plugin settings are the administrator's.
+  // The plugins are the server administrator's: the web app only shows them.
   await admin.post('/api/users', { name: 'bob', role: 'normal', password: 'pw-bob-1234' })
   const bob = await master.admin('bob', 'pw-bob-1234')
-  check((await bob.get('/api/plugins')).status === 403 && (await bob.post('/api/plugins/video')).status === 403 && (await bob.delete('/api/plugins/video')).status === 403, 'only an administrator manages plugins')
+  check((await bob.get('/api/plugins')).status === 403, 'only an administrator sees the plugins')
   check((await bob.get('/api/m/video/ui/index.js')).status === 200, 'any user gets the files of a module that is up')
+  for (const [method, url] of [['post', '/api/plugins/video'], ['delete', '/api/plugins/video'], ['get', '/api/plugins/available']]) {
+    check((await admin[method](url)).status >= 400, `the web app cannot change them: ${method} ${url}`)
+  }
+  check(fs.existsSync(folder) && (await plugin(admin)).version === '3.11.0', 'and nothing changed')
 
-  // --- 2. Installing from the release replaces it, and a bad one changes nothing --------------------------------------
-  release.zip = bundle('3.12.0')
+  // --- 2. FAFNIRX_PLUGINS installs from the release when the master starts; a bad one changes nothing ---------------
+  const restart = async (env) => {
+    await master.stop()
+    master.env = { ...master.env, ...env }
+    await master.start()
+    return master.admin()
+  }
+  release.zip = bundle(VERSION)
   release.sha = 'f'.repeat(64)
-  const damaged = await admin.post('/api/plugins/video')
-  check(damaged.status === 502 && /checksum/.test(damaged.json.error), 'a download that does not match its checksum is refused')
-  check((await plugin(admin)).version === '3.11.0', 'and the plugin that is installed stays')
+  let again = await restart({ FAFNIRX_PLUGINS: 'video' })
+  await sleep(3000)
+  check((await plugin(again)).version === '3.11.0', 'a download that does not match its checksum is refused, and the plugin that is installed stays')
   release.sha = null
 
-  release.zip = zip({ ...bundleFiles('3.12.0'), 'plugin.json': Buffer.from(JSON.stringify({ id: 'docs', version: '3.12.0', contract: 1, platform, exec })) })
-  const wrong = await admin.post('/api/plugins/video')
-  check(wrong.status === 502 && /docs/.test(wrong.json.error), 'a bundle that is another plugin is refused')
-  check((await plugin(admin)).version === '3.11.0' && (await admin.get('/api/m/video/ui/index.js')).text.includes('3.11.0'), 'and it changes nothing')
+  release.zip = zip({ ...bundleFiles(VERSION), 'plugin.json': Buffer.from(JSON.stringify({ id: 'docs', version: VERSION, contract: 1, platform, exec })) })
+  again = await restart({})
+  await sleep(3000)
+  check((await plugin(again)).version === '3.11.0' && (await again.get('/api/m/video/ui/index.js')).text.includes('3.11.0'), 'a bundle that is another plugin is refused, and it changes nothing')
   check(!fs.readdirSync(path.join(data, 'plugins')).some((n) => n.startsWith('.')), 'and leaves nothing behind')
 
-  release.zip = bundle('3.12.0')
-  const offered = (await admin.get('/api/plugins/available')).json
-  check(offered.length === 1 && offered[0].id === 'video' && offered[0].version === '3.12.0', 'the plugins page lists what the release carries')
-  const installed = await admin.post('/api/plugins/video')
-  check(installed.status === 200, 'a good bundle installs')
-  check(await until(async () => (await plugin(admin))?.state === 'up' && (await plugin(admin)).version === '3.12.0', 40, 300), 'and the new version runs in its place')
-  check(await until(async () => (await admin.get('/api/m/video/ui/index.js')).text?.includes('plugin-ui-3.12.0'), 40, 300), 'with its own script')
+  release.zip = bundle(VERSION)
+  again = await restart({})
+  check(await until(async () => (await plugin(again))?.state === 'up' && (await plugin(again)).version === VERSION, 40, 300), 'a good bundle installs, and the new version runs in its place')
+  check(await until(async () => (await again.get('/api/m/video/ui/index.js')).text?.includes(`plugin-ui-${VERSION}`), 40, 300), 'with its own script')
   check((await schema.rows("SELECT 1 FROM file_meta WHERE kind = 'video'")).length === 1, 'the files stay')
 
-  // --- 3. Removing it takes the module away ---------------------------------------------------------------------------
-  const gone = await admin.delete('/api/plugins/video')
-  check(gone.status === 200 && !fs.existsSync(folder), 'removing a plugin deletes its folder')
-  check(!(await modules(admin)).video, 'and the module is not there any more')
+  // --- 3. Deleting the folder takes the module away -----------------------------------------------------------------
+  fs.rmSync(path.join(folder, 'plugin.json')) // Windows keeps a running program's folder: it is the file that makes the folder a plugin
+  check(await until(async () => !(await modules(again)).video, 20, 300), 'with its folder emptied of plugin.json the module is not there any more')
   check(await until(async () => !running(), 20, 250), 'and its program is stopped')
-  check((await admin.delete('/api/plugins/video')).status === 400, 'removing what is not installed says so')
+  fs.rmSync(folder, { recursive: true, force: true })
 
   // --- 4. Install from nothing, then the program goes with the master -----------------------------------------------
-  check((await admin.post('/api/plugins/video')).status === 200, 'a plugin installs from the release when nothing is there')
-  check(await until(async () => (await modules(admin)).video, 40, 300), 'and starts')
+  again = await restart({})
+  check(await until(async () => (await modules(again)).video, 40, 300), 'FAFNIRX_PLUGINS installs a plugin from the release when nothing is there, and it starts')
   check(running(), 'its program is running')
   await master.stop()
   check(await until(async () => !running(), 20, 250), 'when the master stops, the programs it started stop')
@@ -205,9 +212,9 @@ try {
   // --- 5. A module set up by address wins ---------------------------------------------------------------------------
   master.env = { ...master.env, FAFNIRX_MODULE_VIDEO_URL: 'http://127.0.0.1:9', FAFNIRX_MODULE_VIDEO_TOKEN: 'a-token-that-is-long-enough' }
   await master.start()
-  const again = await master.admin()
+  const external = await master.admin()
   await sleep(4000)
-  const listed = await plugin(again)
+  const listed = await plugin(external)
   check(!running() && listed?.state === 'external', 'a module named by address is used instead of the plugin: the plugin is not started')
 } catch (e) {
   console.error(e)

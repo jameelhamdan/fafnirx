@@ -26,7 +26,6 @@ const Watch = lazy(() => import('./pages/watch.tsx'))
 const MapPage = lazy(() => import('./pages/map.tsx'))
 const Trash = lazy(() => import('./pages/trash.tsx'))
 const Users = lazy(() => import('./pages/users.tsx'))
-const Plugins = lazy(() => import('./pages/plugins.tsx'))
 
 /** A page for some of the roles; the others are sent to the first page. */
 function Only({ allow, role, children }: { allow: 'admin' | 'workspace'; role: Role; children: ReactNode }) {
@@ -75,7 +74,6 @@ export default function App() {
             <Route path="/mirrors" element={<Only allow="admin" role={role}><Mirrors /></Only>} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/users" element={<Only allow="admin" role={role}><Users /></Only>} />
-            <Route path="/plugins" element={<Only allow="admin" role={role}><Plugins /></Only>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>

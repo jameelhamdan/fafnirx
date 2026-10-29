@@ -5,6 +5,8 @@
 //!
 //! Bundles come from the project's GitHub releases (`fafnirx-plugin-<id>-<version>-<platform>.zip` with a `.sha256` beside
 //! it, for the release of this very version of the master) or are unpacked into the folder by hand (offline installs).
+//! Only the server administrator changes them: `FAFNIRX_PLUGINS=video` in the master's environment installs what is missing,
+//! deleting the folder removes one. The web app shows their state and nothing more.
 //! A module that is also set up with `FAFNIRX_MODULE_<ID>_URL` is not started: what the administrator names wins.
 
 use super::{Module, Registry};
@@ -49,14 +51,12 @@ fn release_url() -> String {
 }
 
 /// A bundle in a release.
-#[derive(Debug, PartialEq, Serialize)]
-pub struct Offer {
-    pub id: String,
-    pub version: String,
-    #[serde(skip)]
-    pub url: String,
-    #[serde(skip)]
-    pub checksum_url: String,
+#[derive(Debug, PartialEq)]
+struct Offer {
+    id: String,
+    version: String,
+    url: String,
+    checksum_url: String,
 }
 
 /// The bundles for this platform that a release (as its API tells it) carries.
@@ -380,7 +380,7 @@ impl Plugins {
     }
 
     /// The bundles the release of this version carries for this platform.
-    pub async fn available(&self) -> Result<Vec<Offer>> {
+    async fn available(&self) -> Result<Vec<Offer>> {
         let reply = self
             .http
             .get(release_url())
@@ -459,20 +459,28 @@ impl Plugins {
         Ok(hex::encode(hash.finalize()))
     }
 
-    /// Removes a plugin (its settings and cache of the data folder stay).
-    pub async fn remove(&self, id: &str) -> Result<()> {
-        if !valid_id(id) {
-            bail!("{id:?} cannot be a plugin");
+    /// Installs the plugins `FAFNIRX_PLUGINS` names that are not in the folder, or are of another version than this master,
+    /// and tries again every minute until they are. The one way to install: the web app only shows what is there.
+    pub async fn ensure(self: Arc<Self>) {
+        let wanted = wanted(&std::env::var("FAFNIRX_PLUGINS").unwrap_or_default());
+        loop {
+            let have = self.scan_names();
+            let missing: Vec<&String> = wanted
+                .iter()
+                .filter(|id| !self.registry.is_external(id))
+                .filter(|id| !have.iter().any(|(h, v)| h == *id && v.as_deref() == Some(env!("CARGO_PKG_VERSION"))))
+                .collect();
+            if missing.is_empty() {
+                return;
+            }
+            for id in missing {
+                match self.install(id).await {
+                    Ok(version) => tracing::info!("installed the {id} plugin {version}"),
+                    Err(e) => tracing::warn!("cannot install the {id} plugin, trying again in a minute: {e:#}"),
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(60)).await;
         }
-        let _one_at_a_time = self.installing.lock().await;
-        let _busy = self.mark_busy(id);
-        let dir = self.dir.join(id);
-        if !dir.is_dir() {
-            bail!("the {id} plugin is not installed");
-        }
-        self.stop(id).await;
-        std::fs::remove_dir_all(&dir).with_context(|| format!("remove {}", dir.display()))?;
-        Ok(())
     }
 
     /// Clears what an installation that was cut short left behind.
@@ -496,6 +504,14 @@ impl Drop for Busy<'_> {
     fn drop(&mut self) {
         self.plugins.busy.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.id);
     }
+}
+
+/// The ids in a `FAFNIRX_PLUGINS` value (comma separated); what cannot be a plugin is left out.
+fn wanted(list: &str) -> Vec<String> {
+    let mut ids: Vec<String> = list.split(',').map(|s| s.trim().to_string()).filter(|s| valid_id(s)).collect();
+    ids.sort();
+    ids.dedup();
+    ids
 }
 
 fn backoff(failures: u32) -> Duration {
@@ -598,6 +614,12 @@ mod tests {
             asset("fafnirx-plugin-Bad-3.12.0-linux-x86_64.zip.sha256"),
             asset("fafnirx-3.12.0-linux-x86_64"),
         ]})
+    }
+
+    #[test]
+    fn the_wanted_plugins_are_the_valid_ids_of_the_list_once_each() {
+        assert_eq!(wanted("video, docs,video,,../x,Bad Id"), vec!["docs", "video"]);
+        assert!(wanted("").is_empty());
     }
 
     #[test]

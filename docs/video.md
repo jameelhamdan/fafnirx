@@ -41,8 +41,8 @@ flowchart LR
 
 ## Turn it on
 
-**Plugin:** **Plugins** → Install `video`. Master pulls the bundle of its own version (service, web part, static ffmpeg, ~60 MB) and
-starts it. Remove to undo. Settings = `FAFNIRX_VIDEO_*` in the master env (compose: add to master `environment:`). Cache:
+**Plugin:** `FAFNIRX_PLUGINS=video` in the master env (compose: `.env`). At start the master pulls the bundle of its own version
+(service, web part, static ffmpeg, ~60 MB) and runs it. Undo: see [modules](modules.md#plugins). Settings = `FAFNIRX_VIDEO_*` in the master env (compose: add to master `environment:`). Cache:
 `<data>/cache/video-module`.
 
 **Container:**
