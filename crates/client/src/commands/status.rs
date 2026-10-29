@@ -59,6 +59,11 @@ pub fn status(config_path: &Path, json: bool) -> Result<()> {
         held_lines(&dir, &cfg).iter().for_each(|l| println!("{l}"));
     }
     let version = print_daemon(&dir);
+    let access = daemon::read_status(&dir).and_then(|s| s.full_disk_access);
+    let folders = cfg.folders.iter().map(|f| f.path.as_path()).chain(cfg.shared.iter().map(|s| s.path.as_path()));
+    if let Some(blocked) = crate::service::disk_access::first_blocked(access, folders) {
+        println!("ATTENTION: {}", crate::service::disk_access::blocked_text(blocked));
+    }
     print_shared(&shared);
     if let Some(version) = version {
         println!("version {version}");

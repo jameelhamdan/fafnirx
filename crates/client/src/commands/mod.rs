@@ -106,6 +106,9 @@ pub fn add_folders(config_path: &Path, paths: &[PathBuf], name: Option<&str>) ->
     }
     let mut failed = 0;
     for path in paths {
+        if let Some(warning) = crate::service::disk_access::warning_for(config_path, path) {
+            eprintln!("warning: {warning}");
+        }
         match config::add_folder_to_file(config_path, path, name) {
             Ok(f) => {
                 println!("collecting {} as \"{}\"", f.path.display(), f.name);

@@ -548,7 +548,15 @@ impl Attached {
         give_to_owner_of(&self.shared.path, &tmp);
         tokio::fs::rename(&tmp, target).await.map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
-            SyncError::File(format!("cannot replace the file: {e}"))
+            let why = if e.kind() == std::io::ErrorKind::PermissionDenied
+                && cfg!(target_os = "macos")
+                && crate::service::disk_access::is_protected(target)
+            {
+                format!(" (macOS: {})", crate::service::disk_access::STEPS)
+            } else {
+                String::new()
+            };
+            SyncError::File(format!("cannot replace the file: {e}{why}"))
         })
     }
 

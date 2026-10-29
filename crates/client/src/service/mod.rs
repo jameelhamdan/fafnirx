@@ -5,6 +5,7 @@
 //! Its config, token and state are in the folders of the computer (`config::system_data_dir`), not in a profile, and it runs
 //! with the rights to read the folders of every user, so only an administrator may change them (`prepare_dirs`).
 
+pub mod disk_access;
 pub mod elevate;
 pub mod instance;
 #[cfg(windows)]
@@ -361,6 +362,10 @@ pub fn install(config_path: &Path, dry: bool) -> Result<()> {
                 let _ = run(dry, "launchctl", &["asuser", &uid, "launchctl", "load", "-w", MAC_TRAY]);
             }
         }
+        println!(
+            "macOS only lets the client change files in Documents, Desktop, Downloads, iCloud Drive and on other volumes with Full Disk Access.\nTo sync folders there: {}.",
+            disk_access::STEPS
+        );
     } else {
         bail!("service installation is not supported on this OS");
     }

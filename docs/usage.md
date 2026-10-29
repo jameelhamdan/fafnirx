@@ -239,7 +239,14 @@ also take the short name when only one attached folder has it.
 
 Files and folders the client creates in an attached folder belong to the owner of that folder (the service is root, which an
 editor like Obsidian could not write to), with the other computer's mode plus owner read/write. Files made by an older version
-stay root's: `sudo chown -R $USER <folder>`. The service never writes through a link (symlink) inside the folder: a file whose
+stay root's: `sudo chown -R $USER <folder>`.
+
+On macOS the client needs Full Disk Access for folders in Documents, Desktop, Downloads, iCloud Drive and on other volumes. It
+checks, and when a folder of that kind is blocked `fafnirx status` says `ATTENTION`, the tray shows `Needs Full Disk Access` (and
+asks once, with the menu entry **Allow Full Disk Access** opening the settings), and attaching such a folder from the tray
+or `add-folder`/`shared attach` warns first. After allowing it, `sudo fafnirx restart`.
+
+The service never writes through a link (symlink) inside the folder: a file whose
 path crosses one fails with "is a link".
 
 Tray: **Shared folders** lists every usable folder as `<owner>/<name>`; **New shared folder from a folder...** names it

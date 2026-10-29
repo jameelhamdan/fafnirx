@@ -237,6 +237,7 @@ fn spawn_heartbeat(shared: Shared, mut client: Client, config_path: PathBuf, ide
                             s.device = device;
                             s.server = cfg.server.clone();
                             s.bandwidth_limit_kbps = cfg.bandwidth_limit_kbps;
+                            s.full_disk_access = crate::service::disk_access::granted();
                         });
                     }
                     Err(e) => {
