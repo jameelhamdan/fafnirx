@@ -67,5 +67,7 @@ services:
     volumes:
       # The videos are read from files/ and never changed.
       - "${FAFNIRX_DATA_DIR:-./data}:/data:ro"
-      # Segments made so far; removed after a week without being watched. Must be writable by FAFNIRX_UID.
+      # Segments made so far; removed after a week without being watched.
+      # WATCH OUT: the service runs as FAFNIRX_UID (1000). A host dir it cannot write to gives "cache: Permission denied"
+      # in the logs and no playback. chown it, or use a named volume (`video-cache:/cache`, add it under `volumes:`).
       - "${FAFNIRX_VIDEO_CACHE_DIR:-./video-cache}:/cache"
