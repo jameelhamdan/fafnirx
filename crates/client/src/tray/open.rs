@@ -1,6 +1,8 @@
 //! Things the tray starts: editors, file managers, the browser, the client itself.
 
 use super::text::clip;
+use crate::config::Config;
+use crate::daemon::requests::{self, Request};
 use crate::{service, update};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -113,6 +115,16 @@ pub fn run_cli(config_path: &Path, args: &[std::ffi::OsString]) -> Result<String
     let err = String::from_utf8_lossy(&out.stderr);
     let line = err.lines().map(|l| l.trim()).find(|l| !l.is_empty()).unwrap_or("it failed without saying why");
     Err(line.trim_start_matches("Error: ").to_string())
+}
+
+/// Changes the folders. In a system-wide install the service does it for this user, because the tray cannot ask for the
+/// administrator's password; otherwise the command does.
+pub fn change_folders(config_path: &Path, request: &Request) -> Result<String, String> {
+    if cfg!(unix) && crate::config::is_system_config(config_path) && !service::elevate::is_admin() {
+        let cfg = Config::load(config_path).map_err(|e| format!("{e:#}"))?;
+        return requests::submit(&cfg.state_dir(config_path), request).map_err(|e| format!("{e:#}"));
+    }
+    run_cli(config_path, &request.args())
 }
 
 /// A check or an install is going on: pressing the menu entry again meanwhile does nothing.

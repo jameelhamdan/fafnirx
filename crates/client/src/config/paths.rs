@@ -41,8 +41,8 @@ pub fn is_system_config(config_path: &Path) -> bool {
     super::same_path(config_path, &system_config_path())
 }
 
-/// Where the client and the programs that talk to it meet: the markers (pause, sync now, stop, update, restart), the status
-/// file and the log. In a system-wide install it is the one folder every user may write to; the rest of the state is not.
+/// Where the client and the programs that talk to it meet: the markers (pause, sync now, stop, update, restart), the folder
+/// requests and their answers, the status file and the log. In a system-wide install it is the one folder every user may write to; the rest of the state is not.
 pub fn control_dir(state_dir: &Path) -> PathBuf {
     if super::same_path(state_dir, &system_state_dir()) {
         system_data_dir().join("control")

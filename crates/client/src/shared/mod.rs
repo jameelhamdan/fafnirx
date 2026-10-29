@@ -352,7 +352,7 @@ impl Attached {
         // The content of a file that is deleted on the master is what a rename moved: move it here too.
         if let Some(i) = deletions.iter().position(|(b, _)| b.root_hash == change.root_hash) {
             let (old, old_target) = deletions.remove(i);
-            make_parent(target)?;
+            make_parent(&self.shared.path, target)?;
             std::fs::rename(&old_target, target)?;
             self.spellings.removed(&old_target);
             self.spellings.added(target);
@@ -522,7 +522,7 @@ impl Attached {
         change: &pb::Change,
         report: &mut Report,
     ) -> Result<(), SyncError> {
-        make_parent(target)?;
+        make_parent(&self.shared.path, target)?;
         let before = local_stat(target)?;
         let tmp = target.with_file_name(format!(
             "{PART_PREFIX}{}",
@@ -540,10 +540,12 @@ impl Attached {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            // The mode of the other computer, but never one the owner cannot read and write.
             if change.mode & 0o777 != 0 {
-                let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(change.mode & 0o777));
+                let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(change.mode & 0o777 | 0o600));
             }
         }
+        give_to_owner_of(&self.shared.path, &tmp);
         tokio::fs::rename(&tmp, target).await.map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
             SyncError::File(format!("cannot replace the file: {e}"))
@@ -575,12 +577,45 @@ fn local_path(root: &Path, remote: &str) -> PathBuf {
     remote.split('/').fold(root.to_path_buf(), |p, part| p.join(part))
 }
 
-fn make_parent(target: &Path) -> Result<(), SyncError> {
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)?;
+/// Makes the folders above `target`, inside the attached folder `root`, for whoever owns that folder.
+fn make_parent(root: &Path, target: &Path) -> Result<(), SyncError> {
+    let Some(parent) = target.parent() else { return Ok(()) };
+    no_link_between(root, parent)?;
+    let missing: Vec<&Path> = parent.ancestors().take_while(|p| !p.exists()).collect();
+    std::fs::create_dir_all(parent)?;
+    for dir in missing {
+        give_to_owner_of(root, dir);
     }
     Ok(())
 }
+
+/// The service is root and the folder is the user's: a link in it (made by the user) must not lead what the service writes
+/// somewhere else. Refuses when a folder from `root` down to `dir` is a link.
+fn no_link_between(root: &Path, dir: &Path) -> Result<(), SyncError> {
+    for ancestor in dir.ancestors().take_while(|p| *p != root && p.starts_with(root)) {
+        if std::fs::symlink_metadata(ancestor).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(SyncError::File(format!(
+                "{} is a link: files are not written through links",
+                ancestor.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// A file or folder the service makes in an attached folder is given to whoever owns that folder. The service is root, and
+/// what root owns cannot be changed by the programs of the user (an editor, Obsidian) that works in the folder.
+#[cfg(unix)]
+fn give_to_owner_of(root: &Path, path: &Path) {
+    use std::os::unix::fs::MetadataExt;
+    if let Ok(owner) = std::fs::metadata(root) {
+        // Not through a link: only what the service made is given away.
+        let _ = std::os::unix::fs::lchown(path, Some(owner.uid()), Some(owner.gid()));
+    }
+}
+
+#[cfg(not(unix))]
+fn give_to_owner_of(_: &Path, _: &Path) {}
 
 /// (size, modification time) of the file at a path; `None` when there is none. A folder in its place is a problem.
 fn local_stat(target: &Path) -> Result<Option<(u64, i64)>, SyncError> {
@@ -641,6 +676,21 @@ fn civil_date(unix: i64) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn nothing_is_written_through_a_link_in_the_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, outside) = (dir.path().join("shared"), dir.path().join("outside"));
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        assert!(super::make_parent(&root, &root.join("real/new/a.txt")).is_ok());
+        let e = super::make_parent(&root, &root.join("link/a.txt")).unwrap_err();
+        assert!(format!("{e:?}").contains("is a link"), "{e:?}");
+        assert!(super::make_parent(&root, &root.join("link/deep/a.txt")).is_err(), "nor below it");
+        assert!(!outside.join("deep").exists(), "nothing was made outside");
+    }
+
     use super::*;
     use crate::sync::tests::{serve, Calls};
 

@@ -215,6 +215,10 @@ error, and has pause/resume, sync now, the **Folders** and **Shared folders** su
 data folder and web app. **Check for updates** looks for a newer version; when there is one the entry becomes
 **Update to `<version>`** (see [Client updates](#client-updates)).
 
+On macOS and Linux the folder entries need no password: the tray leaves a request in the control folder and the service (root)
+applies it. It only touches folders that belong to the user who asked (owner of the directory); for others it says to use
+`sudo fafnirx`. The commands themselves still need `sudo`.
+
 ## Shared folders: sync both ways
 
 `add-folder` folders are backup: up only, never written by the client. A **shared folder** belongs to a user, not a
@@ -232,6 +236,11 @@ fafnirx shared keep ana/family               # keep files whose deletion on the 
 A folder is named `<owner>/<name>` everywhere: tray, config (`[[shared]] name`), `status`, Files and the web page. The commands
 also take the short name when only one attached folder has it.
 ```
+
+Files and folders the client creates in an attached folder belong to the owner of that folder (the service is root, which an
+editor like Obsidian could not write to), with the other computer's mode plus owner read/write. Files made by an older version
+stay root's: `sudo chown -R $USER <folder>`. The service never writes through a link (symlink) inside the folder: a file whose
+path crosses one fails with "is a link".
 
 Tray: **Shared folders** lists every usable folder as `<owner>/<name>`; **New shared folder from a folder...** names it
 after the picked folder. Stored on the master as `files/users/<owner>/<name>/` with versions, trash,
