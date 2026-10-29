@@ -29,9 +29,11 @@ services:
       # The password of the user "admin", set at the first start. Change it in the web app afterwards.
       FAFNIRX_ADMIN_PASSWORD: "${FAFNIRX_ADMIN_PASSWORD:?set FAFNIRX_ADMIN_PASSWORD}"
       HOME: /tmp # rclone wants a writable home for its cache
-      # A module run as a container (optional): see the `video` service below and docs/video.md. Any module is
-      # FAFNIRX_MODULE_<ID>_URL and _TOKEN (docs/modules.md). Without them a module can be installed as a plugin from the
-      # web app (Plugins), which needs no setting here.
+      # Plugins (optional): modules the master runs itself, installed at start from the GitHub release of its own version.
+      # Comma separated ids, e.g. video. Only set here (the web app shows them, it cannot change them). docs/modules.md
+      FAFNIRX_PLUGINS: "${FAFNIRX_PLUGINS:-}"
+      # Or a module run as a container: see the `video` service below and docs/video.md. Any module is
+      # FAFNIRX_MODULE_<ID>_URL and _TOKEN (docs/modules.md).
       FAFNIRX_MODULE_VIDEO_URL: "${FAFNIRX_MODULE_VIDEO_URL:-}"
       FAFNIRX_MODULE_VIDEO_TOKEN: "${FAFNIRX_MODULE_VIDEO_TOKEN:-}"
     ports:
@@ -46,7 +48,7 @@ services:
       - "${FAFNIRX_CONFIG_DIR:-./config}:/config"
 
   # The video module as a container of its own: video playback in the web app (HLS made with ffmpeg as a video is watched),
-  # subtitles, and the details and poster frames of videos. Off unless asked for (or install the plugin from the web app):
+  # subtitles, and the details and poster frames of videos. Off unless asked for (or FAFNIRX_PLUGINS=video above, no second container):
   #   .env:  FAFNIRX_MODULE_VIDEO_URL=http://video:8090   FAFNIRX_MODULE_VIDEO_TOKEN=<openssl rand -hex 24>
   #   then:  mkdir video-cache && docker compose --profile video up -d
   # It has no login of its own and publishes no port: only the master talks to it, behind its login.

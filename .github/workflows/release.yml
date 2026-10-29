@@ -283,7 +283,7 @@ jobs:
       - name: Create the tag and the release
         run: |
           # shellcheck disable=SC2016 # the backticks are Markdown, not command substitution
-          printf 'Server: `docker pull %s:%s`; the optional video module: `docker pull %s:%s`\n\nPlugins: install them from the Plugins page of the web app (they are attached below too).\n\nClient: the installer for your system is attached below, each with a `.sha256`.\n\n' \
+          printf 'Server: `docker pull %s:%s`; the optional video module: `docker pull %s:%s`\n\nPlugins: set `FAFNIRX_PLUGINS=video` on the server (the bundles are attached below too, for offline installs).\n\nClient: the installer for your system is attached below, each with a `.sha256`.\n\n' \
             "$IMAGE" "$VERSION" "$VIDEO_IMAGE" "$VERSION" > notes.md
           gh release create "v$VERSION" out/* --target "$SHA" --title "v$VERSION" \
             --notes-file notes.md --generate-notes

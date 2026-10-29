@@ -242,7 +242,7 @@ JSON under `/api` behind the login cookie (random token, hash stored, `SameSite=
 | Pictures | `GET /api/media/:id/{thumb,preview,original,download}` (`?v=<hash>` caches for good) |
 | Albums | `GET/POST /api/albums` (a `folder` body makes or returns the folder's album), `GET/PATCH/DELETE /api/albums/:id`, `POST .../files` and `.../files/remove` (by `ids` or `items` of `{device, path}`) |
 | Modules | `GET /api/m/:module/:id/*rest` asks the module for `/files/<rest>` about the file (login and right to the file first); video: `hls/{master.m3u8,<quality>/index.m3u8,<quality>/seg<n>.ts,subtitles.json,subtitles/<n>.vtt}`. `GET /api/m/:module/ui/:file` their web part. `GET /api/session` lists the modules that are up, `GET /api/queue` carries their reports |
-| Plugins (admin) | `GET /api/plugins` (installed, with state), `GET /api/plugins/available` (what the release of this version carries), `POST /api/plugins/:id` (install or update), `DELETE /api/plugins/:id` |
+| Plugins (admin) | `GET /api/plugins` (installed, with state; read only, plugins are set up with `FAFNIRX_PLUGINS`) |
 | Processing | `GET /api/queue`; admin: `POST /api/queue/pause`, `/retry`, `/cancel`, `/rebuild` |
 | Integrations | `GET/POST /api/sources`, `POST /api/sources/rclone` (any rclone storage), `/:user/:name`, `/run`, `/toggle`; admin: `GET/POST /api/mirrors` (`kind` replica or backup) + `/:name`, `/run`, `/toggle`, `/resync`, `GET /api/mirrors/:name/restore-kit` (backups), `GET /api/mirrors/scope?path=` (folders to pick from) |
 | Settings | `GET/PUT /api/settings` |

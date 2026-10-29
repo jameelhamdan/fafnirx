@@ -157,8 +157,6 @@ fn light() -> Router<Shared> {
         .route("/api/logout", post(auth::logout))
         .route("/api/session", get(auth::session))
         .route("/api/plugins", get(plugins::list))
-        .route("/api/plugins/available", get(plugins::available))
-        .route("/api/plugins/:id", post(plugins::install).delete(plugins::remove))
         .route("/api/me/password", post(auth::change_password))
         .route("/api/users", get(users::list).post(users::create))
         .route("/api/users/:name", axum::routing::patch(users::update))

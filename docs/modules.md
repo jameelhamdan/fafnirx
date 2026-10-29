@@ -9,8 +9,8 @@ Two ways to run one, same contract:
 |---|---|---|
 | What | zip bundle in `<data>/plugins/<id>/`: program, web part, tools | image `fafnirx-<id>` next to the master |
 | Started by | master, loopback port, own random token | you (compose profile `<id>`) |
-| Install | **Plugins** page, or unzip by hand | `docker compose pull` |
-| Config | none | `FAFNIRX_MODULE_<ID>_URL`, `FAFNIRX_MODULE_<ID>_TOKEN` |
+| Install | `FAFNIRX_PLUGINS=<id>` on the master, or unzip by hand | `docker compose pull` |
+| Config | `FAFNIRX_PLUGINS` | `FAFNIRX_MODULE_<ID>_URL`, `FAFNIRX_MODULE_<ID>_TOKEN` |
 | Use for | single container, small images | other host, resource limits, GPU |
 
 Address wins over plugin of same id (plugin not started).
@@ -25,10 +25,16 @@ flowchart LR
 
 ## Plugins
 
-Admin: **Plugins** → Install / Update / Remove. Master fetches `fafnirx-plugin-<id>-<version>-<platform>.zip` from the GitHub
-release of **its own version**, checks the `.sha256` next to it, unpacks to `.<id>.new`, validates `plugin.json` (id, contract,
-platform, exec exists), stops the old one, swaps the folder, starts. No master restart. Offline: unzip into `<data>/plugins/<id>/`,
-master picks it up (scan every 2 s).
+Server admin only (env / files); the web app (Settings → Plugins, admin) lists state and changes nothing.
+
+- Install: `FAFNIRX_PLUGINS=video,…` in the master env. At start, for each id that is missing or not of the master's version, master
+  fetches `fafnirx-plugin-<id>-<version>-<platform>.zip` from the GitHub release of **its own version**, checks the `.sha256` next
+  to it, unpacks to `.<id>.new`, validates `plugin.json` (id, contract, platform, exec exists), stops the old one, swaps the folder,
+  starts. Failure → warning in the log, retry every minute. Upgrading the master upgrades the plugin the same way.
+- Offline: unzip into `<data>/plugins/<id>/`, master picks it up (scan every 2 s). Keep the version equal to the master's, or drop it
+  from `FAFNIRX_PLUGINS`.
+- Remove: delete `<data>/plugins/<id>/` and take it out of `FAFNIRX_PLUGINS` (else it is installed again at the next start). The
+  module goes away within seconds. Its cache and the metadata already read stay.
 
 - Crash → restart with backoff 1 s … 60 s. Master exits → plugin exits (stdin pipe closes, `FAFNIRX_MODULE_EXIT_WITH_STDIN=1`).
 - Env given to the plugin: `FAFNIRX_<ID>_*` from master env, basics (`PATH`, `HOME`, `TZ`, `TMP*`, `SYSTEMROOT`…), `plugin.json` `env`

@@ -32,7 +32,7 @@ cargo run -p fafnirx -- enroll --no-service --server http://127.0.0.1:7443   # t
 | E2E: devices, uploads, watcher, renames, updates | `cd tests && npm i && node e2e.mjs` | Built binaries, test DB |
 | E2E: Drive (fake) and mirrors | `node e2e-io.mjs` | `rclone` (`FAFNIRX_RCLONE`) |
 | E2E: video module | `node e2e-video.mjs` | `fafnirx-video` built |
-| E2E: plugins (install, update, remove, UI files) | `node e2e-plugin.mjs` | `fafnirx-video` built |
+| E2E: plugins (FAFNIRX_PLUGINS install, update, UI files) | `node e2e-plugin.mjs` | `fafnirx-video` built |
 | E2E: delete and retention | `node e2e-retention.mjs` | ~2 min |
 | E2E: shared folders (several clients, two users) | `node e2e-shared.mjs` | Built binaries, test DB |
 
