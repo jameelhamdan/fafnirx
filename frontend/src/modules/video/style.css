@@ -1,4 +1,7 @@
-/* The classes this module uses, made on their own: the app's style sheet only has the ones its own code uses. */
+/* The classes this module uses, made on their own: the app's style sheet only has the ones its own code uses.
+   Same layer order as the app's, and loaded before the app's sheet (module-loader.ts), so that where both define a class the
+   app's wins: a later copy of `.hidden` would otherwise override the app's `md:flex`. */
+@layer theme, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities) source(none);
 @import "../../theme.css";

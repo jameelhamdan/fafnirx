@@ -27,7 +27,7 @@ async function load(id: string, info: ModuleInfo) {
       const link = document.createElement('link')
       link.rel = 'stylesheet'
       link.href = `${base(id)}${ui.css}?v=${version}`
-      document.head.append(link)
+      document.head.prepend(link) // before the app's own style sheet: see modules/video/style.css
     }
     registerModule({ ...script.default, id })
   } catch (e) {

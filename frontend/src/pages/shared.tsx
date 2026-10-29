@@ -315,7 +315,7 @@ function Row({ folder, onOpen }: { folder: SharedFolder; onOpen: () => void }) {
           ) : (
             <>
               <span className="flex -space-x-2">{shown.map((m) => <Avatar key={m.user} name={m.user} />)}</span>
-              {t('{count} people', { count: folder.members.length })}
+              {folder.members.length === 1 ? t('1 person') : t('{count} people', { count: folder.members.length })}
             </>
           )
         ) : (
@@ -366,7 +366,7 @@ export default function Shared() {
       ) : (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-2">
-            <Input className="w-56" type="search" aria-label={t('Search shared folders')} placeholder={t('Search')} value={search} onChange={(e) => setSearch(e.target.value)} />
+            <Input className="w-full sm:w-56" type="search" aria-label={t('Search shared folders')} placeholder={t('Search')} value={search} onChange={(e) => setSearch(e.target.value)} />
             {filters.map((f) => (
               <Button key={f.id} size="sm" variant={show === f.id ? 'secondary' : 'ghost'} onClick={() => setShow(f.id)}>{f.label}</Button>
             ))}
