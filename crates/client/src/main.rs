@@ -104,7 +104,7 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Restart the client (the service, when it is installed), which runs the program file as it is now
+    /// Restart the client (the service, when it is installed) and the tray, which run the program file as it is now
     Restart,
     /// What the Windows Service Control Manager runs
     #[command(hide = true)]

@@ -90,14 +90,46 @@ fn launch_agent(label: &str) -> bool {
 /// background program that is not an app bundle updates itself on macOS: replace the file, let launchd start it, so that the job
 /// stays the one launchd supervises and starts at login.
 fn kickstart(label: &str) -> bool {
-    let Ok(uid) = Command::new("id").arg("-u").output() else { return false };
-    let target = format!("gui/{}/{label}", String::from_utf8_lossy(&uid.stdout).trim());
+    let Some(uid) = login_user_id() else { return false };
+    let target = format!("gui/{uid}/{label}");
     Command::new("launchctl").args(["kickstart", "-k", &target]).status().is_ok_and(|s| s.success())
+}
+
+/// The id of the user whose desktop this is: whoever ran `sudo`, else the user of this process.
+fn login_user_id() -> Option<String> {
+    if let Ok(id) = std::env::var("SUDO_UID") {
+        return Some(id);
+    }
+    let out = Command::new("id").arg("-u").output().ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Whether the trays that started at `started` have to start over: the marker of `restart` is newer.
+pub fn asked_to_restart(marker: &Path, started: std::time::SystemTime) -> bool {
+    std::fs::metadata(marker).and_then(|m| m.modified()).is_ok_and(|touched| touched > started)
+}
+
+/// Makes sure the user at this desktop has a tray after a restart: a macOS launchd job is started again (for the user who ran
+/// `sudo`), elsewhere a tray is started unless one runs (a running one starts over by itself, see `asked_to_restart`).
+/// Returns whether one was started. Root has no desktop on Linux: nothing is started there.
+pub fn ensure_tray(config_path: &Path, control: &Path) -> bool {
+    if launch_agent("io.fafnirx.tray") {
+        return kickstart("io.fafnirx.tray");
+    }
+    if cfg!(target_os = "macos") || (cfg!(unix) && crate::service::elevate::is_admin()) {
+        return false;
+    }
+    let name = format!("tray-{}", crate::service::instance::user_name());
+    if crate::service::instance::is_held(control, &name) {
+        return false;
+    }
+    start(config_path, &["tray"]);
+    true
 }
 
 /// Replaces this tray with a new one and tells it to end. On macOS through its launchd job, elsewhere by starting the new
 /// one, which waits for this one to let go of its lock.
-fn restart_tray(config_path: &Path, updates: &Updates) {
+pub fn restart_tray(config_path: &Path, updates: &Updates) {
     // The new tray exists before the old one is told to end, or the process could end first.
     if !(launch_agent("io.fafnirx.tray") && kickstart("io.fafnirx.tray")) {
         start(config_path, &["tray"]); // waits for this one to let go of its lock

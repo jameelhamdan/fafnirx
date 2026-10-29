@@ -7,13 +7,16 @@ mod icon;
 mod open;
 mod text;
 
+pub use open::ensure_tray;
+
 use crate::config::{control_dir, Config, Folder, Shared};
 use crate::daemon::{self, requests::Request};
 use anyhow::{Context, Result};
 use fafnirx_common::unix_now;
 use icon::{icon, Light};
 use open::{
-    change_folders, check_for_updates, install_update, open_path, open_url, restart_if_updated, start_client, Updates,
+    asked_to_restart, change_folders, check_for_updates, install_update, open_path, open_url, restart_if_updated,
+    restart_tray, start_client, Updates,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -518,6 +521,7 @@ pub fn run(config_path: PathBuf) -> Result<()> {
     };
     let mut next_lookup = Instant::now();
     let marker = daemon::paused_marker(&state_dir);
+    let (restart_marker, started) = (daemon::restart_tray_marker(&state_dir), std::time::SystemTime::now());
 
     let event_loop = EventLoopBuilder::new().build();
     let mut tray: Option<TrayIcon> = None;
@@ -576,6 +580,10 @@ pub fn run(config_path: PathBuf) -> Result<()> {
                 next_lookup = now + UPDATE_LOOKUP;
                 restart_if_updated(config_path.clone(), env.updates.clone());
             }
+            // `fafnirx restart` was run since this tray started.
+            if asked_to_restart(&restart_marker, started) && !env.updates.restart.load(Ordering::SeqCst) {
+                restart_tray(&config_path, &env.updates);
+            }
             // The client asks the master for the shared folders (it holds the token); the tray only reads what it found.
             if let (Some(s), Ok(mut listed)) = (&status, env.on_master.lock()) {
                 *listed = s.shared_on_master.clone();
@@ -614,6 +622,22 @@ pub fn run(config_path: PathBuf) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_tray_starts_over_only_when_the_marker_is_newer_than_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("restart-tray");
+        let before = std::time::SystemTime::now();
+        assert!(!super::asked_to_restart(&marker, before), "no marker, nothing to do");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&marker, b"").unwrap();
+        assert!(super::asked_to_restart(&marker, before), "asked after this tray started");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(
+            !super::asked_to_restart(&marker, std::time::SystemTime::now()),
+            "the new tray is younger than the marker"
+        );
+    }
+
     use super::*;
 
     #[test]

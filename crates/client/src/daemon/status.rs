@@ -197,6 +197,12 @@ pub fn update_marker(state_dir: &Path) -> PathBuf {
     control_dir(state_dir).join("update")
 }
 
+/// Touched by `fafnirx restart`: every tray that started before it was touched starts over (it is a new file time, not a
+/// request that is taken away, because one folder serves the trays of all users).
+pub fn restart_tray_marker(state_dir: &Path) -> PathBuf {
+    control_dir(state_dir).join("restart-tray")
+}
+
 /// What the daemon answers to an update marker: the text of the marker (so an old answer is not taken for a new one), then `current <version>`, `updated <version>` or `failed: <why>`.
 pub fn update_result_file(state_dir: &Path) -> PathBuf {
     control_dir(state_dir).join("update-result")
