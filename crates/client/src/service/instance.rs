@@ -79,15 +79,28 @@ pub fn is_held(state_dir: &Path, name: &str) -> bool {
         .write(true)
         .open(state_dir.join(format!("{name}.lock")));
     match opened {
-        // Taking it proves nobody holds it; closing the file gives it back.
-        Ok(file) => matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+        // Taking it proves nobody holds it. It is given back by unlocking, not by closing the file: a process being
+        // started at this moment has a copy of the file until it runs its program, and the lock lives as long as any copy.
+        Ok(file) => match file.try_lock() {
+            Ok(()) => {
+                let _ = file.unlock();
+                false
+            }
+            Err(e) => matches!(e, std::fs::TryLockError::WouldBlock),
+        },
         Err(_) => false,
     }
 }
 
 /// Lets go of a lock early, so that a process this one starts can take it.
 pub fn release(name: &str) {
-    HELD.lock().unwrap_or_else(|e| e.into_inner()).retain(|(n, _)| *n != name);
+    HELD.lock().unwrap_or_else(|e| e.into_inner()).retain(|(n, file)| {
+        let keep = *n != name;
+        if !keep {
+            let _ = file.unlock(); // see `is_held`: closing the file may not be enough at once
+        }
+        keep
+    });
 }
 
 #[cfg(test)]
