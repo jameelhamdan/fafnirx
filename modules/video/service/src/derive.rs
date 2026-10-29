@@ -10,6 +10,7 @@ use fafnirx_module_api::{capability, Manifest, Probe, CONTRACT};
 use serde::Deserialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 pub(crate) async fn manifest(State(app): State<Arc<App>>) -> Json<Manifest> {
     Json(Manifest {
@@ -21,7 +22,44 @@ pub(crate) async fn manifest(State(app): State<Arc<App>>) -> Json<Manifest> {
             .map(String::from)
             .collect(),
         ui: crate::ui::describe(app.cfg.ui.as_deref()),
+        setup: missing(&app).await,
     })
+}
+
+/// How long a look at what is missing is trusted: the master asks for the manifest every 2 s while a plugin starts.
+const SETUP_TTL: Duration = Duration::from_secs(20);
+/// What a program gets to answer `-version`.
+const PROGRAM_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// What the module needs and does not have: ffmpeg and ffprobe that start, and a cache folder it can write to.
+async fn missing(app: &App) -> Vec<String> {
+    let mut seen = app.setup.lock().await;
+    if let Some((_, out)) = seen.as_ref().filter(|(at, _)| at.elapsed() < SETUP_TTL) {
+        return out.clone();
+    }
+    let out = look(app).await;
+    *seen = Some((Instant::now(), out.clone()));
+    out
+}
+
+async fn look(app: &App) -> Vec<String> {
+    let mut out = Vec::new();
+    for program in [&app.cfg.ffmpeg, &app.cfg.ffprobe] {
+        let run = tokio::process::Command::new(program).arg("-version").kill_on_drop(true).output();
+        let started = tokio::time::timeout(PROGRAM_TIMEOUT, run).await;
+        if !matches!(started, Ok(Ok(o)) if o.status.success()) {
+            out.push(format!(
+                "{program} cannot be run: install ffmpeg, or point FAFNIRX_FFMPEG and FAFNIRX_FFPROBE at it"
+            ));
+        }
+    }
+    let probe = app.cfg.cache.join(".writable");
+    if tokio::fs::write(&probe, b"").await.is_err() {
+        out.push(format!("{} is not writable by this service (FAFNIRX_VIDEO_CACHE)", app.cfg.cache.display()));
+    } else {
+        let _ = tokio::fs::remove_file(&probe).await;
+    }
+    out
 }
 
 pub(crate) async fn probe(State(app): State<Arc<App>>, Query(q): Query<Which>) -> Result<Json<Probe>, Failure> {

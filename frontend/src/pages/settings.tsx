@@ -27,7 +27,7 @@ function SettingsForm({ data }: { data: SettingsData }) {
   })
   const submit = (e: FormEvent) => { e.preventDefault(); save.mutate() }
   return (
-    <Card className="max-w-xl">
+    <Card>
       <CardHeader>
         <CardTitle>{t('Versions and retention')}</CardTitle>
         <CardDescription>
@@ -56,7 +56,7 @@ function Account() {
   const t = useT()
   const [open, setOpen] = useState(false)
   return (
-    <Card className="max-w-xl">
+    <Card>
       <CardHeader>
         <CardTitle>{t('Password')}</CardTitle>
         <CardDescription>{t('Changing it ends your other logins.')}</CardDescription>
@@ -71,8 +71,9 @@ function Account() {
 
 const PLUGIN_STATE: Record<PluginState['state'], { label: string; variant: 'default' | 'secondary' | 'outline' | 'destructive' }> = {
   up: { label: msg('Running'), variant: 'default' },
+  setup: { label: msg('Running, not set up'), variant: 'destructive' },
   starting: { label: msg('Starting'), variant: 'secondary' },
-  broken: { label: msg('Cannot run'), variant: 'destructive' },
+  broken: { label: msg('Not running'), variant: 'destructive' },
   external: { label: msg('Set up by address'), variant: 'outline' },
 }
 
@@ -88,13 +89,13 @@ function Plugins() {
   })
   // The web app learns of a module that came up or went away from the session, so ask for it again when the two differ.
   const known = Object.keys(session?.modules ?? {}).sort().join()
-  const running = (data?.installed ?? []).filter((p) => p.state === 'up').map((p) => p.id).sort().join()
+  const running = (data?.installed ?? []).filter((p) => p.state === 'up' || p.state === 'setup').map((p) => p.id).sort().join()
   useEffect(() => {
     if (data && known !== running) void client.invalidateQueries({ queryKey: ['session'] })
   }, [client, data, known, running])
 
   return (
-    <Card className="max-w-xl">
+    <Card>
       <CardHeader>
         <CardTitle>{t('Plugins')}</CardTitle>
         <CardDescription>{t('Optional parts that run next to the server. The server administrator installs and removes them: set FAFNIRX_PLUGINS on the server.')}</CardDescription>
@@ -129,8 +130,8 @@ function Administration() {
   const { data, error } = useQuery({ queryKey: ['settings'], queryFn: () => api.get<SettingsData>('/api/settings') })
   return (
     <>
-      {error ? <ErrorNote error={error} /> : !data ? <Skeleton className="h-56 max-w-xl" /> : <SettingsForm data={data} />}
-      <Card className="max-w-xl">
+      {error ? <ErrorNote error={error} /> : !data ? <Skeleton className="h-56" /> : <SettingsForm data={data} />}
+      <Card>
         <CardHeader>
           <CardTitle>{t('File store')}</CardTitle>
           <CardDescription>
@@ -150,8 +151,10 @@ export default function Settings() {
   return (
     <div className="space-y-6">
       <PageHeader title={t('Settings')} />
-      <Account />
-      {admin && <Administration />}
+      <div className="grid items-start gap-6 lg:grid-cols-2">
+        <Account />
+        {admin && <Administration />}
+      </div>
     </div>
   )
 }
