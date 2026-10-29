@@ -9,6 +9,7 @@ pub mod access;
 mod assets;
 pub mod auth;
 mod events;
+mod plugins;
 pub mod users;
 
 #[cfg(test)]
@@ -50,15 +51,19 @@ pub struct AppState {
     pub previews: Arc<Semaphore>,
     /// Tile address of the map, with `{z}`, `{x}` and `{y}` in it.
     pub map_tiles: String,
-    /// The video streaming service, when there is one (see `library::stream`).
-    pub stream: Option<library::stream::Backend>,
+    /// The modules that are set up (see `modules`).
+    pub modules: Arc<crate::modules::Registry>,
+    /// The plugins in `<data>/plugins`, which the master runs as modules.
+    pub plugins: Arc<crate::modules::Plugins>,
 }
 
 pub type Shared = Arc<AppState>;
 
 impl AppState {
     pub fn new(db: Db, store: Arc<Store>, data_dir: PathBuf) -> Result<Self, anyhow::Error> {
+        let modules = Arc::new(crate::modules::Registry::from_env());
         Ok(Self {
+            plugins: Arc::new(crate::modules::Plugins::new(&data_dir, modules.clone())),
             db,
             store,
             data_dir,
@@ -68,7 +73,7 @@ impl AppState {
             uploads: Mutex::default(),
             streams: Arc::new(Semaphore::new(32)),
             previews: Arc::new(Semaphore::new(4)),
-            stream: library::stream::Backend::from_env(),
+            modules,
             map_tiles: std::env::var("FAFNIRX_MAP_TILES")
                 .ok()
                 .filter(|t| !t.is_empty())
@@ -151,6 +156,9 @@ fn light() -> Router<Shared> {
         .route("/api/login", post(auth::login))
         .route("/api/logout", post(auth::logout))
         .route("/api/session", get(auth::session))
+        .route("/api/plugins", get(plugins::list))
+        .route("/api/plugins/available", get(plugins::available))
+        .route("/api/plugins/:id", post(plugins::install).delete(plugins::remove))
         .route("/api/me/password", post(auth::change_password))
         .route("/api/users", get(users::list).post(users::create))
         .route("/api/users/:name", axum::routing::patch(users::update))
@@ -164,6 +172,7 @@ fn light() -> Router<Shared> {
         .route("/api/devices/:name/revoke", post(devices::api::revoke))
         .route("/api/shared", get(devices::shared::list).post(devices::shared::create))
         .route("/api/shared/leave", post(devices::shared::leave))
+        .route("/api/shared/people", get(devices::shared::people))
         .route("/api/shared/:name", delete(devices::shared::delete))
         .route("/api/shared/:name/members", post(devices::shared::add_member))
         .route("/api/shared/:name/members/:user", delete(devices::shared::remove_member))
@@ -211,7 +220,8 @@ fn heavy() -> Router<Shared> {
         .route("/api/files/download", get(files::transfer::download))
         .route("/api/files/thumb", get(files::transfer::thumbnail))
         .route("/api/media/:id/:variant", get(files::transfer::media))
-        .route("/api/stream/:id/*rest", get(library::stream::proxy))
+        .route("/api/m/:module/ui/:file", get(crate::modules::ui))
+        .route("/api/m/:module/:id/*rest", get(crate::modules::proxy))
         .route("/api/queue", get(monitoring::queue::show))
         .route("/api/queue/pause", post(monitoring::queue::pause))
         .route("/api/queue/retry", post(monitoring::queue::retry))

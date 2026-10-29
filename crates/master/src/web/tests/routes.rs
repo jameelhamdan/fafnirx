@@ -36,6 +36,10 @@ const ROUTES: &[(&str, &str, Rule)] = &[
     ("POST", "/api/mirrors/:name/resync", Rule::Admin),
     ("GET", "/api/mirrors/:name/restore-kit", Rule::Admin),
     ("POST", "/api/files/rescan", Rule::Admin),
+    ("GET", "/api/plugins", Rule::Admin),
+    ("GET", "/api/plugins/available", Rule::Admin),
+    ("POST", "/api/plugins/:id", Rule::Admin),
+    ("DELETE", "/api/plugins/:id", Rule::Admin),
     ("GET", "/api/queue", Rule::Reader),
     ("POST", "/api/queue/pause", Rule::Admin),
     ("POST", "/api/queue/retry", Rule::Admin),
@@ -50,6 +54,7 @@ const ROUTES: &[(&str, &str, Rule)] = &[
     ("POST", "/api/devices", Rule::Workspace),
     ("POST", "/api/shared", Rule::Workspace),
     ("POST", "/api/shared/leave", Rule::Workspace),
+    ("GET", "/api/shared/people", Rule::Workspace),
     ("DELETE", "/api/shared/:name", Rule::Workspace),
     ("POST", "/api/shared/:name/members", Rule::Workspace),
     ("DELETE", "/api/shared/:name/members/:user", Rule::Workspace),
@@ -72,7 +77,8 @@ const ROUTES: &[(&str, &str, Rule)] = &[
     ("GET", "/api/files/thumb", Rule::Reader),
     ("POST", "/api/files/zip", Rule::Reader),
     ("GET", "/api/media/:id/:variant", Rule::Reader),
-    ("GET", "/api/stream/:id/*rest", Rule::Reader),
+    ("GET", "/api/m/:module/:id/*rest", Rule::Reader),
+    ("GET", "/api/m/:module/ui/:file", Rule::Reader),
     ("GET", "/api/uploads/:id", Rule::Reader),
     ("PUT", "/api/uploads/:id", Rule::Reader),
     ("DELETE", "/api/uploads/:id", Rule::Reader),
@@ -138,6 +144,7 @@ fn every_route_has_a_rule_and_the_rule_is_kept() {
                 .replace(":user", "x")
                 .replace(":id", "AAAAAAAAAAAAAAAAAAAAAA")
                 .replace(":variant", "thumb")
+                .replace(":file", "index.js")
                 .replace("*rest", "a");
             let status = |cookie: String| {
                 let uri = uri.clone();

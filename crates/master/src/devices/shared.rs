@@ -140,6 +140,27 @@ pub async fn leave(
     done()
 }
 
+#[derive(Serialize)]
+pub struct Person {
+    name: String,
+    /// Whether they may be given write access (not for read-only accounts).
+    can_write: bool,
+}
+
+/// The other users a folder can be shared with, for the share dialog's suggestions.
+pub async fn people(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Vec<Person>> {
+    who.require_workspace()?;
+    let people = run(&state, move |c| {
+        Ok(crate::repo::users::enabled(c)?
+            .into_iter()
+            .filter(|u| u.name != who.name)
+            .map(|u| Person { can_write: Role::parse(&u.role) != Some(Role::Readonly), name: u.name })
+            .collect())
+    })
+    .await?;
+    Ok(Json(people))
+}
+
 #[derive(Deserialize)]
 pub struct MemberBody {
     user: String,

@@ -2,11 +2,13 @@
 //! video, the EXIF data and GPS position of a photo, and previews. Read by the background queue, shown by the
 //! web API.
 
-use crate::library::{artwork, embedded, media};
+use crate::library::{artwork, embedded};
+use crate::modules;
 use crate::platform::db::{self, Db};
 use crate::platform::store::Store;
 use crate::repo::{file_meta, files, jobs, settings};
 use anyhow::{Context, Result};
+pub use fafnirx_common::meta::{parse_time, valid_position};
 use fafnirx_common::unix_now;
 use image::ImageDecoder;
 use std::io::BufReader;
@@ -18,9 +20,11 @@ const IMAGE_EXTENSIONS: [&str; 11] =
     ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "heic", "heif", "avif"];
 /// Extensions of videos.
 const VIDEO_EXTENSIONS: [&str; 11] = ["mp4", "mov", "mkv", "avi", "webm", "m4v", "wmv", "mts", "3gp", "mpg", "mpeg"];
-/// Extensions the `image` crate can decode here (HEIC and AVIF have metadata but need ffmpeg for a preview).
+/// Extensions the `image` crate can decode here (HEIC and AVIF have metadata but need the video module for a preview).
 const PREVIEW_EXTENSIONS: [&str; 8] = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff"];
 const MAX_ATTEMPTS: i64 = 3;
+/// Jobs worked on at the same time.
+const WORKERS: usize = 2;
 
 /// The two sizes of picture made for every photo and video: a grid cell and a full-screen view.
 pub const THUMB: u32 = 320;
@@ -47,11 +51,12 @@ pub fn wants(path: &str) -> bool {
     kind(path).is_some()
 }
 
-/// Whether a preview picture can be made from this file.
+/// Whether a preview picture can be made from this file: images the `image` crate decodes, and what a module can take a
+/// frame of (videos, HEIC and AVIF) while there is one.
 pub fn can_preview(path: &str) -> bool {
     match kind(path) {
-        Some("video") => true,
-        Some(_) => PREVIEW_EXTENSIONS.contains(&extension(path).as_str()) || media::available(),
+        Some("video") => modules::can_poster(),
+        Some(_) => PREVIEW_EXTENSIONS.contains(&extension(path).as_str()) || modules::can_poster(),
         None => false,
     }
 }
@@ -95,22 +100,6 @@ const EXIF_FIELDS: [&str; 17] = [
     "GPSAltitude",
     "ExposureBiasValue",
 ];
-
-/// A latitude and longitude that mean a place: the latitude in range, the longitude wrapped into -180..180 (some
-/// writers count 0..360), and not the 0,0 that broken cameras write.
-pub fn valid_position(lat: f64, lon: f64) -> Option<(f64, f64)> {
-    if !lat.is_finite() || !lon.is_finite() || lat.abs() > 90.0 || lon.abs() > 360.0 {
-        return None;
-    }
-    let lon = if lon > 180.0 {
-        lon - 360.0
-    } else if lon < -180.0 {
-        lon + 360.0
-    } else {
-        lon
-    };
-    (!(lat == 0.0 && lon == 0.0)).then_some((lat, lon))
-}
 
 /// Reads the size and EXIF data of an image. A file without EXIF just has no fields.
 pub fn read(path: &Path) -> Result<Meta> {
@@ -162,14 +151,11 @@ pub fn read(path: &Path) -> Result<Meta> {
     Ok(meta)
 }
 
-/// Reads a video, or just recognises it when ffmpeg is not there.
-fn read_video(path: &Path) -> Meta {
-    let probe = if media::available() {
-        media::probe(path).map_err(|e| tracing::warn!("{}: {e:#}", path.display())).unwrap_or_default()
-    } else {
-        media::Probe::default()
-    };
-    Meta {
+/// Reads a video, or just recognises it when there is no video module to ask. `hash` is the hex hash of its content.
+fn read_video(path: &Path, hash: &str) -> Result<Meta> {
+    // A module that is there and fails is an error: the job is tried again, and not saved as a video without details.
+    let probe = modules::probe_video(path, hash)?.unwrap_or_default();
+    Ok(Meta {
         kind: "video",
         width: probe.width,
         height: probe.height,
@@ -180,37 +166,15 @@ fn read_video(path: &Path) -> Meta {
         position: probe.position,
         description: None,
         keywords: Vec::new(),
-    }
+    })
 }
 
-/// Reads whatever the file is, by its name.
-pub fn read_any(name: &str, path: &Path) -> Result<Meta> {
+/// Reads whatever the file is, by its name. `hash` is the hex hash of its content.
+pub fn read_any(name: &str, path: &Path, hash: &str) -> Result<Meta> {
     match kind(name) {
-        Some("video") => Ok(read_video(path)),
+        Some("video") => read_video(path, hash),
         _ => read(path),
     }
-}
-
-/// "2023-11-14 22:13:20" (as EXIF displays it) or "2023-11-14T22:13:20Z" to unix seconds, taken as UTC:
-/// EXIF has no time zone.
-pub fn parse_time(text: &str) -> Option<i64> {
-    let digits: Vec<i64> = text
-        .split(|c: char| !c.is_ascii_digit())
-        .filter(|p| !p.is_empty())
-        .map(|p| p.parse().ok())
-        .collect::<Option<_>>()?;
-    let [y, mo, d, h, mi, s, ..] = digits[..] else { return None };
-    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || s > 60 {
-        return None;
-    }
-    // Days since 1970-01-01 (civil-from-days, Howard Hinnant).
-    let (y, m) = if mo <= 2 { (y - 1, mo + 9) } else { (y, mo - 3) };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let doy = (153 * m + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    Some(days * 86_400 + h * 3600 + mi * 60 + s)
 }
 
 /// Decodes an image and turns it upright according to its EXIF orientation.
@@ -227,28 +191,15 @@ const THUMB_KEEP: std::time::Duration = std::time::Duration::from_secs(30 * 8640
 /// A copy that was being written when the master stopped.
 const PARTIAL_KEEP: std::time::Duration = std::time::Duration::from_secs(86400);
 
-/// Clears the cache: old pictures (they are made again when someone looks), unfinished files, and playable
-/// copies of videos that no stored version has any more.
-pub fn clean_cache(db: &Db, cache_root: &Path) -> Result<()> {
-    let age = |e: &std::fs::DirEntry| {
-        e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).unwrap_or_default()
-    };
+/// Clears the cache: old pictures (they are made again when someone looks) and unfinished files.
+pub fn clean_cache(cache_root: &Path) {
     for e in std::fs::read_dir(cache_root.join("thumbs")).into_iter().flatten().flatten() {
         let partial = e.file_name().to_string_lossy().contains(".tmp");
-        if age(&e) > if partial { PARTIAL_KEEP } else { THUMB_KEEP } {
+        let age = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).unwrap_or_default();
+        if age > if partial { PARTIAL_KEEP } else { THUMB_KEEP } {
             let _ = std::fs::remove_file(e.path());
         }
     }
-    let mut c = db.get()?;
-    for e in std::fs::read_dir(cache_root.join("video")).into_iter().flatten().flatten() {
-        let name = e.file_name().to_string_lossy().into_owned();
-        let (stem, partial) = (name.split('.').next().unwrap_or("").to_string(), name.contains(".tmp"));
-        let used = hex::decode(&stem).is_ok_and(|root| file_meta::content_is_stored(&mut *c, &root).unwrap_or(false));
-        if if partial { age(&e) > PARTIAL_KEEP } else { !used } {
-            let _ = std::fs::remove_file(e.path());
-        }
-    }
-    Ok(())
 }
 
 /// A JPEG preview no larger than `max` on its longest side, cached by content and size. Videos get a frame.
@@ -268,7 +219,7 @@ pub fn thumbnail(src: &Path, root_hex: &str, max: u32, cache: &Path) -> Result<P
     // Unique per call: two requests for the same preview can run at once.
     let n = hex::encode(crate::platform::db::random_bytes::<8>());
     let tmp = cache.join(format!("{root_hex}-{max}.{n}.tmp.jpg"));
-    let result = make_thumbnail(src, max, &tmp);
+    let result = make_thumbnail(src, root_hex, max, &tmp);
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -277,11 +228,17 @@ pub fn thumbnail(src: &Path, root_hex: &str, max: u32, cache: &Path) -> Result<P
     Ok(dest)
 }
 
-fn make_thumbnail(src: &Path, max: u32, tmp: &Path) -> Result<()> {
+/// A frame of the file, drawn by a module, written to `tmp`.
+fn module_poster(src: &Path, root_hex: &str, max: u32, tmp: &Path) -> Result<()> {
+    let jpeg = modules::poster(src, root_hex, max)?.context("no module can draw a frame of this file")?;
+    std::fs::write(tmp, jpeg)?;
+    Ok(())
+}
+
+fn make_thumbnail(src: &Path, root_hex: &str, max: u32, tmp: &Path) -> Result<()> {
     let name = src.to_string_lossy();
     if kind(&name) == Some("video") {
-        anyhow::ensure!(media::available(), "ffmpeg is not installed");
-        return media::poster(src, max, tmp);
+        return module_poster(src, root_hex, max, tmp);
     }
     match decode_upright(src) {
         Ok(img) => {
@@ -292,22 +249,16 @@ fn make_thumbnail(src: &Path, max: u32, tmp: &Path) -> Result<()> {
                 .encode_image(&small)
                 .context("encode preview")
         }
-        // Formats the image crate cannot read (HEIC, AVIF) are left to ffmpeg when it is there.
-        Err(e) if media::available() => {
-            media::poster(src, max, tmp).with_context(|| format!("decode {}: {e}", src.display()))
+        // Formats the image crate cannot read (HEIC, AVIF) are left to a module that has ffmpeg, when there is one.
+        Err(e) if modules::can_poster() => {
+            module_poster(src, root_hex, max, tmp).with_context(|| format!("decode {}: {e}", src.display()))
         }
         Err(e) => Err(e).with_context(|| format!("decode {}", src.display())),
     }
 }
 
-/// Where the playable copy of a video is (or will be) kept.
-pub fn proxy_path(cache_root: &Path, root_hex: &str) -> PathBuf {
-    cache_root.join("video").join(format!("{root_hex}.mp4"))
-}
-
 /// Runs queued jobs until the process ends. Several workers can run side by
-/// side: a job is claimed with `FOR UPDATE SKIP LOCKED`. One lane skips the slow video conversions, so that
-/// a long film never keeps the thumbnails of new photos waiting.
+/// side: a job is claimed with `FOR UPDATE SKIP LOCKED`.
 pub fn run_queue(db: Db, store: std::sync::Arc<Store>, cache_root: PathBuf) {
     // The database client blocks, so everything here runs on threads of its own, never on the async runtime.
     std::thread::spawn(move || {
@@ -315,9 +266,9 @@ pub fn run_queue(db: Db, store: std::sync::Arc<Store>, cache_root: PathBuf) {
         if let Ok(mut c) = db.get() {
             let _ = jobs::requeue_running(&mut *c);
         }
-        for lane_with_proxies in [true, false] {
+        for _ in 0..WORKERS {
             let (db, store, cache_root) = (db.clone(), store.clone(), cache_root.clone());
-            std::thread::spawn(move || work(&db, &store, &cache_root, lane_with_proxies));
+            std::thread::spawn(move || work(&db, &store, &cache_root));
         }
     });
 }
@@ -326,19 +277,18 @@ pub fn run_queue(db: Db, store: std::sync::Arc<Store>, cache_root: PathBuf) {
 pub const PAUSED: &str = "jobs_paused";
 
 /// One lane of the queue, forever.
-fn work(db: &Db, store: &Store, cache_root: &Path, with_proxies: bool) {
+fn work(db: &Db, store: &Store, cache_root: &Path) {
     loop {
         if db.get().is_ok_and(|mut c| settings::get_i64(&mut *c, PAUSED, 0) == 1) {
             std::thread::sleep(Duration::from_secs(5));
             continue;
         }
-        match claim(db, with_proxies) {
+        match claim(db) {
             Ok(Some(jobs::Claimed { id, kind, payload, attempts })) => {
                 let result = match kind.as_str() {
                     "meta" => read_job(db, store, &payload).map(|()| None),
                     "artwork" => artwork_job(db, &payload),
-                    "thumb" => thumb_job(db, store, cache_root, &payload).map(|()| None),
-                    "proxy" => proxy_job(db, store, cache_root, &payload).map(|()| None),
+                    "thumb" => thumb_job(db, store, cache_root, &payload),
                     other => Err(anyhow::anyhow!("unknown job kind {other:?}")),
                 };
                 finish(db, id, attempts, result);
@@ -352,8 +302,8 @@ fn work(db: &Db, store: &Store, cache_root: &Path, with_proxies: bool) {
     }
 }
 
-fn claim(db: &Db, with_proxies: bool) -> Result<Option<jobs::Claimed>> {
-    Ok(jobs::claim(&mut *db.get()?, unix_now(), with_proxies)?)
+fn claim(db: &Db) -> Result<Option<jobs::Claimed>> {
+    Ok(jobs::claim(&mut *db.get()?, unix_now())?)
 }
 
 fn finish(db: &Db, id: uuid::Uuid, attempts: i64, result: Result<Option<String>>) {
@@ -394,7 +344,7 @@ fn read_job(db: &Db, store: &Store, payload: &str) -> Result<()> {
         return Ok(()); // replaced or deleted since; the newer content has its own job
     };
     let disk = store.live_path(&p.device, &p.path)?;
-    let meta = read_any(&p.path, &disk)?;
+    let meta = read_any(&p.path, &disk, &p.root)?;
     let exif = serde_json::Value::Object(meta.exif).to_string();
     let keywords = serde_json::to_string(&meta.keywords)?;
     file_meta::save(
@@ -446,59 +396,28 @@ fn artwork_job(db: &Db, payload: &str) -> Result<Option<String>> {
     Ok(Some(format!("{picture}; {details}")))
 }
 
-/// Makes the pictures of the file a `thumb` job names, so that opening the timeline finds them ready, and queues the
-/// playable copy of a video that browsers cannot play as it is. A video with a picture next to it (see `artwork`) gets
-/// its pictures from that.
-fn thumb_job(db: &Db, store: &Store, cache_root: &Path, payload: &str) -> Result<()> {
+/// Makes the pictures of the file a `thumb` job names, so that opening the timeline finds them ready. A video with a picture
+/// next to it (see `artwork`) gets its pictures from that; any other needs a module that can draw a frame of it.
+fn thumb_job(db: &Db, store: &Store, cache_root: &Path, payload: &str) -> Result<Option<String>> {
     let p: JobFile = serde_json::from_str(payload)?;
     let mut c = db.get()?;
     let Some(root) = current_file(&mut c, &p)? else {
-        return Ok(()); // replaced or deleted since; the newer content has its own job
+        return Ok(Some("replaced or deleted since".into()));
     };
     let own = store.live_path(&p.device, &p.path)?;
     let (source, root_hex) = match artwork::lookup(&mut c, store, &p.device, &p.path) {
         Some((art, art_root)) => (art, hex::encode(art_root)),
+        None if !can_preview(&p.path) => {
+            return Ok(Some("no picture next to it, and no video module to draw a frame".into()));
+        }
         None => (own.clone(), hex::encode(&root)),
     };
     let thumbs = cache_root.join("thumbs");
     for size in [THUMB, PREVIEW] {
         thumbnail(&source, &root_hex, size, &thumbs).with_context(|| format!("the {size}px picture of {}", p.path))?;
     }
-    if kind(&p.path) == Some("video") && media::available() {
-        let codec = file_meta::codec(&mut *c, &root)?;
-        let own_hex = hex::encode(&root);
-        if !media::plays_everywhere(&extension(&p.path), codec.as_deref())
-            && !proxy_path(cache_root, &own_hex).is_file()
-        {
-            jobs::enqueue(
-                &mut *c,
-                "proxy",
-                &serde_json::json!({ "device": p.device, "path": p.path, "root": p.root }),
-            )?;
-        }
-    }
     db::notify(&mut *c, "files", &p.device)?;
-    Ok(())
-}
-
-/// Makes the playable copy of a video the `proxy` job names.
-fn proxy_job(db: &Db, store: &Store, cache_root: &Path, payload: &str) -> Result<()> {
-    let p: JobFile = serde_json::from_str(payload)?;
-    let Some(_) = current_file(&mut *db.get()?, &p)? else { return Ok(()) };
-    let dest = proxy_path(cache_root, &p.root);
-    if dest.is_file() {
-        return Ok(());
-    }
-    std::fs::create_dir_all(dest.parent().context("cache path")?)?;
-    let tmp = dest.with_extension(format!("{}.tmp.mp4", std::process::id()));
-    let result = media::proxy(&store.live_path(&p.device, &p.path)?, &tmp);
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result?;
-    std::fs::rename(&tmp, &dest)?;
-    db::notify(&mut *db.get()?, "files", &p.device)?;
-    Ok(())
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -511,20 +430,13 @@ mod tests {
             wants("photos/IMG_1.JPG") && wants("a.heic") && wants("clip.MOV") && !wants("notes.txt") && !wants("jpg")
         );
         assert_eq!((kind("a.png"), kind("a.mp4"), kind("a.pdf")), (Some("image"), Some("video"), None));
-        assert!(can_preview("a.png") && can_preview("a.mp4"));
+        assert!(can_preview("a.png"), "images are drawn here");
+        assert!(
+            !can_preview("a.mp4") && !can_preview("a.heic"),
+            "frames come from the video module, which is not here"
+        );
         assert_eq!(mime("a.png"), "image/png");
         assert_eq!(mime("noext"), "application/octet-stream");
-    }
-
-    #[test]
-    fn times_are_unix_seconds() {
-        assert_eq!(parse_time("2023-11-14 22:13:20"), Some(1_700_000_000));
-        assert_eq!(parse_time("2023-11-14T22:13:20.000000Z"), Some(1_700_000_000));
-        assert_eq!(parse_time("1970-01-01 00:00:00"), Some(0));
-        assert_eq!(parse_time("2024-02-29 12:00:00"), Some(1_709_208_000));
-        assert_eq!(parse_time("not a time"), None);
-        assert_eq!(parse_time("2023-13-14 22:13:20"), None);
-        assert_eq!(parse_time("0000:00:00 00:00:00"), None);
     }
 
     #[test]
@@ -610,11 +522,11 @@ mod tests {
         let jobs = |db: &Db| -> i64 { db.get().unwrap().query_one("SELECT COUNT(*) FROM jobs", &[]).unwrap().get(0) };
         assert_eq!(jobs(&db), 1);
 
-        let jobs::Claimed { kind, payload, .. } = claim(&db, false).unwrap().unwrap();
+        let jobs::Claimed { kind, payload, .. } = claim(&db).unwrap().unwrap();
         assert_eq!(kind, "meta");
         let cache = dir.path().join("cache");
         read_job(&db, &store, &payload).unwrap();
-        let jobs::Claimed { kind, payload, .. } = claim(&db, false).unwrap().unwrap();
+        let jobs::Claimed { kind, payload, .. } = claim(&db).unwrap().unwrap();
         assert_eq!(kind, "thumb", "the pictures are a job of their own");
         thumb_job(&db, &store, &cache, &payload).unwrap();
         let row = db.get().unwrap().query_one("SELECT kind, width, height, lat FROM file_meta", &[]).unwrap();
@@ -639,30 +551,5 @@ mod tests {
             let media: Option<String> = c.query_one("SELECT media FROM files WHERE path = $1", &[path]).unwrap().get(0);
             assert_eq!(media.as_deref(), kind(path), "{path}");
         }
-    }
-
-    #[test]
-    fn slow_video_copies_never_hold_up_the_fast_lane() {
-        use crate::platform::db::testing;
-        let db = testing::db_with_device();
-        {
-            let mut c = db.get().unwrap();
-            jobs::enqueue(&mut *c, "proxy", &serde_json::json!({})).unwrap();
-            jobs::enqueue(&mut *c, "meta", &serde_json::json!({})).unwrap();
-        }
-        let kinds = |lane: bool| claim(&db, lane).unwrap().map(|c| c.kind);
-        assert_eq!(kinds(false).as_deref(), Some("meta"));
-        assert_eq!(kinds(false), None, "the fast lane leaves proxies alone");
-        assert_eq!(kinds(true).as_deref(), Some("proxy"));
-    }
-
-    #[test]
-    fn positions_must_mean_a_place() {
-        assert_eq!(valid_position(52.5, 13.4), Some((52.5, 13.4)));
-        assert_eq!(valid_position(0.0, 0.0), None);
-        assert_eq!(valid_position(10.0, 190.0), Some((10.0, -170.0)));
-        assert_eq!(valid_position(10.0, 400.0), None);
-        assert_eq!(valid_position(91.0, 0.0), None);
-        assert_eq!(valid_position(f64::NAN, 1.0), None);
     }
 }

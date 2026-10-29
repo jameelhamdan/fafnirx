@@ -18,6 +18,16 @@ pub const MASTER_FOLDER: &str = "_master";
 /// make it read-only in one place. Master files cannot start with this name.
 pub const USERS_DIR: &str = "users";
 
+/// A file as modules and the streaming proxy name it: its place below `files/` (`users/<user>/<device>/<path>` for the files
+/// of a device, just `<path>` for a master file).
+pub fn tree_path(folder: &str, path: &str) -> String {
+    if folder == MASTER_FOLDER {
+        path.to_string()
+    } else {
+        format!("{USERS_DIR}/{folder}/{path}")
+    }
+}
+
 pub struct Store {
     files: PathBuf,
     versions: PathBuf,

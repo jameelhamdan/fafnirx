@@ -218,8 +218,8 @@ pub struct Session {
     /// Where the map gets its pictures from (`{z}/{x}/{y}` stand for the tile); only told to a logged-in user.
     #[serde(skip_serializing_if = "Option::is_none")]
     map_tiles: Option<String>,
-    /// Whether videos can be streamed in several qualities (a streaming service is set up); only told to a logged-in user.
-    stream: bool,
+    /// The modules that are up, by id; only told to a logged-in user.
+    modules: std::collections::BTreeMap<String, fafnirx_module_api::Manifest>,
 }
 
 pub async fn session(State(state): State<Shared>, access: Option<Extension<Access>>) -> Res<Session> {
@@ -229,7 +229,7 @@ pub async fn session(State(state): State<Shared>, access: Option<Extension<Acces
         user: access.map(|a| Who { name: a.name, role: a.role.as_str() }),
         version: logged_in.then_some(env!("CARGO_PKG_VERSION")),
         map_tiles: logged_in.then(|| state.map_tiles.clone()),
-        stream: logged_in && state.stream.is_some(),
+        modules: if logged_in { state.modules.active() } else { Default::default() },
     }))
 }
 

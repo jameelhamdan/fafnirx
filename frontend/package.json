@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:module": "node scripts/build-module.mjs",
     "lint": "oxlint",
     "i18n": "node scripts/extract-i18n.mjs",
     "preview": "vite preview"

@@ -216,6 +216,24 @@ export interface SharedFolder {
   computers: SharedState[]
 }
 
+/** A plugin as the administrator's page shows it. */
+export interface PluginState {
+  id: string
+  version: string | null
+  /** `up`, `starting` (not answering yet), `broken` (see `problem`) or `external` (set up with an address, not run here). */
+  state: 'up' | 'starting' | 'broken' | 'external'
+  problem: string | null
+}
+
+/** What the master says a module is (its manifest). `ui` is there when the module has a part of the web app to load. */
+export interface ModuleInfo {
+  id: string
+  version: string
+  contract: number
+  capabilities: string[]
+  ui?: { entry: string; css?: string; sdk: number }
+}
+
 export interface Session {
   /** Who is logged in; null when nobody is. */
   user: { name: string; role: Role } | null
@@ -223,8 +241,8 @@ export interface Session {
   version?: string
   /** Tile address of the map, with {z}, {x} and {y} in it. */
   map_tiles?: string
-  /** Videos can be streamed in several qualities (a streaming service is set up). */
-  stream?: boolean
+  /** The modules that are up on the master, by id (see `sdk`); only sent to a logged-in user. */
+  modules?: Record<string, ModuleInfo>
 }
 
 /** A photo or video of the library. */
@@ -307,16 +325,11 @@ export interface QueueJob {
 
 export interface QueueState {
   paused: boolean
-  ffmpeg: boolean
   can_control: boolean
   summary: { kind: string; queued: number; running: number; failed: number; done: number }[]
   jobs: QueueJob[]
-  stream: {
-    slots: number
-    made: number
-    active: { kind: string; video: string; running: boolean; since: number }[]
-    failed: { kind: string; video: string; error: string; at: number }[]
-  } | null
+  /** What each module that reports its work is doing, by module id; the shape is the module's own (see `sdk`). */
+  modules: Record<string, unknown>
 }
 
 export interface TagInfo {

@@ -31,13 +31,14 @@ cargo run -p fafnirx -- enroll --no-service --server http://127.0.0.1:7443   # t
 | Web app | `cd frontend && npx tsc -b && npx oxlint && npm run i18n -- --check` | |
 | E2E: devices, uploads, watcher, renames, updates | `cd tests && npm i && node e2e.mjs` | Built binaries, test DB |
 | E2E: Drive (fake) and mirrors | `node e2e-io.mjs` | `rclone` (`FAFNIRX_RCLONE`) |
-| E2E: streaming | `node e2e-stream.mjs` | `fafnirx-stream` built |
+| E2E: video module | `node e2e-video.mjs` | `fafnirx-video` built |
+| E2E: plugins (install, update, remove, UI files) | `node e2e-plugin.mjs` | `fafnirx-video` built |
 | E2E: delete and retention | `node e2e-retention.mjs` | ~2 min |
 | E2E: shared folders (several clients, two users) | `node e2e-shared.mjs` | Built binaries, test DB |
 
 Database tests use a schema of their own, so they run in parallel. `crates/master/src/web/tests/` drives the real router in
 memory; `routes.rs` pins the access rule of every route. Video parts need ffmpeg, which tests do not: they check parsing and
-job lanes. E2E scripts start the real master, client and a fake Drive (binaries from `target/debug` or `$FAFNIRX_BIN_DIR`);
+the contract with the module (a stand-in module in `web/tests/library.rs`, stand-in programs in `e2e-video.mjs`). E2E scripts start the real master, client and a fake Drive (binaries from `target/debug` or `$FAFNIRX_BIN_DIR`);
 run them on a normal disk (Docker Desktop bind mounts report no file events). Unit tests never wait on the clock.
 
 Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cd frontend && npx tsc -b && npx oxlint`.
@@ -60,7 +61,8 @@ Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targ
 | `devices` | Clients, tokens, shared folders | `grpc.rs` (device API), `api.rs`, `shared.rs`, `totals.rs` |
 | `web` | HTTP shell, logins, roles | `mod.rs` (state, errors, routes), `auth.rs`, `access.rs`, `users.rs`, `events.rs`, `assets.rs`, `tests/` |
 | `files` | Content in and out | `ingest.rs` (commit, delete, rename, move), `livetree.rs`, `browse.rs`, `transfer.rs`, `zip.rs` |
-| `library` | Photos and videos | `meta.rs` (jobs, pictures), `media.rs` (ffmpeg), `artwork.rs`, `photos.rs`, `albums.rs`, `stream.rs` |
+| `library` | Photos and videos | `meta.rs` (jobs, pictures), `artwork.rs`, `photos.rs`, `albums.rs` |
+| `modules` | The optional [modules](modules.md): found by environment, asked for capabilities, proxied for the web app | `mod.rs` (registry, `probe_video`, `poster`), `plugins.rs` (run, install, remove), `proxy.rs` |
 | `integrations` | Sources, mirrors | `mod.rs`, `gdrive.rs`, `rclone_source.rs`, `syncsource.rs`, `mirror.rs`, `scope.rs`, `spec.rs`, `api.rs` |
 | `monitoring` | Dashboard, schedules, queue | `api.rs`, `jobs.rs`, `queue.rs` |
 
@@ -68,7 +70,7 @@ New endpoints go in the app's `api.rs` and are registered in `web/mod.rs`. Apps 
 functions; `platform` knows no app. SQL lives only in `queries/*.sql` and `repo/`. No ORM.
 
 **Core vs add-ons.** Core: client, `common`, and in the master `devices`, `files`, `monitoring`, `platform`, `repo` (minus
-library), `web`, mirrors. Add-ons: the library, streaming, Drive sources. Add-ons use the core, not the reverse; known
+library), `web`, mirrors. Add-ons: the library, Drive sources, and the [modules](modules.md) (separate services; the master asks them for capabilities and works without them). Add-ons use the core, not the reverse; known
 exceptions: `ingest.rs` queues metadata jobs and calls `repo::albums::follow_folder_move`; `browse.rs`/`transfer.rs` use
 `library::meta`; `repo/files.rs` and `repo/jobs.rs` hold library queries; `monitoring/jobs.rs` cleans the library cache.
 
@@ -128,8 +130,11 @@ Vite, React 19, TypeScript, Tailwind v4, shadcn/ui, TanStack Query, React Router
   later; `tr('…')` outside components); `{name}` placeholders come from the second argument. `npm run i18n` updates
   `translations/en.json` and lists gaps; `-- --check` fails if stale or incomplete. A language is `translations/<code>.json` plus
   a line in `LANGUAGES` (`src/lib/i18n.ts`); Arabic is RTL, so use `start`/`end`, not `left`/`right`.
-- **Player:** `frontend/src/player` imports nothing from the app (joined in `components/app-video.tsx` and
-  `lib/player-source.ts`); its backend is `crates/stream`. Keep both READMEs true.
+- **Modules:** `frontend/src/modules/<id>` is built apart (`npm run build:module -- <id>`, into `dist-modules/`) and joins the app
+  only through `src/sdk` (checked by `npx oxlint`); the video module is `modules/video` (its player, `player/`, imports nothing
+  from the app) with its backend in `modules/video/service`. To try one in development, build it, run its service with
+  `FAFNIRX_MODULE_UI=frontend/dist-modules/<id>`, and point the master at it (`FAFNIRX_MODULE_<ID>_URL`/`_TOKEN`). Keep both
+  READMEs true. Adding one: [modules](modules.md#writing-one).
 
 ## Releasing
 

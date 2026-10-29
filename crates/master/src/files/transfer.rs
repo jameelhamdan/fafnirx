@@ -55,8 +55,6 @@ struct Stored {
     root: Vec<u8>,
     size: u64,
     name: String,
-    /// The video codec, when it is known.
-    codec: Option<String>,
     /// A picture that sits next to a video and stands for it (see `library::artwork`): its place on disk and content.
     art: Option<(PathBuf, Vec<u8>)>,
 }
@@ -81,7 +79,7 @@ fn stored_version(
         } else {
             None
         };
-        Ok(Stored { disk, root, size: size as u64, name: base_name(&path).to_string(), codec: None, art })
+        Ok(Stored { disk, root, size: size as u64, name: base_name(&path).to_string(), art })
     }
 }
 
@@ -190,7 +188,7 @@ async fn send_file(state: &Shared, headers: &HeaderMap, f: SendFile<'_>) -> Resu
 
 /// A JPEG picture of an image or a video frame, from the cache or made now.
 async fn preview_response(state: &Shared, stored: &Stored, max: u32, immutable: bool) -> Result<Response, ApiError> {
-    if !meta::can_preview(&stored.name) {
+    if !meta::can_preview(&stored.name) && stored.art.is_none() {
         return Err(ApiError::not_found("No preview for this kind of file"));
     }
     let _slot = state.previews.acquire().await.map_err(anyhow::Error::from)?;
@@ -239,19 +237,16 @@ fn stored_by_id(
             root: row.root_hash,
             size: row.size as u64,
             name: base_name(&path).to_string(),
-            codec: row.codec,
             art: if deleted_at.is_none() { artwork::lookup(c, &store, &device, &path) } else { None },
         })
     }
 }
 
-/// What the library shows of a file: a small or large picture, the video as played in a browser, the
-/// original in place, or the original as a download.
+/// What the library shows of a file: a small or large picture, the original in place, or the original as a download.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Variant {
     Thumb,
     Preview,
-    Video,
     Original,
     Download,
 }
@@ -261,7 +256,6 @@ impl Variant {
         Some(match text {
             "thumb" => Self::Thumb,
             "preview" => Self::Preview,
-            "video" => Self::Video,
             "original" => Self::Original,
             "download" => Self::Download,
             _ => return None,
@@ -290,25 +284,6 @@ pub async fn media(
     match variant {
         Variant::Thumb => preview_response(&state, &stored, meta::THUMB, immutable).await,
         Variant::Preview => preview_response(&state, &stored, meta::PREVIEW, immutable).await,
-        Variant::Video => {
-            let proxy = meta::proxy_path(&state.data_dir.join("cache"), &root_hex);
-            if proxy.is_file() {
-                let stem = stored.name.rsplit_once('.').map_or(stored.name.as_str(), |(n, _)| n);
-                let name = format!("{stem}.mp4");
-                let file = SendFile {
-                    disk: &proxy,
-                    etag: format!("\"{root_hex}-proxy\""),
-                    size: 0,
-                    name: &name,
-                    inline: true,
-                };
-                return send_file(&state, &headers, file).await;
-            }
-            if !crate::library::media::plays_everywhere(&meta::extension(&stored.name), stored.codec.as_deref()) {
-                return Err(ApiError::not_found("A copy that plays in the browser is still being made"));
-            }
-            send_original(&state, &headers, &stored, true).await
-        }
         Variant::Original | Variant::Download => {
             send_original(&state, &headers, &stored, variant == Variant::Original).await
         }

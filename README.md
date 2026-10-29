@@ -25,7 +25,7 @@ flowchart LR
   Photos and videos can be opened in the viewer and rated or favorited from here.
 - **Photo and video library** over the same files: timeline, favorites, archive, trash, albums (a folder can be an album),
   map, tags, ratings, corrected dates and places. Originals are never changed.
-- **Video player** with subtitles; optional [streaming](docs/streaming.md) in several qualities.
+- **Video player** with subtitles and adaptive quality, as the optional [video module](docs/video.md), installed from the web app, so a server without videos carries no ffmpeg.
 - **Sources and mirrors**: Google Drive folders in; any [rclone](https://rclone.org) remote out.
 - **Users and roles**: administrator, normal, read-only. Six languages (English, Spanish, Chinese, Arabic, Russian, Japanese).
 
@@ -55,7 +55,8 @@ fafnirx add-folder ~/Documents
 | [Usage](docs/usage.md) | Web app, library, processing, change log, client |
 | [Sources](docs/sources.md) | Pull files in from Google Drive and other storage |
 | [Mirrors](docs/mirrors.md) | Offsite backups (compressed, encrypted) and replicas |
-| [Video streaming](docs/streaming.md) | Optional adaptive playback |
+| [Modules](docs/modules.md) | Optional features, installed as plugins or run as services of their own |
+| [Video module](docs/video.md) | Video playback, subtitles, details and poster frames |
 | [Deployment](docs/deployment.md) | Storage, proxy, tunnel, backups, security checklist |
 | [Architecture](docs/architecture.md) | Components, data model, IDs, locking, API |
 | [Development](docs/development.md) | Build, test, extend, release |
@@ -68,7 +69,8 @@ fafnirx add-folder ~/Documents
 | `crates/client` | `fafnirx`: client, tray, self-update |
 | `crates/db` | Typed queries, generated at build time from `queries/*.sql` |
 | `crates/common` | Hashing, chunking, path rules, gRPC types |
-| `crates/stream` | `fafnirx-stream`: optional HLS service |
+| `crates/module-api` | The contract between the master and its modules |
+| `modules` | Optional features as services: `video/service` is `fafnirx-video` (HLS, details, poster frames) |
 | `crates/sign` | `fafnirx-sign`: signed client builds (optional) |
 | `frontend` | Web app (React, shadcn/ui), built into the master |
 | `proto`, `installer`, `tests`, `docs` | Device contract, installers, end-to-end tests, documentation |

@@ -110,16 +110,17 @@ nothing leaves the host.
 
 | Job | Does | Reads | Result |
 |---|---|---|---|
-| `meta` | Reads details | Image: size, EXIF (camera, exposure, date, GPS). Video: duration, size, codec (`ffprobe`) | One `file_meta` row per content |
+| `meta` | Reads details | Image: size, EXIF (camera, exposure, date, GPS). Video: duration, size, codec, date, place (from the [video module](video.md)) | One `file_meta` row per content |
 | `artwork` | Looks for the picture and `.nfo` beside a video | File names in its folder and two above | Nothing stored; the note says what was found |
-| `thumb` | Draws 320 px and 1600 px JPEGs | The photo, a video frame, or the artwork picture | `cache/thumbs/`, removed after 30 days unused |
-| `proxy` | Converts a video browsers cannot play to MP4 (`ffmpeg`) | The video | `cache/video/` |
+| `thumb` | Draws 320 px and 1600 px JPEGs | The photo, a video frame (video module), or the artwork picture | `cache/thumbs/`, removed after 30 days unused |
 
-Order: `meta` → `artwork` (videos) → `thumb` → `proxy` (own slow lane). HEIC/AVIF get pictures only if ffmpeg can make them.
+Order: `meta` → `artwork` (videos) → `thumb`. Without the [video module](video.md) a video is a file to download: no details and
+no frame (a picture beside it is still used), and HEIC/AVIF get no pictures. After setting the module up, **Process missing**
+reads those videos again.
 
 **Logged per job:** kind, state (queued, running, failed, done), device and path, attempts, error, note, created, started
 and finished times. Counts per kind show waiting, running, failed and done in the last 24 h; done jobs stay a day. A job is
-tried 3 times, later each time, then fails. The same work is never queued twice. Streaming ([streaming](streaming.md)) adds
+tried 3 times, later each time, then fails. The same work is never queued twice. The video module ([video](video.md)) adds
 the segments and subtitle tracks it is making and its recent failures.
 
 Users see the jobs of devices they can see. Uploads are not jobs: a file is received, verified and recorded first

@@ -21,6 +21,11 @@ pub fn names(c: &mut impl GenericClient) -> Result<Vec<String>, Error> {
     q::user_names().bind(&mut Pg(c)).all()
 }
 
+/// The users who can log in, with their roles.
+pub fn enabled(c: &mut impl GenericClient) -> Result<Vec<q::EnabledUsers>, Error> {
+    q::enabled_users().bind(&mut Pg(c)).all()
+}
+
 pub fn exists(c: &mut impl GenericClient, name: &str) -> Result<bool, Error> {
     Ok(q::user_exists().bind(&mut Pg(c), &name).opt()?.is_some())
 }

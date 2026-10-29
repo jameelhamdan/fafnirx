@@ -80,8 +80,8 @@ THIS SOFTWARE.
 ## Map tiles and ffmpeg
 
 The map's pictures are loaded by the browser from OpenStreetMap by default (© OpenStreetMap contributors, ODbL,
-https://www.openstreetmap.org/copyright); `FAFNIRX_MAP_TILES` points it somewhere else. The Docker image installs the
-Debian `ffmpeg` package (LGPL/GPL, https://ffmpeg.org), which the master runs as a separate program; it is not linked in.
+https://www.openstreetmap.org/copyright); `FAFNIRX_MAP_TILES` points it somewhere else. The video module's Docker image installs the
+Debian `ffmpeg` package (LGPL/GPL, https://ffmpeg.org), which the module runs as a separate program; it is not linked in. The video plugin bundle carries a static build of `ffmpeg` and `ffprobe` (GPLv3, https://johnvansickle.com/ffmpeg/, with its license file inside the bundle), likewise run as separate programs. The master's image does not contain either.
 
 ## Other dependencies
 

@@ -3,6 +3,50 @@
   "plugins": ["react", "typescript", "oxc"],
   "rules": {
     "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
+    "react/only-export-components": ["warn", { "allowConstantExport": true }],
+    // The rest of the app does not reach into a module: the app loads each module's built script when the master says it is up.
+    "no-restricted-imports": [
+      "error",
+      { "patterns": [{ "group": ["@/modules/**", "**/modules/**"], "message": "Modules join the app through @/sdk; nothing else imports them." }] }
+    ]
+  },
+  "overrides": [
+    {
+      // A module uses its own folder, the app interface (@/sdk) and the ui kit, and no other part of the app, so that no
+      // module needs another (docs/modules.md). Deeper folders of a module may go up to its root, not beyond.
+      "files": ["src/modules/**/*.ts", "src/modules/**/*.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@/lib/**", "@/hooks/**", "@/pages/**", "@/modules/**", "@/components/*", "!@/components/ui/*"],
+                "message": "A module imports only from @/sdk, @/components/ui and its own folder."
+              },
+              { "group": ["../../**"], "message": "A module stays inside its own folder." }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // The files at the root of a module have nothing above them but other modules.
+      "files": ["src/modules/*/*.ts", "src/modules/*/*.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@/lib/**", "@/hooks/**", "@/pages/**", "@/modules/**", "@/components/*", "!@/components/ui/*"],
+                "message": "A module imports only from @/sdk, @/components/ui and its own folder."
+              },
+              { "group": ["../**"], "message": "A module stays inside its own folder." }
+            ]
+          }
+        ]
+      }
+    }
+  ]
 }

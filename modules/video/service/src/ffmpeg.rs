@@ -1,4 +1,4 @@
-//! `ffprobe` and `ffmpeg`: reading what a video is (the size, length and sound come from `fafnirx_common::probe`), listing its
+//! `ffprobe` and `ffmpeg`: reading what a video is (the size, length and sound come from `crate::probe`), listing its
 //! subtitle tracks, making one segment of one quality of it, and writing subtitles as WebVTT.
 
 use crate::hls::{Source, Variant};
@@ -11,7 +11,7 @@ use tokio::process::Command;
 /// What `ffprobe` said, as the size, length and sound of the video. A file with no picture (a song with cover art counts
 /// as none), no size or no length is not a video.
 pub fn parse_probe(json: &str) -> Result<Source> {
-    let probe = fafnirx_common::probe::parse(json.as_bytes())?;
+    let probe = crate::probe::parse(json.as_bytes())?;
     let video = probe.video.context("the file has no video")?;
     let (Some(width), Some(height)) = (video.width.filter(|w| *w > 0), video.height.filter(|h| *h > 0)) else {
         bail!("the video has no size");
@@ -36,12 +36,30 @@ async fn ffprobe_output(ffprobe: &str, args: &[&str], file: &Path) -> Result<Str
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Runs `ffprobe` on `file`.
+/// What `ffprobe` says about `file`, as JSON.
+async fn probe_json(ffprobe: &str, file: &Path) -> Result<String> {
+    ffprobe_output(ffprobe, &["-v", "error", "-print_format", "json", "-show_format", "-show_streams"], file).await
+}
+
+/// Runs `ffprobe` on `file`, for the size, length and sound a stream is made from.
 pub async fn probe(ffprobe: &str, file: &Path) -> Result<Source> {
-    let json =
-        ffprobe_output(ffprobe, &["-v", "error", "-print_format", "json", "-show_format", "-show_streams"], file)
-            .await?;
-    parse_probe(&json)
+    parse_probe(&probe_json(ffprobe, file).await?)
+}
+
+/// Runs `ffprobe` on `file`, for everything it says (tags included).
+pub async fn details(ffprobe: &str, file: &Path) -> Result<crate::probe::Probe> {
+    crate::probe::parse(probe_json(ffprobe, file).await?.as_bytes())
+}
+
+/// The arguments that take one frame of `source`, `seek` seconds in, to the JPEG `out`, no larger than `max` pixels on its
+/// longest side.
+pub fn poster_args(source: &Path, out: &Path, max: u32, seek: &str) -> Vec<String> {
+    let scale = format!("scale=min({max}\\,iw):min({max}\\,ih):force_original_aspect_ratio=decrease");
+    let mut a: Vec<String> = ["-v", "error", "-y", "-ss", seek, "-i"].iter().map(|s| s.to_string()).collect();
+    a.push(source.to_string_lossy().into_owned());
+    a.extend(["-frames:v", "1", "-vf", &scale, "-q:v", "4"].iter().map(|s| s.to_string()));
+    a.push(out.to_string_lossy().into_owned());
+    a
 }
 
 /// The arguments that make segment `start`..`start + len` (seconds) of `source` in quality `v`, as MPEG-TS with

@@ -1,4 +1,3 @@
-import { useQueryClient } from '@tanstack/react-query'
 import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, Download, FileImage, FolderPlus, Heart, Info, MoreVertical, Trash2, X } from 'lucide-react'
 import { lazy, Suspense, useEffect, useRef, useState, type PointerEvent } from 'react'
 import { Button } from '../ui/button'
@@ -9,11 +8,11 @@ import { mediaUrl } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { whenText } from '@/lib/format'
 import { useLibraryActions } from '@/lib/library'
-import { assetSource } from '@/lib/player-source'
+import { fileOfAsset } from '@/lib/module-file'
 import { hasWorkspace, useRole } from '@/lib/session'
-import type { Asset, Session } from '@/lib/types'
+import type { Asset } from '@/lib/types'
 import { AlbumPicker } from './album-picker'
-import { AppVideo } from '../lazy-video'
+import { ModuleViewer, useHasViewer } from '@/sdk'
 import { useT } from '@/lib/i18n'
 
 const InfoPanel = lazy(() => import('./info-panel'))
@@ -28,15 +27,18 @@ function busyElsewhere(e: KeyboardEvent) {
   return !!target?.closest('input, textarea, select, [contenteditable="true"]') || !!document.querySelector('[data-slot="dialog-content"], [role="menu"]')
 }
 
-function Unavailable({ asset, video, retry }: { asset: Asset; video?: boolean; retry?: () => void }) {
+/** `video`: the file is a video; `missing`: nothing that is up can play it (the video module is not set up). */
+function Unavailable({ asset, video, missing, retry }: { asset: Asset; video?: boolean; missing?: boolean; retry?: () => void }) {
   const t = useT()
   return (
     <div className="flex max-w-sm flex-col items-center gap-3 p-6 text-center text-white/90">
       <FileImage className="size-10 text-white/60" />
       <p className="text-sm">
-        {video
-          ? t('This video cannot be played in the browser yet. A playable copy is made in the background for formats browsers do not support.')
-          : t('No picture could be made of this file.')}
+        {missing
+          ? t('Playing videos needs the video module. Download the file to watch it.')
+          : video
+            ? t('This video cannot be played in the browser. Download it to watch it.')
+            : t('No picture could be made of this file.')}
       </p>
       <div className="flex gap-2">
         {retry && <Button variant="secondary" size="sm" onClick={retry}>{t('Try again')}</Button>}
@@ -73,17 +75,26 @@ function Photo({ asset, onFail }: { asset: Asset; onFail: () => void }) {
   )
 }
 
-function Media({ asset, stream }: { asset: Asset; stream: boolean }) {
+function Media({ asset }: { asset: Asset }) {
   const [failed, setFailed] = useState(false)
   const [attempt, setAttempt] = useState(0)
-  if (failed) return <Unavailable asset={asset} video={asset.kind === 'video'} retry={() => { setFailed(false); setAttempt((n) => n + 1) }} />
-  if (asset.kind === 'video') {
+  const file = fileOfAsset(asset)
+  // A module that is up shows what it can (videos, with the video module); otherwise a photo is shown here.
+  const hasViewer = useHasViewer(file)
+  const retry = () => { setFailed(false); setAttempt((n) => n + 1) }
+  if (failed) return <Unavailable asset={asset} video={asset.kind === 'video'} retry={retry} />
+  if (hasViewer) {
     return (
-      <Suspense fallback={<Skeleton className="h-64 w-96 max-w-full bg-white/10" />}>
-        <AppVideo key={attempt} source={assetSource(asset, stream)} onFail={() => setFailed(true)} globalKeys />
-      </Suspense>
+      <ModuleViewer
+        key={attempt}
+        file={file}
+        onFail={() => setFailed(true)}
+        globalKeys
+        loading={<Skeleton className="h-64 w-96 max-w-full bg-white/10" />}
+      />
     )
   }
+  if (asset.kind === 'video') return <Unavailable asset={asset} video missing />
   return <Photo key={attempt} asset={asset} onFail={() => setFailed(true)} />
 }
 
@@ -108,9 +119,6 @@ export function Viewer({
   const t = useT()
   // A read-only user looks at files, downloads and streams them; everything else is for the other roles.
   const mine = hasWorkspace(useRole())
-  const client = useQueryClient()
-  // With the streaming service videos play adaptively (several qualities), and as the file is when that fails.
-  const streamOn = client.getQueryData<Session>(['session'])?.stream === true
   const { edit, remove } = useLibraryActions()
   const [info, setInfo] = useState(() => window.matchMedia('(min-width: 1024px)').matches)
   const [dialog, setDialog] = useState<'album' | 'delete' | null>(null)
@@ -245,7 +253,7 @@ export function Viewer({
             className="pointer-events-none absolute inset-0 size-full scale-125 object-cover opacity-40 blur-3xl saturate-150"
           />
           <div key={asset.id} className="animate-in fade-in absolute inset-0 z-[1] flex items-center justify-center duration-200">
-            <Media asset={asset} stream={streamOn} />
+            <Media asset={asset} />
           </div>
           {before && (
             <Button variant="ghost" size="icon" className={cn(glass, 'absolute top-1/2 left-2 z-[2] size-11 -translate-y-1/2 max-sm:hidden')} aria-label={t('Previous')} onClick={() => go(-1)}><ChevronLeft className="size-6" /></Button>
