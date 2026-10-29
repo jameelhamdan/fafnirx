@@ -1,7 +1,7 @@
 # Deployment
 
 Inbound: `7443` (devices, token) and `8080` (users, password), both plain HTTP: trusted network/VPN, or TLS in front.
-Outbound: Google Drive and mirror endpoints only.
+Outbound: Google Drive, and the storage of your sources and mirrors, only.
 
 ## Storage
 
@@ -108,9 +108,9 @@ major upgrade needs dump and restore. Clients update themselves from GitHub with
 - Strong `FAFNIRX_ADMIN_PASSWORD` and `FAFNIRX_DB_PASSWORD`; `.env` readable only by you; PostgreSQL port unpublished.
 - `8080` and `7443` off the internet unless behind TLS.
 - Device tokens are shown once and stored as SHA-256 hashes; revoke lost devices. A device adds data to its own device; it reads and writes only its user's shared folders.
-- Source and mirror credentials are plain text in the database and `rclone.conf`: protect backups and the config folder.
+- Source and mirror credentials, and the encryption key of backup mirrors, are plain text in the database and `rclone.conf`: protect backups and the config folder. Keep a copy of each backup key away from the master.
 - Keep the update signing key off the master.
-- Nothing is encrypted at rest or on mirrors: use an encrypted dataset and an rclone `crypt` remote.
+- The master's disk is not encrypted by fafnirx: use an encrypted dataset. A **backup** mirror is encrypted with its own key ([Mirrors](mirrors.md)); a replica is not.
 
 ## Operations
 

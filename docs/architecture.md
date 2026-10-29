@@ -242,7 +242,7 @@ JSON under `/api` behind the login cookie (random token, hash stored, `SameSite=
 | Albums | `GET/POST /api/albums` (a `folder` body makes or returns the folder's album), `GET/PATCH/DELETE /api/albums/:id`, `POST .../files` and `.../files/remove` (by `ids` or `items` of `{device, path}`) |
 | Streaming | `GET /api/stream/:id/{master.m3u8,<quality>/index.m3u8,<quality>/seg<n>.ts,subtitles.json,subtitles/<n>.vtt}` |
 | Processing | `GET /api/queue`; admin: `POST /api/queue/pause`, `/retry`, `/cancel`, `/rebuild` |
-| Integrations | `GET/POST /api/sources` + `/:user/:name`, `/run`, `/toggle`; admin: `GET/POST /api/mirrors` + `/:name`, `/run`, `/toggle`, `/resync`, `GET /api/mirrors/scope?path=` (folders to pick from) |
+| Integrations | `GET/POST /api/sources`, `POST /api/sources/rclone` (any rclone storage), `/:user/:name`, `/run`, `/toggle`; admin: `GET/POST /api/mirrors` (`kind` replica or backup) + `/:name`, `/run`, `/toggle`, `/resync`, `GET /api/mirrors/:name/restore-kit` (backups), `GET /api/mirrors/scope?path=` (folders to pick from) |
 | Settings | `GET/PUT /api/settings` |
 
 Browser uploads are chunked: pieces are `PUT` at an offset (409 with the expected offset if misaligned); `finish` verifies the

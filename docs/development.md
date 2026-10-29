@@ -61,7 +61,7 @@ Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targ
 | `web` | HTTP shell, logins, roles | `mod.rs` (state, errors, routes), `auth.rs`, `access.rs`, `users.rs`, `events.rs`, `assets.rs`, `tests/` |
 | `files` | Content in and out | `ingest.rs` (commit, delete, rename, move), `livetree.rs`, `browse.rs`, `transfer.rs`, `zip.rs` |
 | `library` | Photos and videos | `meta.rs` (jobs, pictures), `media.rs` (ffmpeg), `artwork.rs`, `photos.rs`, `albums.rs`, `stream.rs` |
-| `integrations` | Sources, mirrors | `mod.rs`, `gdrive.rs`, `mirror.rs`, `scope.rs`, `api.rs` |
+| `integrations` | Sources, mirrors | `mod.rs`, `gdrive.rs`, `rclone_source.rs`, `syncsource.rs`, `mirror.rs`, `scope.rs`, `spec.rs`, `api.rs` |
 | `monitoring` | Dashboard, schedules, queue | `api.rs`, `jobs.rs`, `queue.rs` |
 
 New endpoints go in the app's `api.rs` and are registered in `web/mod.rs`. Apps use `platform` and each other's public
@@ -111,10 +111,11 @@ with `Id` and check visibility like any input. Test each role.
 and the user's shared folders; any other call that reads, lists or deletes stored data changes the security model (see
 [CONTRIBUTING](../CONTRIBUTING.md)).
 
-**A source.** Model: `integrations/gdrive.rs`. A `sources` row plus a `source-<name>` device (`integrations/api.rs`), claimed
-by `integrations::claim_source`, dispatched by `kind`; plan by comparing the remote listing with `source_items` and live
-`files`; download to temp files; record with `ingest::commit_version` (`renamed_from` for renames) and `mark_deleted`; delete
-nothing if listing fails.
+**A source.** Models: `integrations/gdrive.rs` (has file ids), `integrations/rclone_source.rs` (paths only). A `sources` row
+plus a `source-<name>` device (`integrations/api.rs`), claimed by `integrations::claim_source`, dispatched by `kind`. A source
+lists its files as `syncsource::Item`s and fetches one; `syncsource::apply` compares the listing with `source_items` and live
+`files`, downloads to temp files, records with `ingest::commit_version` (`renamed_from` for renames) and `mark_deleted`, and
+deletes nothing if listing fails.
 
 ## The web app
 

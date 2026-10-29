@@ -191,6 +191,7 @@ fn light() -> Router<Shared> {
         .route("/api/albums/:id/files", post(library::albums::add))
         .route("/api/albums/:id/files/remove", post(library::albums::remove))
         .route("/api/sources", get(integrations::api::sources).post(integrations::api::create_source))
+        .route("/api/sources/rclone", post(integrations::api::create_rclone_source))
         .route("/api/sources/:user/:name", delete(integrations::api::delete_source))
         .route("/api/sources/:user/:name/run", post(integrations::api::run_source))
         .route("/api/sources/:user/:name/toggle", post(integrations::api::toggle_source))
@@ -200,6 +201,7 @@ fn light() -> Router<Shared> {
         .route("/api/mirrors/:name/run", post(integrations::api::run_mirror))
         .route("/api/mirrors/:name/toggle", post(integrations::api::toggle_mirror))
         .route("/api/mirrors/:name/resync", post(integrations::api::resync_mirror))
+        .route("/api/mirrors/:name/restore-kit", get(integrations::api::mirror_restore_kit))
         .route("/api/events", get(events::stream))
 }
 

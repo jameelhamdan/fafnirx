@@ -1,5 +1,5 @@
 --! list_mirrors : (last_run_at?, last_ok_at?, last_status?, last_message?, last_files?, last_bytes?)
-SELECT name, remote, remote_type, options, remote_path, scope, interval_secs, keep_runs, enabled, last_run_at, last_ok_at,
+SELECT name, kind, remote, remote_type, options, remote_path, scope, interval_secs, keep_runs, enabled, last_run_at, last_ok_at,
        last_status, last_message, last_files, last_bytes
 FROM mirrors ORDER BY name;
 
@@ -7,8 +7,13 @@ FROM mirrors ORDER BY name;
 SELECT id FROM mirrors WHERE name = :name;
 
 --! insert_mirror
-INSERT INTO mirrors (name, remote, remote_type, options, remote_path, scope, interval_secs, keep_runs, created_at)
-VALUES (:name, :remote, :remote_type, :options, :remote_path, :scope, :interval_secs, :keep_runs, :now) ON CONFLICT (name) DO NOTHING;
+INSERT INTO mirrors (name, kind, crypt_password, crypt_salt, remote, remote_type, options, remote_path, scope, interval_secs, keep_runs, created_at)
+VALUES (:name, :kind, :crypt_password, :crypt_salt, :remote, :remote_type, :options, :remote_path, :scope, :interval_secs, :keep_runs, :now)
+ON CONFLICT (name) DO NOTHING;
+
+--! mirror_key
+-- The two passwords of a backup mirror: all that is needed, with the storage, to restore it.
+SELECT kind, remote, remote_type, options, remote_path, crypt_password, crypt_salt FROM mirrors WHERE name = :name;
 
 --! delete_mirror_items
 DELETE FROM mirror_items WHERE mirror_id = :mirror_id;
@@ -28,7 +33,7 @@ WHERE id = (SELECT id FROM mirrors
             WHERE (run_requested = 1 OR (enabled = 1 AND (last_run_at IS NULL OR last_run_at + interval_secs <= :now)))
               AND last_status IS DISTINCT FROM 'running'
             ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)
-RETURNING id, name, remote_type, options, remote_path, scope, keep_runs, remote;
+RETURNING id, name, kind, crypt_password, crypt_salt, remote_type, options, remote_path, scope, keep_runs, remote;
 
 --! finish_mirror (ok_at?)
 UPDATE mirrors SET last_status = :status, last_message = :message, last_ok_at = COALESCE(:ok_at, last_ok_at) WHERE id = :id;

@@ -23,6 +23,9 @@ pub fn id_of(c: &mut impl GenericClient, name: &str) -> Result<Option<i64>, Erro
 /// What a new mirror is made of.
 pub struct New<'a> {
     pub name: &'a str,
+    pub kind: &'a str,
+    pub crypt_password: &'a str,
+    pub crypt_salt: &'a str,
     pub remote: &'a str,
     pub remote_type: &'a str,
     pub options: &'a str,
@@ -36,6 +39,9 @@ pub struct New<'a> {
 pub fn insert(c: &mut impl GenericClient, m: &New, now: i64) -> Result<bool, Error> {
     let params = q::InsertMirrorParams {
         name: m.name,
+        kind: m.kind,
+        crypt_password: m.crypt_password,
+        crypt_salt: m.crypt_salt,
         remote: m.remote,
         remote_type: m.remote_type,
         options: m.options,
@@ -46,6 +52,13 @@ pub fn insert(c: &mut impl GenericClient, m: &New, now: i64) -> Result<bool, Err
         now,
     };
     Ok(q::insert_mirror().params(&mut Pg(c), &params)? > 0)
+}
+
+/// What restoring a backup mirror needs to know besides the storage's own credentials.
+pub type Key = q::MirrorKey;
+
+pub fn key_of(c: &mut impl GenericClient, name: &str) -> Result<Option<Key>, Error> {
+    q::mirror_key().bind(&mut Pg(c), &name).opt()
 }
 
 /// Forgets what was uploaded: the next run sends everything again.

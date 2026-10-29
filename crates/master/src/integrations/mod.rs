@@ -7,8 +7,10 @@
 pub mod api;
 pub mod gdrive;
 pub mod mirror;
+pub mod rclone_source;
 pub mod scope;
 pub mod spec;
+pub mod syncsource;
 
 use crate::platform::db::{self, Db, Device};
 use crate::platform::store::Store;
@@ -54,6 +56,10 @@ pub struct SourceRow {
 pub struct MirrorRow {
     pub id: i64,
     pub name: String,
+    /// `backup` (compressed and encrypted with the two passwords) or `replica` (the files as they are).
+    pub kind: String,
+    pub crypt_password: String,
+    pub crypt_salt: String,
     pub remote_type: String,
     pub options: String,
     pub remote_path: String,
@@ -166,6 +172,9 @@ fn claim_mirror(db: &Db) -> Option<MirrorRow> {
     Some(MirrorRow {
         id: m.id,
         name: m.name,
+        kind: m.kind,
+        crypt_password: m.crypt_password,
+        crypt_salt: m.crypt_salt,
         remote_type: m.remote_type,
         options: m.options,
         remote_path: m.remote_path,
@@ -217,6 +226,7 @@ async fn run_source(db: &Db, store: &Arc<Store>, src: SourceRow) {
     tracing::info!("source {name}: starting");
     let result = match src.kind.as_str() {
         "gdrive" => crate::integrations::gdrive::run(db.clone(), store.clone(), src).await.map(|o| o.report()),
+        "rclone" => crate::integrations::rclone_source::run(db.clone(), store.clone(), src).await.map(|o| o.report()),
         other => Err(anyhow!("unknown source kind {other:?}")),
     };
     finish_job(db, Table::Sources, "source_failed", id, name, result).await;

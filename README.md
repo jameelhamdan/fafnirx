@@ -52,12 +52,13 @@ fafnirx add-folder ~/Documents
 | --- | --- |
 | [Overview](docs/overview.md) | What it does, how a file travels, the rules |
 | [Installation](docs/installation.md) | Master and clients, configuration reference |
-| [Usage](docs/usage.md) | Web app, library, processing, change log, client, sources, mirrors |
+| [Usage](docs/usage.md) | Web app, library, processing, change log, client |
+| [Sources](docs/sources.md) | Pull files in from Google Drive and other storage |
+| [Mirrors](docs/mirrors.md) | Offsite backups (compressed, encrypted) and replicas |
 | [Video streaming](docs/streaming.md) | Optional adaptive playback |
 | [Deployment](docs/deployment.md) | Storage, proxy, tunnel, backups, security checklist |
 | [Architecture](docs/architecture.md) | Components, data model, IDs, locking, API |
 | [Development](docs/development.md) | Build, test, extend, release |
-| [Plans](docs/plans/features.md) | Not built yet |
 
 ## Repository
 

@@ -10,7 +10,7 @@ icon in the top bar. Pages update live.
 | Albums, Map, Trash | Group media; where it was taken; deleted files until retention ends |
 | Files | Browse, search, preview, download, upload, move, delete; open media in the viewer |
 | Processing | Background work ([details](#processing)) |
-| Devices, Sources, Mirrors | Computers that send; Google Drive folders; offsite copies |
+| Devices, Sources, Mirrors | Computers that send; Google Drive and other storage; offsite backups and replicas |
 | Shared folders | Make, share with users, delete (not for read-only users) |
 | Users, Settings | Administrators only |
 
@@ -300,52 +300,10 @@ stateDiagram-v2
 - A file overwritten in place has no previous copy; deleting moves it to `versions/`.
 - Decomposed (Mac) names are renamed to composed form.
 
-## Sources: Google Drive
+## Sources and mirrors
 
-1. Create a Google Cloud **service account**, download its JSON key, enable the Drive API.
-2. Share each Drive folder with its email (viewer is enough).
-3. **Sources → Add Google Drive source:** name, folder ids or URLs, key, interval.
-
-A source belongs to its user (`<user>/<name>`); files appear under `<user>/source-<name>` with the usual versions and
-retention. The key is never shown again.
-
-- Raw files only; Docs, Sheets, Slides, forms, shortcuts are skipped and counted.
-- Names are made safe (`/ \ : * ? " < > |` → `_`); duplicates get ` (<id prefix>)`.
-- A Drive rename/move is a `rename` without a download. A file deleted in the web app stays deleted until it changes on Drive.
-- Files gone from Drive are marked deleted; if listing fails nothing is deleted. Failed or partial runs raise an alert.
-
-## Mirrors: offsite copies
-
-**Mirrors → Add mirror** (administrators): what to mirror, name, rclone backend type, options, remote path, interval (72 h),
-runs kept (3). A mirror pushes everything (all users' files and master files) or one folder you pick by going down the tree:
-`_master` or `_master/<folder>`, `<user>`, `<user>/<device>` or `<user>/<shared folder>`, then any folder inside. The files
-keep their place below `files/` on the remote, so a restore is a copy back. A mirror of one folder leaves out
-`meta/library.json` (it names files of the whole tree). The folder cannot be changed later: add another mirror.
-
-```text
-# type: s3
-provider = Other
-endpoint = https://s3.example.com
-access_key_id = ...
-secret_access_key = ...
-# path: my-bucket/fafnirx
-```
-
-Options are rclone `key = value` lines, never shown again; SFTP/WebDAV passwords must be obscured (`rclone obscure`). To use
-existing remotes (`crypt`, `b2`, OAuth), put `rclone.conf` in `./config` (or `FAFNIRX_RCLONE_CONFIG`; writable by the
-master, readable by its owner only) and enter `name:path` as **rclone remote**.
-
-```text
-files/users/<user>/<device>/...  current tree per device, local folder, source
-files/<path>                    master files
-versions/<UTC time>/...         what that run replaced or removed
-meta/stats.json, meta/<user>_<device>.json, meta/_master.json   run stats; file lists (path, size, mtime, root hash)
-meta/library.json               albums, tags, favorites, ratings, descriptions, corrected dates and places
-```
-
-Each run uploads only changed files, re-hashing each; a corrupt file makes the run **partial** (alert) instead of being
-mirrored. The newest `keep` runs are kept. **Run now** starts one; the circular arrow forgets what was uploaded. A mirror is
-the offsite copy of 3-2-1 and does not contain the database ([backups](deployment.md#backups)).
+**Sources** pull files in from Google Drive and other storage; **mirrors** keep offsite copies, as encrypted backups or as
+plain replicas. See [Sources](sources.md) and [Mirrors](mirrors.md).
 
 ## Alerts
 
@@ -366,7 +324,7 @@ Dismiss by hand. Collection never pauses automatically. No email or webhook.
 
 Web app: open the file, pick a version, **Download** or **Restore**. Disk: current version
 `<data>/files/users/<user>/<device>/<path>` (`<data>/files/<path>` for master files); replaced or deleted version
-`<data>/versions/<version id>/<user>/<device>/<path>`. Or copy from a mirror's `files/` tree (it has the same layout as the disk).
+`<data>/versions/<version id>/<user>/<device>/<path>`. Or copy from a replica's `files/` tree (it has the same layout as the disk), or restore a backup with its restore kit ([Mirrors](mirrors.md#restore)).
 
 ## Client updates
 

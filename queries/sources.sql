@@ -1,5 +1,5 @@
 --! list_sources : (last_run_at?, last_ok_at?, last_status?, last_message?)
-SELECT s.name, u.name AS owner, s.config, s.interval_secs, s.enabled, s.last_run_at, s.last_ok_at, s.last_status,
+SELECT s.name, s.kind, u.name AS owner, s.config, s.interval_secs, s.enabled, s.last_run_at, s.last_ok_at, s.last_status,
        s.last_message, d.total_bytes AS bytes, d.file_count AS files, s.device_id, d.folder
 FROM sources s JOIN devices d ON d.id = s.device_id JOIN users u ON u.id = d.user_id
 WHERE :all::boolean OR d.user_id = :user::bigint ORDER BY u.name, s.name;
@@ -14,7 +14,7 @@ ON CONFLICT (user_id, name) DO NOTHING RETURNING id, folder;
 
 --! insert_source
 INSERT INTO sources (name, kind, config, interval_secs, device_id, created_at)
-VALUES (:name, 'gdrive', :config, :interval_secs, :device_id, :now);
+VALUES (:name, :kind, :config, :interval_secs, :device_id, :now);
 
 --! source_device
 SELECT s.device_id, d.folder FROM sources s JOIN devices d ON d.id = s.device_id WHERE s.id = :id;
