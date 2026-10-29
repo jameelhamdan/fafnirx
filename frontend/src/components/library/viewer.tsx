@@ -4,6 +4,7 @@ import { Button } from '../ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/dropdown-menu'
 import { Skeleton } from '../ui/skeleton'
 import { Confirm } from '../confirm'
+import { NativeVideo } from '../native-video'
 import { mediaUrl } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { whenText } from '@/lib/format'
@@ -27,18 +28,14 @@ function busyElsewhere(e: KeyboardEvent) {
   return !!target?.closest('input, textarea, select, [contenteditable="true"]') || !!document.querySelector('[data-slot="dialog-content"], [role="menu"]')
 }
 
-/** `video`: the file is a video; `missing`: nothing that is up can play it (the video module is not set up). */
-function Unavailable({ asset, video, missing, retry }: { asset: Asset; video?: boolean; missing?: boolean; retry?: () => void }) {
+/** `video`: the file is a video. */
+function Unavailable({ asset, video, retry }: { asset: Asset; video?: boolean; retry?: () => void }) {
   const t = useT()
   return (
     <div className="flex max-w-sm flex-col items-center gap-3 p-6 text-center text-white/90">
       <FileImage className="size-10 text-white/60" />
       <p className="text-sm">
-        {missing
-          ? t('Playing videos needs the video module. Download the file to watch it.')
-          : video
-            ? t('This video cannot be played in the browser. Download it to watch it.')
-            : t('No picture could be made of this file.')}
+        {video ? t('This video cannot be played in the browser. Download it to watch it.') : t('No picture could be made of this file.')}
       </p>
       <div className="flex gap-2">
         {retry && <Button variant="secondary" size="sm" onClick={retry}>{t('Try again')}</Button>}
@@ -94,7 +91,8 @@ function Media({ asset }: { asset: Asset }) {
       />
     )
   }
-  if (asset.kind === 'video') return <Unavailable asset={asset} video missing />
+  // Without the video module the original plays as it is, in the browser's own player.
+  if (asset.kind === 'video') return <NativeVideo key={attempt} src={mediaUrl(asset.id, 'original', asset.hash)} poster={mediaUrl(asset.id, 'preview', asset.hash)} onFail={() => setFailed(true)} />
   return <Photo key={attempt} asset={asset} onFail={() => setFailed(true)} />
 }
 

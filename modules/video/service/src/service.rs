@@ -49,13 +49,22 @@ pub struct App {
     pub(crate) tasks: Tasks,
     /// One lock per file being made, so that two requests for the same segment make it once.
     locks: Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
+    /// What the manifest said last was missing, and when it was looked at (see `derive::missing`).
+    pub(crate) setup: tokio::sync::Mutex<Option<(std::time::Instant, Vec<String>)>>,
 }
 
 impl App {
     pub fn new(cfg: Config) -> Arc<Self> {
         let jobs = Semaphore::new(cfg.jobs.max(1));
         let derive = Semaphore::new(cfg.jobs.max(1));
-        Arc::new(Self { cfg, jobs, derive, tasks: Tasks::default(), locks: Mutex::default() })
+        Arc::new(Self {
+            cfg,
+            jobs,
+            derive,
+            tasks: Tasks::default(),
+            locks: Mutex::default(),
+            setup: Default::default(),
+        })
     }
 
     pub(crate) fn lock_for(&self, path: &Path) -> Arc<tokio::sync::Mutex<()>> {
@@ -414,6 +423,11 @@ mod tests {
         // Whatever the manifest promises is served.
         assert!(manifest.has("probe.video") && manifest.has("poster") && manifest.has("status"));
         assert_eq!(get(&f, "/status", T).await.0, StatusCode::OK);
+        assert_eq!(
+            manifest.setup.iter().filter(|s| s.contains("cannot be run")).count(),
+            2,
+            "the programs of this test are not there, and the manifest says so"
+        );
         assert_eq!(manifest.ui.map(|u| u.entry), Some("index.js".to_string()), "it has built its screens");
     }
 

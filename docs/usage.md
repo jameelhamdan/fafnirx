@@ -114,7 +114,7 @@ nothing leaves the host.
 | `artwork` | Looks for the picture and `.nfo` beside a video | File names in its folder and two above | Nothing stored; the note says what was found |
 | `thumb` | Draws 320 px and 1600 px JPEGs | The photo, a video frame (video module), or the artwork picture | `cache/thumbs/`, removed after 30 days unused |
 
-Order: `meta` → `artwork` (videos) → `thumb`. Without the [video module](video.md) a video is a file to download: no details and
+Order: `meta` → `artwork` (videos) → `thumb`. Without the [video module](video.md) a video plays as the original in the browser: no details and
 no frame (a picture beside it is still used), and HEIC/AVIF get no pictures. After setting the module up, **Process missing**
 reads those videos again.
 

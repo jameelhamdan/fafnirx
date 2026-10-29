@@ -3,11 +3,12 @@ import { Archive, Cog, FolderOpen, FolderSync, GalleryVerticalEnd, HardDrive, He
 import { useTheme } from 'next-themes'
 import { useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
+import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { msg, useI18n } from '@/lib/i18n'
 import { useLive } from '@/lib/live-state'
 import { hasWorkspace, useRole, useSession } from '@/lib/session'
-import type { Role, Session } from '@/lib/types'
+import type { Role } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { UploadPanel } from './files/upload-panel'
 import { LanguageMenu } from './language-menu'
@@ -127,9 +128,16 @@ export function AppShell({ children }: { children: ReactNode }) {
   const version = session?.version
 
   async function logout() {
-    await api.post('/api/logout').catch(() => undefined)
+    try {
+      await api.post('/api/logout')
+    } catch (e) {
+      // Still logged in: say so instead of showing a login page the server would not honour.
+      toast.error(e instanceof Error ? e.message : t('Could not log out'))
+      return
+    }
     client.clear()
-    client.setQueryData<Session>(['session'], { user: null })
+    // A full load of the start page, which is the login page without a session: nothing of this user stays in memory.
+    window.location.replace('/')
   }
 
   return (

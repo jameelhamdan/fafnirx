@@ -155,7 +155,8 @@ struct Started {
 pub struct Status {
     pub id: String,
     pub version: Option<String>,
-    /// `up`, `starting` (not answering yet), `broken` (see `problem`) or `external` (set up with an address, not run here).
+    /// `up`, `setup` (running, but `problem` says what it is missing), `starting` (not answering yet), `broken` (not running,
+    /// see `problem`) or `external` (set up with an address, not run here).
     pub state: &'static str,
     pub problem: Option<String>,
 }
@@ -339,10 +340,15 @@ impl Plugins {
         let mut out: Vec<Status> = installed
             .into_iter()
             .map(|(id, version)| {
-                let up = self.registry.up(&id).is_some_and(|m| m.managed);
-                let problem = problems.get(&id).cloned();
-                let state = if up {
-                    "up"
+                let running = self.registry.up(&id).filter(|m| m.managed);
+                let missing = running.as_ref().and_then(|m| m.manifest()).map(|m| m.setup).unwrap_or_default();
+                let problem = if missing.is_empty() { problems.get(&id).cloned() } else { Some(missing.join("; ")) };
+                let state = if running.is_some() {
+                    if missing.is_empty() {
+                        "up"
+                    } else {
+                        "setup"
+                    }
                 } else if self.registry.is_external(&id) {
                     "external"
                 } else if problem.is_some() {
@@ -354,11 +360,17 @@ impl Plugins {
             })
             .collect();
         for module in self.registry.all().into_iter().filter(|m| !m.managed) {
+            let manifest = module.manifest();
+            let missing = manifest.as_ref().map(|m| m.setup.join("; ")).filter(|m| !m.is_empty());
             out.push(Status {
                 id: module.id().to_string(),
-                version: module.manifest().map(|m| m.version),
-                state: if module.manifest().is_some() { "up" } else { "external" },
-                problem: None,
+                version: manifest.as_ref().map(|m| m.version.clone()),
+                state: match (&manifest, &missing) {
+                    (None, _) => "external",
+                    (Some(_), Some(_)) => "setup",
+                    _ => "up",
+                },
+                problem: missing,
             });
         }
         out

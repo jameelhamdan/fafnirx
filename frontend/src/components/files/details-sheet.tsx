@@ -23,6 +23,7 @@ import { WorkNote } from '../work-note'
 import { FileIcon } from './file-icon'
 import { useT } from '@/lib/i18n'
 import { ModuleViewer, useHasViewer } from '@/sdk'
+import { NativeVideo } from '../native-video'
 
 const InfoPanel = lazy(() => import('../library/info-panel'))
 
@@ -36,10 +37,10 @@ function VideoPreview({ info }: { info: FileInfo }) {
   const hasViewer = useHasViewer(file)
   const [started, setStarted] = useState(false)
   const [failed, setFailed] = useState(false)
-  if (failed || !hasViewer) {
+  if (failed) {
     return (
       <div className="grid gap-2 rounded-lg border bg-muted/40 p-4 text-center text-sm text-muted-foreground">
-        <p>{hasViewer ? t('This video cannot be played in the browser. Download it to watch it.') : t('Playing videos needs the video module. Download the file to watch it.')}</p>
+        <p>{t('This video cannot be played in the browser. Download it to watch it.')}</p>
         <Button variant="outline" size="sm" className="mx-auto" asChild><a href={downloadUrl(info.device, info.path)}><Download className="size-4" />{t('Download')}</a></Button>
       </div>
     )
@@ -59,6 +60,8 @@ function VideoPreview({ info }: { info: FileInfo }) {
       </button>
     )
   }
+  // Without the video module the original plays as it is, in the browser's own player.
+  if (!hasViewer) return <NativeVideo src={downloadUrl(info.device, info.path, { inline: true })} poster={file.poster} onFail={() => setFailed(true)} className="w-full rounded-lg max-h-80" />
   return (
     <ModuleViewer
       file={file}

@@ -61,6 +61,10 @@ pub struct Manifest {
     /// Its part of the web app, if it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui: Option<Ui>,
+    /// What is missing for it to do its work (a program it needs, a folder it cannot write), in words for the administrator.
+    /// A module that answers with some is running but not set up; the administrator's page says so.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub setup: Vec<String>,
 }
 
 /// A module's part of the web app: a script (an ES module whose default export is the module, see

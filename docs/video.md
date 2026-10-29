@@ -1,7 +1,7 @@
 # Video module
 
-The [module](modules.md) that plays videos. Without it the master has no ffmpeg: a video is a file you can download, with no
-details, no frame for its thumbnail and no player. With it:
+The [module](modules.md) that plays videos. Without it the master has no ffmpeg: a video plays as the original in the browser's own player
+(if the browser can decode it), with no details, no frame for its thumbnail and no qualities or subtitles. With it:
 
 - **Playback** in the web app, adaptive: several qualities, chosen by connection or by hand, made as a video is watched.
   Same login and rules as the web app; no share links.

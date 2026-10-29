@@ -75,7 +75,7 @@ checked login and file access; modules have no users.
 
 | Request | By | Answer |
 |---|---|---|
-| `GET /manifest` | master | `{id, version, contract, capabilities, ui?}` |
+| `GET /manifest` | master | `{id, version, contract, capabilities, ui?, setup?}`; `setup` lists what is missing for it to work (shown under Settings as "Running, not set up") |
 | `GET /probe?p&h` | master, `probe.video` | length, size, codec, date, place |
 | `GET /poster?p&h&max` | master, `poster` | JPEG ≤ `max` px (videos, HEIC/AVIF master can't decode) |
 | `GET /status` | master, `status` | `active`, `failed` tasks, each with `path`; other fields are the module's own |
@@ -101,13 +101,13 @@ Built apart, loaded by the browser from the module while it's up. Not in the app
   (`src/sdk/runtime.ts`), so one React, same i18n, toasts, look. Everything else (icons, hls.js) is bundled. `style.css` = Tailwind
   classes of the module, same theme (`src/theme.css`).
 - `SDK` (`runtime.ts`) must equal `WEB_SDK` (`module-api`); test checks. Mismatch → script not loaded.
-- Script missing/failing → files fall back to download.
+- Script missing/failing → files fall back to their plain form (a video plays as the original in the browser's own player).
 - Loader: `src/lib/module-loader.ts`; registry: `src/sdk/registry.ts`.
 
 ## Rules
 
 1. Module crate depends on `fafnirx-module-api` + `fafnirx-common` only (`crates/module-api/tests/rules.rs`).
-2. Master never names a module; asks capabilities or proxies. No module → plain file (icon, download).
+2. Master never names a module; asks capabilities or proxies. No module → plain file (icon, native player, download).
 3. Web part imports `@/sdk`, `@/components/ui`, own folder only (oxlint). App never imports a module.
 4. Shared data goes through the master (columns it keeps per file). Own tables would be `m_<id>_*` with own migrations; none yet.
 5. No login in modules; listen where only the master reaches, trust the token.
