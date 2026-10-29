@@ -1,14 +1,17 @@
 [package]
-name = "fafnirx-stream"
+name = "fafnirx-video"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# The video module: adaptive streaming, subtitles, and what the master needs to know about a video (details, poster frame).
+# It may depend on fafnirx-module-api and fafnirx-common only, never on the master (checked by crates/module-api/tests).
 [dependencies]
 anyhow.workspace = true
 axum = "0.7"
-fafnirx-common = { path = "../common", features = ["server"] }
+fafnirx-common = { path = "../../../crates/common", features = ["server"] }
+fafnirx-module-api = { path = "../../../crates/module-api" }
 hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true

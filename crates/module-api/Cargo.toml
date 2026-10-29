@@ -1,0 +1,14 @@
+[package]
+name = "fafnirx-module-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The contract between the master and its modules (see docs/modules.md). Types only: it depends on neither the master nor
+# any web framework, so a module is free to be built with whatever it likes.
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

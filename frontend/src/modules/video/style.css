@@ -1,0 +1,5 @@
+/* The classes this module uses, made on their own: the app's style sheet only has the ones its own code uses. */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@import "../../theme.css";
+@source "./";

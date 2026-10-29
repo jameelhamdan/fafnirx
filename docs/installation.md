@@ -4,7 +4,7 @@ Install the **master** on a server first, then the **client** on each device (it
 
 ## 1. The master (Docker)
 
-Image: [`jameelh99/fafnirx-master`](https://hub.docker.com/r/jameelh99/fafnirx-master) (`amd64`, `arm64`); Compose adds PostgreSQL.
+Image: [`jameelh99/fafnirx`](https://hub.docker.com/r/jameelh99/fafnirx) (`amd64`, `arm64`); Compose adds PostgreSQL.
 
 **Requirements:** Docker with Compose; local disk for PostgreSQL (never SMB/NFS; an external server must be PostgreSQL 13+);
 disk for the files (ZFS recommended); ports `7443` (devices) and `8080` (web app), both plain HTTP: keep them on a LAN/VPN or
@@ -27,7 +27,7 @@ FAFNIRX_DB_DIR=/tank/fafnirx/pgdata      # PostgreSQL, local disk
 FAFNIRX_CONFIG_DIR=/tank/fafnirx/config  # rclone.conf
 FAFNIRX_UID=1000
 FAFNIRX_GID=1000
-FAFNIRX_IMAGE=jameelh99/fafnirx-master:3.0.1   # pin to upgrade on purpose
+FAFNIRX_IMAGE=jameelh99/fafnirx:3.0.1   # pin to upgrade on purpose
 ```
 
 **Upgrade:** `docker compose pull && docker compose up -d` (migrates on start; [back up first](deployment.md#backups)).
@@ -40,8 +40,7 @@ FAFNIRX_IMAGE=jameelh99/fafnirx-master:3.0.1   # pin to upgrade on purpose
 | `FAFNIRX_DATA` | `data` (`/data`) | Data directory |
 | `FAFNIRX_LISTEN`, `FAFNIRX_HTTP` | `0.0.0.0:7443`, `0.0.0.0:8080` | Device (gRPC) and web addresses |
 | `FAFNIRX_RCLONE`, `FAFNIRX_RCLONE_CONFIG` | `rclone`, `<data>/rclone.conf` (`/config/rclone.conf`) | rclone binary and config for mirrors |
-| `FAFNIRX_STREAM_URL`, `FAFNIRX_STREAM_TOKEN` | unset | Streaming service and secret ([streaming](streaming.md)) |
-| `FAFNIRX_FFMPEG`, `FAFNIRX_FFPROBE` | `ffmpeg`, `ffprobe` | Video details, pictures, playable copies |
+| `FAFNIRX_MODULE_<ID>_URL`, `FAFNIRX_MODULE_<ID>_TOKEN` | unset | An optional [module](modules.md) run as a container of its own, and its secret, e.g. `FAFNIRX_MODULE_VIDEO_URL` ([video](video.md)). A module can also be installed as a plugin from the web app (**Plugins**) with no setting |
 | `FAFNIRX_TICK_SECS` | `15` | How often due sources and mirrors are looked for |
 | `FAFNIRX_TRUSTED_PROXY` | none | Proxies whose `X-Forwarded-For` is believed ([proxy](deployment.md#reverse-proxy-with-caddy)) |
 | `FAFNIRX_INSTANCE_LEASE_SECS` | `90` | Silence before another computer may take over a device |

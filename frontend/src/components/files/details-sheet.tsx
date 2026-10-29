@@ -5,7 +5,6 @@ import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ErrorNote, Fact } from '../common'
 import { Confirm } from '../confirm'
-import { AppVideo } from '../lazy-video'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Separator } from '../ui/separator'
@@ -16,13 +15,14 @@ import { api, downloadUrl, thumbUrl } from '@/lib/api'
 import { isLibraryFile } from '@/lib/entries'
 import { useLibraryActions } from '@/lib/library'
 import { ago, bytes, dateTime } from '@/lib/format'
-import { fileSource } from '@/lib/player-source'
-import { hasWorkspace, useRole, useSession } from '@/lib/session'
+import { fileOfInfo } from '@/lib/module-file'
+import { hasWorkspace, useRole } from '@/lib/session'
 import type { AssetDetail, FileInfo } from '@/lib/types'
 import { AlbumPicker } from '../library/album-picker'
 import { WorkNote } from '../work-note'
 import { FileIcon } from './file-icon'
 import { useT } from '@/lib/i18n'
+import { ModuleViewer, useHasViewer } from '@/sdk'
 
 const InfoPanel = lazy(() => import('../library/info-panel'))
 
@@ -32,14 +32,14 @@ const InfoPanel = lazy(() => import('../library/info-panel'))
  */
 function VideoPreview({ info }: { info: FileInfo }) {
   const t = useT()
-  const stream = useSession()?.stream === true
+  const file = fileOfInfo(info)
+  const hasViewer = useHasViewer(file)
   const [started, setStarted] = useState(false)
   const [failed, setFailed] = useState(false)
-  const source = fileSource(info, stream)
-  if (failed) {
+  if (failed || !hasViewer) {
     return (
       <div className="grid gap-2 rounded-lg border bg-muted/40 p-4 text-center text-sm text-muted-foreground">
-        <p>{t('This video cannot be played in the browser yet. A playable copy is made in the background for formats browsers do not support.')}</p>
+        <p>{hasViewer ? t('This video cannot be played in the browser. Download it to watch it.') : t('Playing videos needs the video module. Download the file to watch it.')}</p>
         <Button variant="outline" size="sm" className="mx-auto" asChild><a href={downloadUrl(info.device, info.path)}><Download className="size-4" />{t('Download')}</a></Button>
       </div>
     )
@@ -52,7 +52,7 @@ function VideoPreview({ info }: { info: FileInfo }) {
         onClick={() => setStarted(true)}
         className="group relative grid h-56 w-full place-items-center overflow-hidden rounded-lg border bg-black"
       >
-        {source.poster && <img src={source.poster} alt="" className="absolute inset-0 size-full object-contain opacity-80" />}
+        {file.poster && <img src={file.poster} alt="" className="absolute inset-0 size-full object-contain opacity-80" />}
         <span className="relative grid size-14 place-items-center rounded-full bg-black/55 text-white ring-1 ring-white/20 transition-transform group-hover:scale-105">
           <Play className="size-6 translate-x-0.5 fill-current" />
         </span>
@@ -60,9 +60,12 @@ function VideoPreview({ info }: { info: FileInfo }) {
     )
   }
   return (
-    <Suspense fallback={<Skeleton className="h-56 w-full" />}>
-      <AppVideo source={source} onFail={() => setFailed(true)} className="w-full rounded-lg [&_video]:max-h-80 [&_video]:w-full" />
-    </Suspense>
+    <ModuleViewer
+      file={file}
+      onFail={() => setFailed(true)}
+      loading={<Skeleton className="h-56 w-full" />}
+      className="w-full rounded-lg [&_video]:max-h-80 [&_video]:w-full"
+    />
   )
 }
 

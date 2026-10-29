@@ -4,8 +4,9 @@
 /docker-data/
 .env
 /dist
+/frontend/dist-modules/
 frontend/node_modules
 frontend/dist
 .venv/
 /config/rclone.conf
-/stream-cache/
+/video-cache/

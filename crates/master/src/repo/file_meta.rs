@@ -46,17 +46,7 @@ pub fn save(c: &mut impl GenericClient, root: &[u8], m: &Meta, read_at: i64) -> 
     Ok(())
 }
 
-/// Whether any version of any file has this content.
-pub fn content_is_stored(c: &mut impl GenericClient, root: &[u8]) -> Result<bool, Error> {
-    q::content_is_stored().bind(&mut Pg(c), &root).one()
-}
-
 /// Whether the path of a device still holds this content (a job made for it may be out of date).
 pub fn path_holds(c: &mut impl GenericClient, device: &str, path: &str, root: &[u8]) -> Result<bool, Error> {
     q::file_holds_content().params(&mut Pg(c), &q::FileHoldsContentParams { device, path, root }).one()
-}
-
-/// The video codec read from a content, if it was read.
-pub fn codec(c: &mut impl GenericClient, root: &[u8]) -> Result<Option<String>, Error> {
-    Ok(q::file_codec().bind(&mut Pg(c), &root).opt()?.flatten())
 }

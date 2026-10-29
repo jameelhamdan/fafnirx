@@ -1,18 +1,19 @@
-// End-to-end test of adaptive video streaming: the real master in front of the real fafnirx-stream service.
+// End-to-end test of the video module: the real master in front of the real fafnirx-video service.
 //
 // ffmpeg is not needed: small stand-in programs answer for ffprobe and ffmpeg, so that what is tested is everything
-// around them: the web login in front, the token between the two services, the playlists, which stretch of the
-// video each segment asks ffmpeg for, that a segment is made once and kept, and that the service refuses paths that
-// leave the file tree. (Real transcoding needs ffmpeg and is checked by hand: docs/streaming.md.)
-//   cd tests && npm install && node e2e-stream.mjs
+// around them: the manifest the master asks for, the web login in front, the token between the two services, the
+// details and poster frame the master gets for a new video, the playlists, which stretch of the video each segment asks
+// ffmpeg for, that a segment is made once and kept, and that the service refuses paths that leave the file tree. (Real
+// transcoding needs ffmpeg and is checked by hand: docs/video.md.)
+//   cd tests && npm install && node e2e-video.mjs
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { BIN, check, ENV, EXE, freePort, harness, MASTER, passedChecks, until } from './lib.mjs'
 
-const STREAM = path.join(BIN, `fafnirx-stream${EXE}`)
-const TOKEN = 'stream-token-for-the-test-0123456789'
-const h = await harness('fafnirx-e2e-stream-', { binaries: [MASTER, STREAM] })
+const VIDEO = path.join(BIN, `fafnirx-video${EXE}`)
+const TOKEN = 'module-token-for-the-test-0123456789'
+const h = await harness('fafnirx-e2e-video-', { binaries: [MASTER, VIDEO] })
 const { tmp, data, schema, master } = h
 
 // --- stand-ins for ffprobe and ffmpeg -------------------------------------------------------------------------------
@@ -21,13 +22,13 @@ fs.mkdirSync(fakes)
 const calls = path.join(tmp, 'ffmpeg-calls.log')
 fs.writeFileSync(
   path.join(fakes, 'ffprobe.mjs'),
-  `console.log(JSON.stringify({ streams: [{ codec_type: 'video', width: 1280, height: 720 }, { codec_type: 'audio' }], format: { duration: '14.5' } }))\n`,
+  `console.log(JSON.stringify({ streams: [{ codec_type: 'video', width: 1280, height: 720 }, { codec_type: 'audio' }], format: { duration: '14.5', tags: { creation_time: '2023-11-14T22:13:20.000000Z' } } }))\n`,
 )
 fs.writeFileSync(
   path.join(fakes, 'ffmpeg.mjs'),
   `import fs from 'node:fs'
 const a = process.argv.slice(2)
-const at = (flag) => a[a.indexOf(flag) + 1]
+const at = (flag) => (a.includes(flag) ? a[a.indexOf(flag) + 1] : undefined)
 fs.appendFileSync(${JSON.stringify(calls)}, 'ss=' + at('-ss') + ' t=' + at('-t') + ' vf=' + at('-vf') + '\\n')
 fs.writeFileSync(a[a.length - 1], 'TS ss=' + at('-ss') + ' t=' + at('-t'))\n`,
 )
@@ -43,31 +44,35 @@ function program(name) {
   return sh
 }
 
-const streamPort = await freePort()
-const streamUrl = `http://127.0.0.1:${streamPort}`
+const videoPort = await freePort()
+const videoUrl = `http://127.0.0.1:${videoPort}`
 let service = null
-const calledSegments = () => (fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n').filter(Boolean) : [])
+const called = () => (fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n').filter(Boolean) : [])
+// A poster is one frame (no -t); a segment is a stretch of the video.
+const calledSegments = () => called().filter((l) => !l.includes('t=undefined'))
+const calledPosters = () => called().filter((l) => l.includes('t=undefined'))
 
 try {
-  const log = fs.openSync(path.join(tmp, 'stream.log'), 'a')
-  service = spawn(STREAM, [], {
+  const log = fs.openSync(path.join(tmp, 'video.log'), 'a')
+  service = spawn(VIDEO, [], {
     stdio: ['ignore', log, log],
     env: {
       ...ENV,
-      FAFNIRX_STREAM_TOKEN: TOKEN,
+      FAFNIRX_MODULE_TOKEN: TOKEN,
       FAFNIRX_DATA: data,
-      FAFNIRX_STREAM_CACHE: path.join(tmp, 'stream-cache'),
-      FAFNIRX_STREAM_LISTEN: `127.0.0.1:${streamPort}`,
+      FAFNIRX_VIDEO_CACHE: path.join(tmp, 'video-cache'),
+      FAFNIRX_MODULE_LISTEN: `127.0.0.1:${videoPort}`,
       FAFNIRX_FFMPEG: program('ffmpeg'),
       FAFNIRX_FFPROBE: program('ffprobe'),
     },
   })
-  check(await until(async () => { try { return (await fetch(`${streamUrl}/health`)).ok } catch { return false } }, 20, 100), 'the streaming service starts')
+  check(await until(async () => { try { return (await fetch(`${videoUrl}/health`)).ok } catch { return false } }, 20, 100), 'the video module starts')
 
-  master.env = { FAFNIRX_STREAM_URL: streamUrl, FAFNIRX_STREAM_TOKEN: TOKEN }
+  master.env = { FAFNIRX_MODULE_VIDEO_URL: videoUrl, FAFNIRX_MODULE_VIDEO_TOKEN: TOKEN }
   await master.start()
   const admin = await master.admin()
-  check((await admin.get('/api/session')).json.stream === true, 'the web app is told that streaming is on')
+  const up = await until(async () => (await admin.get('/api/session')).json.modules?.video, 30, 300)
+  check(up?.id === 'video' && up.contract === 1 && up.capabilities.includes('poster'), 'the master asks the module for its manifest, and the web app is told that the module is up')
 
   // A video in a local folder.
   await admin.post('/api/devices', { name: 'videos', kind: 'local' })
@@ -76,8 +81,14 @@ try {
   const id = await until(async () => (await schema.rows("SELECT id FROM files WHERE path = 'trip/clip.mkv'"))[0]?.[0], 30, 300)
   check(id, 'the master finds the video')
 
+  // --- what the master asks the module for ------------------------------------------------------------------------------
+  const details = await until(async () => (await schema.rows("SELECT duration_ms, width, height, taken_at FROM file_meta WHERE kind = 'video'"))[0], 30, 300)
+  check(details && Number(details[0]) === 14500 && Number(details[1]) === 1280 && Number(details[2]) === 720 && Number(details[3]) === 1_700_000_000, 'the details of the video come from the module')
+  const thumb = await until(async () => { const r = await admin.get(`/api/media/${id}/thumb`); return r.status === 200 ? r : null }, 30, 300)
+  check(thumb?.text.startsWith('TS ss=1') && calledPosters().some((l) => l.includes('scale=min(320')), 'its poster frame is made by the module, as a picture of the size asked for')
+
   // --- the playlists ------------------------------------------------------------------------------------------------------
-  const stream = (rest) => admin.get(`/api/stream/${id}/${rest}`)
+  const stream = (rest) => admin.get(`/api/m/video/${id}/hls/${rest}`)
   const top = await stream('master.m3u8')
   check(top.status === 200 && top.text.includes('720p/index.m3u8') && top.text.includes('360p/index.m3u8') && !top.text.includes('1080p'), 'the master playlist offers the qualities up to the video\'s own')
   const list = await stream('720p/index.m3u8')
@@ -98,14 +109,20 @@ try {
   check((await stream('720p/seg1.mp4')).status === 404 && (await stream('..%2Fmaster.m3u8')).status === 404, 'only playlists and segments are passed on')
 
   // --- who may ask ------------------------------------------------------------------------------------------------------------
-  const anonymous = await fetch(`${master.base}/api/stream/${id}/master.m3u8`)
+  const anonymous = await fetch(`${master.base}/api/m/video/${id}/hls/master.m3u8`)
   check(anonymous.status === 401, 'the master asks for a login first')
-  const direct = (p, headers = {}) => fetch(`${streamUrl}/hls/master.m3u8?p=${p}&h=abc123`, { headers })
-  check((await direct('admin/videos/trip/clip.mkv')).status === 401, 'the service itself refuses a request without the token')
-  check((await direct('admin/videos/trip/clip.mkv', { authorization: 'Bearer wrong-token-wrong-token' })).status === 401, 'and with a wrong one')
+  const direct = (p, headers = {}) => fetch(`${videoUrl}/files/hls/master.m3u8?p=${p}&h=abc123`, { headers })
+  check((await direct('users/admin/videos/trip/clip.mkv')).status === 401, 'the module itself refuses a request without the token')
+  check((await direct('users/admin/videos/trip/clip.mkv', { authorization: 'Bearer wrong-token-wrong-token' })).status === 401, 'and with a wrong one')
   const ok = { authorization: `Bearer ${TOKEN}` }
-  check((await direct('admin/videos/trip/clip.mkv', ok)).status === 200, 'and answers with the right one')
-  check((await direct('videos/..%2F..%2Fsecret', ok)).status === 400 && (await direct('..%2Fx%2Fy', ok)).status === 400, 'the service refuses paths that leave the file tree')
+  check((await direct('users/admin/videos/trip/clip.mkv', ok)).status === 200, 'and answers with the right one')
+  check((await direct('videos/..%2F..%2Fsecret', ok)).status === 400 && (await direct('..%2Fx%2Fy', ok)).status === 400, 'the module refuses paths that leave the file tree')
+
+  // What only the master may ask for is not reachable through its login: /files is all the web app gets.
+  const status = await admin.get(`/api/m/video/${id}/status`)
+  check(status.status === 404, 'the report and the manifest of the module are not served to the web app')
+  const queue = (await admin.get('/api/queue')).json
+  check(Array.isArray(queue.modules.video?.active), 'the queue page gets the module\'s report')
 
   // --- a file that is gone or changed ---------------------------------------------------------------------------------------------
   fs.writeFileSync(path.join(data, 'files', 'users', 'admin', 'videos', 'trip', 'clip.mkv'), 'a different video, another content hash')
@@ -117,12 +134,12 @@ try {
   await admin.post('/api/files/delete', { items: [{ device: 'admin/videos', path: 'trip/clip.mkv' }] })
   check((await stream('master.m3u8')).status === 404, 'a deleted file is not streamed')
 
-  // --- the master without a service ---------------------------------------------------------------------------------------------------
+  // --- the master without the module ---------------------------------------------------------------------------------------------------
   await master.stop()
   master.env = {}
   await master.start()
   const plain = await master.admin()
-  check((await plain.get('/api/session')).json.stream === false && (await plain.get(`/api/stream/${id}/master.m3u8`)).status === 404, 'without a streaming service the web app does not offer it')
+  check(Object.keys((await plain.get('/api/session')).json.modules).length === 0 && (await plain.get(`/api/m/video/${id}/hls/master.m3u8`)).status === 404, 'without the module the web app does not offer it')
 } catch (e) {
   console.error(e)
   process.exitCode = 1

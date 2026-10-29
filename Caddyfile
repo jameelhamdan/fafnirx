@@ -1,5 +1,5 @@
 # The reverse proxy in front of fafnirx (see docker-compose.proxy.yml and docs/deployment.md). It is the only thing
-# that is reachable from outside: the master and the streaming service stay inside the compose network.
+# that is reachable from outside: the master and the modules stay inside the compose network.
 #
 #   FAFNIRX_WEB_ADDRESS      the address of the web app. ":80" (the default) is plain HTTP on this machine's address,
 #                            like running without a proxy. A domain name, for example "fafnirx.example.com", makes

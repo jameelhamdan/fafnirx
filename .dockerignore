@@ -1,10 +1,11 @@
-# The Dockerfile only needs Cargo.toml, Cargo.lock, crates/, queries/, proto/ and frontend/ (see COPY lines); keep the rest out of
+# The Dockerfile only needs Cargo.toml, Cargo.lock, crates/, modules/, queries/, proto/ and frontend/ (see COPY lines); keep the rest out of
 # the build context so it is small, and so secrets and local data never reach the image or the layer cache.
 
 # Build output and dependencies (rebuilt inside the image)
 **/target
 **/node_modules
 frontend/dist
+frontend/dist-modules
 dist
 .venv
 
@@ -14,7 +15,7 @@ dist
 data
 pgdata
 docker-data
-stream-cache
+video-cache
 config
 
 # Repository and tooling

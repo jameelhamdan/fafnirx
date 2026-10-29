@@ -1,35 +1,44 @@
-//! The photo library, albums and the streaming proxy.
+//! The photo library, albums and the modules.
 
 use super::*;
 
-#[test]
-fn streaming_is_for_whoever_can_see_the_file_and_only_when_a_service_is_set_up() {
-    // Not set up: nothing to offer, and nothing is passed on.
-    let mut api = Api::new();
-    block(async {
-        assert_eq!(
-            api.get("/api/stream/AAAAAAAAAAAAAAAAAAAAAA/master.m3u8").await.0,
-            StatusCode::UNAUTHORIZED,
-            "the login comes first"
-        );
-        api.cookie = login(&api).await;
-        assert_eq!(api.get("/api/session").await.1["stream"], false);
-        assert_eq!(api.get("/api/stream/AAAAAAAAAAAAAAAAAAAAAA/master.m3u8").await.0, StatusCode::NOT_FOUND);
-    });
-
-    // A stand-in for the streaming service: answers only with the right token, and says what it was asked for.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let mut api = Api::with_stream(Some(crate::library::stream::Backend::new(&url, "stream-token")));
-    block(async {
-        let service = Router::new().route(
-            "/hls/*rest",
+/// A stand-in for a module: answers only with the right token, says what it was asked for, and has a report that only
+/// the master may read. `contract` is what its manifest says.
+fn stand_in_module(contract: u32) -> String {
+    use axum::extract::{Path, Query};
+    use axum::http::HeaderMap;
+    let allowed = |h: &HeaderMap| h.get("authorization").and_then(|v| v.to_str().ok()) == Some("Bearer module-token");
+    let service = Router::new()
+        .route(
+            "/manifest",
+            axum::routing::get(move |h: HeaderMap| async move {
+                if !allowed(&h) {
+                    return (StatusCode::UNAUTHORIZED, "no".to_string()).into_response();
+                }
+                axum::Json(json!({"id": "video", "version": "1.0.0", "contract": contract, "capabilities": ["status"]}))
+                    .into_response()
+            }),
+        )
+        .route(
+            "/status",
+            axum::routing::get(move |h: HeaderMap| async move {
+                if !allowed(&h) {
+                    return (StatusCode::UNAUTHORIZED, "no".to_string()).into_response();
+                }
+                axum::Json(json!({"active": [
+                    {"kind": "segment", "path": "users/admin/videos/trip/clip.mkv"},
+                    {"kind": "segment", "path": "users/bob/pc/secret.mkv"}
+                ], "failed": []}))
+                .into_response()
+            }),
+        )
+        .route(
+            "/files/*rest",
             axum::routing::get(
-                |axum::extract::Path(rest): axum::extract::Path<String>,
-                 axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
-                 headers: axum::http::HeaderMap| async move {
-                    if headers.get("authorization").and_then(|v| v.to_str().ok()) != Some("Bearer stream-token") {
+                move |Path(rest): Path<String>,
+                      Query(q): Query<std::collections::HashMap<String, String>>,
+                      h: HeaderMap| async move {
+                    if !allowed(&h) {
                         return (StatusCode::UNAUTHORIZED, "no".to_string()).into_response();
                     }
                     if rest.ends_with("seg9.ts") {
@@ -40,13 +49,48 @@ fn streaming_is_for_whoever_can_see_the_file_and_only_when_a_service_is_set_up()
                 },
             ),
         );
-        tokio::spawn(async move {
-            axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), service).await.unwrap();
-        });
+    // On a runtime of its own, so that it can be started outside the test's.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async move {
+            axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), service).await.unwrap()
+        })
+    });
+    url
+}
 
-        assert_eq!(api.get("/api/stream/AAAAAAAAAAAAAAAAAAAAAA/master.m3u8").await.0, StatusCode::UNAUTHORIZED);
+fn registry_of(url: &str, token: &str) -> Arc<crate::modules::Registry> {
+    let vars = [("FAFNIRX_MODULE_VIDEO_URL", url), ("FAFNIRX_MODULE_VIDEO_TOKEN", token)];
+    Arc::new(crate::modules::Registry::from_vars(vars.into_iter().map(|(k, v)| (k.to_string(), v.to_string()))))
+}
+
+#[test]
+fn a_module_is_for_whoever_can_see_the_file_and_only_when_it_is_set_up() {
+    // Not set up: nothing to offer, and nothing is passed on.
+    let mut api = Api::new();
+    block(async {
+        assert_eq!(
+            api.get("/api/m/video/AAAAAAAAAAAAAAAAAAAAAA/hls/master.m3u8").await.0,
+            StatusCode::UNAUTHORIZED,
+            "the login comes first"
+        );
         api.cookie = login(&api).await;
-        assert_eq!(api.get("/api/session").await.1["stream"], true);
+        assert_eq!(api.get("/api/session").await.1["modules"], json!({}));
+        assert_eq!(api.get("/api/m/video/AAAAAAAAAAAAAAAAAAAAAA/hls/master.m3u8").await.0, StatusCode::NOT_FOUND);
+    });
+
+    let registry = registry_of(&stand_in_module(fafnirx_module_api::CONTRACT), "module-token");
+    let mut api = Api::with_modules(registry.clone());
+    block(async {
+        api.cookie = login(&api).await;
+        assert_eq!(api.get("/api/session").await.1["modules"], json!({}), "not up before it has answered");
+        assert_eq!(api.get("/api/m/video/AAAAAAAAAAAAAAAAAAAAAA/hls/master.m3u8").await.0, StatusCode::NOT_FOUND);
+
+        registry.refresh_all().await;
+        let session = api.get("/api/session").await.1;
+        assert_eq!(session["modules"]["video"]["capabilities"], json!(["status"]));
         api.json(Method::POST, "/api/devices", json!({"name": "videos", "kind": "local"})).await;
         api.upload("admin/videos", "trip/clip.mkv", b"video bytes").await;
         let id: uuid::Uuid = crate::platform::db::with(&api.db, |c| {
@@ -57,30 +101,50 @@ fn streaming_is_for_whoever_can_see_the_file_and_only_when_a_service_is_set_up()
         let id = crate::platform::id::Id(id);
 
         let (status, headers, body) =
-            api.send(Method::GET, &format!("/api/stream/{id}/720p/index.m3u8"), Body::empty(), None, &[]).await;
+            api.send(Method::GET, &format!("/api/m/video/{id}/hls/720p/index.m3u8"), Body::empty(), None, &[]).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers[header::CONTENT_TYPE], "application/vnd.apple.mpegurl");
         let text = String::from_utf8(body).unwrap();
         assert!(
-            text.contains("720p/index.m3u8 p=users/admin/videos/trip/clip.mkv h="),
-            "the service is told which file and content: {text}"
+            text.contains("hls/720p/index.m3u8 p=users/admin/videos/trip/clip.mkv h="),
+            "the module is told which file and content: {text}"
         );
-        assert!(!text.contains("stream-token"));
+        assert!(!text.contains("module-token"));
 
-        let (status, error) = api.get(&format!("/api/stream/{id}/720p/seg9.ts")).await;
+        let (status, error) = api.get(&format!("/api/m/video/{id}/hls/720p/seg9.ts")).await;
         assert_eq!(
             (status, error["error"].as_str()),
             (StatusCode::NOT_FOUND, Some("no such segment")),
             "its answer is passed on"
         );
-        for bad in ["../master.m3u8", "720p/seg1.mp4", "other"] {
-            assert_eq!(api.get(&format!("/api/stream/{id}/{bad}")).await.0, StatusCode::NOT_FOUND, "{bad}");
+        for bad in ["../status", "hls/../status", ".hidden", "a/b/c/d/e"] {
+            assert_eq!(api.get(&format!("/api/m/video/{id}/{bad}")).await.0, StatusCode::NOT_FOUND, "{bad}");
         }
+        // Only what is under /files of the module is reachable: asking for its report or manifest asks for /files/status
+        // and /files/manifest, so what only the master may read is never sent.
+        for private in ["status", "manifest"] {
+            let uri = format!("/api/m/video/{id}/{private}");
+            let (status, _, body) = api.send(Method::GET, &uri, Body::empty(), None, &[]).await;
+            let text = String::from_utf8(body).unwrap();
+            assert!(
+                status == StatusCode::OK && text.starts_with(&format!("#EXTM3U {private} p=")) && !text.contains("bob"),
+                "{private}: {text}"
+            );
+        }
+        assert_eq!(api.get(&format!("/api/m/nothing/{id}/hls/master.m3u8")).await.0, StatusCode::NOT_FOUND);
         assert_eq!(
-            api.get("/api/stream/AAAAAAAAAAAAAAAAAAAAAQ/master.m3u8").await.0,
+            api.get("/api/m/video/AAAAAAAAAAAAAAAAAAAAAQ/hls/master.m3u8").await.0,
             StatusCode::NOT_FOUND,
             "no such file"
         );
+
+        // The queue page shows the report of the module, without the tasks of files the user cannot see.
+        let tasks = |queue: &serde_json::Value| queue["modules"]["video"]["active"].as_array().unwrap().len();
+        assert_eq!(tasks(&api.get("/api/queue").await.1), 2, "an administrator sees every task");
+        let bob = add_user(&mut api, "bob", "normal").await;
+        api.cookie = bob;
+        assert_eq!(tasks(&api.get("/api/queue").await.1), 1, "bob sees only the task of his own file");
+        api.cookie = login(&api).await;
 
         api.json(
             Method::POST,
@@ -89,10 +153,27 @@ fn streaming_is_for_whoever_can_see_the_file_and_only_when_a_service_is_set_up()
         )
         .await;
         assert_eq!(
-            api.get(&format!("/api/stream/{id}/master.m3u8")).await.0,
+            api.get(&format!("/api/m/video/{id}/hls/master.m3u8")).await.0,
             StatusCode::NOT_FOUND,
             "a deleted file is not streamed"
         );
+    });
+}
+
+#[test]
+fn a_module_that_refuses_the_token_or_speaks_another_contract_is_not_used() {
+    let other_contract = registry_of(&stand_in_module(fafnirx_module_api::CONTRACT + 1), "module-token");
+    let wrong_token = registry_of(&stand_in_module(fafnirx_module_api::CONTRACT), "not-the-token");
+    block(async {
+        other_contract.refresh_all().await;
+        assert!(other_contract.active().is_empty(), "another contract version");
+
+        wrong_token.refresh_all().await;
+        assert!(wrong_token.active().is_empty(), "the token is refused");
+
+        let nobody_home = registry_of("http://127.0.0.1:1", "module-token");
+        nobody_home.refresh_all().await;
+        assert!(nobody_home.active().is_empty(), "nothing answers");
     });
 }
 

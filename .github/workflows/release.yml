@@ -262,7 +262,8 @@ jobs:
     env:
       VERSION: ${{ needs.validate.outputs.version }}
       SHA: ${{ needs.prepare.outputs.sha }}
-      IMAGE: ${{ vars.DOCKERHUB_IMAGE || format('{0}/fafnirx-master', secrets.DOCKERHUB_USERNAME) }}
+      IMAGE: ${{ vars.DOCKERHUB_IMAGE || format('{0}/fafnirx', secrets.DOCKERHUB_USERNAME) }}
+      VIDEO_IMAGE: ${{ vars.DOCKERHUB_VIDEO_IMAGE || format('{0}/fafnirx-video', secrets.DOCKERHUB_USERNAME) }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -273,11 +274,17 @@ jobs:
           pattern: client-*
           path: out
           merge-multiple: true
+      # The plugins the master installs from this release (fafnirx-plugin-<module>-<version>-<platform>.zip and its checksum).
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: plugin-*
+          path: out
+          merge-multiple: true
       - name: Create the tag and the release
         run: |
           # shellcheck disable=SC2016 # the backticks are Markdown, not command substitution
-          printf 'Server: `docker pull %s:%s`\n\nClient: the installer for your system is attached below, each with a `.sha256`.\n\n' \
-            "$IMAGE" "$VERSION" > notes.md
+          printf 'Server: `docker pull %s:%s`; the optional video module: `docker pull %s:%s`\n\nPlugins: install them from the Plugins page of the web app (they are attached below too).\n\nClient: the installer for your system is attached below, each with a `.sha256`.\n\n' \
+            "$IMAGE" "$VERSION" "$VIDEO_IMAGE" "$VERSION" > notes.md
           gh release create "v$VERSION" out/* --target "$SHA" --title "v$VERSION" \
             --notes-file notes.md --generate-notes
 

@@ -1,4 +1,3 @@
-import { clock as clockOfSeconds } from '@/player/util'
 import { locale, msg, tr } from './i18n'
 
 const UNITS = [msg('B'), msg('KB'), msg('MB'), msg('GB'), msg('TB'), msg('PB')]
@@ -79,9 +78,15 @@ export function fromInputValue(value: string): number | null {
   return Number.isNaN(ms) ? null : Math.floor(ms / 1000)
 }
 
-/** "1:23" or "1:02:03" from milliseconds. */
 /** A length of time given in milliseconds, as `1:05` or `1:02:03`. */
-export const clock = (ms: number): string => clockOfSeconds(Math.round(ms / 1000))
+export function clock(ms: number): string {
+  const seconds = Math.round(ms / 1000)
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = String(seconds % 60).padStart(2, '0')
+  return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`
+}
 
 export function count(n: number): string {
   return n.toLocaleString(locale())

@@ -39,16 +39,16 @@ struct Api {
 
 impl Api {
     fn new() -> Self {
-        Self::with_stream(None)
+        Self::with_modules(Arc::default())
     }
 
-    fn with_stream(stream: Option<crate::library::stream::Backend>) -> Self {
+    fn with_modules(modules: Arc<crate::modules::Registry>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(Store::open(dir.path()).unwrap());
         let db = testing::db();
         super::auth::bootstrap(&mut *db.get().unwrap(), "secret").unwrap();
         let mut state = AppState::new(db.clone(), store.clone(), dir.path().to_path_buf()).unwrap();
-        state.stream = stream;
+        state.modules = modules;
         let state = Arc::new(state);
         let app = router(state.clone()).layer(MockConnectInfo("127.0.0.1:1".parse::<SocketAddr>().unwrap()));
         Self { app, db, store, cookie: String::new(), _dir: dir }

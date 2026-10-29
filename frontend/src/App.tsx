@@ -26,6 +26,7 @@ const Watch = lazy(() => import('./pages/watch.tsx'))
 const MapPage = lazy(() => import('./pages/map.tsx'))
 const Trash = lazy(() => import('./pages/trash.tsx'))
 const Users = lazy(() => import('./pages/users.tsx'))
+const Plugins = lazy(() => import('./pages/plugins.tsx'))
 
 /** A page for some of the roles; the others are sent to the first page. */
 function Only({ allow, role, children }: { allow: 'admin' | 'workspace'; role: Role; children: ReactNode }) {
@@ -40,7 +41,7 @@ export default function App() {
 
   // Any call that finds the login ended sends the user back to the login page.
   useEffect(() => {
-    const ended = () => client.setQueryData<Session>(['session'], { user: null, stream: false })
+    const ended = () => client.setQueryData<Session>(['session'], { user: null })
     window.addEventListener(UNAUTHORIZED, ended)
     return () => window.removeEventListener(UNAUTHORIZED, ended)
   }, [client])
@@ -74,6 +75,7 @@ export default function App() {
             <Route path="/mirrors" element={<Only allow="admin" role={role}><Mirrors /></Only>} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/users" element={<Only allow="admin" role={role}><Users /></Only>} />
+            <Route path="/plugins" element={<Only allow="admin" role={role}><Plugins /></Only>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>

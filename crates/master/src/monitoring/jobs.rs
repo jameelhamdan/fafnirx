@@ -116,7 +116,7 @@ pub fn hourly(db: &Db, store: &Store, cache_root: &Path) -> Result<()> {
     if orphans > 0 {
         tracing::info!("removed {orphans} stored versions that no record points to");
     }
-    crate::library::meta::clean_cache(db, cache_root)?;
+    crate::library::meta::clean_cache(cache_root);
     crate::repo::jobs::purge_done(&mut *db.get()?)?;
     Ok(())
 }

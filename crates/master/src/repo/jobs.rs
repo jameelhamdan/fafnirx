@@ -1,4 +1,4 @@
-//! The queue of background work (`library::meta`): reading metadata, making thumbnails and playable copies. Look at it and
+//! The queue of background work (`library::meta`): reading metadata, making thumbnails. Look at it and
 //! steer it with `monitoring::queue`.
 
 use crate::platform::pg::Pg;
@@ -32,11 +32,9 @@ pub fn requeue_running(c: &mut impl GenericClient) -> Result<(), Error> {
     Ok(())
 }
 
-/// Takes one due job from the queue and marks it running; the other lane (`with_proxies` false) leaves the slow video
-/// conversions alone. One statement, so a job is only taken once.
-pub fn claim(c: &mut impl GenericClient, now: i64, with_proxies: bool) -> Result<Option<Claimed>, Error> {
-    let params = q::ClaimJobParams { now, with_proxies };
-    Ok(q::claim_job().params(&mut Pg(c), &params).opt()?.map(|j| Claimed {
+/// Takes one due job from the queue and marks it running. One statement, so a job is only taken once.
+pub fn claim(c: &mut impl GenericClient, now: i64) -> Result<Option<Claimed>, Error> {
+    Ok(q::claim_job().bind(&mut Pg(c), &now).opt()?.map(|j| Claimed {
         id: j.id,
         kind: j.kind,
         payload: j.payload,

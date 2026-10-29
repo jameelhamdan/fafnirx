@@ -1,5 +1,5 @@
 //! The subtitles of a video: the text tracks inside the file and the subtitle files next to it, offered as one list of
-//! WebVTT tracks (`/hls/subtitles.json`, `/hls/subtitles/<n>.vtt`). Each track is made once, by `ffmpeg`, and kept with
+//! WebVTT tracks (`/files/hls/subtitles.json`, `/files/hls/subtitles/<n>.vtt`). Each track is made once, by `ffmpeg`, and kept with
 //! the video's other cached things.
 
 use crate::ffmpeg;

@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Archive, Cog, FolderOpen, FolderSync, GalleryVerticalEnd, HardDrive, Heart, Images, LayoutDashboard, LogOut, MapPin, Menu, Monitor, Moon, Settings, Sun, Trash2, UploadCloud, Users } from 'lucide-react'
+import { Archive, Cog, FolderOpen, FolderSync, GalleryVerticalEnd, HardDrive, Heart, Images, LayoutDashboard, LogOut, MapPin, Menu, Monitor, Moon, Puzzle, Settings, Sun, Trash2, UploadCloud, Users } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
@@ -15,6 +15,7 @@ import { Button } from './ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 import { REPO } from '@/lib/links'
+import { useModuleScripts } from '@/lib/module-loader'
 
 /** Who sees an entry: everybody, the roles with a workspace of their own (not read-only), or administrators. */
 type Audience = 'all' | 'workspace' | 'admin'
@@ -42,6 +43,7 @@ const NAV: { title: string; items: { to: string; label: string; icon: typeof Ima
       { to: '/queue', label: msg('Processing'), icon: Cog, for: 'all' },
       { to: '/mirrors', label: msg('Mirrors'), icon: HardDrive, for: 'admin' },
       { to: '/users', label: msg('Users'), icon: Users, for: 'admin' },
+      { to: '/plugins', label: msg('Plugins'), icon: Puzzle, for: 'admin' },
       { to: '/settings', label: msg('Settings'), icon: Settings, for: 'all' },
     ],
   },
@@ -122,12 +124,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   const live = useLive()
   const [open, setOpen] = useState(false)
   const session = useSession()
+  useModuleScripts()
   const version = session?.version
 
   async function logout() {
     await api.post('/api/logout').catch(() => undefined)
     client.clear()
-    client.setQueryData<Session>(['session'], { user: null, stream: false })
+    client.setQueryData<Session>(['session'], { user: null })
   }
 
   return (

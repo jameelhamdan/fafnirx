@@ -1,12 +1,18 @@
-# The master image (see Dockerfile) for linux/amd64 and linux/arm64. Called twice by the Release workflow:
-#   push: false  builds each platform on a runner of its own kind (no emulation), starts the image against a PostgreSQL
-#                and checks that it works (.github/scripts/smoke-image.sh). Nothing leaves the runner.
+# The images (see Dockerfile: the master, and one per module) for linux/amd64 and linux/arm64. Called twice by the Release
+# workflow:
+#   push: false  builds each image on each platform on a runner of its own kind (no emulation), starts it and checks that
+#                it works (.github/scripts/smoke-image.sh). Nothing leaves the runner.
 #   push: true   builds both platforms again, from the layers the check cached, and pushes <version>, <major>.<minor> and
 #                latest to Docker Hub.
-# So the image is proven on both platforms before anything is pushed anywhere.
+# So every image is proven on both platforms before anything is pushed anywhere. A new module is one more entry in the two
+# matrices.
+#
+# The check also makes the plugin bundles (the modules as zip files for the master to install, see docs/modules.md), starts the
+# master image with each, and keeps them as artifacts (plugin-<module>-<arch>) for the Release workflow to attach to the release.
 #
 # Needs: secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (an access token with write rights), and optionally the
-# repository variable DOCKERHUB_IMAGE (default <username>/fafnirx-master).
+# repository variables DOCKERHUB_IMAGE (default <username>/fafnirx) and DOCKERHUB_VIDEO_IMAGE (default
+# <username>/fafnirx-video).
 name: Docker
 
 on:
@@ -35,8 +41,10 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - { arch: amd64, os: ubuntu-latest }
-          - { arch: arm64, os: ubuntu-24.04-arm }
+          - { image: master, arch: amd64, os: ubuntu-latest }
+          - { image: master, arch: arm64, os: ubuntu-24.04-arm }
+          - { image: video, arch: amd64, os: ubuntu-latest }
+          - { image: video, arch: arm64, os: ubuntu-24.04-arm }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -49,20 +57,50 @@ jobs:
           DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
           context: .
+          target: ${{ matrix.image }}
           platforms: linux/${{ matrix.arch }}
           load: true
-          tags: fafnirx-master:check
+          tags: fafnirx-${{ matrix.image }}:check
           provenance: false
-          cache-from: type=gha,scope=image-${{ matrix.arch }}
-          cache-to: type=gha,scope=image-${{ matrix.arch }},mode=max
+          cache-from: type=gha,scope=image-${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: type=gha,scope=image-${{ matrix.image }}-${{ matrix.arch }},mode=max
       - name: Start it and check that it works
-        run: bash .github/scripts/smoke-image.sh fafnirx-master:check
+        run: bash .github/scripts/smoke-image.sh fafnirx-${{ matrix.image }}:check ${{ matrix.image }}
+
+      # The bundle is built on the same stages as the images (the layers are in the cache by now), and has to run on the master
+      # image of this platform: the program is built on its system.
+      - name: Build the video plugin
+        if: ${{ matrix.image == 'master' }}
+        uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: .
+          target: plugin-video
+          platforms: linux/${{ matrix.arch }}
+          build-args: VERSION=${{ inputs.version }}
+          outputs: type=local,dest=plugin-out
+          provenance: false
+          cache-from: type=gha,scope=image-video-${{ matrix.arch }}
+      - name: Start the master with the plugin and check that it works
+        if: ${{ matrix.image == 'master' }}
+        run: bash .github/scripts/smoke-image.sh fafnirx-master:check plugin plugin-out/fafnirx-plugin-video-*.zip
+      - uses: actions/upload-artifact@v4
+        if: ${{ matrix.image == 'master' }}
+        with:
+          name: plugin-video-${{ matrix.arch }}
+          path: plugin-out/*
+          if-no-files-found: error
 
   push:
     if: ${{ inputs.push }}
+    strategy:
+      fail-fast: true
+      matrix:
+        image: [master, video]
     runs-on: ubuntu-latest
     env:
-      IMAGE: ${{ vars.DOCKERHUB_IMAGE || format('{0}/fafnirx-master', secrets.DOCKERHUB_USERNAME) }}
+      IMAGE: ${{ matrix.image == 'video' && (vars.DOCKERHUB_VIDEO_IMAGE || format('{0}/fafnirx-video', secrets.DOCKERHUB_USERNAME)) || (vars.DOCKERHUB_IMAGE || format('{0}/fafnirx', secrets.DOCKERHUB_USERNAME)) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -94,14 +132,15 @@ jobs:
           DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
           context: .
+          target: ${{ matrix.image }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: false
           cache-from: |
-            type=gha,scope=image-amd64
-            type=gha,scope=image-arm64
+            type=gha,scope=image-${{ matrix.image }}-amd64
+            type=gha,scope=image-${{ matrix.image }}-arm64
 
       - name: What was pushed
         run: docker buildx imagetools inspect "$IMAGE:${{ inputs.version }}"

@@ -19,10 +19,11 @@ flowchart TB
 |---|---|
 | Client `fafnirx` (`crates/client`) | Watch, hash in chunks, upload, offline queue, shared-folder sync, tray, self-update from GitHub releases |
 | Master `fafnirx-master` (`crates/master`) | Device API, web API, file store, ingest, retention, alerts, sources, mirrors, metadata |
-| Web app (`frontend`) | React, built into the master. The video player (`src/player`) imports nothing from the app |
-| `fafnirx-stream` (`crates/stream`) | Optional HLS service; only the master talks to it ([streaming](streaming.md)) |
+| Web app (`frontend`) | React, built into the master. A module's part is `src/modules/<id>`, built apart and loaded by the browser from the module while it is up (`src/sdk`, `src/lib/module-loader.ts`) |
+| Modules (`modules/<id>/service`) | Optional services, run by the master as plugins (`<data>/plugins/<id>`) or as containers; only the master talks to them ([modules](modules.md)). Today: `fafnirx-video`, HLS streaming and video details ([video](video.md)) |
+| `crates/module-api` | The contract between the master and a module: manifest, capabilities, version |
 | `fafnirx-sign` (`crates/sign`) | Optional: signed client builds |
-| `crates/common` | gRPC types, chunking, hashing, path rules, `ffprobe` parsing |
+| `crates/common` | gRPC types, chunking, hashing, path rules, reading dates and places from metadata text |
 
 ## Design decisions
 
@@ -159,9 +160,9 @@ name it `<owner>/<name>`. Clients reach it like this:
 | Offline and disk alerts, upload-error and held-deletion expiry | `monitoring/jobs.rs`, every minute | |
 | Retention, version pruning, stale uploads, cache cleaning | `monitoring/jobs.rs`, hourly | Removes files with their records |
 | Sources, mirrors | `integrations/` | `FOR UPDATE SKIP LOCKED` |
-| `meta` → `artwork` → `thumb` → `proxy` | `library/meta.rs`, table `jobs` | 3 attempts; `proxy` is a slow lane; a job returns a note shown in Processing |
+| `meta` → `artwork` → `thumb` | `library/meta.rs`, table `jobs` | 3 attempts; videos are probed and drawn by a module (`modules/`, capabilities `probe.video`, `poster`); a job returns a note shown in Processing |
 | Pictures on request | `library/meta.rs` | `cache/thumbs/`, at most 4 decoded at once |
-| Segments, subtitles | `crates/stream` | On request; in memory, `GET /tasks` |
+| Segments, subtitles | `modules/video/service` | On request; in memory, `GET /status` |
 
 `done` jobs stay a day; queueing the same `(kind, payload)` while one is queued or running is a no-op; setting `jobs_paused`
 makes workers wait. A file counts as unread while it has no `file_meta` row: that is the API's `processing` flag; `work`
@@ -238,9 +239,10 @@ JSON under `/api` behind the login cookie (random token, hash stored, `SameSite=
 | Files | `GET /api/files` (entries carry `id`, `processing`), `GET /api/files/info` (carries `work`), `POST /api/files/delete`, `/restore`, `/move` (`{device, from, to}`; local folders, shared folders and master files, 409 otherwise), `/rescan` (admin) |
 | Transfers | `GET /api/files/download` (ranges, versions), `/thumb`, `POST /api/files/zip`, `POST /api/uploads`, `PUT/GET/DELETE /api/uploads/:id`, `POST /api/uploads/:id/finish` |
 | Library | `GET /api/timeline/buckets`, `/timeline?month=`, `/library?ids=`, `GET/PATCH /api/library/:id` (carries `work`), `GET /api/library/:id/folder`, `POST /api/library/bulk`, `GET /api/tags`, `DELETE /api/tags/:id`, `GET /api/map`, `GET /api/trash`. Assets carry `processing` |
-| Pictures | `GET /api/media/:id/{thumb,preview,video,original,download}` (`?v=<hash>` caches for good; `video` is 404 until a playable copy exists) |
+| Pictures | `GET /api/media/:id/{thumb,preview,original,download}` (`?v=<hash>` caches for good) |
 | Albums | `GET/POST /api/albums` (a `folder` body makes or returns the folder's album), `GET/PATCH/DELETE /api/albums/:id`, `POST .../files` and `.../files/remove` (by `ids` or `items` of `{device, path}`) |
-| Streaming | `GET /api/stream/:id/{master.m3u8,<quality>/index.m3u8,<quality>/seg<n>.ts,subtitles.json,subtitles/<n>.vtt}` |
+| Modules | `GET /api/m/:module/:id/*rest` asks the module for `/files/<rest>` about the file (login and right to the file first); video: `hls/{master.m3u8,<quality>/index.m3u8,<quality>/seg<n>.ts,subtitles.json,subtitles/<n>.vtt}`. `GET /api/m/:module/ui/:file` their web part. `GET /api/session` lists the modules that are up, `GET /api/queue` carries their reports |
+| Plugins (admin) | `GET /api/plugins` (installed, with state), `GET /api/plugins/available` (what the release of this version carries), `POST /api/plugins/:id` (install or update), `DELETE /api/plugins/:id` |
 | Processing | `GET /api/queue`; admin: `POST /api/queue/pause`, `/retry`, `/cancel`, `/rebuild` |
 | Integrations | `GET/POST /api/sources`, `POST /api/sources/rclone` (any rclone storage), `/:user/:name`, `/run`, `/toggle`; admin: `GET/POST /api/mirrors` (`kind` replica or backup) + `/:name`, `/run`, `/toggle`, `/resync`, `GET /api/mirrors/:name/restore-kit` (backups), `GET /api/mirrors/scope?path=` (folders to pick from) |
 | Settings | `GET/PUT /api/settings` |

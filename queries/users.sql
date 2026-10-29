@@ -6,6 +6,9 @@ FROM users u ORDER BY u.name;
 --! user_names
 SELECT name FROM users;
 
+--! enabled_users : (name, role)
+SELECT name, role FROM users WHERE disabled_at IS NULL ORDER BY name;
+
 --! user_exists
 SELECT 1 FROM users WHERE name = :name;
 

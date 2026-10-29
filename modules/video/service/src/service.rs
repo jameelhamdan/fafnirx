@@ -1,4 +1,5 @@
-//! The HTTP side: playlists and segments of the videos in the master's file tree (the subtitles are in `subtitles.rs`).
+//! The HTTP side: playlists and segments of the videos in the master's file tree (the subtitles are in `subtitles.rs`, the
+//! details and posters the master asks for in `derive.rs`).
 //!
 //! Only the master talks to this service (it holds the shared token and checks the login first). A request
 //! names a file by its place in the tree (`p`, `<user>/<device>/<path>`, or just `<path>` for a master file) and its content (`h`, the hex root hash): a changed
@@ -14,6 +15,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
+use fafnirx_module_api::{bearer_matches, FILES_PREFIX, HEALTH_PATH, MANIFEST_PATH, UI_PREFIX};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -34,12 +36,16 @@ pub struct Config {
     pub vcodec: String,
     /// Segments made at the same time.
     pub jobs: usize,
+    /// The built script and style of the module's part of the web app (`FAFNIRX_MODULE_UI`), if it has been built.
+    pub ui: Option<PathBuf>,
 }
 
 pub struct App {
     pub(crate) cfg: Config,
     pub(crate) jobs: Semaphore,
-    /// What is being made, and what failed lately (see `GET /tasks`).
+    /// Details and frames for the master have slots of their own: segments being cut must not starve the master's jobs.
+    pub(crate) derive: Semaphore,
+    /// What is being made, and what failed lately (see `GET /status`).
     pub(crate) tasks: Tasks,
     /// One lock per file being made, so that two requests for the same segment make it once.
     locks: Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
@@ -48,7 +54,8 @@ pub struct App {
 impl App {
     pub fn new(cfg: Config) -> Arc<Self> {
         let jobs = Semaphore::new(cfg.jobs.max(1));
-        Arc::new(Self { cfg, jobs, tasks: Tasks::default(), locks: Mutex::default() })
+        let derive = Semaphore::new(cfg.jobs.max(1));
+        Arc::new(Self { cfg, jobs, derive, tasks: Tasks::default(), locks: Mutex::default() })
     }
 
     pub(crate) fn lock_for(&self, path: &Path) -> Arc<tokio::sync::Mutex<()>> {
@@ -120,27 +127,29 @@ pub(crate) fn internal(context: &str, e: anyhow::Error) -> Failure {
 }
 
 pub fn router(app: Arc<App>) -> Router {
-    let hls = Router::new()
+    // What the web app may ask for, through the master (which has checked the login and the file first).
+    let files = Router::new()
         .route("/hls/master.m3u8", get(master))
         .route("/hls/subtitles.json", get(crate::subtitles::list))
         .route("/hls/subtitles/:file", get(crate::subtitles::track))
         .route("/hls/:variant/index.m3u8", get(media))
-        .route("/hls/:variant/:segment", get(segment))
-        .route("/tasks", get(tasks))
+        .route("/hls/:variant/:segment", get(segment));
+    // What only the master asks for.
+    let for_master = Router::new()
+        .nest(FILES_PREFIX, files)
+        .route(&format!("{UI_PREFIX}/:file"), get(crate::ui::file))
+        .route(MANIFEST_PATH, get(crate::derive::manifest))
+        .route("/probe", get(crate::derive::probe))
+        .route("/poster", get(crate::derive::poster))
+        .route("/status", get(status))
         .layer(middleware::from_fn_with_state(app.clone(), guard));
-    Router::new().route("/health", get(|| async { "ok" })).merge(hls).with_state(app)
-}
-
-/// Compares without stopping at the first difference.
-fn same(a: &str, b: &str) -> bool {
-    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    Router::new().route(HEALTH_PATH, get(|| async { "ok" })).merge(for_master).with_state(app)
 }
 
 async fn guard(State(app): State<Arc<App>>, req: Request, next: Next) -> Response {
-    let given =
-        req.headers().get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "));
-    if !given.is_some_and(|t| same(t, &app.cfg.token)) {
-        return fail(StatusCode::UNAUTHORIZED, "streaming needs the master's token").into_response();
+    let given = req.headers().get(header::AUTHORIZATION).and_then(|v| v.to_str().ok());
+    if !bearer_matches(given, &app.cfg.token) {
+        return fail(StatusCode::UNAUTHORIZED, "the video module needs the master's token").into_response();
     }
     next.run(req).await
 }
@@ -148,9 +157,9 @@ async fn guard(State(app): State<Arc<App>>, req: Request, next: Next) -> Respons
 #[derive(Deserialize)]
 pub(crate) struct Which {
     /// The place in the file tree: `<user>/<device>/<path>`, or `<path>` for a master file (they are at the root).
-    p: String,
+    pub(crate) p: String,
     /// Hex root hash of the content.
-    h: String,
+    pub(crate) h: String,
 }
 
 /// Where a video is kept, and where its playlists and segments are.
@@ -172,7 +181,8 @@ fn valid_path(p: &str) -> bool {
     parts.iter().all(|c| !c.is_empty() && *c != "." && *c != ".." && !c.contains(['\\', ':', '\0']))
 }
 
-pub(crate) fn locate(app: &App, q: &Which) -> Result<Video, Failure> {
+/// The file a request names, once it is known to be a file inside the tree.
+pub(crate) fn source_of(app: &App, q: &Which) -> Result<PathBuf, Failure> {
     if q.h.is_empty() || q.h.len() > 64 || !q.h.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(fail(StatusCode::BAD_REQUEST, "h is the hex hash of the content"));
     }
@@ -183,6 +193,12 @@ pub(crate) fn locate(app: &App, q: &Which) -> Result<Video, Failure> {
     if !source.is_file() {
         return Err(fail(StatusCode::NOT_FOUND, "no such file"));
     }
+    Ok(source)
+}
+
+/// The video a request names, with the cache folder of its playlists and segments.
+pub(crate) fn locate(app: &App, q: &Which) -> Result<Video, Failure> {
+    let source = source_of(app, q)?;
     let dir = app.cfg.cache.join(cache_key(&q.p, &q.h));
     std::fs::create_dir_all(&dir).map_err(|e| internal("cache", e.into()))?;
     // The folder is used: it is not swept for a while.
@@ -285,8 +301,8 @@ async fn segment(
     Ok(reply("video/mp2t", "private, max-age=86400", bytes))
 }
 
-/// What the service is making and what failed lately, for whoever runs it (the master shows it next to its own queue).
-async fn tasks(State(app): State<Arc<App>>) -> Response {
+/// What the service is making and what failed lately (the master shows it next to its own queue).
+async fn status(State(app): State<Arc<App>>) -> Response {
     let body = serde_json::to_vec(&app.tasks.report(app.cfg.jobs.max(1))).unwrap_or_default();
     reply("application/json", "no-store", body)
 }
@@ -330,10 +346,13 @@ mod tests {
         app: Router,
         data: tempfile::TempDir,
         cache: PathBuf,
+        _ui: tempfile::TempDir,
     }
 
     fn fixture() -> Fixture {
         let data = tempfile::tempdir().unwrap();
+        let ui = tempfile::tempdir().unwrap();
+        std::fs::write(ui.path().join("index.js"), "export default {}").unwrap();
         std::fs::create_dir_all(data.path().join("files/pc")).unwrap();
         std::fs::write(data.path().join("files/pc/clip.mkv"), b"not really a video").unwrap();
         let cache = data.path().join("cache");
@@ -346,8 +365,9 @@ mod tests {
             ffprobe: "fafnirx-no-such-ffprobe".into(),
             vcodec: "libx264".into(),
             jobs: 2,
+            ui: Some(ui.path().to_path_buf()),
         }));
-        Fixture { app, data, cache }
+        Fixture { app, data, cache, _ui: ui }
     }
 
     /// The video as if it had been probed already: 1280x720, 14.5 s.
@@ -377,10 +397,64 @@ mod tests {
     async fn only_the_master_may_ask() {
         let f = fixture();
         assert_eq!(get(&f, "/health", None).await.0, StatusCode::OK, "health needs no token");
-        let uri = format!("/hls/master.m3u8?p=pc/clip.mkv&h={H}");
+        let uri = format!("/files/hls/master.m3u8?p=pc/clip.mkv&h={H}");
         assert_eq!(get(&f, &uri, None).await.0, StatusCode::UNAUTHORIZED);
         assert_eq!(get(&f, &uri, Some("wrong")).await.0, StatusCode::UNAUTHORIZED);
         assert_eq!(get(&f, &uri, Some("secret-token-and-more")).await.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn the_manifest_says_what_the_module_is() {
+        let f = fixture();
+        assert_eq!(get(&f, "/manifest", None).await.0, StatusCode::UNAUTHORIZED);
+        let (status, body) = get(&f, "/manifest", T).await;
+        assert_eq!(status, StatusCode::OK);
+        let manifest: fafnirx_module_api::Manifest = serde_json::from_str(&body).unwrap();
+        assert_eq!((manifest.id.as_str(), manifest.contract), ("video", fafnirx_module_api::CONTRACT));
+        // Whatever the manifest promises is served.
+        assert!(manifest.has("probe.video") && manifest.has("poster") && manifest.has("status"));
+        assert_eq!(get(&f, "/status", T).await.0, StatusCode::OK);
+        assert_eq!(manifest.ui.map(|u| u.entry), Some("index.js".to_string()), "it has built its screens");
+    }
+
+    #[tokio::test]
+    async fn the_screens_are_served_to_whoever_has_the_token() {
+        let f = fixture();
+        assert_eq!(get(&f, "/ui/index.js", None).await.0, StatusCode::UNAUTHORIZED);
+        let (status, body) = get(&f, "/ui/index.js", T).await;
+        assert_eq!((status, body.as_str()), (StatusCode::OK, "export default {}"));
+        for missing in ["/ui/nope.js", "/ui/.env", "/ui/%2e%2e", "/ui/a%2fb"] {
+            assert_eq!(get(&f, missing, T).await.0, StatusCode::NOT_FOUND, "{missing}");
+        }
+    }
+
+    #[tokio::test]
+    async fn what_only_the_master_asks_for_is_not_under_files() {
+        let f = fixture();
+        for private in ["status", "manifest", "probe", "poster"] {
+            let uri = format!("/files/{private}?p=pc/clip.mkv&h={H}&max=100");
+            assert_eq!(get(&f, &uri, T).await.0, StatusCode::NOT_FOUND, "{private}");
+        }
+    }
+
+    #[tokio::test]
+    async fn probes_and_posters_need_a_file_in_the_tree() {
+        let f = fixture();
+        let q = format!("p=pc/clip.mkv&h={H}");
+        // ffprobe and ffmpeg are not there in this test: asking for the details of a file that is gets as far as them.
+        assert_eq!(get(&f, &format!("/probe?{q}"), T).await.0, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(get(&f, &format!("/poster?{q}&max=320"), T).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(!f.cache.join("posters").read_dir().unwrap().any(|_| true), "no half-made picture is left");
+        for (uri, want) in [
+            (format!("/probe?p=pc/missing.mkv&h={H}"), StatusCode::NOT_FOUND),
+            (format!("/probe?p=../clip.mkv&h={H}"), StatusCode::BAD_REQUEST),
+            (format!("/poster?p=pc/missing.mkv&h={H}&max=320"), StatusCode::NOT_FOUND),
+            (format!("/poster?{q}&max=0"), StatusCode::BAD_REQUEST),
+            (format!("/poster?{q}&max=100000"), StatusCode::BAD_REQUEST),
+            (format!("/poster?{q}"), StatusCode::BAD_REQUEST),
+        ] {
+            assert_eq!(get(&f, &uri, T).await.0, want, "{uri}");
+        }
     }
 
     #[tokio::test]
@@ -396,12 +470,15 @@ mod tests {
             "pc%5Cclip.mkv",
             "c:/x",
         ] {
-            let (status, _) = get(&f, &format!("/hls/master.m3u8?p={p}&h={H}"), T).await;
+            let (status, _) = get(&f, &format!("/files/hls/master.m3u8?p={p}&h={H}"), T).await;
             assert!(status == StatusCode::BAD_REQUEST || status == StatusCode::NOT_FOUND, "{p}: {status}");
         }
-        assert_eq!(get(&f, "/hls/master.m3u8?p=pc/clip.mkv&h=nothex", T).await.0, StatusCode::BAD_REQUEST);
-        assert_eq!(get(&f, &format!("/hls/master.m3u8?p=pc/missing.mkv&h={H}"), T).await.0, StatusCode::NOT_FOUND);
-        assert_eq!(get(&f, "/hls/master.m3u8", T).await.0, StatusCode::BAD_REQUEST, "p and h are needed");
+        assert_eq!(get(&f, "/files/hls/master.m3u8?p=pc/clip.mkv&h=nothex", T).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            get(&f, &format!("/files/hls/master.m3u8?p=pc/missing.mkv&h={H}"), T).await.0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(get(&f, "/files/hls/master.m3u8", T).await.0, StatusCode::BAD_REQUEST, "p and h are needed");
     }
 
     #[tokio::test]
@@ -409,22 +486,22 @@ mod tests {
         let f = fixture();
         probed(&f);
         let q = format!("p=pc/clip.mkv&h={H}");
-        let (status, master) = get(&f, &format!("/hls/master.m3u8?{q}"), T).await;
+        let (status, master) = get(&f, &format!("/files/hls/master.m3u8?{q}"), T).await;
         assert_eq!(status, StatusCode::OK);
         assert!(
             master.contains("720p/index.m3u8") && master.contains("360p/index.m3u8") && !master.contains("1080p"),
             "{master}"
         );
-        let (status, media) = get(&f, &format!("/hls/720p/index.m3u8?{q}"), T).await;
+        let (status, media) = get(&f, &format!("/files/hls/720p/index.m3u8?{q}"), T).await;
         assert_eq!(status, StatusCode::OK);
         assert!(media.contains("seg2.ts") && !media.contains("seg3.ts"), "{media}");
         assert_eq!(
-            get(&f, &format!("/hls/1080p/index.m3u8?{q}"), T).await.0,
+            get(&f, &format!("/files/hls/1080p/index.m3u8?{q}"), T).await.0,
             StatusCode::NOT_FOUND,
             "a quality it was not offered"
         );
-        assert_eq!(get(&f, &format!("/hls/720p/seg3.ts?{q}"), T).await.0, StatusCode::NOT_FOUND, "past the end");
-        assert_eq!(get(&f, &format!("/hls/720p/seg1.mp4?{q}"), T).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(get(&f, &format!("/files/hls/720p/seg3.ts?{q}"), T).await.0, StatusCode::NOT_FOUND, "past the end");
+        assert_eq!(get(&f, &format!("/files/hls/720p/seg1.mp4?{q}"), T).await.0, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -432,7 +509,7 @@ mod tests {
         let f = fixture();
         probed(&f);
         let q = format!("p=pc/clip.mkv&h={H}");
-        let (status, body) = get(&f, &format!("/hls/720p/seg0.ts?{q}"), T).await;
+        let (status, body) = get(&f, &format!("/files/hls/720p/seg0.ts?{q}"), T).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
         let leftovers: Vec<_> = std::fs::read_dir(f.cache.join(cache_key("pc/clip.mkv", H)))
             .unwrap()
@@ -453,7 +530,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/hls/720p/seg1.ts?p=pc/clip.mkv&h={H}"))
+                    .uri(format!("/files/hls/720p/seg1.ts?p=pc/clip.mkv&h={H}"))
                     .header(header::AUTHORIZATION, "Bearer secret-token")
                     .body(Body::empty())
                     .unwrap(),
@@ -468,7 +545,7 @@ mod tests {
     #[tokio::test]
     async fn a_video_that_cannot_be_probed_is_not_a_video() {
         let f = fixture();
-        let (status, _) = get(&f, &format!("/hls/master.m3u8?p=pc/clip.mkv&h={H}"), T).await;
+        let (status, _) = get(&f, &format!("/files/hls/master.m3u8?p=pc/clip.mkv&h={H}"), T).await;
         assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
     }
 
@@ -491,10 +568,5 @@ mod tests {
         assert_eq!(sweep(&f.cache, Duration::from_secs(7 * 86400)), 1);
         assert!(!f.cache.join("old").exists() && f.cache.join("new").exists());
         drop(f.data);
-    }
-
-    #[test]
-    fn tokens_are_compared_whole() {
-        assert!(same("abc", "abc") && !same("abc", "abd") && !same("abc", "ab") && !same("", "a"));
     }
 }

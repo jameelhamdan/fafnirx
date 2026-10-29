@@ -59,7 +59,7 @@ export const downloadUrl = (device: string, path: string, opts: { version?: numb
 export const thumbUrl = (device: string, path: string, size = 256) =>
   `/api/files/thumb${query({ device, path, size })}`
 
-export type MediaView = 'thumb' | 'preview' | 'video' | 'original' | 'download'
+export type MediaView = 'thumb' | 'preview' | 'original' | 'download'
 
 /** A view of a library file by its id. The hash makes the link specific to one content, so browsers keep it for good. */
 export const mediaUrl = (id: string, view: MediaView, hash?: string) =>

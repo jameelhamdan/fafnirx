@@ -1,5 +1,5 @@
-//! What `ffprobe -print_format json -show_format -show_streams` says about a video. The master reads it for the videos in
-//! the photo library, the streaming service for the videos it cuts into segments, so the rules (which stream is the
+//! What `ffprobe -print_format json -show_format -show_streams` says about a video. Both the details the master asks for
+//! (`derive`) and the segments of a stream (`ffmpeg`) read it, so the rules (which stream is the
 //! picture, how a sideways video is measured, which length counts) are written once, here.
 
 use anyhow::{Context, Result};

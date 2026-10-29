@@ -1,5 +1,5 @@
-//! The queue of background work, to look at and to steer: what is being read, drawn or converted, what waits, what failed and
-//! why, and, when the streaming service is set up, what it is making (video segments and subtitle tracks).
+//! The queue of background work, to look at and to steer: what is being read or drawn, what waits, what failed and
+//! why, and what the modules that are set up report (the video module: segments being cut, subtitle tracks).
 //!
 //! Everybody sees the jobs of the devices they can see. Only an administrator holds the queue back, retries, cancels or asks
 //! for files to be read again.
@@ -51,14 +51,13 @@ pub struct Job {
 pub struct Queue {
     /// Held back by an administrator: nothing new is started.
     paused: bool,
-    /// Without ffmpeg videos get no details, pictures or playable copies.
-    ffmpeg: bool,
     /// Whether this user may steer the queue.
     can_control: bool,
     summary: Vec<Summary>,
     jobs: Vec<Job>,
-    /// What the streaming service is making, as it reports it; absent when streaming is off or the service does not answer.
-    stream: Option<serde_json::Value>,
+    /// What each module that reports its work is doing, by module id, as it reports it (the web app's module of the same
+    /// name shows it). A module that is off or does not answer is not listed.
+    modules: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -107,20 +106,22 @@ fn summarize(counts: Vec<jobs::Count>) -> Vec<Summary> {
     by_kind.into_values().collect()
 }
 
-/// Whether a user sees the video the streaming service names (`<user>/<device>/<path>`, or just `<path>` for a master file).
-fn sees_video(who: &Access, p: &str) -> bool {
-    let mut parts = p.splitn(3, '/');
+/// Whether a user sees the file a module names: `users/<user>/<device>/<path>` for the files of a device, just `<path>` for a
+/// master file (see `store::tree_path`).
+fn sees_path(who: &Access, p: &str) -> bool {
+    use crate::platform::store::{MASTER_FOLDER, USERS_DIR};
+    let mut parts = p.strip_prefix(USERS_DIR).and_then(|r| r.strip_prefix('/')).unwrap_or("").splitn(3, '/');
     match (parts.next(), parts.next(), parts.next()) {
         (Some(user), Some(device), Some(_)) => who.can_see(&format!("{user}/{device}")),
-        _ => who.can_see(crate::platform::store::MASTER_FOLDER),
+        _ => who.can_see(MASTER_FOLDER),
     }
 }
 
-/// Keeps what `who` may see of the streaming service's report.
+/// Keeps what `who` may see of a module's report: the tasks (`active`, `failed`) of the files they can see.
 fn visible_tasks(who: &Access, mut report: serde_json::Value) -> serde_json::Value {
     for list in ["active", "failed"] {
         if let Some(items) = report.get_mut(list).and_then(|v| v.as_array_mut()) {
-            items.retain(|i| i.get("video").and_then(|v| v.as_str()).is_some_and(|p| sees_video(who, p)));
+            items.retain(|i| i.get("path").and_then(|v| v.as_str()).is_some_and(|p| sees_path(who, p)));
         }
     }
     report
@@ -133,17 +134,14 @@ pub async fn show(State(state): State<Shared>, Extension(who): Extension<Access>
         Ok((paused, summarize(jobs::counts(c, all, user)?), jobs::items(c, all, user, LIST)?))
     })
     .await?;
-    let stream = match &state.stream {
-        Some(backend) => backend.tasks().await.map(|report| visible_tasks(&who, report)),
-        None => None,
-    };
+    let modules =
+        state.modules.statuses().await.into_iter().map(|(id, report)| (id, visible_tasks(&who, report))).collect();
     Ok(Json(Queue {
         paused,
-        ffmpeg: crate::library::media::available(),
         can_control: who.is_admin(),
         summary,
         jobs: listed.into_iter().map(Job::from).collect(),
-        stream,
+        modules,
     }))
 }
 
@@ -240,6 +238,37 @@ mod tests {
     }
 
     #[test]
+    fn process_missing_includes_videos_read_without_details() {
+        use crate::platform::db::testing;
+        let db = testing::db_with_device();
+        let mut c = db.get().unwrap();
+        for (path, root) in [("a/new.jpg", 1u8), ("a/seen.jpg", 2), ("a/blind.mp4", 3), ("a/known.mp4", 4)] {
+            c.execute("INSERT INTO files (device_id, path) VALUES (1, $1)", &[&path]).unwrap();
+            let version: i64 = c
+                .query_one(
+                    "INSERT INTO versions (file_id, root_hash, size, mtime, created_at) SELECT id, $2, 1, 0, 0 FROM files WHERE path = $1 RETURNING id",
+                    &[&path, &vec![root; 32]],
+                )
+                .unwrap()
+                .get(0);
+            c.execute("UPDATE files SET current_version_id = $1 WHERE path = $2", &[&version, &path]).unwrap();
+        }
+        // The image and the video with details are read; the video that was read without any is not.
+        for (root, kind, duration) in [(2u8, "image", None), (3, "video", None), (4, "video", Some(5000i64))] {
+            c.execute(
+                "INSERT INTO file_meta (root_hash, mime, kind, exif, read_at, duration_ms) VALUES ($1, 'x/y', $2, '{}', 0, $3)",
+                &[&vec![root; 32], &kind, &duration],
+            )
+            .unwrap();
+        }
+        let mut missing: Vec<String> =
+            jobs::media_to_read(&mut *c, false, 100).unwrap().into_iter().map(|(_, path, _)| path).collect();
+        missing.sort();
+        assert_eq!(missing, ["a/blind.mp4", "a/new.jpg"], "never read, and a video without details");
+        assert_eq!(jobs::media_to_read(&mut *c, true, 100).unwrap().len(), 4, "everything");
+    }
+
+    #[test]
     fn counts_are_gathered_per_kind() {
         let s = summarize(vec![count("thumb", "queued", 4), count("meta", "failed", 1), count("thumb", "running", 2)]);
         assert_eq!(s.iter().map(|s| s.kind.as_str()).collect::<Vec<_>>(), ["meta", "thumb"]);
@@ -257,13 +286,13 @@ mod tests {
         jobs::enqueue(c, "thumb", &work).unwrap();
         assert_eq!(jobs::items(c, true, -1, LIST).unwrap().len(), 1, "waiting work is not queued twice");
 
-        let job = jobs::claim(c, 0, false).unwrap().unwrap();
+        let job = jobs::claim(c, 0).unwrap().unwrap();
         jobs::fail(c, job.id, true, 0, "no frame").unwrap();
         let listed = jobs::items(c, true, -1, LIST).unwrap();
         assert_eq!((listed[0].status.as_str(), listed[0].error.as_deref()), ("failed", Some("no frame")));
         assert_eq!(jobs::retry_failed(c, None).unwrap(), 1);
 
-        let job = jobs::claim(c, 0, false).unwrap().unwrap();
+        let job = jobs::claim(c, 0).unwrap().unwrap();
         jobs::complete(c, job.id, Some("picture: poster.jpg")).unwrap();
         let summary = summarize(jobs::counts(c, true, -1).unwrap());
         assert_eq!((summary[0].queued, summary[0].failed, summary[0].done), (0, 0, 1));

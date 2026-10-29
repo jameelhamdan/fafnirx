@@ -336,7 +336,7 @@ pub struct VersionInfo {
 
 #[derive(Serialize)]
 pub struct Info {
-    /// The id of the file, which is also its address for streaming (`/api/stream/<id>/...`).
+    /// The id of the file, which is also its address for the modules (`/api/m/<module>/<id>/...`).
     id: crate::platform::id::Id,
     device: String,
     path: String,

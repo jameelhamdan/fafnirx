@@ -20,7 +20,7 @@ pub struct Active {
     /// `segment` or `subtitles`
     kind: &'static str,
     /// The video, by its place in the file tree.
-    video: String,
+    path: String,
     /// False while it waits for a free slot.
     running: bool,
     since: u64,
@@ -29,7 +29,7 @@ pub struct Active {
 #[derive(Serialize, Clone)]
 pub struct Failed {
     kind: &'static str,
-    video: String,
+    path: String,
     error: String,
     at: u64,
 }
@@ -57,17 +57,17 @@ pub struct Task<'a> {
     tasks: &'a Tasks,
     id: u64,
     kind: &'static str,
-    video: String,
+    path: String,
     done: bool,
 }
 
 impl Tasks {
     /// Work that is waiting for a slot.
-    pub fn begin(&self, kind: &'static str, video: &str) -> Task<'_> {
+    pub fn begin(&self, kind: &'static str, path: &str) -> Task<'_> {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
-        let entry = Active { id, kind, video: video.to_string(), running: false, since: now() };
+        let entry = Active { id, kind, path: path.to_string(), running: false, since: now() };
         self.active.lock().unwrap_or_else(|e| e.into_inner()).push(entry);
-        Task { tasks: self, id, kind, video: video.to_string(), done: false }
+        Task { tasks: self, id, kind, path: path.to_string(), done: false }
     }
 
     pub fn report(&self, slots: usize) -> Report {
@@ -106,7 +106,7 @@ impl Task<'_> {
                 // The last line is what ffmpeg complained about; the rest is its banner.
                 let error =
                     error.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("failed").chars().take(300).collect();
-                failed.push_back(Failed { kind: self.kind, video: self.video.clone(), error, at: now() });
+                failed.push_back(Failed { kind: self.kind, path: self.path.clone(), error, at: now() });
             }
         }
     }

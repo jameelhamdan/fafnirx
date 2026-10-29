@@ -1,4 +1,4 @@
--- The queue of background work: reading metadata, making pictures and playable copies of videos.
+-- The queue of background work: reading metadata and making pictures.
 -- A job that worked stays as 'done' for a day (`purge_done_jobs`), so the queue can show what happened lately.
 --
 -- The queries that list jobs take the same numbers for who is looking as the library ones (see library.sql): a job names
@@ -15,12 +15,11 @@ WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE kind = :kind AND payload = :payload A
 UPDATE jobs SET status = 'queued' WHERE status = 'running';
 
 --! claim_job
--- Picks one queued job that is due and marks it running. One statement, so a job is only claimed once. A lane
--- without `with_proxies` skips the slow video conversions, and proxies come after the other jobs.
+-- Picks one queued job that is due and marks it running. One statement, so a job is only claimed once.
 UPDATE jobs SET status = 'running', attempts = attempts + 1, started_at = :now
 WHERE id = (SELECT id FROM jobs
-            WHERE status = 'queued' AND run_after <= :now AND (:with_proxies::boolean OR kind <> 'proxy')
-            ORDER BY (kind = 'proxy'), seq LIMIT 1 FOR UPDATE SKIP LOCKED)
+            WHERE status = 'queued' AND run_after <= :now
+            ORDER BY seq LIMIT 1 FOR UPDATE SKIP LOCKED)
 RETURNING id, kind, payload, attempts;
 
 --! complete_job (note?)
@@ -62,11 +61,13 @@ WHERE status = 'failed' AND (:id::uuid IS NULL OR id = :id);
 DELETE FROM jobs WHERE status = :status AND (:id::uuid IS NULL OR id = :id);
 
 --! media_to_read
--- The live photos and videos to read again: those never read, or all of them. Newest first.
+-- The live photos and videos to read again: those never read, videos read without details (before the video module was
+-- set up, or when it failed), or all of them. Newest first.
 SELECT d.folder, f.path, v.root_hash FROM files f
 JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id
 LEFT JOIN file_meta m ON m.root_hash = v.root_hash
-WHERE f.deleted_at IS NULL AND f.media IS NOT NULL AND (:everything::boolean OR m.root_hash IS NULL)
+WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
+  AND (:everything::boolean OR m.root_hash IS NULL OR (f.media = 'video' AND m.duration_ms IS NULL))
 ORDER BY f.id DESC LIMIT :limit;
 
 --! pending_jobs_of_file

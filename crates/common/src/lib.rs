@@ -5,7 +5,7 @@ use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
 
-pub mod probe;
+pub mod meta;
 
 #[allow(clippy::result_large_err)]
 pub mod pb {

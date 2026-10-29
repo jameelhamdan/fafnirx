@@ -113,10 +113,9 @@ SELECT id, current_version_id, deleted_at FROM files WHERE device_id = :device_i
 --! version_of_file
 SELECT root_hash, size FROM versions WHERE id = :version_id AND file_id = :file_id;
 
---! file_by_id : (codec?, deleted_at?)
-SELECT d.folder, f.path, f.current_version_id, f.deleted_at, v.root_hash, v.size, m.codec
-FROM files f JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id
-LEFT JOIN file_meta m ON m.root_hash = v.root_hash WHERE f.id = :id;
+--! file_by_id : (deleted_at?)
+SELECT d.folder, f.path, f.current_version_id, f.deleted_at, v.root_hash, v.size
+FROM files f JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id WHERE f.id = :id;
 
 --! current_mtime
 SELECT v.mtime FROM files f JOIN versions v ON v.id = f.current_version_id WHERE f.device_id = :device_id AND f.path = :path;
@@ -145,10 +144,6 @@ WHERE f.id = :id AND f.deleted_at IS NULL;
 SELECT EXISTS (SELECT 1 FROM files f JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id
                WHERE d.folder = :device AND f.path = :path AND v.root_hash = :root) AS holds;
 
---! content_is_stored
--- Whether any version has this content.
-SELECT EXISTS (SELECT 1 FROM versions WHERE root_hash = :root) AS stored;
-
 --! save_file_meta (width?, height?, taken_at?, duration_ms?, codec?, lat?, lon?, caption?, keywords?)
 -- What was read from a content: kind, size, time and place taken, EXIF. Once per content, not per file.
 INSERT INTO file_meta (root_hash, mime, width, height, taken_at, exif, read_at, kind, duration_ms, codec, lat, lon, caption, keywords)
@@ -164,10 +159,6 @@ ON CONFLICT (root_hash) DO UPDATE SET mime = excluded.mime, width = excluded.wid
 SELECT f.path, v.root_hash FROM files f JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id
 WHERE d.folder = :device AND f.deleted_at IS NULL AND starts_with(f.path, :prefix)
   AND position('/' IN substr(f.path, length(:prefix) + 1)) = 0;
-
---! file_codec : (codec?)
--- The video codec read from a content, if it was read.
-SELECT codec FROM file_meta WHERE root_hash = :root;
 
 --! version_record
 -- What a version holds, to record the same content under another path.

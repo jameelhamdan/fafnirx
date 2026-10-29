@@ -47,7 +47,7 @@ Keys: space/`k` play, `j`/`l` skip 10 s, `m` mute, `c` subtitles. Arrows are lef
   **`track`**: the WebVTT of one track, with `{index}` replaced. A `forced` track in the page's language starts by itself;
   otherwise the last choice is kept. Without `subtitles`, the viewer can still load a `.srt`/`.vtt` from their computer.
 
-fafnirx's backend for both is `fafnirx-stream` (`crates/stream`), reached through the master.
+fafnirx's backend for both is the video module's service (`modules/video/service`), reached through the master.
 
 ## Subtitles
 

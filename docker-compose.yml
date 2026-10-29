@@ -16,9 +16,9 @@ services:
       - "${FAFNIRX_DB_DIR:-./pgdata}:/var/lib/postgresql/data"
 
   master:
-    # The release on Docker Hub. Pin a version in .env (FAFNIRX_IMAGE=jameelh99/fafnirx-master:3.0.1) to upgrade on purpose.
+    # The release on Docker Hub. Pin a version in .env (FAFNIRX_IMAGE=jameelh99/fafnirx:3.0.1) to upgrade on purpose.
     # To build from a checkout instead: docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
-    image: "${FAFNIRX_IMAGE:-jameelh99/fafnirx-master:latest}"
+    image: "${FAFNIRX_IMAGE:-jameelh99/fafnirx:latest}"
     restart: unless-stopped
     user: "${FAFNIRX_UID:-1000}:${FAFNIRX_GID:-1000}"
     depends_on:
@@ -29,9 +29,11 @@ services:
       # The password of the user "admin", set at the first start. Change it in the web app afterwards.
       FAFNIRX_ADMIN_PASSWORD: "${FAFNIRX_ADMIN_PASSWORD:?set FAFNIRX_ADMIN_PASSWORD}"
       HOME: /tmp # rclone wants a writable home for its cache
-      # Adaptive video streaming (optional): see the `stream` service below and docs/streaming.md.
-      FAFNIRX_STREAM_URL: "${FAFNIRX_STREAM_URL:-}"
-      FAFNIRX_STREAM_TOKEN: "${FAFNIRX_STREAM_TOKEN:-}"
+      # A module run as a container (optional): see the `video` service below and docs/video.md. Any module is
+      # FAFNIRX_MODULE_<ID>_URL and _TOKEN (docs/modules.md). Without them a module can be installed as a plugin from the
+      # web app (Plugins), which needs no setting here.
+      FAFNIRX_MODULE_VIDEO_URL: "${FAFNIRX_MODULE_VIDEO_URL:-}"
+      FAFNIRX_MODULE_VIDEO_TOKEN: "${FAFNIRX_MODULE_VIDEO_TOKEN:-}"
     ports:
       - "7443:7443" # devices (gRPC)
       - "8080:8080" # web app and web API
@@ -43,21 +45,20 @@ services:
       # must be writable by FAFNIRX_UID). See docs/usage.md (Mirrors).
       - "${FAFNIRX_CONFIG_DIR:-./config}:/config"
 
-  # Adaptive video streaming (HLS, made with ffmpeg as it is watched). Off unless asked for:
-  #   .env:  FAFNIRX_STREAM_URL=http://stream:8090   FAFNIRX_STREAM_TOKEN=<openssl rand -hex 24>
-  #   then:  mkdir stream-cache && docker compose --profile stream up -d
+  # The video module as a container of its own: video playback in the web app (HLS made with ffmpeg as a video is watched),
+  # subtitles, and the details and poster frames of videos. Off unless asked for (or install the plugin from the web app):
+  #   .env:  FAFNIRX_MODULE_VIDEO_URL=http://video:8090   FAFNIRX_MODULE_VIDEO_TOKEN=<openssl rand -hex 24>
+  #   then:  mkdir video-cache && docker compose --profile video up -d
   # It has no login of its own and publishes no port: only the master talks to it, behind its login.
-  stream:
-    image: "${FAFNIRX_IMAGE:-jameelh99/fafnirx-master:latest}"
-    profiles: ["stream"]
+  video:
+    image: "${FAFNIRX_VIDEO_IMAGE:-jameelh99/fafnirx-video:latest}"
+    profiles: ["video"]
     restart: unless-stopped
     user: "${FAFNIRX_UID:-1000}:${FAFNIRX_GID:-1000}"
-    command: ["fafnirx-stream"]
     environment:
-      FAFNIRX_STREAM_TOKEN: "${FAFNIRX_STREAM_TOKEN:-}"
-      FAFNIRX_STREAM_CACHE: /cache
-      FAFNIRX_STREAM_JOBS: "${FAFNIRX_STREAM_JOBS:-2}"
-      FAFNIRX_STREAM_VCODEC: "${FAFNIRX_STREAM_VCODEC:-libx264}"
+      FAFNIRX_MODULE_TOKEN: "${FAFNIRX_MODULE_VIDEO_TOKEN:-}"
+      FAFNIRX_VIDEO_JOBS: "${FAFNIRX_VIDEO_JOBS:-2}"
+      FAFNIRX_VIDEO_VCODEC: "${FAFNIRX_VIDEO_VCODEC:-libx264}"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/health"]
       interval: 30s
@@ -67,4 +68,4 @@ services:
       # The videos are read from files/ and never changed.
       - "${FAFNIRX_DATA_DIR:-./data}:/data:ro"
       # Segments made so far; removed after a week without being watched. Must be writable by FAFNIRX_UID.
-      - "${FAFNIRX_STREAM_CACHE_DIR:-./stream-cache}:/cache"
+      - "${FAFNIRX_VIDEO_CACHE_DIR:-./video-cache}:/cache"
