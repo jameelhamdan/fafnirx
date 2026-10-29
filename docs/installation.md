@@ -80,7 +80,7 @@ Windows `fafnirx-setup-<version>.exe`; macOS `fafnirx-<version>-macos-{aarch64,x
 On Linux and macOS the client is **a service of the computer**: it starts at boot, is started again when it fails, reads the
 folders of every user, and its tray starts when a user logs in. Its config, token and state are in `/etc/fafnirx` and
 `/var/lib/fafnirx` (Linux), `/Library/Application Support/fafnirx` (macOS), where only administrators can change them; commands
-that change them ask for administrator rights (`sudo`). On Windows the client is **yours**: it and its tray start when you log
+that change them ask for administrator rights (`sudo`); the tray's folder entries do not, the service applies them. On Windows the client is **yours**: it and its tray start when you log
 in, and its config (`%LocalAppData%\fafnirx\config.toml`), token (Credential Manager) and state are in your profile, so the tray
 and the commands change them without asking for anything.
 
@@ -103,6 +103,7 @@ use `--name`. Names are compared ignoring case and accents; `add-folder` refuses
 | `not sending: device in use ...` | Another computer uses the token: **Release** on the device page, or wait 90 s |
 | `unknown or revoked device token` | Token rotated or device revoked: enroll again |
 | `status` says holding deletions | A large part of a folder vanished: [delete guard](usage.md#the-delete-guard) |
+| `add-folder`/`shared attach`: `... overlaps ... collect one of them` | A folder cannot sit inside, or contain, another collected folder. To share a folder inside one you collect, `remove-folder` the outer one and `add-folder` its other subfolders (the master keeps its data) |
 | Master: `cannot connect to the database` | PostgreSQL unreachable, or password differs from the first start's |
 | Device shown offline | No heartbeat for 60 s: check `fafnirx status` |
 | Files copied into `data/files/` take minutes | Mount reports no changes; the master compares the tree every 5 minutes |

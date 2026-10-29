@@ -8,12 +8,12 @@ mod open;
 mod text;
 
 use crate::config::{control_dir, Config, Folder, Shared};
-use crate::daemon;
+use crate::daemon::{self, requests::Request};
 use anyhow::{Context, Result};
 use fafnirx_common::unix_now;
 use icon::{icon, Light};
 use open::{
-    check_for_updates, install_update, open_path, open_url, restart_if_updated, run_cli, start_client, Updates,
+    change_folders, check_for_updates, install_update, open_path, open_url, restart_if_updated, start_client, Updates,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -328,11 +328,8 @@ fn shared_name_of(dir: &Path) -> Option<String> {
 
 /// Asks for a folder and syncs it with the shared folder `name`, made first when `create` is set.
 fn attach_shared_dialog(config_path: &Path, name: &str, dir: &Path, create: bool) {
-    let mut args = vec!["shared".into(), "attach".into(), name.into(), dir.as_os_str().to_owned()];
-    if create {
-        args.push("--create".into());
-    }
-    if let Err(e) = run_cli(config_path, &args) {
+    let request = Request::AttachShared { name: name.into(), path: dir.into(), create };
+    if let Err(e) = change_folders(config_path, &request) {
         message(rfd::MessageLevel::Error, format!("Could not sync \"{name}\":\n\n{e}")).show();
     }
 }
@@ -417,7 +414,7 @@ fn new_shared(config_path: &Path, on_master: &[(String, bool)], owner: &str) {
 
 fn detach_shared_dialog(config_path: &Path, name: &str) {
     let text = format!("Stop syncing \"{name}\" on this computer?\n\nNothing is deleted: the files stay in the folder and on the server.");
-    confirm_then(text, || cli_change(config_path, &["shared".into(), "detach".into(), name.into()]));
+    confirm_then(text, || cli_change(config_path, &Request::DetachShared { name: name.into() }));
 }
 
 fn message(level: rfd::MessageLevel, text: String) -> rfd::MessageDialog {
@@ -430,25 +427,20 @@ fn add_folders_dialog(config_path: &Path) -> bool {
     let Some(picked) = rfd::FileDialog::new().set_title("Choose the folders to collect").pick_folders() else {
         return false;
     };
-    // Through the command: the config of a system-wide install is the administrators', and the command asks for their rights.
-    if let Err(e) = run_cli(config_path, &add_folder_args(&picked)) {
+    // The config of a system-wide install is the administrators': the service makes the change for this user.
+    if let Err(e) = change_folders(config_path, &Request::AddFolder { paths: picked }) {
         message(rfd::MessageLevel::Warning, format!("Some folders were not added:\n\n{e}")).show();
     }
     true
 }
 
-/// Changes the config through the command, which asks for administrator rights when the config needs them.
-fn cli_change(config_path: &Path, args: &[std::ffi::OsString]) -> anyhow::Result<()> {
-    run_cli(config_path, args).map(drop).map_err(anyhow::Error::msg)
-}
-
-fn add_folder_args(dirs: &[PathBuf]) -> Vec<std::ffi::OsString> {
-    std::iter::once("add-folder".into()).chain(dirs.iter().map(|d| d.as_os_str().to_owned())).collect()
+fn cli_change(config_path: &Path, request: &Request) -> anyhow::Result<()> {
+    change_folders(config_path, request).map(drop).map_err(anyhow::Error::msg)
 }
 
 fn remove_folder_dialog(config_path: &Path, name: &str) {
     let text = format!("Stop collecting \"{name}\"?\n\nFiles already uploaded stay on the server.");
-    confirm_then(text, || cli_change(config_path, &["remove-folder".into(), name.into()]));
+    confirm_then(text, || cli_change(config_path, &Request::RemoveFolder { name: name.into() }));
 }
 
 /// Everything an action needs to do its work.
@@ -637,12 +629,5 @@ mod tests {
         assert_eq!(owner_of(Some(&status("ana/laptop"))), "ana");
         assert_eq!(owner_of(Some(&status(""))), "");
         assert_eq!(owner_of(None), "");
-    }
-
-    #[test]
-    fn folders_picked_in_the_tray_are_added_by_one_command() {
-        let args = add_folder_args(&[PathBuf::from("C:/a b"), PathBuf::from("D:/c")]);
-        let words: Vec<_> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
-        assert_eq!(words, ["add-folder", "C:/a b", "D:/c"], "one command, so one request for administrator rights");
     }
 }

@@ -1,5 +1,6 @@
 //! The long running client: heartbeat, watcher, periodic scan and update checks.
 
+pub mod requests;
 mod status;
 
 pub use status::*;
@@ -427,6 +428,7 @@ async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Res
     spawn_heartbeat(shared.clone(), client.clone(), config_path.clone(), identity);
     spawn_shared_watch(shared.clone(), client.clone(), config_path.clone());
     spawn_update_requests(client.clone(), config_path.clone(), state_dir.clone());
+    requests::spawn(config_path.clone(), state_dir.clone(), shared.wake.clone());
     spawn_updater(client, config_path.clone(), state_dir.clone());
 
     let mut watched: Vec<PathBuf> = Vec::new();

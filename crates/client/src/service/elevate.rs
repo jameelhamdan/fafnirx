@@ -3,6 +3,7 @@
 
 use anyhow::{bail, Context, Result};
 use std::ffi::{OsStr, OsString};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 /// How something is run as root by whoever is not.
@@ -81,8 +82,30 @@ fn as_root(program: &OsStr, args: &[OsString]) -> Result<(OsString, Vec<OsString
         Way::Direct => Ok((line.remove(0), line)),
         Way::Sudo => Ok(("sudo".into(), line)),
         Way::Pkexec => Ok(("pkexec".into(), line)),
-        Way::Manual => Err(format!("sudo {}", line.iter().map(|w| w.to_string_lossy()).collect::<Vec<_>>().join(" "))),
+        Way::Manual => Err(by_hand(&line)),
     }
+}
+
+/// The command to type: the program by its name (it is on the path), the config only when it is not the default one, and every
+/// word that has a space in it quoted for the shell.
+fn by_hand(line: &[OsString]) -> String {
+    let default = crate::config::default_config_path();
+    let mut words: Vec<String> = Vec::new();
+    let mut rest = line.iter().skip(1).peekable();
+    while let Some(word) = rest.next() {
+        if word == "--config" && rest.peek().is_some_and(|path| Path::new(path) == default) {
+            rest.next();
+        } else {
+            words.push(word.to_string_lossy().into_owned());
+        }
+    }
+    let program = Path::new(&line[0]).file_name().unwrap_or(&line[0]).to_string_lossy().into_owned();
+    std::iter::once("sudo".to_string())
+        .chain(std::iter::once(program))
+        .chain(words)
+        .map(|w| if w.contains([' ', '\t', '\'', '"']) { format!("'{}'", w.replace('\'', r"'\''")) } else { w })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Runs `program args` as root and waits for it. Linux and macOS: `sudo` or `pkexec` ask where the person is.
@@ -142,6 +165,24 @@ mod tests {
         assert_eq!(f(false, true, false, false, true), Way::Manual, "a terminal without sudo, and no window: told");
         assert_eq!(f(false, false, false, true, true), Way::Manual, "nothing can ask");
         assert_eq!(f(false, false, true, true, false), Way::Manual, "no polkit");
+    }
+
+    #[test]
+    fn the_command_to_type_is_short_and_safe_for_the_shell() {
+        let line = |words: &[&str]| words.iter().map(OsString::from).collect::<Vec<_>>();
+        let default = crate::config::default_config_path();
+        let default = default.to_string_lossy();
+        assert_eq!(
+            by_hand(&line(&["/usr/local/bin/fafnirx", "--config", &default, "remove-folder", "Documents"])),
+            "sudo fafnirx remove-folder Documents",
+            "the program by its name, the usual config left out"
+        );
+        assert_eq!(
+            by_hand(&line(&["/usr/local/bin/fafnirx", "--config", "/Library/Application Support/x.toml", "folders"])),
+            "sudo fafnirx --config '/Library/Application Support/x.toml' folders",
+            "another config is kept, quoted"
+        );
+        assert_eq!(by_hand(&line(&["fafnirx", "add-folder", "/a/it's"])), r"sudo fafnirx add-folder '/a/it'\''s'");
     }
 
     #[test]
