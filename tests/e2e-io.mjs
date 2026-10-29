@@ -1,4 +1,4 @@
-// End-to-end test for sources (Google Drive) and mirrors (rclone).
+// End-to-end test for sources (Google Drive, any rclone storage) and mirrors (replicas, encrypted backups, renames).
 //
 // A fake Google Drive HTTP server stands in for Google: it verifies the RS256 service-account assertion,
 // pages its listings, and can fail on demand. The mirror target is a local directory through rclone's `local`
@@ -151,7 +151,11 @@ async function runAndWait(table, name) {
 const livePaths = async (device) =>
   new Set((await schema.rows("SELECT f.path FROM files f JOIN devices d ON d.id = f.device_id WHERE d.folder = $1 AND f.deleted_at IS NULL", [device])).map((r) => r[0]))
 const stored = (device, p) => fs.readFileSync(path.join(data, 'files', ...(device === '_master' ? [] : ['users']), device, p))
-const openAlerts = async () => (await admin.get('/api/dashboard')).json.alerts
+const openAlerts = async () => {
+  const r = await admin.get('/api/dashboard')
+  if (!r.json?.alerts) throw new Error(`the dashboard failed: ${r.status} ${JSON.stringify(r.json)}`)
+  return r.json.alerts
+}
 
 try {
   await master.start()
@@ -285,6 +289,53 @@ try {
   check(dirs.length === 3, `old version runs are pruned to the newest 3 (${dirs})`)
   check(new Set(dirs).size === 3 && dirs.every((d) => /^\d{8}T\d{6}Z$/.test(d)), 'version directories are UTC timestamps')
 
+  // --- a rename is a move on the mirror, not an upload --------------------------------------------------------------------------------------
+  const vaultDir = path.join(tmp, 'vault')
+  const passwords = { crypt_password: 'a secret password!', crypt_salt: 'and another salt' }
+  const vault = { ...form, name: 'vault', kind: 'backup', remote_path: vaultDir.replaceAll('\\', '/'), ...passwords }
+  check((await admin.post('/api/mirrors', { ...vault, name: 'weak', crypt_password: 'short' })).status === 400, 'a backup needs a long enough key')
+  check((await admin.post('/api/mirrors', { ...vault, name: 'nokey', crypt_salt: '' })).status === 400, 'a backup needs both passwords')
+  fs.writeFileSync(path.join(docs, 'move-me.txt'), 'a file that will move '.repeat(20000))
+  c('sync')
+  await runAndWait('mirrors', 'offsite')
+  fs.mkdirSync(path.join(docs, 'moved'))
+  fs.renameSync(path.join(docs, 'move-me.txt'), path.join(docs, 'moved', 'moved.txt'))
+  c('sync')
+  const moved = await runAndWait('mirrors', 'offsite')
+  check(moved[0] === 'ok' && moved[1].startsWith('0 uploaded') && moved[1].includes('1 moved'), `a renamed file is moved on the mirror, not uploaded again (${moved[1].split('\n')[0]})`)
+  files = tree(path.join(mirrorDir, 'files'))
+  check(files['users/admin/laptop/docs/moved/moved.txt']?.toString().startsWith('a file that will move') && !('users/admin/laptop/docs/move-me.txt' in files), 'the file is at its new path and gone from the old one')
+
+  // --- a backup is compressed and encrypted; its restore kit brings the files back with plain rclone --------------------------------
+  check((await admin.post('/api/mirrors', vault)).status === 200, 'a backup mirror is added')
+  const v1 = await until(() => finished('mirrors', 'vault'), 90)
+  check(v1?.[0] === 'ok', `the backup runs (${v1?.[0]}: ${JSON.stringify(v1?.[1])})`)
+  const raw = tree(vaultDir)
+  const rawNames = Object.keys(raw).join('\n')
+  check(!/x\.txt|move-me|Photos|laptop|files|meta/.test(rawNames), 'names of files and folders are encrypted')
+  check(![...Object.values(raw)].some((b) => b.includes('from a device') || b.includes('device edit') || b.includes('a file that will move')), 'contents are encrypted')
+  const kit = (await admin.get('/api/mirrors/vault/restore-kit')).json.config
+  check(kit.includes('type = crypt') && kit.includes('type = compress') && !kit.includes(passwords.crypt_password), 'the restore kit is an rclone config with the key obscured')
+  check((await admin.get('/api/mirrors/offsite/restore-kit')).status === 400, 'a replica has no restore kit')
+  check(!JSON.stringify((await admin.get('/api/mirrors')).json).includes('secret password'), 'the key is not in the mirror list')
+  const kitFile = path.join(tmp, 'restore.conf')
+  fs.writeFileSync(kitFile, kit)
+  const restored = path.join(tmp, 'restored')
+  execFileSync(rclone, ['--config', kitFile, 'copy', 'fafnirx-backup:files', restored])
+  const back = tree(restored)
+  files = tree(path.join(mirrorDir, 'files'))
+  check(Object.keys(back).sort().join() === Object.keys(files).sort().join() && Object.entries(back).every(([k, v]) => v.equals(files[k])), `a restore through the kit gives back every file, byte for byte (${Object.keys(back).length} files)`)
+  const compressed = [...Object.values(raw)].reduce((n, b) => n + b.length, 0)
+  const original = Object.values(files).reduce((n, b) => n + b.length, 0)
+  check(compressed < original - 400_000, `the backup is compressed: the 440 KB repetitive file is stored in a fraction of that (${compressed} stored for ${original} bytes)`)
+  fs.renameSync(path.join(docs, 'moved', 'moved.txt'), path.join(docs, 'moved', 'again.txt'))
+  c('sync')
+  const vmoved = await runAndWait('mirrors', 'vault')
+  check(vmoved[0] === 'ok' && vmoved[1].includes('1 moved'), `a rename also moves inside an encrypted backup (${vmoved[1].split('\n')[0]})`)
+  execFileSync(rclone, ['--config', kitFile, 'copy', 'fafnirx-backup:files', path.join(tmp, 'restored2')])
+  check('users/admin/laptop/docs/moved/again.txt' in tree(path.join(tmp, 'restored2')) && !('users/admin/laptop/docs/moved/moved.txt' in tree(path.join(tmp, 'restored2'))), 'the restore has the new name only')
+  await runAndWait('mirrors', 'offsite')
+
   // --- bit rot in the stored files is caught before it reaches the mirror ---------------------------------------------------------------------
   const rotten = path.join(data, 'files', 'users', 'admin', 'laptop', 'docs', 'deep', 'y.txt')
   const blob = fs.readFileSync(rotten)
@@ -303,6 +354,31 @@ try {
   await admin.post('/api/mirrors', { ...form, name: 'broken', remote_type: 'doesnotexist' })
   const broken = await until(() => finished('mirrors', 'broken'), 90)
   check(broken?.[0] === 'failed', `an unusable mirror fails with a message (${broken?.[1]?.slice(0, 90)})`)
+
+  // --- a source of any rclone storage (here a plain directory) ------------------------------------------------------------------------------
+  const shelf = path.join(tmp, 'shelf')
+  fs.mkdirSync(path.join(shelf, 'sub'), { recursive: true })
+  fs.writeFileSync(path.join(shelf, 'one.txt'), 'first')
+  fs.writeFileSync(path.join(shelf, 'sub', 'two.txt'), 'second')
+  const shelfForm = { name: 'shelf', remote_type: 'local', remote_path: shelf.replaceAll('\\', '/'), interval_hours: 24 }
+  check((await admin.post('/api/sources/rclone', { ...shelfForm, name: 'bad name!' })).status === 400, 'a source needs a valid name')
+  check((await admin.post('/api/sources/rclone', { ...shelfForm, remote_type: '' })).status === 400, 'a source needs a backend or a remote')
+  check((await admin.post('/api/sources/rclone', shelfForm)).status === 200, 'an rclone source is added through the web API')
+  const r1 = await until(() => finished('sources', 'shelf'), 90)
+  check(r1?.[0] === 'ok' && r1[1].startsWith('2 added'), `the first run copies both files (${r1?.[0]}: ${r1?.[1]?.split('\n')[0]})`)
+  const shelved = tree(path.join(data, 'files', 'users', 'admin', 'source-shelf'))
+  check(shelved['one.txt']?.toString() === 'first' && shelved['sub/two.txt']?.toString() === 'second', 'they are under files/users/<user>/source-<name>/ with the remote layout')
+  const listed = (await admin.get('/api/sources')).json.find((s) => s.name === 'shelf')
+  check(listed?.detail.kind === 'rclone' && String(listed.detail.remote).startsWith('local:'), 'it is listed with its kind and storage')
+  fs.writeFileSync(path.join(shelf, 'one.txt'), 'first, edited')
+  fs.rmSync(path.join(shelf, 'sub', 'two.txt'))
+  fs.writeFileSync(path.join(shelf, 'three.txt'), 'third')
+  const r2 = await runAndWait('sources', 'shelf')
+  check(r2[0] === 'ok' && r2[1].startsWith('1 added, 1 updated') && r2[1].includes('1 deleted'), `edits, additions and deletions are picked up (${r2[1].split('\n')[0]})`)
+  check(tree(path.join(data, 'files', 'users', 'admin', 'source-shelf'))['one.txt']?.toString() === 'first, edited', 'the edited file has its new content')
+  fs.rmSync(shelf, { recursive: true })
+  const r3 = await runAndWait('sources', 'shelf')
+  check(r3[0] === 'failed', `a storage that cannot be listed fails the run and deletes nothing (${r3[0]})`)
 
   // --- credentials never leak back ---------------------------------------------------------------------------------------------------------------------
   const pages = JSON.stringify((await admin.get('/api/sources')).json) + JSON.stringify((await admin.get('/api/mirrors')).json)

@@ -1,4 +1,4 @@
-//! What a mirror is made of, and the checks on it, for the API that adds one (the API checks the name).
+//! What a mirror or a source keeps its files in, and what a mirror is made of, with the checks on them (the API checks the name).
 
 use crate::integrations::api::hours_to_secs;
 use anyhow::{anyhow, bail, Result};
@@ -17,6 +17,10 @@ pub fn rclone_config() -> PathBuf {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MirrorSpec {
     pub name: String,
+    /// `replica`: the files as they are. `backup`: compressed and encrypted with the two passwords below.
+    pub kind: String,
+    pub crypt_password: String,
+    pub crypt_salt: String,
     /// A remote of the rclone config file, as `name:path`. When set, the three fields below are not used.
     pub remote: String,
     /// An rclone backend (`s3`, `sftp`, `webdav`, `b2`, ...) configured by `options`.
@@ -51,42 +55,73 @@ fn option_name(key: &str) -> Option<String> {
     ok.then_some(key)
 }
 
+/// Checks and cleans where a mirror or a source keeps its files: a remote of the rclone config, or a backend with options.
+pub fn normalize_storage(
+    remote: &mut String,
+    remote_type: &mut String,
+    remote_path: &mut String,
+    options: &mut BTreeMap<String, Value>,
+) -> Result<()> {
+    *remote = remote.trim().to_string();
+    if !remote.is_empty() {
+        if !valid_remote(remote) {
+            bail!("remote {remote:?} must be a remote of the rclone config as name:path");
+        }
+        remote_type.clear();
+        remote_path.clear();
+        options.clear();
+        return Ok(());
+    }
+    *remote_type = remote_type.trim().to_lowercase();
+    if remote_type.is_empty()
+        || remote_type.len() > 32
+        || !remote_type.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    {
+        bail!("set remote (a remote of the rclone config), or remote_type (an rclone backend such as s3, sftp, webdav, b2)");
+    }
+    *remote_path = remote_path.trim().to_string();
+    let mut clean = BTreeMap::new();
+    for (key, value) in std::mem::take(options) {
+        let name = option_name(&key).ok_or_else(|| anyhow!("option {key:?}: use lowercase letters, digits and _"))?;
+        let text = match value {
+            Value::String(s) => s,
+            Value::Number(n) => n.to_string(),
+            Value::Bool(b) => b.to_string(),
+            _ => bail!("option {key:?} must be a string, a number or true/false"),
+        };
+        if text.contains('\0') {
+            bail!("option {key:?} has an invalid value");
+        }
+        clean.insert(name, Value::String(text));
+    }
+    *options = clean;
+    Ok(())
+}
+
+/// The shortest password of a backup: it protects everything the mirror holds.
+const MIN_PASSWORD: usize = 12;
+
 impl MirrorSpec {
     pub fn normalize(&mut self) -> Result<()> {
-        self.remote = self.remote.trim().to_string();
-        if !self.remote.is_empty() {
-            if !valid_remote(&self.remote) {
-                bail!("remote {:?} must be a remote of the rclone config as name:path", self.remote);
+        self.kind = self.kind.trim().to_lowercase();
+        match self.kind.as_str() {
+            "replica" => {
+                self.crypt_password.clear();
+                self.crypt_salt.clear();
             }
-            self.remote_type.clear();
-            self.remote_path.clear();
-            self.options.clear();
-        } else {
-            self.remote_type = self.remote_type.trim().to_lowercase();
-            if self.remote_type.is_empty()
-                || self.remote_type.len() > 32
-                || !self.remote_type.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-            {
-                bail!("set remote (a remote of the rclone config), or remote_type (an rclone backend such as s3, sftp, webdav, b2)");
-            }
-            self.remote_path = self.remote_path.trim().to_string();
-            let mut options = BTreeMap::new();
-            for (key, value) in std::mem::take(&mut self.options) {
-                let name =
-                    option_name(&key).ok_or_else(|| anyhow!("option {key:?}: use lowercase letters, digits and _"))?;
-                let text = match value {
-                    Value::String(s) => s,
-                    Value::Number(n) => n.to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    _ => bail!("option {key:?} must be a string, a number or true/false"),
-                };
-                if text.contains('\0') {
-                    bail!("option {key:?} has an invalid value");
+            "backup" => {
+                for (what, v) in [("password", &self.crypt_password), ("salt", &self.crypt_salt)] {
+                    if v.chars().count() < MIN_PASSWORD || v.contains(['\0', '\n', '\r']) {
+                        bail!("the encryption {what} needs at least {MIN_PASSWORD} characters on one line");
+                    }
                 }
-                options.insert(name, Value::String(text));
+                if self.crypt_password == self.crypt_salt {
+                    bail!("the encryption password and salt must differ");
+                }
             }
-            self.options = options;
+            _ => bail!("kind must be replica or backup"),
         }
+        normalize_storage(&mut self.remote, &mut self.remote_type, &mut self.remote_path, &mut self.options)?;
         self.scope = crate::integrations::scope::normalize(&self.scope)?;
         self.interval_hours = hours_to_secs(self.interval_hours).map_err(|e| anyhow!(e.1))? as f64 / 3600.0;
         if !(1..=100).contains(&self.keep_runs) {
@@ -103,6 +138,9 @@ mod tests {
     fn spec() -> MirrorSpec {
         MirrorSpec {
             name: "m".into(),
+            kind: "replica".into(),
+            crypt_password: "ignored".into(),
+            crypt_salt: String::new(),
             remote: String::new(),
             remote_type: "S3".into(),
             remote_path: " bucket/x ".into(),
@@ -132,6 +170,26 @@ mod tests {
         let mut none = spec();
         none.remote_type.clear();
         assert!(none.normalize().is_err());
+    }
+
+    #[test]
+    fn a_backup_needs_a_key_and_a_replica_has_none() {
+        let mut replica = spec();
+        replica.normalize().unwrap();
+        assert!(replica.crypt_password.is_empty(), "a replica is not encrypted");
+        let mut backup = spec();
+        backup.kind = "Backup".into();
+        assert!(backup.normalize().is_err(), "no key");
+        backup.crypt_password = "short".into();
+        backup.crypt_salt = "another long salt".into();
+        assert!(backup.normalize().is_err(), "too short");
+        backup.crypt_password = "a long enough password".into();
+        backup.normalize().unwrap();
+        backup.crypt_salt = backup.crypt_password.clone();
+        assert!(backup.normalize().is_err(), "salt equals password");
+        let mut other = spec();
+        other.kind = "snapshot".into();
+        assert!(other.normalize().is_err());
     }
 
     #[test]

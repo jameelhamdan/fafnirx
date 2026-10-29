@@ -14,6 +14,7 @@ import { LanguageMenu } from './language-menu'
 import { Button } from './ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
+import { REPO } from '@/lib/links'
 
 /** Who sees an entry: everybody, the roles with a workspace of their own (not read-only), or administrators. */
 type Audience = 'all' | 'workspace' | 'admin'
@@ -78,8 +79,6 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
     </nav>
   )
 }
-
-const REPO = 'https://github.com/jameelhamdan/fafnirx'
 
 function GitHubMark({ className }: { className?: string }) {
   return (

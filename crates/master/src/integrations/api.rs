@@ -1,13 +1,14 @@
 //! Third-party sources (inbound) and mirrors (outbound): their configuration. The background scheduler runs them;
 //! this only stores their settings and asks for runs (`run_requested`). A source belongs to a user, a mirror to the
 //! administrators. Credentials
-//! are write-only: they are never sent back to the browser.
+//! are write-only: they are never sent back to the browser (the encryption key of a backup mirror, in its restore kit,
+//! is the one exception).
 
 use crate::devices::api::NAME_RULE;
 use crate::files::browse::expand;
 use crate::files::ingest;
 use crate::integrations::scope;
-use crate::integrations::spec::MirrorSpec;
+use crate::integrations::spec::{normalize_storage, MirrorSpec};
 use crate::integrations::Table;
 use crate::platform::db;
 use crate::platform::store::Store;
@@ -81,7 +82,9 @@ fn source_states(c: &mut Client, who: &Access) -> Result<Vec<JobState>, postgres
                 "bytes": r.bytes,
                 "files": r.files,
                 "folders": config["folders"].as_array().map_or(0, Vec::len),
+                "kind": r.kind,
                 "account": config["service_account"]["client_email"],
+                "remote": if r.kind == "rclone" { storage_label(&config) } else { Value::Null },
                 "device": r.folder,
             });
             let key = format!("{}/{}", r.owner, r.name);
@@ -110,6 +113,7 @@ fn mirror_states(c: &mut Client) -> Result<Vec<JobState>, postgres::Error> {
             let mut keys: Vec<&String> = options.as_object().map_or_else(Vec::new, |o| o.keys().collect());
             keys.sort();
             let detail = json!({
+                "kind": r.kind,
                 "remote": r.remote,
                 "remote_type": r.remote_type,
                 "remote_path": r.remote_path,
@@ -232,6 +236,33 @@ fn parse_options(text: &str) -> Result<serde_json::Map<String, Value>, ApiError>
     Ok(opts)
 }
 
+/// The `key=value` lines of a form, plus passwords given plain that rclone keeps in a scrambled form.
+async fn backend_options(
+    text: &str,
+    secrets: &std::collections::BTreeMap<String, String>,
+) -> Result<Vec<(String, Value)>, ApiError> {
+    let mut options: Vec<(String, Value)> = parse_options(text)?.into_iter().collect();
+    let bin = crate::integrations::mirror::rclone_bin();
+    for (key, plain) in secrets {
+        let scrambled =
+            crate::integrations::mirror::obscure(&bin, plain).await.map_err(|e| ApiError::bad(format!("{e:#}")))?;
+        options.push((key.clone(), Value::String(scrambled)));
+    }
+    Ok(options)
+}
+
+/// What a source of rclone shows of its storage: `type:path`, or the remote of the config file.
+fn storage_label(config: &Value) -> Value {
+    match config["remote"].as_str().filter(|r| !r.is_empty()) {
+        Some(remote) => Value::String(remote.to_string()),
+        None => Value::String(format!(
+            "{}:{}",
+            config["remote_type"].as_str().unwrap_or_default(),
+            config["remote_path"].as_str().unwrap_or_default()
+        )),
+    }
+}
+
 pub(crate) fn hours_to_secs(hours: f64) -> Result<i64, ApiError> {
     if !(INTERVAL_HOURS.0..=INTERVAL_HOURS.1).contains(&hours) {
         return Err(ApiError::bad("Interval: between 0.25 hours and one year"));
@@ -273,14 +304,72 @@ pub async fn create_source(
     }
     let config = json!({ "service_account": parse_service_account(&b.service_account)?, "folders": parse_folder_ids(&b.folders)? });
     let secs = hours_to_secs(b.interval_hours)?;
+    add_source(&state, who, name, "gdrive", config, secs).await
+}
+
+#[derive(Deserialize)]
+pub struct NewRcloneSource {
+    name: String,
+    /// A remote of the rclone config file (`name:path`); when set, the backend, options and path are not used.
+    #[serde(default)]
+    remote: String,
+    #[serde(default)]
+    remote_type: String,
+    #[serde(default)]
+    options: String,
+    /// Passwords that rclone keeps in a scrambled form, given plain: key -> password.
+    #[serde(default)]
+    secrets: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    remote_path: String,
+    #[serde(default = "day")]
+    interval_hours: f64,
+}
+
+/// Adds a source that copies a folder of any storage rclone supports.
+pub async fn create_rclone_source(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    Json(b): Json<NewRcloneSource>,
+) -> Res<Done> {
+    who.require_workspace()?;
+    let name = slug(&b.name)?;
+    if !valid_device_name(&format!("{SOURCE_PREFIX}{name}")) {
+        return Err(ApiError::bad("Name: too long for a source"));
+    }
+    let options = backend_options(&b.options, &b.secrets).await?;
+    let (mut remote, mut remote_type, mut remote_path) = (b.remote, b.remote_type, b.remote_path);
+    let mut options: std::collections::BTreeMap<String, Value> = options.into_iter().collect();
+    normalize_storage(&mut remote, &mut remote_type, &mut remote_path, &mut options)
+        .map_err(|e| ApiError::bad(format!("{e:#}")))?;
+    let secs = hours_to_secs(b.interval_hours)?;
+    let config = json!({
+        "remote": remote,
+        "remote_type": remote_type,
+        "remote_path": remote_path,
+        "options": Value::Object(options.into_iter().collect()).to_string(),
+    });
+    add_source(&state, who, name, "rclone", config, secs).await
+}
+
+/// Adds the source and the device that holds its files.
+async fn add_source(
+    state: &Shared,
+    who: Access,
+    name: String,
+    kind: &'static str,
+    config: Value,
+    secs: i64,
+) -> Res<Done> {
+    let device = format!("{SOURCE_PREFIX}{name}");
     let store = state.store.clone();
-    run(&state, move |c| {
+    run(state, move |c| {
         let mut tx = c.transaction()?;
         // The source owns a device row (in the workspace of the user who added it), so its files use the
         // same tables as a device's. '!' can never equal a SHA-256 hex digest, so nothing can authenticate as a source.
         let (device_id, folder) = sources::insert_device(&mut tx, who.user_id, &device, unix_now())?
             .ok_or_else(|| ApiError::conflict(format!("You already have a source named {name}")))?;
-        sources::insert(&mut tx, device_id, &name, &config.to_string(), secs, unix_now())?;
+        sources::insert(&mut tx, device_id, &name, kind, &config.to_string(), secs, unix_now())?;
         db::notify(&mut tx, "jobs", &folder)?;
         tx.commit()?;
         let _ = std::fs::create_dir_all(store.live_dir(&folder));
@@ -395,6 +484,13 @@ pub async fn toggle_mirror(
 #[derive(Deserialize)]
 pub struct NewMirror {
     name: String,
+    /// `replica` (the files as they are) or `backup` (compressed and encrypted with the passwords below).
+    #[serde(default = "replica")]
+    kind: String,
+    #[serde(default)]
+    crypt_password: String,
+    #[serde(default)]
+    crypt_salt: String,
     /// A remote of the rclone config file (`name:path`); when set, the backend, options and path are not used.
     #[serde(default)]
     remote: String,
@@ -402,6 +498,9 @@ pub struct NewMirror {
     remote_type: String,
     #[serde(default)]
     options: String,
+    /// Passwords that rclone keeps in a scrambled form (`rclone obscure`), given plain: key -> password.
+    #[serde(default)]
+    secrets: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     remote_path: String,
     /// The folder to hold, like `ana/laptop/Documents`; everything when empty.
@@ -413,6 +512,9 @@ pub struct NewMirror {
     keep_runs: i64,
 }
 
+fn replica() -> String {
+    "replica".into()
+}
 fn three_days() -> f64 {
     72.0
 }
@@ -426,12 +528,16 @@ pub async fn create_mirror(
     Json(b): Json<NewMirror>,
 ) -> Res<Done> {
     who.require_admin()?;
+    let options = backend_options(&b.options, &b.secrets).await?;
     let mut mirror = MirrorSpec {
         name: slug(&b.name)?,
+        kind: b.kind,
+        crypt_password: b.crypt_password,
+        crypt_salt: b.crypt_salt,
         remote: b.remote,
         remote_type: b.remote_type,
         remote_path: b.remote_path,
-        options: parse_options(&b.options)?.into_iter().collect(),
+        options: options.into_iter().collect(),
         scope: b.scope,
         interval_hours: b.interval_hours,
         keep_runs: b.keep_runs,
@@ -445,6 +551,9 @@ pub async fn create_mirror(
         }
         let new = mirrors::New {
             name: &mirror.name,
+            kind: &mirror.kind,
+            crypt_password: &mirror.crypt_password,
+            crypt_salt: &mirror.crypt_salt,
             remote: &mirror.remote,
             remote_type: &mirror.remote_type,
             options: &options,
@@ -506,6 +615,33 @@ pub async fn resync_mirror(
     })
     .await?;
     done()
+}
+
+/// The rclone config that restores a backup mirror without fafnirx (administrators). The one place a credential
+/// leaves the master: a backup is worthless without its key.
+pub async fn mirror_restore_kit(
+    State(state): State<Shared>,
+    Extension(who): Extension<Access>,
+    Path(name): Path<String>,
+) -> Res<Value> {
+    who.require_admin()?;
+    let key = run(&state, move |c| {
+        let key = mirrors::key_of(c, &name)?.ok_or_else(|| ApiError::not_found("No such mirror"))?;
+        Ok(key)
+    })
+    .await?;
+    if key.kind != crate::integrations::mirror::BACKUP {
+        return Err(ApiError::bad("Only a backup is encrypted: a replica is restored by copying its files"));
+    }
+    let bin = crate::integrations::mirror::rclone_bin();
+    let obscured = |p: &str| {
+        let p = p.to_string();
+        let bin = bin.clone();
+        async move { crate::integrations::mirror::obscure(&bin, &p).await.map_err(|e| ApiError::bad(format!("{e:#}"))) }
+    };
+    let (password, salt) = (obscured(&key.crypt_password).await?, obscured(&key.crypt_salt).await?);
+    let config = crate::integrations::mirror::restore_config(&key, &password, &salt);
+    Ok(Json(json!({ "config": config })))
 }
 
 pub async fn delete_mirror(

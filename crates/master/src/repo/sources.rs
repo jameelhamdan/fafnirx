@@ -35,11 +35,13 @@ pub fn insert(
     c: &mut impl GenericClient,
     device_id: i64,
     name: &str,
+    kind: &str,
     config: &str,
     interval_secs: i64,
     now: i64,
 ) -> Result<(), Error> {
-    q::insert_source().params(&mut Pg(c), &q::InsertSourceParams { name, config, interval_secs, device_id, now })?;
+    q::insert_source()
+        .params(&mut Pg(c), &q::InsertSourceParams { name, kind, config, interval_secs, device_id, now })?;
     Ok(())
 }
 

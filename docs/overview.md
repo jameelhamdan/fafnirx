@@ -42,7 +42,7 @@ flowchart LR
 ## Not in scope
 
 - Not a general sync tool: only shared folders sync both ways.
-- Not encryption: use an encrypted disk, and an rclone `crypt` remote for mirrors.
+- Not encryption of the master's disk: use an encrypted disk. Backup mirrors are encrypted with your key.
 - Not enterprise access control: three roles and a workspace per user.
 
 ## The pieces
@@ -54,6 +54,6 @@ flowchart LR
 | `fafnirx-stream` | Optional: adaptive video streaming ([streaming](streaming.md)) |
 | `fafnirx-sign` | Optional: sign your own client builds |
 | PostgreSQL | All metadata |
-| rclone | Mirror uploads (in the Docker image) |
+| rclone | Mirror uploads and storage sources (in the Docker image) |
 
 Next: [Installation](installation.md), then [Usage](usage.md).

@@ -41,6 +41,7 @@ pub const ALL: &[Migration] = &[
     Migration { version: 12, name: "embedded_text", sql: include_str!("../../migrations/0012_embedded_text.sql") },
     Migration { version: 13, name: "shared_folders", sql: include_str!("../../migrations/0013_shared_folders.sql") },
     Migration { version: 14, name: "mirror_scope", sql: include_str!("../../migrations/0014_mirror_scope.sql") },
+    Migration { version: 15, name: "mirror_kind", sql: include_str!("../../migrations/0015_mirror_kind.sql") },
 ];
 
 const TRACKING: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (
