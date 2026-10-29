@@ -56,6 +56,9 @@ mkdir video-cache && chown 1000:1000 video-cache       # FAFNIRX_VIDEO_CACHE_DIR
 docker compose --profile video up -d                    # or COMPOSE_PROFILES=video
 ```
 
+**Watch out:** the cache dir must be writable by uid 1000 (`FAFNIRX_UID`). Otherwise the service starts, then logs `cache: Permission denied`
+and nothing plays. Fix: `chown -R 1000:1000` the dir (ZFS/NFS ACLs: check `acltype`), or use a named volume (`video-cache:/cache`; Docker sets the owner).
+
 Image `jameelh99/fafnirx-video` (`FAFNIRX_VIDEO_IMAGE` pins). No published port, no login: reachable from the master only. Use for
 other host, limits, GPU.
 
