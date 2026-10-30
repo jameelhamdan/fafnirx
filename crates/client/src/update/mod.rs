@@ -7,6 +7,7 @@
 //! Only the program file is replaced. The config, the token in the keychain and the state directory (with the
 //! installation id) stay, so the updated client is the same device and goes on where the old one stopped.
 
+pub mod purge;
 pub mod release;
 
 use crate::config::Config;

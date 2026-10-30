@@ -79,11 +79,15 @@ fn describe(p: &crate::probe::Probe) -> Probe {
         width: width.map(i64::from),
         height: height.map(i64::from),
         codec,
+        // The date a phone wrote with its time zone is the wall clock, which is how photos are dated; `creation_time` is UTC.
         taken_at: p
-            .tag(&["creation_time", "com.apple.quicktime.creationdate"])
+            .tag(&["com.apple.quicktime.creationdate", "creation_time"])
             .and_then(fafnirx_common::meta::parse_time)
             .filter(|t| *t > 0),
-        position: p.tag(&["com.apple.quicktime.location.ISO6709", "location"]).and_then(parse_iso6709),
+        position: p
+            .tag(&["com.apple.quicktime.location.iso6709", "location"])
+            .or_else(|| p.tag_starting("location"))
+            .and_then(parse_iso6709),
     }
 }
 
@@ -108,6 +112,9 @@ pub(crate) struct PosterQuery {
     which: Which,
     /// The longest side, in pixels.
     max: u32,
+    /// Where in the video to take the frame (milliseconds), as an earlier answer said; when left out, the module looks for it.
+    #[serde(default)]
+    at_ms: Option<i64>,
 }
 
 /// The sizes a poster may have.
@@ -122,22 +129,47 @@ pub(crate) async fn poster(State(app): State<Arc<App>>, Query(q): Query<PosterQu
     let dir = app.cfg.cache.join("posters");
     std::fs::create_dir_all(&dir).map_err(|e| internal("cache", e.into()))?;
     let out = dir.join(format!("{}-{}.jpg", std::process::id(), NEXT_POSTER.fetch_add(1, Ordering::Relaxed)));
-    // A second in is usually past the black first frame; a clip shorter than that gets its first frame.
+    // Where the master was told to look; else the first frame at 10%, 20%, ... of the video that is not black. Failing that,
+    // a second in, which is usually past the black first frame; a clip shorter than that gets its first frame.
+    let chosen = match q.at_ms.filter(|ms| *ms >= 0) {
+        Some(ms) => Some(ms),
+        None => look_for_poster(&app, &source).await,
+    };
+    let chosen_seek = chosen.map(|ms| format!("{:.3}", ms as f64 / 1000.0));
     let mut made = false;
-    for seek in ["1", "0"] {
+    let mut at_ms = None;
+    for (i, seek) in chosen_seek.iter().map(String::as_str).chain(["1", "0"]).enumerate() {
         let _ = std::fs::remove_file(&out);
         let args = crate::ffmpeg::poster_args(&source, &out, q.max, seek);
         if crate::ffmpeg::run(&app.cfg.ffmpeg, &args).await.is_ok()
             && std::fs::metadata(&out).is_ok_and(|m| m.len() > 0)
         {
             made = true;
+            // The place is said only when it was the one looked for.
+            at_ms = if i == 0 { chosen } else { None };
             break;
         }
     }
     let bytes = if made { std::fs::read(&out) } else { Err(std::io::ErrorKind::NotFound.into()) };
     let _ = std::fs::remove_file(&out);
     let bytes = bytes.map_err(|_| fail(StatusCode::UNPROCESSABLE_ENTITY, "no frame could be taken from the file"))?;
-    Ok(crate::service::reply("image/jpeg", "no-store", bytes))
+    let mut reply = crate::service::reply("image/jpeg", "no-store", bytes);
+    if let Some(ms) = at_ms {
+        reply.headers_mut().insert(POSTER_AT_HEADER, ms.to_string().parse().expect("a number is a header value"));
+    }
+    Ok(reply)
+}
+
+/// The header that says where in the video the frame of the answer is (milliseconds).
+const POSTER_AT_HEADER: &str = "x-poster-ms";
+
+/// Where the poster frame of a video is: the first frame at 10%, 20%, ... of its length that is not black. Only a video that
+/// says how long it is has one (a picture does not).
+async fn look_for_poster(app: &App, source: &std::path::Path) -> Option<i64> {
+    let found = crate::ffmpeg::details(&app.cfg.ffprobe, source).await.ok()?;
+    found.video.as_ref()?;
+    found.duration?;
+    crate::ffmpeg::pick_poster(&app.cfg.ffmpeg, source, found.duration).await
 }
 
 /// Numbers the posters being made, so that two never share a file.
@@ -165,6 +197,20 @@ mod tests {
         assert_eq!(p.codec.as_deref(), Some("h264"));
         assert_eq!(p.taken_at, Some(1_700_000_000));
         assert_eq!(p.position, Some((52.52, 13.405)));
+    }
+
+    #[test]
+    fn a_phones_local_date_and_an_androids_language_tagged_place_are_used() {
+        let json = br#"{"streams": [{"codec_type": "video", "width": 4, "height": 2}],
+            "format": {"tags": {"creation_time": "2023-11-14T21:13:20.000000Z",
+                                "com.apple.quicktime.creationdate": "2023-11-14T22:13:20+0100",
+                                "location-eng": "+52.5200+013.4050/"}}}"#;
+        let p = describe(&crate::probe::parse(json).unwrap());
+        assert_eq!(p.taken_at, Some(1_700_000_000), "the wall clock of the phone, the same as its photos");
+        assert_eq!(p.position, Some((52.52, 13.405)));
+        let zero =
+            br#"{"streams": [{"codec_type": "video"}], "format": {"tags": {"creation_time": "1904-01-01T00:00:00Z"}}}"#;
+        assert_eq!(describe(&crate::probe::parse(zero).unwrap()).taken_at, None, "the QuickTime epoch is no date");
     }
 
     #[test]

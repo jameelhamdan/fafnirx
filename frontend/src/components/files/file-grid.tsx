@@ -1,5 +1,5 @@
 import { Loader2 } from 'lucide-react'
-import { thumbUrl } from '@/lib/api'
+import { mediaUrl, thumbUrl } from '@/lib/api'
 import { bytes, plural } from '@/lib/format'
 import { entryKey } from '@/lib/entries'
 import type { Entry } from '@/lib/types'
@@ -33,7 +33,7 @@ export function FileGrid({
             <button type="button" onClick={() => onOpen(e)} className="block w-full text-left" title={e.name}>
               <div className="grid aspect-square place-items-center bg-muted/40">
                 {e.kind === 'file' && e.preview ? (
-                  <Thumb src={thumbUrl(e.device, e.path)} className={cn('size-full', e.deleted_at && 'opacity-40')} fallback={<FileIcon entry={e} className="size-10" />} />
+                  <Thumb src={e.id ? mediaUrl(e.id, 'thumb') : thumbUrl(e.device, e.path)} className={cn('size-full', e.deleted_at && 'opacity-40')} fallback={<FileIcon entry={e} className="size-10" />} />
                 ) : (
                   <FileIcon entry={e} className="size-10" />
                 )}

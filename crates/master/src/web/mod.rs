@@ -47,10 +47,6 @@ pub struct AppState {
     pub uploads: Mutex<HashMap<String, crate::files::transfer::Upload>>,
     /// At most this many files are streamed at once, so that transfers cannot starve everything else.
     pub streams: Arc<Semaphore>,
-    /// At most this many previews are decoded at once.
-    pub previews: Arc<Semaphore>,
-    /// Tile address of the map, with `{z}`, `{x}` and `{y}` in it.
-    pub map_tiles: String,
     /// The modules that are set up (see `modules`).
     pub modules: Arc<crate::modules::Registry>,
     /// The plugins in `<data>/plugins`, which the master runs as modules.
@@ -72,12 +68,7 @@ impl AppState {
             trusted: crate::platform::proxy::Trusted::from_env()?,
             uploads: Mutex::default(),
             streams: Arc::new(Semaphore::new(32)),
-            previews: Arc::new(Semaphore::new(4)),
             modules,
-            map_tiles: std::env::var("FAFNIRX_MAP_TILES")
-                .ok()
-                .filter(|t| !t.is_empty())
-                .unwrap_or_else(|| "https://tile.openstreetmap.org/{z}/{x}/{y}.png".into()),
         })
     }
 }
@@ -150,6 +141,15 @@ pub fn done() -> Res<Done> {
     Ok(Json(Done { ok: true }))
 }
 
+/// Runs `f` like [`run`] and answers `{ "ok": true }`: the handlers that change something and return nothing.
+pub async fn act<F>(state: &Shared, f: F) -> Res<Done>
+where
+    F: FnOnce(&mut Client) -> anyhow::Result<()> + Send + 'static,
+{
+    run(state, f).await?;
+    done()
+}
+
 /// Quick JSON calls.
 fn light() -> Router<Shared> {
     Router::new()
@@ -188,7 +188,6 @@ fn light() -> Router<Shared> {
         .route("/api/library/:id/folder", get(library::photos::folder))
         .route("/api/tags", get(library::photos::tags))
         .route("/api/tags/:id", delete(library::photos::delete_tag))
-        .route("/api/map", get(library::photos::map))
         .route("/api/trash", get(library::photos::trash))
         .route("/api/albums", get(library::albums::list).post(library::albums::create))
         .route(
@@ -198,7 +197,6 @@ fn light() -> Router<Shared> {
         .route("/api/albums/:id/files", post(library::albums::add))
         .route("/api/albums/:id/files/remove", post(library::albums::remove))
         .route("/api/sources", get(integrations::api::sources).post(integrations::api::create_source))
-        .route("/api/sources/rclone", post(integrations::api::create_rclone_source))
         .route("/api/sources/:user/:name", delete(integrations::api::delete_source))
         .route("/api/sources/:user/:name/run", post(integrations::api::run_source))
         .route("/api/sources/:user/:name/toggle", post(integrations::api::toggle_source))
@@ -245,7 +243,7 @@ pub fn router(state: Shared) -> Router {
         // The fallback comes first: a layer only wraps what the router holds when it is added.
         .fallback(assets::serve)
         .layer(middleware::from_fn_with_state(state.clone(), guard))
-        .layer(middleware::from_fn_with_state(state.clone(), security_headers))
+        .layer(middleware::from_fn(security_headers))
         .with_state(state)
 }
 
@@ -254,33 +252,22 @@ async fn healthz() -> &'static str {
     "ok"
 }
 
-/// The origin of the map tile address (`https://tile.example.org`), which the pages may load pictures from.
-fn tile_origin(template: &str) -> Option<&str> {
-    let (scheme, rest) = template.split_once("://")?;
-    let host_end = rest.find('/').unwrap_or(rest.len());
-    Some(&template[..scheme.len() + 3 + host_end]).filter(|o| !o.contains('{'))
-}
-
 /// Headers every response carries. The pages may only load their own scripts and styles, and cannot be put in
 /// a frame; what the API sends is only ever data.
-async fn security_headers(State(state): State<Shared>, req: axum::extract::Request, next: Next) -> Response {
+async fn security_headers(req: axum::extract::Request, next: Next) -> Response {
     let secure = auth::is_secure(req.headers());
     let page = !req.uri().path().starts_with("/api/");
     let mut resp = next.run(req).await;
-    let tiles = tile_origin(&state.map_tiles).unwrap_or("");
     let csp = if page {
-        format!(
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: {tiles}; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-        )
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
     } else {
-        "frame-ancestors 'none'".to_string()
+        "frame-ancestors 'none'"
     };
     let mut set = vec![
-        ("content-security-policy", csp),
+        ("content-security-policy", csp.to_string()),
         ("x-content-type-options", "nosniff".into()),
         ("x-frame-options", "DENY".into()),
-        // The map's tile server wants to know which site asks, so the address is sent without the path.
-        ("referrer-policy", "strict-origin-when-cross-origin".into()),
+        ("referrer-policy", "same-origin".into()),
         ("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()".into()),
         ("cross-origin-opener-policy", "same-origin".into()),
         ("cross-origin-resource-policy", "same-origin".into()),

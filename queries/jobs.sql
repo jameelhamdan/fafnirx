@@ -10,6 +10,14 @@ INSERT INTO jobs (kind, payload, created_at)
 SELECT :kind, :payload, :now
 WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE kind = :kind AND payload = :payload AND status IN ('queued', 'running'));
 
+--! job_status_of
+-- How the last job with this payload went: queued, running, failed or done. It counts as failed only when it failed (or ended
+-- without doing its work, which its note says) since `since`: later it is tried again.
+SELECT CASE WHEN status IN ('queued', 'running') THEN status
+            WHEN (status = 'failed' OR note IS NOT NULL) AND finished_at >= :since THEN 'failed'
+            ELSE 'done' END AS status
+FROM jobs WHERE kind = :kind AND payload = :payload ORDER BY seq DESC LIMIT 1;
+
 --! requeue_running_jobs
 -- A restart interrupts whatever was running: it runs again.
 UPDATE jobs SET status = 'queued' WHERE status = 'running';
@@ -20,6 +28,14 @@ UPDATE jobs SET status = 'running', attempts = attempts + 1, started_at = :now
 WHERE id = (SELECT id FROM jobs
             WHERE status = 'queued' AND run_after <= :now
             ORDER BY seq LIMIT 1 FOR UPDATE SKIP LOCKED)
+RETURNING id, kind, payload, attempts;
+
+--! claim_thumb_job
+-- The same for a picture somebody is waiting for, which goes first, newest request first: it is the one on screen.
+UPDATE jobs SET status = 'running', attempts = attempts + 1, started_at = :now
+WHERE id = (SELECT id FROM jobs
+            WHERE kind = 'thumb' AND status = 'queued' AND run_after <= :now
+            ORDER BY seq DESC LIMIT 1 FOR UPDATE SKIP LOCKED)
 RETURNING id, kind, payload, attempts;
 
 --! complete_job (note?)
@@ -60,14 +76,15 @@ WHERE status = 'failed' AND (:id::uuid IS NULL OR id = :id);
 -- Jobs of one state (failed, or queued and not started) are forgotten: one, or all of them.
 DELETE FROM jobs WHERE status = :status AND (:id::uuid IS NULL OR id = :id);
 
---! media_to_read
+--! media_to_read (after?)
 -- The live photos and videos to read again: those never read, videos read without details (before the video module was
--- set up, or when it failed), or all of them. Newest first.
-SELECT d.folder, f.path, v.root_hash FROM files f
+-- set up, or when it failed), or all of them. Newest first; `after` is the last file of the batch before, for the next one.
+SELECT f.id, d.folder, f.path, v.root_hash FROM files f
 JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id
 LEFT JOIN file_meta m ON m.root_hash = v.root_hash
 WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
   AND (:everything::boolean OR m.root_hash IS NULL OR (f.media = 'video' AND m.duration_ms IS NULL))
+  AND (:after::uuid IS NULL OR f.id < :after)
 ORDER BY f.id DESC LIMIT :limit;
 
 --! pending_jobs_of_file

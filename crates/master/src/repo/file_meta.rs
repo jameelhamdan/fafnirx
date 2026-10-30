@@ -42,8 +42,17 @@ pub fn save(c: &mut impl GenericClient, root: &[u8], m: &Meta, read_at: i64) -> 
         caption: m.description,
         keywords: Some(m.keywords),
     };
-    q::save_file_meta().params(&mut Pg(c), &params)?;
-    Ok(())
+    q::save_file_meta().params(&mut Pg(c), &params).map(drop)
+}
+
+/// Remembers where in a video its poster frame is (milliseconds).
+pub fn set_poster_ms(c: &mut impl GenericClient, root: &[u8], poster_ms: i64) -> Result<(), Error> {
+    q::set_poster_ms().bind(&mut Pg(c), &poster_ms, &root).map(drop)
+}
+
+/// Where in a video its poster frame was found; none when it was not looked for (or the file is not a video).
+pub fn poster_ms(c: &mut impl GenericClient, root: &[u8]) -> Result<Option<i64>, Error> {
+    Ok(q::poster_ms_of().bind(&mut Pg(c), &root).opt()?.and_then(|r| r.poster_ms))
 }
 
 /// Whether the path of a device still holds this content (a job made for it may be out of date).

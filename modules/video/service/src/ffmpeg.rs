@@ -62,6 +62,66 @@ pub fn poster_args(source: &Path, out: &Path, max: u32, seek: &str) -> Vec<Strin
     a
 }
 
+/// Size of the small frame a poster is chosen from (in pixels): enough to tell a black or blank frame from a picture.
+const LOOK_W: usize = 32;
+const LOOK_H: usize = 18;
+
+/// The arguments that take one tiny frame of `source`, `seek` seconds in, as raw RGB on standard output.
+fn look_args(source: &Path, seek: f64) -> Vec<String> {
+    let mut a: Vec<String> =
+        ["-v", "error", "-nostdin", "-ss", &format!("{seek:.3}"), "-i"].iter().map(|s| s.to_string()).collect();
+    a.push(source.to_string_lossy().into_owned());
+    let filter = format!("scale={LOOK_W}:{LOOK_H},format=rgb24");
+    a.extend(["-frames:v", "1", "-vf", &filter, "-f", "rawvideo", "-"].iter().map(|s| s.to_string()));
+    a
+}
+
+/// Whether a tiny RGB frame shows something: not black, not blown out to white, and not one flat colour.
+pub fn shows_a_picture(rgb: &[u8]) -> bool {
+    let pixels: Vec<[f64; 3]> = rgb.as_chunks::<3>().0.iter().map(|p| p.map(f64::from)).collect();
+    if pixels.is_empty() {
+        return false;
+    }
+    let luma: Vec<f64> = pixels.iter().map(|p| 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]).collect();
+    let n = luma.len() as f64;
+    let mean = luma.iter().sum::<f64>() / n;
+    let spread = (luma.iter().map(|l| (l - mean).powi(2)).sum::<f64>() / n).sqrt();
+    // How far apart the colour channels are: a grey frame has none, a coloured one has some.
+    let colour = pixels.iter().map(|p| p[0].max(p[1]).max(p[2]) - p[0].min(p[1]).min(p[2])).sum::<f64>() / n;
+    (24.0..235.0).contains(&mean) && (spread >= 10.0 || colour >= 20.0)
+}
+
+/// Where to look, in seconds, for a video of `duration` seconds (none when its length is not known): 10%, 20%, ... 90%.
+pub fn poster_candidates(duration: Option<f64>) -> Vec<f64> {
+    match duration.filter(|d| d.is_finite() && *d > 0.0) {
+        Some(d) => (1..=9).map(|i| d * i as f64 / 10.0).collect(),
+        None => vec![1.0, 3.0, 10.0, 30.0],
+    }
+}
+
+/// The place in the video (milliseconds) for its poster: the first frame at 10%, 20%, ... of its length that shows a
+/// picture. When none does, 10% (a video that is dark throughout has no better one); none when no frame can be taken.
+pub async fn pick_poster(ffmpeg: &str, source: &Path, duration: Option<f64>) -> Option<i64> {
+    let mut first = None;
+    for at in poster_candidates(duration) {
+        let out = Command::new(ffmpeg)
+            .args(look_args(source, at))
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output()
+            .await
+            .ok()
+            .filter(|o| o.status.success() && o.stdout.len() == LOOK_W * LOOK_H * 3);
+        let Some(out) = out else { continue };
+        let ms = (at * 1000.0).round() as i64;
+        if shows_a_picture(&out.stdout) {
+            return Some(ms);
+        }
+        first.get_or_insert(ms);
+    }
+    first
+}
+
 /// The arguments that make segment `start`..`start + len` (seconds) of `source` in quality `v`, as MPEG-TS with
 /// timestamps that continue from the segment before it, so that a player joins them without a gap.
 pub fn segment_args(
@@ -230,6 +290,30 @@ mod tests {
         ],
         "format": { "duration": "61.480000" }
     }"#;
+
+    #[test]
+    fn black_white_and_flat_frames_are_not_pictures() {
+        let flat = |r: u8, g: u8, b: u8| [r, g, b].repeat(LOOK_W * LOOK_H);
+        assert!(!shows_a_picture(&flat(0, 0, 0)), "black");
+        assert!(!shows_a_picture(&flat(12, 12, 12)), "almost black");
+        assert!(!shows_a_picture(&flat(250, 250, 250)), "white");
+        assert!(!shows_a_picture(&flat(120, 120, 120)), "one flat grey");
+        assert!(shows_a_picture(&flat(200, 40, 40)), "a flat colour is coloured");
+        let mut half = flat(30, 30, 30);
+        let middle = half.len() / 2;
+        half[..middle].fill(200);
+        assert!(shows_a_picture(&half), "light and dark parts are contrast");
+        assert!(!shows_a_picture(&[]), "no frame");
+    }
+
+    #[test]
+    fn the_places_to_look_are_every_tenth_of_the_length() {
+        assert_eq!(poster_candidates(Some(100.0)), [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0]);
+        assert_eq!(poster_candidates(None), [1.0, 3.0, 10.0, 30.0], "no length: a few fixed places");
+        assert_eq!(poster_candidates(Some(0.0)), poster_candidates(None));
+        let args = look_args(std::path::Path::new("in.mp4"), 12.5);
+        assert!(args.windows(2).any(|w| w == ["-ss", "12.500"]) && args.iter().any(|a| a == "rawvideo"));
+    }
 
     #[test]
     fn a_probe_gives_size_length_and_sound() {

@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import { ChangePassword } from '@/components/change-password'
 import { api } from '@/lib/api'
 import { useRole, useSession } from '@/lib/session'
@@ -20,8 +21,9 @@ function SettingsForm({ data }: { data: SettingsData }) {
   const client = useQueryClient()
   const [versions, setVersions] = useState(String(data.version_count))
   const [days, setDays] = useState(String(data.retention_days))
+  const [thumbnails, setThumbnails] = useState(data.thumbnails)
   const save = useMutation({
-    mutationFn: () => api.put<SettingsData>('/api/settings', { version_count: Number(versions), retention_days: Number(days) }),
+    mutationFn: () => api.put<SettingsData>('/api/settings', { version_count: Number(versions), retention_days: Number(days), thumbnails }),
     onSuccess: (saved) => { client.setQueryData(['settings'], saved); toast.success(t('Settings saved')) },
     onError: (e) => toast.error(e.message),
   })
@@ -43,6 +45,15 @@ function SettingsForm({ data }: { data: SettingsData }) {
           <div className="space-y-2">
             <Label htmlFor="days">{t('Retention (days)')}</Label>
             <Input id="days" type="number" min="1" max="3650" value={days} onChange={(e) => setDays(e.target.value)} />
+          </div>
+          <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
+            <div className="space-y-1">
+              <Label htmlFor="thumbnails">{t('Thumbnails and previews')}</Label>
+              <p className="text-sm text-muted-foreground">
+                {t('Made when someone looks at a photo or video, and kept. Off: none is made, not even on demand, and an icon is shown instead.')}
+              </p>
+            </div>
+            <Switch id="thumbnails" checked={thumbnails} onCheckedChange={setThumbnails} />
           </div>
           <Button type="submit" disabled={save.isPending}>{t('Save')}</Button>
         </form>

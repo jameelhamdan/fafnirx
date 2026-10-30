@@ -1,10 +1,16 @@
-//! A streaming ZIP writer: files are read once and sent as they are, with no temporary archive and no
-//! memory use that grows with the size. Entries are stored, not compressed (photos and videos are
-//! already compressed), and use ZIP64 so that files and archives can be any size.
+//! A streaming ZIP writer: files are read once and sent as they are, with no temporary archive and no memory use that grows
+//! with the size. Entries are stored, not compressed (photos and videos are already compressed), and use ZIP64 so that files
+//! and archives can be any size. The `zip` crate writes it, for an output that cannot seek; it blocks, so it runs on a thread
+//! of its own, and the thread waits whenever the download is slower than the disk.
 
-use std::io;
+use std::io::{self, BufReader};
 use std::path::PathBuf;
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tokio::io::AsyncWrite;
+use tokio_util::io::SyncIoBridge;
+use zip::write::{SimpleFileOptions, StreamWriter};
+use zip::{CompressionMethod, DateTime, ZipWriter};
 
 pub struct Entry {
     /// Name inside the archive, with `/` separators.
@@ -14,162 +20,116 @@ pub struct Entry {
     pub mtime: i64,
 }
 
-struct Done {
-    name: String,
-    crc: u32,
-    size: u64,
-    offset: u64,
-    time: u16,
-    date: u16,
+/// The time an entry is dated: what the format can say (it starts in 1980), else its first moment.
+fn dated(unix: i64) -> DateTime {
+    time::OffsetDateTime::from_unix_timestamp(unix)
+        .ok()
+        .and_then(|t| {
+            DateTime::from_date_and_time(
+                t.year().try_into().ok()?,
+                t.month().into(),
+                t.day(),
+                t.hour(),
+                t.minute(),
+                t.second(),
+            )
+            .ok()
+        })
+        .unwrap_or_default()
 }
 
-/// MS-DOS (time, date) of a unix time; the format cannot say anything before 1980.
-fn dos_time(unix: i64) -> (u16, u16) {
-    let unix = unix.max(315_532_800);
-    let (days, secs) = (unix.div_euclid(86400), unix.rem_euclid(86400));
-    // civil_from_days (Howard Hinnant)
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    let time = ((secs / 3600) << 11) | (((secs % 3600) / 60) << 5) | ((secs % 60) / 2);
-    let date = ((year - 1980) << 9) | (month << 5) | day;
-    (time as u16, date as u16)
+/// Passes what is written on until told to throw the rest away. An archive that failed must not be finished into one that
+/// looks complete, so what follows the failure never reaches the download, and the writer can still be closed quietly.
+struct Gate<W> {
+    inner: W,
+    discard: Arc<AtomicBool>,
 }
 
-const GENERAL_FLAGS: u16 = 0x0808; // sizes follow the data; names are UTF-8
-const VERSION: u16 = 45; // ZIP64
-
-fn local_header(name: &str, time: u16, date: u16) -> Vec<u8> {
-    let mut h = Vec::with_capacity(30 + name.len() + 20);
-    h.extend(0x0403_4b50u32.to_le_bytes());
-    h.extend(VERSION.to_le_bytes());
-    h.extend(GENERAL_FLAGS.to_le_bytes());
-    h.extend(0u16.to_le_bytes()); // stored
-    h.extend(time.to_le_bytes());
-    h.extend(date.to_le_bytes());
-    h.extend([0u8; 12]); // crc and sizes: in the descriptor
-    h.extend((name.len() as u16).to_le_bytes());
-    h.extend(20u16.to_le_bytes());
-    h.extend(name.as_bytes());
-    // The ZIP64 extra field tells readers that the descriptor has 8-byte sizes.
-    h.extend(1u16.to_le_bytes());
-    h.extend(16u16.to_le_bytes());
-    h.extend([0u8; 16]);
-    h
-}
-
-fn descriptor(crc: u32, size: u64) -> Vec<u8> {
-    let mut d = Vec::with_capacity(24);
-    d.extend(0x0807_4b50u32.to_le_bytes());
-    d.extend(crc.to_le_bytes());
-    d.extend(size.to_le_bytes());
-    d.extend(size.to_le_bytes());
-    d
-}
-
-fn central_entry(e: &Done) -> Vec<u8> {
-    let mut h = Vec::with_capacity(46 + e.name.len() + 28);
-    h.extend(0x0201_4b50u32.to_le_bytes());
-    h.extend(VERSION.to_le_bytes()); // made by
-    h.extend(VERSION.to_le_bytes()); // needed
-    h.extend(GENERAL_FLAGS.to_le_bytes());
-    h.extend(0u16.to_le_bytes());
-    h.extend(e.time.to_le_bytes());
-    h.extend(e.date.to_le_bytes());
-    h.extend(e.crc.to_le_bytes());
-    h.extend(u32::MAX.to_le_bytes());
-    h.extend(u32::MAX.to_le_bytes());
-    h.extend((e.name.len() as u16).to_le_bytes());
-    h.extend(28u16.to_le_bytes());
-    h.extend([0u8; 10]); // comment length, disk, internal and external attributes
-    h.extend(u32::MAX.to_le_bytes());
-    h.extend(e.name.as_bytes());
-    h.extend(1u16.to_le_bytes());
-    h.extend(24u16.to_le_bytes());
-    h.extend(e.size.to_le_bytes());
-    h.extend(e.size.to_le_bytes());
-    h.extend(e.offset.to_le_bytes());
-    h
-}
-
-fn end_of_archive(entries: u64, dir_offset: u64, dir_size: u64) -> Vec<u8> {
-    let mut t = Vec::with_capacity(98);
-    t.extend(0x0606_4b50u32.to_le_bytes());
-    t.extend(44u64.to_le_bytes());
-    t.extend(VERSION.to_le_bytes());
-    t.extend(VERSION.to_le_bytes());
-    t.extend([0u8; 8]); // disk numbers
-    t.extend(entries.to_le_bytes());
-    t.extend(entries.to_le_bytes());
-    t.extend(dir_size.to_le_bytes());
-    t.extend(dir_offset.to_le_bytes());
-    t.extend(0x0706_4b50u32.to_le_bytes());
-    t.extend(0u32.to_le_bytes());
-    t.extend((dir_offset + dir_size).to_le_bytes());
-    t.extend(1u32.to_le_bytes());
-    t.extend(0x0605_4b50u32.to_le_bytes());
-    t.extend([0u8; 4]);
-    t.extend(u16::MAX.to_le_bytes());
-    t.extend(u16::MAX.to_le_bytes());
-    t.extend(u32::MAX.to_le_bytes());
-    t.extend(u32::MAX.to_le_bytes());
-    t.extend(0u16.to_le_bytes());
-    t
-}
-
-/// Writes the entries as one archive. A file that cannot be read stops the archive with an error, so
-/// the download fails visibly instead of being quietly incomplete.
-pub async fn write<W: AsyncWrite + Unpin>(out: &mut W, entries: Vec<Entry>) -> io::Result<()> {
-    let mut offset = 0u64;
-    let mut done = Vec::with_capacity(entries.len());
-    let mut buf = vec![0u8; 256 * 1024];
-    for e in entries {
-        let (time, date) = dos_time(e.mtime);
-        let header = local_header(&e.name, time, date);
-        out.write_all(&header).await?;
-        let entry_offset = offset;
-        offset += header.len() as u64;
-        let mut file = tokio::fs::File::open(&e.path).await?;
-        let (mut crc, mut size) = (crc32fast::Hasher::new(), 0u64);
-        loop {
-            let n = file.read(&mut buf).await?;
-            if n == 0 {
-                break;
-            }
-            crc.update(&buf[..n]);
-            out.write_all(&buf[..n]).await?;
-            size += n as u64;
+impl<W: io::Write> io::Write for Gate<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.discard.load(Ordering::Relaxed) {
+            Ok(buf.len())
+        } else {
+            self.inner.write(buf)
         }
-        let crc = crc.finalize();
-        out.write_all(&descriptor(crc, size)).await?;
-        offset += size + 24;
-        done.push(Done { name: e.name, crc, size, offset: entry_offset, time, date });
     }
-    let dir_offset = offset;
-    for e in &done {
-        let entry = central_entry(e);
-        out.write_all(&entry).await?;
-        offset += entry.len() as u64;
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.discard.load(Ordering::Relaxed) {
+            Ok(())
+        } else {
+            self.inner.flush()
+        }
     }
-    out.write_all(&end_of_archive(done.len() as u64, dir_offset, offset - dir_offset)).await?;
-    out.flush().await
+}
+
+fn add_all(
+    zip: &mut ZipWriter<StreamWriter<Gate<SyncIoBridge<impl AsyncWrite + Unpin>>>>,
+    entries: Vec<Entry>,
+) -> io::Result<()> {
+    for e in entries {
+        let options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Stored)
+            .large_file(true)
+            .last_modified_time(dated(e.mtime));
+        zip.start_file(e.name, options).map_err(io::Error::other)?;
+        let file = std::fs::File::open(&e.path)?;
+        io::copy(&mut BufReader::with_capacity(256 * 1024, file), zip)?;
+    }
+    Ok(())
+}
+
+fn write_all(out: SyncIoBridge<impl AsyncWrite + Unpin>, entries: Vec<Entry>, failed: &AtomicBool) -> io::Result<()> {
+    let discard = Arc::new(AtomicBool::new(false));
+    let mut zip = ZipWriter::new_stream(Gate { inner: out, discard: discard.clone() });
+    let added = add_all(&mut zip, entries);
+    if added.is_err() {
+        // Set before the output is closed, so that whoever reads it sees the failure at its end.
+        failed.store(true, Ordering::Relaxed);
+        discard.store(true, Ordering::Relaxed);
+    }
+    let finished = zip.finish().map_err(io::Error::other);
+    added?;
+    finished?.into_inner().inner.shutdown()
+}
+
+/// Writes the entries as one archive and ends `out`. A file that cannot be read stops the archive with an error, leaves
+/// what was sent unfinished (no central directory) and sets `failed` before `out` ends, so that the download fails
+/// visibly instead of being quietly incomplete.
+pub async fn write<W: AsyncWrite + Unpin + Send + 'static>(
+    out: W,
+    entries: Vec<Entry>,
+    failed: Arc<AtomicBool>,
+) -> io::Result<()> {
+    let out = SyncIoBridge::new(out);
+    tokio::task::spawn_blocking(move || write_all(out, entries, &failed)).await.map_err(io::Error::other)?
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Read;
+    use tokio::io::AsyncReadExt;
+
+    /// The archive `write` makes of `entries`, read whole.
+    async fn archive_of(entries: Vec<Entry>) -> Vec<u8> {
+        let (writer, mut reader) = tokio::io::duplex(64 * 1024);
+        let writing = tokio::spawn(write(writer, entries, Arc::default()));
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).await.unwrap();
+        writing.await.unwrap().unwrap();
+        bytes
+    }
 
     #[test]
     fn dos_times() {
-        assert_eq!(dos_time(1_700_000_000), (0xB1AA, 0x576E), "2023-11-14 22:13:20");
-        assert_eq!(dos_time(0), dos_time(315_532_800), "clamped to 1980");
+        let at = |unix| {
+            let d = dated(unix);
+            (d.year(), d.month(), d.day(), d.hour(), d.minute(), d.second())
+        };
+        assert_eq!(at(1_700_000_000), (2023, 11, 14, 22, 13, 20));
+        assert_eq!(at(0), (1980, 1, 1, 0, 0, 0), "the format starts in 1980");
+        assert_eq!(at(i64::MAX), (1980, 1, 1, 0, 0, 0), "a time that means nothing");
     }
 
     #[tokio::test]
@@ -181,19 +141,78 @@ mod tests {
         std::fs::write(dir.path().join("empty"), b"").unwrap();
         let entry =
             |name: &str, file: &str| Entry { name: name.into(), path: dir.path().join(file), mtime: 1_700_000_000 };
-        let mut bytes = Vec::new();
-        write(&mut bytes, vec![entry("x/a.txt", "a"), entry("x/ü b.bin", "b"), entry("empty", "empty")]).await.unwrap();
+        let bytes = archive_of(vec![entry("x/a.txt", "a"), entry("x/ü b.bin", "b"), entry("empty", "empty")]).await;
 
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         assert_eq!(archive.len(), 3);
         let mut read = |i: usize| {
             let mut f = archive.by_index(i).unwrap();
+            assert_eq!(f.compression(), CompressionMethod::Stored);
             let mut data = Vec::new();
             f.read_to_end(&mut data).unwrap();
-            (f.name().to_string(), data)
+            (f.name().unwrap().to_string(), data)
         };
         assert_eq!(read(0), ("x/a.txt".to_string(), b"hello".to_vec()));
         assert_eq!(read(1), ("x/ü b.bin".to_string(), big));
         assert_eq!(read(2), ("empty".to_string(), vec![]));
+    }
+
+    #[tokio::test]
+    async fn a_missing_file_ends_the_archive_with_an_error() {
+        let (writer, mut reader) = tokio::io::duplex(1024);
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ok"), b"fine").unwrap();
+        let entry = |name: &str, path: std::path::PathBuf| Entry { name: name.into(), path, mtime: 0 };
+        let entries = vec![entry("ok", dir.path().join("ok")), entry("gone", dir.path().join("gone"))];
+        let failed = Arc::new(AtomicBool::new(false));
+        let writing = tokio::spawn(write(writer, entries, failed.clone()));
+        let mut sent = Vec::new();
+        let _ = reader.read_to_end(&mut sent).await;
+        assert!(failed.load(Ordering::Relaxed), "the end of the stream says that it failed");
+        assert!(writing.await.unwrap().is_err(), "the download must fail, not end quietly");
+        assert!(zip::ZipArchive::new(std::io::Cursor::new(sent)).is_err(), "what was sent is not a complete archive");
+    }
+
+    #[tokio::test]
+    async fn a_download_that_goes_away_stops_the_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f"), vec![7u8; 4 << 20]).unwrap();
+        let (writer, reader) = tokio::io::duplex(1024);
+        drop(reader);
+        let entry = Entry { name: "f".into(), path: dir.path().join("f"), mtime: 0 };
+        assert!(
+            write(writer, vec![entry], Arc::default()).await.is_err(),
+            "nobody reads: the writer gives up instead of waiting"
+        );
+    }
+
+    /// A file larger than 4 GiB, which needs ZIP64. Slow and takes the disk space of the archive, so it is run by hand:
+    /// `cargo test -p fafnirx-master --bins zip -- --ignored`.
+    #[tokio::test]
+    #[ignore = "writes a 4 GiB archive"]
+    async fn a_file_over_4_gib_is_read_back_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("huge");
+        let size = (4u64 << 30) + 12_345;
+        // Zeros, extended without writing them.
+        std::fs::File::create(&source).unwrap().set_len(size).unwrap();
+        let out = dir.path().join("huge.zip");
+        let sink = tokio::fs::File::create(&out).await.unwrap();
+        let small = dir.path().join("small");
+        std::fs::write(&small, b"after").unwrap();
+        let entry = Entry { name: "huge.bin".into(), path: source, mtime: 1_700_000_000 };
+        write(sink, vec![entry, Entry { name: "after.txt".into(), path: small, mtime: 0 }], Arc::default())
+            .await
+            .unwrap();
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(&out).unwrap()).unwrap();
+        assert_eq!(archive.len(), 2);
+        let mut file = archive.by_index(0).unwrap();
+        assert_eq!(file.size(), size);
+        let copied = std::io::copy(&mut file, &mut std::io::sink()).unwrap(); // the checksum is checked at the end
+        assert_eq!(copied, size);
+        drop(file);
+        let mut after = String::new();
+        archive.by_index(1).unwrap().read_to_string(&mut after).unwrap();
+        assert_eq!(after, "after", "what follows a ZIP64 entry is found");
     }
 }

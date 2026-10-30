@@ -1,6 +1,6 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { Calendar, FolderOpen, MapPin, RotateCcw, Star, X } from 'lucide-react'
-import { lazy, Suspense, useState, type FormEvent, type ReactNode } from 'react'
+import { useState, type FormEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { Button } from '../ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog'
@@ -9,16 +9,12 @@ import { Skeleton } from '../ui/skeleton'
 import { Textarea } from '../ui/textarea'
 import { api, query } from '@/lib/api'
 import { bytes, clock, fromInputValue, toInputValue, whenText } from '@/lib/format'
-import { DEFAULT_TILES } from '@/lib/leaflet-defaults'
 import { useLibraryActions, useTags } from '@/lib/library'
 import { hasWorkspace, useRole } from '@/lib/session'
-import type { AssetDetail, Session } from '@/lib/types'
+import type { AssetDetail } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { WorkNote } from '../work-note'
-import type { Place } from './location-picker'
 import { useT } from '@/lib/i18n'
-
-const LocationPicker = lazy(() => import('./location-picker'))
 
 function Row({ icon: Icon, label, children, action }: { icon: typeof Calendar; label: string; children: ReactNode; action?: ReactNode }) {
   return (
@@ -159,41 +155,34 @@ function DateDialog({ detail, onClose }: { detail: AssetDetail; onClose: () => v
   )
 }
 
+/** A place as latitude and longitude, or null when the text is not one. */
+function placeOf(lat: string, lon: string): { lat: number; lon: number } | null {
+  const [a, b] = [Number(lat), Number(lon)]
+  if (!lat.trim() || !lon.trim() || !Number.isFinite(a) || !Number.isFinite(b) || Math.abs(a) > 90 || Math.abs(b) > 180) return null
+  return { lat: a, lon: b }
+}
+
 function PlaceDialog({ detail, onClose }: { detail: AssetDetail; onClose: () => void }) {
   const t = useT()
   const { edit } = useLibraryActions()
-  const client = useQueryClient()
-  const tiles = client.getQueryData<Session>(['session'])?.map_tiles ?? DEFAULT_TILES
-  const [place, setPlace] = useState<Place | null>(detail.lat !== null && detail.lon !== null ? { lat: detail.lat, lon: detail.lon } : null)
-  const [lat, setLat] = useState(place ? String(place.lat) : '')
-  const [lon, setLon] = useState(place ? String(place.lon) : '')
-  const choose = (p: Place) => {
-    setPlace(p)
-    setLat(String(p.lat))
-    setLon(String(p.lon))
-  }
-  const typed = (la: string, lo: string) => {
-    setLat(la)
-    setLon(lo)
-    const [a, b] = [Number(la), Number(lo)]
-    if (la.trim() && lo.trim() && Number.isFinite(a) && Number.isFinite(b) && Math.abs(a) <= 90 && Math.abs(b) <= 180) setPlace({ lat: a, lon: b })
-  }
+  const [lat, setLat] = useState(detail.lat === null ? '' : String(detail.lat))
+  const [lon, setLon] = useState(detail.lon === null ? '' : String(detail.lon))
+  const place = placeOf(lat, lon)
   const save = (e: FormEvent) => {
     e.preventDefault()
     if (place) edit.mutate({ id: detail.id, location: place }, { onSuccess: onClose })
   }
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent>
         <form onSubmit={save} className="space-y-4">
           <DialogHeader>
             <DialogTitle>{t('Change the place')}</DialogTitle>
-            <DialogDescription>{t('Click the map or drag the pin. The file itself is not changed.')}</DialogDescription>
+            <DialogDescription>{t('Enter the latitude and longitude. The file itself is not changed.')}</DialogDescription>
           </DialogHeader>
-          <Suspense fallback={<Skeleton className="h-64" />}><LocationPicker value={place} onChange={choose} tiles={tiles} /></Suspense>
           <div className="grid grid-cols-2 gap-2">
-            <Input value={lat} onChange={(e) => typed(e.target.value, lon)} inputMode="decimal" placeholder={t('Latitude')} aria-label={t('Latitude')} />
-            <Input value={lon} onChange={(e) => typed(lat, e.target.value)} inputMode="decimal" placeholder={t('Longitude')} aria-label={t('Longitude')} />
+            <Input value={lat} onChange={(e) => setLat(e.target.value)} inputMode="decimal" placeholder={t('Latitude')} aria-label={t('Latitude')} />
+            <Input value={lon} onChange={(e) => setLon(e.target.value)} inputMode="decimal" placeholder={t('Longitude')} aria-label={t('Longitude')} />
           </div>
           <DialogFooter className="sm:justify-between">
             {detail.place_edited ? (

@@ -287,21 +287,20 @@ pub fn probe_video(file: &Path, hash: &str) -> Result<Option<Probe>> {
     })
 }
 
-/// One frame of a file as a JPEG no larger than `max` pixels; none when no module can make one.
+/// One frame of a file as a JPEG no larger than `max` pixels, and where in the video it was taken (milliseconds) when the
+/// module looked for the place; none when no module can make a frame. `at_ms` is a place an earlier answer gave.
 ///
 /// For the threads of the job queue: it waits for the answer.
-pub fn poster(file: &Path, hash: &str, max: u32) -> Result<Option<Vec<u8>>> {
+pub fn poster(file: &Path, hash: &str, max: u32, at_ms: Option<i64>) -> Result<Option<(Vec<u8>, Option<i64>)>> {
     let Some(run) = RUNNING.get() else { return Ok(None) };
     let Some(module) = run.registry.provider(capability::POSTER) else { return Ok(None) };
     let p = tree_path(&run.files, file)?;
     run.runtime.block_on(async {
-        let reply = module
-            .get("/poster")
-            .query(&[("p", p.as_str()), ("h", hash), ("max", &max.to_string())])
-            .timeout(DERIVE_TIMEOUT)
-            .send()
-            .await?;
+        let mut query = vec![("p", p.clone()), ("h", hash.to_string()), ("max", max.to_string())];
+        query.extend(at_ms.map(|ms| ("at_ms", ms.to_string())));
+        let reply = module.get("/poster").query(&query).timeout(DERIVE_TIMEOUT).send().await?;
         let reply = ok(reply).await?;
+        let taken_at = reply.headers().get("x-poster-ms").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok());
         if reply.content_length().is_some_and(|n| n as usize > POSTER_LIMIT) {
             bail!("the {} module sent a picture that is too large", module.id);
         }
@@ -315,7 +314,7 @@ pub fn poster(file: &Path, hash: &str, max: u32) -> Result<Option<Vec<u8>>> {
             }
             picture.extend_from_slice(&chunk);
         }
-        Ok(Some(picture))
+        Ok(Some((picture, taken_at)))
     })
 }
 

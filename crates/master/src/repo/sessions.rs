@@ -12,23 +12,19 @@ pub fn user_of(c: &mut impl GenericClient, token_hash: &str, now: i64) -> Result
 /// Forgets the sessions that have expired, then starts a new one.
 pub fn start(c: &mut impl GenericClient, token_hash: &str, user_id: i64, now: i64, lifetime: i64) -> Result<(), Error> {
     q::delete_expired_sessions().bind(&mut Pg(&mut *c), &now)?;
-    q::insert_session().bind(&mut Pg(c), &token_hash, &user_id, &now, &(now + lifetime))?;
-    Ok(())
+    q::insert_session().bind(&mut Pg(c), &token_hash, &user_id, &now, &(now + lifetime)).map(drop)
 }
 
 pub fn end(c: &mut impl GenericClient, token_hash: &str) -> Result<(), Error> {
-    q::delete_session().bind(&mut Pg(c), &token_hash)?;
-    Ok(())
+    q::delete_session().bind(&mut Pg(c), &token_hash).map(drop)
 }
 
 /// Ends every session of a user.
 pub fn end_all(c: &mut impl GenericClient, user_id: i64) -> Result<(), Error> {
-    q::delete_user_sessions().bind(&mut Pg(c), &user_id)?;
-    Ok(())
+    q::delete_user_sessions().bind(&mut Pg(c), &user_id).map(drop)
 }
 
 /// Ends every session of a user except the one with this token hash (the one that asked for the change).
 pub fn end_others(c: &mut impl GenericClient, user_id: i64, keep: &str) -> Result<(), Error> {
-    q::delete_user_sessions_except().bind(&mut Pg(c), &user_id, &keep)?;
-    Ok(())
+    q::delete_user_sessions_except().bind(&mut Pg(c), &user_id, &keep).map(drop)
 }

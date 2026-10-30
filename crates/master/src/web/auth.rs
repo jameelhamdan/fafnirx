@@ -215,9 +215,6 @@ pub struct Session {
     /// Shown in the top bar; only told to a logged-in user.
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<&'static str>,
-    /// Where the map gets its pictures from (`{z}/{x}/{y}` stand for the tile); only told to a logged-in user.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    map_tiles: Option<String>,
     /// The modules that are up, by id; only told to a logged-in user.
     modules: std::collections::BTreeMap<String, fafnirx_module_api::Manifest>,
 }
@@ -228,7 +225,6 @@ pub async fn session(State(state): State<Shared>, access: Option<Extension<Acces
     Ok(Json(Session {
         user: access.map(|a| Who { name: a.name, role: a.role.as_str() }),
         version: logged_in.then_some(env!("CARGO_PKG_VERSION")),
-        map_tiles: logged_in.then(|| state.map_tiles.clone()),
         modules: if logged_in { state.modules.active() } else { Default::default() },
     }))
 }

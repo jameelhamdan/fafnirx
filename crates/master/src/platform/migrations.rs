@@ -47,6 +47,21 @@ pub const ALL: &[Migration] = &[
         name: "retire_playable_copies",
         sql: include_str!("../../migrations/0016_retire_playable_copies.sql"),
     },
+    Migration {
+        version: 17,
+        name: "retire_drive_sources",
+        sql: include_str!("../../migrations/0017_retire_drive_sources.sql"),
+    },
+    Migration {
+        version: 18,
+        name: "video_poster_frame",
+        sql: include_str!("../../migrations/0018_video_poster_frame.sql"),
+    },
+    Migration {
+        version: 19,
+        name: "pictures_on_demand",
+        sql: include_str!("../../migrations/0019_pictures_on_demand.sql"),
+    },
 ];
 
 const TRACKING: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (

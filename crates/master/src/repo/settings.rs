@@ -17,6 +17,5 @@ pub fn get_i64(c: &mut impl GenericClient, key: &str, default: i64) -> i64 {
 }
 
 pub fn set(c: &mut impl GenericClient, key: &str, value: &str) -> Result<(), Error> {
-    q::set_setting().bind(&mut Pg(c), &key, &value)?;
-    Ok(())
+    q::set_setting().bind(&mut Pg(c), &key, &value).map(drop)
 }

@@ -5,7 +5,6 @@
 //! mirrors each run one job at a time.
 
 pub mod api;
-pub mod gdrive;
 pub mod mirror;
 pub mod rclone_source;
 pub mod scope;
@@ -74,7 +73,6 @@ pub struct MirrorRow {
 pub struct Outcome {
     pub added: usize,
     pub updated: usize,
-    pub renamed: usize,
     pub deleted: usize,
     pub unchanged: usize,
     pub skipped: usize,
@@ -85,8 +83,8 @@ impl Outcome {
     pub fn report(&self) -> JobReport {
         JobReport {
             summary: format!(
-                "{} added, {} updated, {} renamed, {} deleted, {} unchanged, {} skipped (not raw files)",
-                self.added, self.updated, self.renamed, self.deleted, self.unchanged, self.skipped
+                "{} added, {} updated, {} deleted, {} unchanged, {} skipped",
+                self.added, self.updated, self.deleted, self.unchanged, self.skipped
             ),
             problems: self.failed.clone(),
         }
@@ -225,7 +223,6 @@ async fn run_source(db: &Db, store: &Arc<Store>, src: SourceRow) {
     let (id, name) = (src.id, src.device.name.clone());
     tracing::info!("source {name}: starting");
     let result = match src.kind.as_str() {
-        "gdrive" => crate::integrations::gdrive::run(db.clone(), store.clone(), src).await.map(|o| o.report()),
         "rclone" => crate::integrations::rclone_source::run(db.clone(), store.clone(), src).await.map(|o| o.report()),
         other => Err(anyhow!("unknown source kind {other:?}")),
     };
@@ -277,7 +274,7 @@ mod tests {
         .unwrap();
         c.execute(
             "INSERT INTO sources (name, kind, config, device_id, created_at, interval_secs)
-             VALUES ('d', 'gdrive', '{}', (SELECT id FROM devices WHERE kind = 'source'), 0, 3600)",
+             VALUES ('d', 'rclone', '{}', (SELECT id FROM devices WHERE kind = 'source'), 0, 3600)",
             &[],
         )
         .unwrap();

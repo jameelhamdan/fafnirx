@@ -153,6 +153,14 @@ ON CONFLICT (root_hash) DO UPDATE SET mime = excluded.mime, width = excluded.wid
     duration_ms = excluded.duration_ms, codec = excluded.codec, lat = excluded.lat, lon = excluded.lon,
     caption = excluded.caption, keywords = excluded.keywords;
 
+--! set_poster_ms
+-- Where in a video its poster frame was found (found when the first picture of the video was asked for).
+UPDATE file_meta SET poster_ms = :poster_ms WHERE root_hash = :root;
+
+--! poster_ms_of : PosterAt(poster_ms?)
+-- Where in a video its poster frame was found, when it was looked for.
+SELECT poster_ms FROM file_meta WHERE root_hash = :root;
+
 --! files_in_folder
 -- The live files directly in a folder of a device with their content: `prefix` is the folder's path with a slash at the
 -- end, empty for the top of the device. Used to find the pictures and the .nfo that sit next to a video.

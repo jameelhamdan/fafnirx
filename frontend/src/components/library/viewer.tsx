@@ -1,5 +1,7 @@
-import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, Download, FileImage, FolderPlus, Heart, Info, MoreVertical, Trash2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, Download, FileImage, FolderPlus, Heart, Info, Link2, Loader2, MoreVertical, Trash2, X } from 'lucide-react'
 import { lazy, Suspense, useEffect, useRef, useState, type PointerEvent } from 'react'
+import { toast } from 'sonner'
+import { usePicture, useReadyUrl } from '@/lib/pictures'
 import { Button } from '../ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/dropdown-menu'
 import { Skeleton } from '../ui/skeleton'
@@ -49,25 +51,55 @@ function Unavailable({ asset, video, retry }: { asset: Asset; video?: boolean; r
 function Photo({ asset, onFail }: { asset: Asset; onFail: () => void }) {
   const t = useT()
   const [zoom, setZoom] = useState<{ x: number; y: number } | null>(null)
+  // The preview is made when it is first looked at: a spinner until it is there.
+  const picture = usePicture(mediaUrl(asset.id, 'preview', asset.hash))
+  useEffect(() => {
+    if (picture.state === 'none') onFail()
+  }, [picture.state, onFail])
   const at = (e: PointerEvent<HTMLElement>) => {
     const rect = e.currentTarget.getBoundingClientRect()
     return { x: ((e.clientX - rect.left) / rect.width) * 100, y: ((e.clientY - rect.top) / rect.height) * 100 }
   }
+  const waiting = picture.state === 'pending'
   return (
+    <>
+      {waiting && <Loader2 className="size-8 animate-spin text-white/70" aria-label={t('Making the picture')} />}
     <img
+      key={picture.attempt}
       src={mediaUrl(asset.id, 'preview', asset.hash)}
       alt={asset.name}
       draggable={false}
       title={zoom ? undefined : t('Double-click to zoom')}
-      onError={onFail}
+      onLoad={picture.onLoad}
+      onError={picture.onError}
       onDoubleClick={(e) => setZoom(zoom ? null : at(e as unknown as PointerEvent<HTMLElement>))}
       onPointerMove={(e) => { if (zoom) setZoom(at(e)) }}
       style={zoom ? { transform: 'scale(2.5)', transformOrigin: `${zoom.x}% ${zoom.y}%` } : undefined}
       className={cn(
         'relative max-h-full max-w-full object-contain shadow-2xl select-none sm:rounded-sm',
+        waiting && 'hidden',
         'transition-transform duration-200 ease-out',
         zoom ? 'cursor-zoom-out' : 'cursor-zoom-in',
       )}
+    />
+    </>
+  )
+}
+
+/** The thumbnail of the file, blurred, behind the picture. It is not waited for: it shows when it is there. */
+function Backdrop({ src }: { src: string }) {
+  const picture = usePicture(src)
+  if (picture.state === 'none') return null
+  return (
+    <img
+      key={picture.attempt}
+      src={src}
+      alt=""
+      aria-hidden
+      draggable={false}
+      onLoad={picture.onLoad}
+      onError={picture.onError}
+      className="pointer-events-none absolute inset-0 size-full scale-125 object-cover opacity-40 blur-3xl saturate-150"
     />
   )
 }
@@ -75,7 +107,10 @@ function Photo({ asset, onFail }: { asset: Asset; onFail: () => void }) {
 function Media({ asset }: { asset: Asset }) {
   const [failed, setFailed] = useState(false)
   const [attempt, setAttempt] = useState(0)
-  const file = fileOfAsset(asset)
+  const made = fileOfAsset(asset)
+  // The poster of a video is made when it is first looked at: it is given to the player once it is there.
+  const poster = useReadyUrl(made.poster)
+  const file = { ...made, poster }
   // A module that is up shows what it can (videos, with the video module); otherwise a photo is shown here.
   const hasViewer = useHasViewer(file)
   const retry = () => { setFailed(false); setAttempt((n) => n + 1) }
@@ -92,7 +127,7 @@ function Media({ asset }: { asset: Asset }) {
     )
   }
   // Without the video module the original plays as it is, in the browser's own player.
-  if (asset.kind === 'video') return <NativeVideo key={attempt} src={mediaUrl(asset.id, 'original', asset.hash)} poster={mediaUrl(asset.id, 'preview', asset.hash)} onFail={() => setFailed(true)} />
+  if (asset.kind === 'video') return <NativeVideo key={attempt} src={mediaUrl(asset.id, 'original', asset.hash)} poster={poster} onFail={() => setFailed(true)} />
   return <Photo key={attempt} asset={asset} onFail={() => setFailed(true)} />
 }
 
@@ -147,6 +182,13 @@ export function Viewer({
   const go = (delta: number) => {
     const next = delta < 0 ? before : after
     if (next) onChange(next.id)
+  }
+  /** Puts the address of this file on its own on the clipboard, to send to whoever may see it (shown when the page may not copy). */
+  const copyLink = () => {
+    if (!asset) return
+    const link = `${window.location.origin}/watch/${asset.id}`
+    if (navigator.clipboard) navigator.clipboard.writeText(link).then(() => toast.success(t('Link copied')), () => toast(link))
+    else toast(link)
   }
   /** After deleting or archiving: carry on with a neighbour, or leave when nothing is left. */
   const moveOn = () => {
@@ -216,6 +258,7 @@ export function Viewer({
         <DropdownMenu>
           <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className={bare} aria-label={t('More actions')}><MoreVertical className="size-5" /></Button></DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={copyLink}><Link2 className="size-4" />{t('Copy link')}</DropdownMenuItem>
             {mine && <DropdownMenuItem onSelect={() => setDialog('album')}><FolderPlus className="size-4" />{t('Add to album')}</DropdownMenuItem>}
             <DropdownMenuItem asChild><a href={mediaUrl(asset.id, 'download', asset.hash)}><Download className="size-4" />{t('Download')}</a></DropdownMenuItem>
             {mine && (
@@ -242,14 +285,7 @@ export function Viewer({
           }}
         >
           {/* The picture itself, blurred and dimmed, fills what the picture leaves empty. */}
-          <img
-            key={`backdrop-${asset.id}`}
-            src={mediaUrl(asset.id, 'thumb', asset.hash)}
-            alt=""
-            aria-hidden
-            draggable={false}
-            className="pointer-events-none absolute inset-0 size-full scale-125 object-cover opacity-40 blur-3xl saturate-150"
-          />
+          <Backdrop key={asset.id} src={mediaUrl(asset.id, 'thumb', asset.hash)} />
           <div key={asset.id} className="animate-in fade-in absolute inset-0 z-[1] flex items-center justify-center duration-200">
             <Media asset={asset} />
           </div>

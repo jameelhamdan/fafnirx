@@ -10,7 +10,7 @@ use crate::platform::store::MASTER_FOLDER;
 use crate::repo::listing::{self, Listed, Page, Sort};
 use crate::repo::{devices, events, files, settings};
 use crate::web::access::Access;
-use crate::web::{done, run, ApiError, Done, Res, Shared};
+use crate::web::{act, run, ApiError, Done, Res, Shared};
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
 use fafnirx_common::{base_name, clean_remote_path, secs_of_ns, DAY_SECS};
@@ -503,7 +503,7 @@ pub async fn restore(
     Json(r): Json<Restore>,
 ) -> Res<Done> {
     let store = state.store.clone();
-    run(&state, move |c| {
+    act(&state, move |c| {
         let dev = find_device_to_change(c, &who, &r.device)?;
         let path = clean_remote_path(&r.path).map_err(|e| ApiError::bad(e.to_string()))?;
         let row = files::version_to_restore(c, dev.id, &path, r.version)?
@@ -543,8 +543,7 @@ pub async fn restore(
         )?;
         Ok(())
     })
-    .await?;
-    done()
+    .await
 }
 
 #[derive(Deserialize)]

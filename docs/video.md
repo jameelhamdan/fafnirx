@@ -5,8 +5,10 @@ The [module](modules.md) that plays videos. Without it the master has no ffmpeg:
 
 - **Playback** in the web app, adaptive: several qualities, chosen by connection or by hand, made as a video is watched.
   Same login and rules as the web app; no share links.
-- **Details** of each new video (length, size, codec, date, place) and a **poster frame** for its thumbnail, which the master
-  asks for while it processes the file. A picture beside the video (see [Usage](usage.md#processing)) is still used first.
+- **Details** of each new video (length, size, codec, date, place), read when it arrives.
+- **Poster frame** for its thumbnail, made when the video is first looked at: the first frame at 10%, 20%, … of its length that
+  is not black. Where it was found is stored with the details. A picture beside the video (see [Usage](usage.md#processing))
+  is used first. Nothing is made when thumbnails are off.
 - **Subtitles**, listed and converted for the player.
 
 `fafnirx-video` (`modules/video/service`) runs next to the master (as a plugin the master starts, or as a container) and reads

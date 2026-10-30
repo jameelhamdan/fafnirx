@@ -179,6 +179,7 @@ fn a_module_that_refuses_the_token_or_speaks_another_contract_is_not_used() {
 
 #[test]
 fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
+    let _on = crate::library::meta::THUMBNAILS_TEST.lock().unwrap_or_else(|e| e.into_inner());
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
@@ -263,21 +264,30 @@ fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
         edit(&a, json!({"taken_at": null})).await;
         assert_eq!(api.get("/api/timeline/buckets").await.1["months"].as_array().unwrap().len(), 1);
 
-        // A corrected place shows on the map; nonsense places and the "null island" are refused.
-        assert_eq!(api.get("/api/map").await.1["points"].as_array().unwrap().len(), 0);
+        // A corrected place shows in the details; nonsense places and the "null island" are refused.
+        assert!(api.get(&format!("/api/library/{a}")).await.1["lat"].is_null());
         let place = |lat: f64, lon: f64| json!({"location": {"lat": lat, "lon": lon}});
         assert_eq!(edit(&a, place(95.0, 0.0)).await.0, StatusCode::BAD_REQUEST);
         assert_eq!(edit(&a, place(0.0, 0.0)).await.0, StatusCode::BAD_REQUEST);
         edit(&a, place(52.5, 13.4)).await;
-        let (_, map) = api.get("/api/map").await;
-        assert_eq!(json!([map["points"][0][0], map["points"][0][1], map["points"][0][2]]), json!([a, 52.5, 13.4]));
-        assert_eq!(api.get(&format!("/api/library/{a}")).await.1["place_edited"], true);
+        let detail = api.get(&format!("/api/library/{a}")).await.1;
+        assert_eq!(
+            (detail["lat"].as_f64(), detail["lon"].as_f64(), &detail["place_edited"]),
+            (Some(52.5), Some(13.4), &json!(true))
+        );
         edit(&a, json!({"location": null})).await;
-        assert_eq!(api.get("/api/map").await.1["points"].as_array().unwrap().len(), 0);
+        assert!(api.get(&format!("/api/library/{a}")).await.1["lat"].is_null());
 
-        // Pictures and originals by id.
-        let (status, headers, thumb) =
-            api.send(Method::GET, &format!("/api/media/{a}/thumb"), Body::empty(), None, &[]).await;
+        // Pictures and originals by id. A picture is made when it is asked for: the first answer is "accepted", and once the
+        // job is done it is there.
+        let thumb_uri = format!("/api/media/{a}/thumb");
+        let first = api.send(Method::GET, &thumb_uri, Body::empty(), None, &[]).await;
+        assert_eq!(first.0, StatusCode::ACCEPTED);
+        assert_eq!(first.1[header::CACHE_CONTROL], "no-store", "the answer must not be kept");
+        assert_eq!(api.send(Method::GET, &thumb_uri, Body::empty(), None, &[]).await.0, StatusCode::ACCEPTED);
+        assert_eq!(api.picture_jobs().await, 1, "asking again does not queue it again");
+        api.make_pictures().await;
+        let (status, headers, thumb) = api.send(Method::GET, &thumb_uri, Body::empty(), None, &[]).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers[header::CONTENT_TYPE], "image/jpeg");
         assert_eq!(image::load_from_memory(&thumb).unwrap().width(), 8);
@@ -498,5 +508,46 @@ fn the_folder_of_a_viewer_takes_wildcards_in_names_literally() {
         let names: Vec<&str> =
             folder["assets"].as_array().unwrap().iter().map(|a| a["name"].as_str().unwrap()).collect();
         assert_eq!(names, ["one.png"], "neither axb/ nor the subfolder");
+    });
+}
+
+#[test]
+fn nothing_is_made_when_thumbnails_are_off() {
+    let _on = crate::library::meta::THUMBNAILS_TEST.lock().unwrap_or_else(|e| e.into_inner());
+    let mut api = Api::new();
+    block(async {
+        api.cookie = login(&api).await;
+        api.json(Method::POST, "/api/devices", json!({"name": "photos", "kind": "local"})).await;
+        api.upload("admin/photos", "a.png", &png(8, 4, [200, 10, 10])).await;
+        let a = photo_id(&api, "a.png").await;
+        let settings = |on: bool| json!({"version_count": 5, "retention_days": 30, "thumbnails": on});
+        let uri = format!("/api/media/{a}/thumb");
+
+        // Off: no job, no picture, and the file is not offered a preview.
+        assert_eq!(api.json(Method::PUT, "/api/settings", settings(false)).await.0, StatusCode::OK);
+        assert_eq!(api.send(Method::GET, &uri, Body::empty(), None, &[]).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(
+            api.send(Method::GET, &format!("/api/media/{a}/preview"), Body::empty(), None, &[]).await.0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(api.picture_jobs().await, 0, "not even on demand");
+        assert_eq!(api.get(&format!("/api/library/{a}")).await.1["preview"], false);
+        assert_eq!(api.get("/api/settings").await.1["thumbnails"], false);
+        // The original is still there.
+        assert_eq!(
+            api.send(Method::GET, &format!("/api/media/{a}/original"), Body::empty(), None, &[]).await.0,
+            StatusCode::OK
+        );
+
+        // On again: asked for, made, and sent.
+        assert_eq!(api.json(Method::PUT, "/api/settings", settings(true)).await.0, StatusCode::OK);
+        assert_eq!(api.send(Method::GET, &uri, Body::empty(), None, &[]).await.0, StatusCode::ACCEPTED);
+        api.make_pictures().await;
+        assert_eq!(api.send(Method::GET, &uri, Body::empty(), None, &[]).await.0, StatusCode::OK);
+        assert_eq!(api.get(&format!("/api/library/{a}")).await.1["preview"], true);
+        // Off hides what was made as well: nothing is sent while the setting says no.
+        assert_eq!(api.json(Method::PUT, "/api/settings", settings(false)).await.0, StatusCode::OK);
+        assert_eq!(api.send(Method::GET, &uri, Body::empty(), None, &[]).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(api.json(Method::PUT, "/api/settings", settings(true)).await.0, StatusCode::OK);
     });
 }

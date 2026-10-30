@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { lazy, Suspense, useEffect, type ReactNode } from 'react'
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AppShell } from './components/app-shell.tsx'
 import { api, UNAUTHORIZED } from './lib/api.ts'
 import { LiveUpdates } from './lib/live.tsx'
+import { backgroundOf, ViewerSourceProvider } from './lib/viewer-source.tsx'
 import { hasWorkspace } from './lib/session.ts'
 import type { Role, Session } from './lib/types.ts'
 import { Skeleton } from './components/ui/skeleton.tsx'
@@ -23,7 +24,6 @@ const Timeline = lazy(() => import('./pages/timeline.tsx'))
 const Albums = lazy(() => import('./pages/albums.tsx'))
 const Album = lazy(() => import('./pages/album.tsx'))
 const Watch = lazy(() => import('./pages/watch.tsx'))
-const MapPage = lazy(() => import('./pages/map.tsx'))
 const Trash = lazy(() => import('./pages/trash.tsx'))
 const Users = lazy(() => import('./pages/users.tsx'))
 
@@ -45,16 +45,20 @@ export default function App() {
     return () => window.removeEventListener(UNAUTHORIZED, ended)
   }, [client])
 
+  const location = useLocation()
   if (session.isPending) return null
   const user = session.data?.user
   if (!user) return <Login />
   const role = user.role
+  // A viewer opened from a page is shown over it (see `viewer-source`): the page is the one it was opened from.
+  const background = backgroundOf(location)
 
   return (
+    <ViewerSourceProvider>
     <LiveUpdates>
       <AppShell>
         <Suspense fallback={<Skeleton className="h-64" />}>
-          <Routes>
+          <Routes location={background ?? location}>
             <Route path="/" element={<Dashboard />} />
             {/* A key per view, so that a selection or an open photo does not carry over from one to another. */}
             <Route path="/timeline" element={<Timeline key="timeline" scope="timeline" />} />
@@ -63,7 +67,6 @@ export default function App() {
             <Route path="/albums" element={<Only allow="workspace" role={role}><Albums /></Only>} />
             <Route path="/albums/:id" element={<Only allow="workspace" role={role}><Album /></Only>} />
             <Route path="/watch/:id" element={<Watch />} />
-            <Route path="/map" element={<MapPage />} />
             <Route path="/trash" element={<Only allow="workspace" role={role}><Trash /></Only>} />
             <Route path="/files" element={<Files />} />
             <Route path="/devices" element={<Only allow="workspace" role={role}><Devices /></Only>} />
@@ -76,8 +79,14 @@ export default function App() {
             <Route path="/users" element={<Only allow="admin" role={role}><Users /></Only>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+          {background && (
+            <Routes>
+              <Route path="/watch/:id" element={<Watch />} />
+            </Routes>
+          )}
         </Suspense>
       </AppShell>
     </LiveUpdates>
+    </ViewerSourceProvider>
   )
 }

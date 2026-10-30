@@ -7,20 +7,15 @@ A source belongs to its user (`<user>/<name>`). Its files are at `files/users/<u
 layout as every other device, so [mirrors](mirrors.md) and the network drive treat them alike. Credentials are never shown
 again.
 
-| Source | For | Needs |
-|---|---|---|
-| Google Drive | Folders shared with a service account | JSON key, folder ids |
-| Other storage (rclone) | OneDrive, Dropbox, Nextcloud/WebDAV, SFTP, S3-compatible, a local folder | The storage's details |
-
-## Other storage
+Sources read any storage [rclone](https://rclone.org) supports: Google Drive, OneDrive, Dropbox, Nextcloud/WebDAV, SFTP,
+S3-compatible, a local folder.
 
 **Sources → Add storage source:** name, storage, schedule. The choices and fields are the same as for a mirror
-([Storage](mirrors.md#storage)).
+([Storage](mirrors.md#storage)), plus Google Drive.
 
 - Each run lists the folder recursively and downloads files that are new or whose size or modification time changed.
 - The remote layout is kept: `Photos/2024/a.jpg` on the storage is `source-<name>/Photos/2024/a.jpg`.
 - The storage has no stable file ids, so a **rename or move downloads the file again** and the old path is marked deleted.
-  Google Drive sources have ids and rename without a download.
 - Files gone from the storage are marked deleted (kept for the retention period). If listing fails nothing is deleted and
   the run fails with an alert.
 - Names rclone lists that cannot be a path (`..`, empty parts) and files of unknown size are skipped and counted.
@@ -33,13 +28,13 @@ as `name:folder`.
 ## Google Drive
 
 1. Create a Google Cloud **service account**, download its JSON key, enable the Drive API.
-2. Share each Drive folder with its email (viewer is enough).
-3. **Sources → Add Google Drive source:** name, folder ids or URLs, key, interval.
+2. Share the Drive folder with its email (viewer is enough).
+3. **Sources → Add storage source → Google Drive:** the key, the folder id (the part after `/folders/` in its URL) and,
+   if you want only a subfolder, its name.
 
-- Raw files only; Docs, Sheets, Slides, forms and shortcuts are skipped and counted.
-- Names are made safe (`/ \ : * ? " < > |` → `_`); duplicates get ` (<id prefix>)`.
-- A Drive rename/move is a `rename` without a download.
-- Files gone from Drive are marked deleted; if listing fails nothing is deleted. Failed or partial runs raise an alert.
+One source reads one folder; add another source for each further folder. Docs, Sheets and Slides are skipped (add
+`drive_export_formats` under *More backend options* to export them). Drive sources made before this changed are switched
+off, with their files kept: add the folder again and delete the old source.
 
 ## Run and pause
 

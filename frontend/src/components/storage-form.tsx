@@ -7,14 +7,14 @@ import { presetOf, type Storage } from '@/lib/storage'
 import { cn } from '@/lib/utils'
 
 /** Picks a kind of storage and asks for what it needs. */
-export function StorageForm({ value, onChange }: { value: Storage; onChange: (next: Storage) => void }) {
+export function StorageForm({ value, onChange, source = false }: { value: Storage; onChange: (next: Storage) => void; source?: boolean }) {
   const t = useT()
   const preset = presetOf(value)
   const set = (patch: Partial<Storage>) => onChange({ ...value, ...patch })
   return (
     <div className="space-y-3">
       <div role="radiogroup" aria-label={t('Storage')} className="grid gap-2 sm:grid-cols-3">
-        {PRESETS.map((p) => (
+        {PRESETS.filter((p) => source || !p.sourceOnly).map((p) => (
           <button
             key={p.id}
             type="button"

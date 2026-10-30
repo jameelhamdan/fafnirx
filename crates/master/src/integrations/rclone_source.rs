@@ -40,6 +40,12 @@ struct Listed {
     is_dir: bool,
 }
 
+fn parse_time_ns(s: &str) -> i64 {
+    time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+        .map(|t| t.unix_timestamp_nanos() as i64)
+        .unwrap_or(0)
+}
+
 /// The files of a `lsjson` listing as items, and how many entries were skipped (unusable names or unknown sizes).
 fn items_of(listing: &str) -> Result<(Vec<Item>, usize)> {
     let listed: Vec<Listed> = serde_json::from_str(listing).context("rclone listing is not valid JSON")?;
@@ -49,14 +55,8 @@ fn items_of(listing: &str) -> Result<(Vec<Item>, usize)> {
             skipped += 1;
             continue;
         };
-        let mtime_ns = crate::integrations::gdrive::parse_time_ns(&l.mod_time);
-        items.push(Item {
-            id: path.clone(),
-            marker: format!("{}:{mtime_ns}", l.size),
-            path,
-            size: l.size as u64,
-            mtime_ns,
-        });
+        let mtime_ns = parse_time_ns(&l.mod_time);
+        items.push(Item { marker: format!("{}:{mtime_ns}", l.size), path, size: l.size as u64, mtime_ns });
     }
     Ok((items, skipped))
 }
@@ -130,8 +130,14 @@ mod tests {
         let (items, skipped) = items_of(json).unwrap();
         assert_eq!(skipped, 2, "an unknown size and a path that leaves the folder");
         assert_eq!(items.len(), 1);
-        assert_eq!((items[0].id.as_str(), items[0].path.as_str()), ("a/b.txt", "a/b.txt"));
+        assert_eq!(items[0].path, "a/b.txt");
         assert_eq!(items[0].marker, "12:1714557600500000000");
         assert!(items_of("not json").is_err());
+    }
+
+    #[test]
+    fn rfc3339_to_unix_nanoseconds() {
+        assert_eq!(parse_time_ns("1970-01-01T00:00:01.5Z"), 1_500_000_000);
+        assert_eq!(parse_time_ns("garbage"), 0);
     }
 }

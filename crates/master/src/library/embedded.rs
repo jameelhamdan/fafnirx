@@ -1,5 +1,6 @@
-//! The words and places that people and programs write into a photo: a caption, keywords (what photo managers and AI
-//! taggers store as tags), and a GPS position. They live in three places, and a file can have any of them:
+//! The words, places and dates that people and programs write into a photo: a caption, keywords (what photo managers
+//! and AI taggers store as tags), a GPS position and the time it was taken. They live in three places, and a file can
+//! have any of them:
 //! EXIF (ImageDescription, UserComment, the Windows XP* fields), IPTC (a JPEG's Photoshop segment) and XMP (an XML
 //! packet that sits in the file, whatever its format). Nothing here fails: what cannot be read is just not there.
 
@@ -17,6 +18,8 @@ pub struct Embedded {
     pub description: Option<String>,
     pub keywords: Vec<String>,
     pub position: Option<(f64, f64)>,
+    /// Unix seconds of the wall clock when it was taken.
+    pub taken_at: Option<i64>,
 }
 
 impl Embedded {
@@ -30,6 +33,9 @@ impl Embedded {
         }
         if self.position.is_none() {
             self.position = other.position;
+        }
+        if self.taken_at.is_none() {
+            self.taken_at = other.taken_at;
         }
     }
 
@@ -61,10 +67,12 @@ fn combine(mut found: Embedded, bytes: &[u8]) -> Embedded {
     if let Some(xmp) = find_xmp(bytes) {
         let x = from_xmp(&xmp);
         // XMP is what current software writes, and the caption in it is the one people edited last.
-        let mut merged = Embedded { description: x.description, keywords: x.keywords, position: None };
-        let position = found.position.or(x.position);
+        let mut merged = Embedded { description: x.description, keywords: x.keywords, ..Embedded::default() };
+        // The camera's own position and time are kept over what a program wrote later.
+        let (position, taken_at) = (found.position.or(x.position), found.taken_at.or(x.taken_at));
         merged.fill(found);
         merged.position = position;
+        merged.taken_at = taken_at;
         return merged.tidy();
     }
     found.tidy()
@@ -137,27 +145,71 @@ fn from_exif(data: &exif::Exif) -> Embedded {
         description: ascii(exif::Tag::ImageDescription).or_else(comment).or_else(|| xp(0x9c9c)),
         keywords: xp(0x9c9e).map(|k| k.split(';').map(str::to_string).collect()).unwrap_or_default(),
         position: gps(data),
+        taken_at: taken_at(data),
     }
+}
+
+/// The text of an EXIF field of ASCII text.
+fn ascii_of(data: &exif::Exif, tag: exif::Tag) -> Option<String> {
+    match &data.get_field(tag, exif::In::PRIMARY)?.value {
+        exif::Value::Ascii(parts) => {
+            Some(parts.iter().map(|p| String::from_utf8_lossy(p)).collect::<Vec<_>>().join(" "))
+        }
+        _ => None,
+    }
+}
+
+/// When the photo was taken: the camera's own time, else the time it was digitised, else the clock of the GPS receiver, else
+/// the time the file was last written (an editor sets that to when it saved). A date that means nothing (cameras with no clock
+/// set write zeros or 1970) is skipped for the next.
+pub fn taken_at(data: &exif::Exif) -> Option<i64> {
+    let stamp = |tag| super::meta::parse_time(&ascii_of(data, tag)?).filter(|t| *t > 0);
+    stamp(exif::Tag::DateTimeOriginal)
+        .or_else(|| stamp(exif::Tag::DateTimeDigitized))
+        .or_else(|| gps_time(data))
+        .or_else(|| stamp(exif::Tag::DateTime))
+}
+
+/// The date and time the GPS receiver reported (UTC), when nothing better is there.
+fn gps_time(data: &exif::Exif) -> Option<i64> {
+    let day = ascii_of(data, exif::Tag::GPSDateStamp)?;
+    let exif::Value::Rational(hms) = &data.get_field(exif::Tag::GPSTimeStamp, exif::In::PRIMARY)?.value else {
+        return None;
+    };
+    let [h, m, s] = [0, 1, 2].map(|i| hms.get(i).filter(|r| r.denom != 0).map_or(0, |r| r.num / r.denom));
+    super::meta::parse_time(&format!("{day} {h}:{m}:{s}")).filter(|t| *t > 0)
+}
+
+/// Degrees from the three numbers of a GPS coordinate: degrees, minutes and seconds. Some writers give degrees and
+/// decimal minutes, or only degrees; a number with a zero denominator is no number (minutes and seconds then count as 0).
+fn degrees_of(value: &exif::Value) -> Option<f64> {
+    let parts: Vec<Option<f64>> = match value {
+        exif::Value::Rational(p) => p.iter().map(|r| (r.denom != 0).then(|| r.to_f64())).collect(),
+        exif::Value::SRational(p) => p.iter().map(|r| (r.denom != 0).then(|| r.to_f64())).collect(),
+        _ => return None,
+    };
+    let degrees = (*parts.first()?)?;
+    let part = |i: usize| parts.get(i).copied().flatten().unwrap_or(0.0).abs();
+    // The sign belongs to the whole value: -33 degrees 30 minutes is -33.5, not -32.5.
+    Some(degrees.signum() * (degrees.abs() + part(1) / 60.0 + part(2) / 3600.0))
 }
 
 /// The GPS position of a photo, in degrees (south and west are negative).
 pub fn gps(data: &exif::Exif) -> Option<(f64, f64)> {
-    let coordinate = |tag, reference, negative: &[u8]| -> Option<f64> {
-        let exif::Value::Rational(parts) = &data.get_field(tag, exif::In::PRIMARY)?.value else { return None };
-        let part = |i: usize| parts.get(i).filter(|r| r.denom != 0).map(|r| r.to_f64()).unwrap_or(0.0);
-        // Degrees, minutes and seconds; some writers give degrees and decimal minutes, or only degrees.
-        let value = part(0) + part(1) / 60.0 + part(2) / 3600.0;
-        let south_or_west = match &data.get_field(reference, exif::In::PRIMARY)?.value {
+    let coordinate = |tag, reference, negative: u8| -> Option<f64> {
+        let value = degrees_of(&data.get_field(tag, exif::In::PRIMARY)?.value)?;
+        // A reference that is missing or unreadable means north and east.
+        let behind = data.get_field(reference, exif::In::PRIMARY).is_some_and(|f| match &f.value {
             exif::Value::Ascii(r) => {
-                r.first().and_then(|r| r.first()).is_some_and(|b| negative.contains(&b.to_ascii_uppercase()))
+                r.first().and_then(|r| r.first()).is_some_and(|b| b.to_ascii_uppercase() == negative)
             }
             _ => false,
-        };
-        Some(if south_or_west { -value } else { value })
+        });
+        Some(if behind { -value.abs() } else { value })
     };
     super::meta::valid_position(
-        coordinate(exif::Tag::GPSLatitude, exif::Tag::GPSLatitudeRef, b"S")?,
-        coordinate(exif::Tag::GPSLongitude, exif::Tag::GPSLongitudeRef, b"W")?,
+        coordinate(exif::Tag::GPSLatitude, exif::Tag::GPSLatitudeRef, b'S')?,
+        coordinate(exif::Tag::GPSLongitude, exif::Tag::GPSLongitudeRef, b'W')?,
     )
 }
 
@@ -308,14 +360,20 @@ fn leaf(tag: &str) -> &str {
     tag.rsplit(['|', '/']).next().unwrap_or(tag)
 }
 
-/// "52,30.5N", "52,30,15N" or "52.5N": the XMP way to write a coordinate.
+/// "52,30.5N", "52,30,15N" or "52.5N": the XMP way to write a coordinate. Some programs write a plain signed number.
 fn xmp_coordinate(text: &str) -> Option<f64> {
     let text = text.trim();
-    let reference = text.chars().last().filter(char::is_ascii_alphabetic)?.to_ascii_uppercase();
-    let numbers: Vec<f64> = text[..text.len() - 1].split(',').map(|p| p.trim().parse().ok()).collect::<Option<_>>()?;
+    let reference = text.chars().last().filter(char::is_ascii_alphabetic).map(|c| c.to_ascii_uppercase());
+    let digits = if reference.is_some() { &text[..text.len() - 1] } else { text };
+    let numbers: Vec<f64> = digits.split(',').map(|p| p.trim().parse().ok()).collect::<Option<_>>()?;
     let part = |i: usize| numbers.get(i).copied().unwrap_or(0.0);
     let value = part(0) + part(1) / 60.0 + part(2) / 3600.0;
-    Some(if reference == 'S' || reference == 'W' { -value } else { value })
+    Some(if matches!(reference, Some('S' | 'W')) { -value.abs() } else { value })
+}
+
+/// A simple property, written as an attribute or as an element.
+fn property(xml: &str, name: &str) -> Option<String> {
+    attribute(xml, name).or_else(|| element(xml, name).map(unescape))
 }
 
 fn from_xmp(xml: &str) -> Embedded {
@@ -339,11 +397,14 @@ fn from_xmp(xml: &str) -> Embedded {
             }
         }
     }
-    let position = attribute(xml, "exif:GPSLatitude")
-        .or_else(|| element(xml, "exif:GPSLatitude").map(unescape))
-        .zip(attribute(xml, "exif:GPSLongitude").or_else(|| element(xml, "exif:GPSLongitude").map(unescape)))
+    let position = property(xml, "exif:GPSLatitude")
+        .zip(property(xml, "exif:GPSLongitude"))
         .and_then(|(lat, lon)| super::meta::valid_position(xmp_coordinate(&lat)?, xmp_coordinate(&lon)?));
-    Embedded { description, keywords, position }
+    let taken_at = ["exif:DateTimeOriginal", "xmp:CreateDate", "photoshop:DateCreated", "exif:DateTimeDigitized"]
+        .iter()
+        .find_map(|tag| super::meta::parse_time(&property(xml, tag)?))
+        .filter(|t| *t > 0);
+    Embedded { description, keywords, position, taken_at }
 }
 
 #[cfg(test)]
@@ -425,7 +486,12 @@ mod tests {
         let path = dir.path().join("p.jpg");
         std::fs::write(&path, bytes).unwrap();
         let meta = super::super::meta::read(&path).unwrap();
-        Embedded { description: meta.description, keywords: meta.keywords, position: meta.position }
+        Embedded {
+            description: meta.description,
+            keywords: meta.keywords,
+            position: meta.position,
+            taken_at: meta.taken_at,
+        }
     }
 
     #[test]
@@ -558,5 +624,157 @@ mod tests {
             &[],
         );
         assert_eq!(embedded_in(&zero).position, None);
+    }
+
+    fn srational(v: &[(i32, i32)]) -> Value {
+        Value::SRational(v.iter().map(|&(num, denom)| exif::SRational { num, denom }).collect())
+    }
+
+    fn position_of(fields: Vec<Field>) -> Option<(f64, f64)> {
+        embedded_in(&jpeg(fields, &[])).position
+    }
+
+    fn taken(fields: Vec<Field>) -> Option<i64> {
+        embedded_in(&jpeg(fields, &[])).taken_at
+    }
+
+    #[test]
+    fn a_position_without_references_is_north_and_east() {
+        let at = position_of(vec![
+            field(Tag::GPSLatitude, rational(&[(52, 1), (30, 1), (0, 1)])),
+            field(Tag::GPSLongitude, rational(&[(13, 1), (24, 1), (0, 1)])),
+        ]);
+        assert_eq!(at, Some((52.5, 13.4)));
+        // A reference that is not text is as good as none.
+        let odd = position_of(vec![
+            field(Tag::GPSLatitudeRef, Value::Byte(vec![b'S'])),
+            field(Tag::GPSLatitude, rational(&[(52, 1)])),
+            field(Tag::GPSLongitude, rational(&[(13, 1)])),
+        ]);
+        assert_eq!(odd, Some((52.0, 13.0)));
+    }
+
+    #[test]
+    fn signed_numbers_and_zero_denominators_are_understood() {
+        let signed = position_of(vec![
+            field(Tag::GPSLatitudeRef, ascii("S")),
+            field(Tag::GPSLatitude, srational(&[(-33, 1), (30, 1)])),
+            field(Tag::GPSLongitude, srational(&[(151, 1), (0, 1), (0, 1)])),
+        ]);
+        assert_eq!(signed, Some((-33.5, 151.0)), "a south reference and a negative number do not cancel out");
+        // Minutes and seconds written as 0/0 count as nothing; degrees written so are no position.
+        let lazy = position_of(vec![
+            field(Tag::GPSLatitude, rational(&[(40, 1), (0, 0), (0, 0)])),
+            field(Tag::GPSLongitude, rational(&[(8, 1), (0, 0), (0, 0)])),
+        ]);
+        assert_eq!(lazy, Some((40.0, 8.0)));
+        let broken = position_of(vec![
+            field(Tag::GPSLatitude, rational(&[(0, 0), (30, 1), (0, 1)])),
+            field(Tag::GPSLongitude, rational(&[(8, 1), (0, 1), (0, 1)])),
+        ]);
+        assert_eq!(broken, None);
+        // Only one of the two numbers is no place.
+        assert_eq!(position_of(vec![field(Tag::GPSLatitude, rational(&[(40, 1), (0, 1), (0, 1)]))]), None);
+        // The equator and the prime meridian are places; 0,0 is not (see the test below), and 91 degrees is not.
+        let equator = position_of(vec![
+            field(Tag::GPSLatitude, rational(&[(0, 1), (0, 1), (0, 1)])),
+            field(Tag::GPSLongitude, rational(&[(10, 1), (0, 1), (0, 1)])),
+        ]);
+        assert_eq!(equator, Some((0.0, 10.0)));
+        let over = position_of(vec![
+            field(Tag::GPSLatitude, rational(&[(91, 1), (0, 1), (0, 1)])),
+            field(Tag::GPSLongitude, rational(&[(10, 1), (0, 1), (0, 1)])),
+        ]);
+        assert_eq!(over, None);
+    }
+
+    #[test]
+    fn the_time_is_the_cameras_then_the_next_best() {
+        let date = |tag, text| field(tag, ascii(text));
+        let original = || date(Tag::DateTimeOriginal, "2023:11:14 22:13:20");
+        let digitized = || date(Tag::DateTimeDigitized, "2023:11:15 08:00:00");
+        let written = || date(Tag::DateTime, "2023:11:16 09:00:00");
+        assert_eq!(taken(vec![original(), digitized(), written()]), Some(1_700_000_000));
+        assert_eq!(taken(vec![digitized(), written()]), Some(1_700_035_200), "no camera time: when it was digitised");
+        assert_eq!(taken(vec![written()]), Some(1_700_125_200), "a screenshot or an edit has only this one");
+        // A clock that was never set writes zeros or 1970: the next date is used.
+        assert_eq!(taken(vec![date(Tag::DateTimeOriginal, "0000:00:00 00:00:00"), written()]), Some(1_700_125_200));
+        assert_eq!(taken(vec![date(Tag::DateTimeOriginal, "1970:01:01 00:00:00"), written()]), Some(1_700_125_200));
+        assert_eq!(taken(vec![date(Tag::DateTimeOriginal, "                   ")]), None);
+        // Writers that leave out the seconds or use other separators still say when.
+        assert_eq!(taken(vec![date(Tag::DateTimeOriginal, "2023-11-14 22:13")]), Some(1_699_999_980));
+        assert_eq!(taken(vec![]), None);
+    }
+
+    #[test]
+    fn the_gps_clock_comes_before_the_date_a_program_wrote() {
+        let gps = |day: &str| {
+            vec![field(Tag::GPSDateStamp, ascii(day)), field(Tag::GPSTimeStamp, rational(&[(22, 1), (13, 1), (20, 1)]))]
+        };
+        assert_eq!(taken(gps("2023:11:14")), Some(1_700_000_000));
+        assert_eq!(taken(gps("0000:00:00")), None);
+        let mut both = gps("2023:11:14");
+        both.push(field(Tag::DateTime, ascii("2023:11:16 09:00:00")));
+        assert_eq!(
+            taken(both),
+            Some(1_700_000_000),
+            "the receiver's clock is when it was taken; DateTime is when it was saved"
+        );
+    }
+
+    #[test]
+    fn only_the_photos_own_fields_are_shown_not_its_thumbnail() {
+        let bytes = jpeg(
+            vec![
+                field(Tag::Make, ascii("Canon")),
+                Field { tag: Tag::Make, ifd_num: In::THUMBNAIL, value: ascii("Thumbnail Maker") },
+                Field { tag: Tag::JPEGInterchangeFormat, ifd_num: In::THUMBNAIL, value: Value::Long(vec![0]) },
+                Field { tag: Tag::JPEGInterchangeFormatLength, ifd_num: In::THUMBNAIL, value: Value::Long(vec![0]) },
+            ],
+            &[],
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.jpg");
+        std::fs::write(&path, &bytes).unwrap();
+        let meta = super::super::meta::read(&path).unwrap();
+        assert_eq!(meta.exif.get("Make").and_then(|m| m.as_str()), Some("\"Canon\""));
+    }
+
+    #[test]
+    fn xmp_gives_the_time_and_plain_decimal_coordinates() {
+        let xml = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF><rdf:Description xmp:CreateDate="2023-11-14T22:13:20"
+            exif:GPSLatitude="52.52" exif:GPSLongitude="-13.405"></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        let e = embedded_in(&jpeg(vec![], &xmp_segment(xml)));
+        assert_eq!(e.taken_at, Some(1_700_000_000));
+        assert_eq!(e.position, Some((52.52, -13.405)));
+        // The camera's own time and place win over what a program wrote.
+        let both = jpeg(
+            vec![
+                field(Tag::DateTimeOriginal, ascii("2020:01:01 00:00:00")),
+                field(Tag::GPSLatitude, rational(&[(10, 1), (0, 1), (0, 1)])),
+                field(Tag::GPSLongitude, rational(&[(20, 1), (0, 1), (0, 1)])),
+            ],
+            &xmp_segment(xml),
+        );
+        let e = embedded_in(&both);
+        assert_eq!((e.taken_at, e.position), (Some(1_577_836_800), Some((10.0, 20.0))));
+    }
+
+    #[test]
+    fn a_damaged_part_of_the_exif_does_not_lose_the_rest() {
+        // One IFD with a date, and a pointer to a next IFD that is not in the data: the whole block used to be dropped.
+        let mut tiff = b"II*\0".to_vec();
+        tiff.extend(8u32.to_le_bytes());
+        tiff.extend(1u16.to_le_bytes());
+        for part in [0x0132u16.to_le_bytes().to_vec(), 2u16.to_le_bytes().to_vec()] {
+            tiff.extend(part);
+        }
+        tiff.extend(20u32.to_le_bytes());
+        tiff.extend(26u32.to_le_bytes());
+        tiff.extend(0xFFFFu32.to_le_bytes());
+        tiff.extend(b"2023:11:14 22:13:20\0");
+        let mut app1 = b"Exif\0\0".to_vec();
+        app1.extend(tiff);
+        assert_eq!(embedded_in(&jpeg(vec![], &segment(0xE1, &app1))).taken_at, Some(1_700_000_000));
     }
 }

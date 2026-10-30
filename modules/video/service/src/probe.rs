@@ -14,7 +14,8 @@ pub struct Probe {
     pub has_audio: bool,
     /// Seconds: the length of the whole file, else of the video stream.
     pub duration: Option<f64>,
-    /// The tags of the file (`creation_time`, `location`, ...), by the names the file gives them.
+    /// The tags of the file and of its streams (`creation_time`, `location`, ...) by name in lower case: files differ in
+    /// how they write them, and some keep the date and the place only on a stream. The file's own tag wins.
     pub tags: HashMap<String, String>,
 }
 
@@ -27,9 +28,15 @@ pub struct Video {
 }
 
 impl Probe {
-    /// The value of the first of `names` the file has a tag for.
+    /// The value of the first of `names` (in lower case) the file has a tag for.
     pub fn tag(&self, names: &[&str]) -> Option<&str> {
         names.iter().find_map(|n| self.tags.get(*n).map(String::as_str))
+    }
+
+    /// The value of a tag whose name starts with `prefix`, such as the `location-eng` a phone writes. When there are
+    /// several, the one that sorts first, so that the answer does not change from run to run.
+    pub fn tag_starting(&self, prefix: &str) -> Option<&str> {
+        self.tags.iter().filter(|(k, _)| k.starts_with(prefix)).min_by_key(|(k, _)| *k).map(|(_, v)| v.as_str())
     }
 }
 
@@ -100,7 +107,13 @@ pub fn parse(json: &[u8]) -> Result<Probe> {
         Video { codec: s.codec_name.clone(), width, height }
     });
     let duration = seconds(format.duration.as_ref()).or_else(|| stream.and_then(|s| seconds(s.duration.as_ref())));
-    Ok(Probe { video, has_audio, duration, tags: format.tags })
+    let mut tags: HashMap<String, String> = format.tags.into_iter().map(|(k, v)| (k.to_lowercase(), v)).collect();
+    for stream in &raw.streams {
+        for (name, value) in &stream.tags {
+            tags.entry(name.to_lowercase()).or_insert_with(|| value.clone());
+        }
+    }
+    Ok(Probe { video, has_audio, duration, tags })
 }
 
 #[cfg(test)]
@@ -120,6 +133,24 @@ mod tests {
         assert_eq!(p.duration, Some(12.5), "the length of the whole file, not of one stream");
         assert_eq!(p.tag(&["nope", "creation_time"]), Some("2023-11-14T22:13:20.000000Z"));
         assert_eq!(p.tag(&["nope"]), None);
+    }
+
+    #[test]
+    fn tags_are_found_whatever_their_case_and_wherever_the_file_keeps_them() {
+        let p = parse(
+            br#"{"streams":[{"codec_type":"video","width":4,"height":2,"tags":{"CREATION_TIME":"2020-01-02T03:04:05Z","Rotate":"0"}},
+                           {"codec_type":"audio","tags":{"creation_time":"1999-01-01T00:00:00Z"}}],
+                "format":{"tags":{"Location-eng":"+52.5200+013.4050/","com.apple.quicktime.creationdate":"2023-11-14T22:13:20+0100"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(p.tag(&["creation_time"]), Some("2020-01-02T03:04:05Z"), "a stream's tag, found in lower case");
+        assert_eq!(p.tag_starting("location"), Some("+52.5200+013.4050/"));
+        assert_eq!(p.tag(&["com.apple.quicktime.creationdate"]), Some("2023-11-14T22:13:20+0100"));
+        let both = parse(
+            br#"{"streams":[{"codec_type":"video","tags":{"creation_time":"2000-01-01T00:00:00Z"}}],"format":{"tags":{"creation_time":"2021-01-01T00:00:00Z"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(both.tag(&["creation_time"]), Some("2021-01-01T00:00:00Z"), "the file's own tag wins");
     }
 
     #[test]

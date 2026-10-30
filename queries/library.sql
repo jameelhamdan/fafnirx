@@ -59,30 +59,6 @@ WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
        OR to_char(to_timestamp(COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000)) AT TIME ZONE 'UTC', 'YYYY-MM') = :month)
 ORDER BY shown_at DESC, f.id DESC LIMIT :limit;
 
---! map_points (device?, kind?, tag?, month?)
--- Where each file with a place was taken, newest first, for the map.
-SELECT f.id, COALESCE(s.lat, m.lat) AS lat, COALESCE(s.lon, m.lon) AS lon,
-       COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000) AS shown_at
-FROM files f
-JOIN devices d ON d.id = f.device_id
-JOIN versions v ON v.id = f.current_version_id
-LEFT JOIN file_meta m ON m.root_hash = v.root_hash
-LEFT JOIN file_state s ON s.file_id = f.id AND s.user_id = :uid
-WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
-  AND visible(d, :scope_user::bigint, :all::boolean)
-  AND CASE :scope::text
-        WHEN 'timeline' THEN NOT COALESCE(s.archived, false)
-        WHEN 'favorites' THEN COALESCE(s.favorite, false)
-        WHEN 'archive' THEN COALESCE(s.archived, false)
-      END
-  AND (:device::text IS NULL OR d.folder = :device)
-  AND (:kind::text IS NULL OR f.media = :kind)
-  AND (:tag::uuid IS NULL OR EXISTS (SELECT 1 FROM file_tags t WHERE t.file_id = f.id AND t.tag_id = :tag))
-  AND (:month::text IS NULL
-       OR to_char(to_timestamp(COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000)) AT TIME ZONE 'UTC', 'YYYY-MM') = :month)
-  AND COALESCE(s.lat, m.lat) IS NOT NULL
-ORDER BY shown_at DESC LIMIT :limit;
-
 --! assets_by_ids : Asset(width?, height?, duration_ms?, rating?, lat?, lon?)
 -- Some files by id, whatever they are, as long as they are not deleted and the user can see them.
 SELECT f.id, d.folder, f.path, v.size, v.root_hash, m.width, m.height, m.duration_ms,

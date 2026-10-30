@@ -69,20 +69,17 @@ pub fn insert_version(c: &mut impl GenericClient, v: &NewVersion) -> Result<i64,
 
 /// Makes a version the current one of its file, undeleting it.
 pub fn make_current(c: &mut impl GenericClient, file_id: Uuid, version_id: i64) -> Result<(), Error> {
-    q::make_current().bind(&mut Pg(c), &version_id, &file_id)?;
-    Ok(())
+    q::make_current().bind(&mut Pg(c), &version_id, &file_id).map(drop)
 }
 
 /// Keeps the newest `keep` versions of a file; older ones are marked pruned and removed by retention.
 pub fn prune_versions(c: &mut impl GenericClient, file_id: Uuid, keep: i64, ts: i64) -> Result<(), Error> {
-    q::prune_versions().bind(&mut Pg(c), &ts, &file_id, &keep)?;
-    Ok(())
+    q::prune_versions().bind(&mut Pg(c), &ts, &file_id, &keep).map(drop)
 }
 
 /// Remembers the modification time of a version whose content did not change.
 pub fn set_version_mtime(c: &mut impl GenericClient, version_id: i64, mtime: i64) -> Result<(), Error> {
-    q::set_version_mtime().bind(&mut Pg(c), &mtime, &version_id)?;
-    Ok(())
+    q::set_version_mtime().bind(&mut Pg(c), &mtime, &version_id).map(drop)
 }
 
 /// Whether the kind, size and EXIF data of this content were read already.
@@ -186,8 +183,7 @@ pub fn vacate_renamed(c: &mut impl GenericClient, device_id: i64, path: &str, ts
 
 /// A file a source collected stays deleted until it changes at the source, whatever the retention period does.
 pub fn keep_source_item_deleted(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<(), Error> {
-    q::keep_source_item_deleted().bind(&mut Pg(c), &path, &device_id)?;
-    Ok(())
+    q::keep_source_item_deleted().bind(&mut Pg(c), &path, &device_id).map(drop)
 }
 
 /// A file as the detail view shows it: its current version and what is known about the content.

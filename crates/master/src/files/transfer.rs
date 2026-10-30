@@ -6,7 +6,7 @@ use crate::files::ingest::{self, NewVersion};
 use crate::library::{artwork, meta};
 use crate::platform::db;
 use crate::platform::id::Id;
-use crate::repo::{devices, files};
+use crate::repo::{devices, files, jobs};
 use crate::web::access::Access;
 use crate::web::{run, ApiError, Res, Shared};
 use axum::body::Body;
@@ -18,6 +18,8 @@ use fafnirx_common::{base_name, clean_remote_path, secs_of_ns, unix_now};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
@@ -57,6 +59,13 @@ struct Stored {
     name: String,
     /// A picture that sits next to a video and stands for it (see `library::artwork`): its place on disk and content.
     art: Option<(PathBuf, Vec<u8>)>,
+    /// Which file and content this is, for a picture of it that is asked for.
+    id: uuid::Uuid,
+    device: String,
+    path: String,
+    version: i64,
+    current: Option<i64>,
+    deleted: bool,
 }
 
 fn stored_version(
@@ -79,7 +88,19 @@ fn stored_version(
         } else {
             None
         };
-        Ok(Stored { disk, root, size: size as u64, name: base_name(&path).to_string(), art })
+        Ok(Stored {
+            disk,
+            root,
+            size: size as u64,
+            name: base_name(&path).to_string(),
+            art,
+            id: file_id,
+            device: dev.name.clone(),
+            version,
+            current,
+            deleted: deleted.is_some(),
+            path,
+        })
     }
 }
 
@@ -186,28 +207,71 @@ async fn send_file(state: &Shared, headers: &HeaderMap, f: SendFile<'_>) -> Resu
     Ok(resp)
 }
 
-/// A JPEG picture of an image or a video frame, from the cache or made now.
+/// A picture that could not be made is not asked for again for this long.
+const FAILED_PICTURE_RETRY_SECS: i64 = 600;
+
+/// What the job queue says about a picture that is not made yet.
+enum Picture {
+    /// A job is making it, or was just asked to: the browser is told when it is done.
+    Coming,
+    /// There will not be one.
+    Never,
+}
+
+/// A JPEG picture of an image or a video frame. When it is made already it is sent. When it is not, a job makes it, and the
+/// answer is "accepted": the browser waits for the master to say it is ready (`thumbs`, see `web::events`) and asks again.
+/// Nothing is made when thumbnails are off.
 async fn preview_response(state: &Shared, stored: &Stored, max: u32, immutable: bool) -> Result<Response, ApiError> {
-    if !meta::can_preview(&stored.name) && stored.art.is_none() {
+    if !meta::thumbnails_enabled() || (!meta::can_preview(&stored.name) && stored.art.is_none()) {
         return Err(ApiError::not_found("No preview for this kind of file"));
     }
-    let _slot = state.previews.acquire().await.map_err(anyhow::Error::from)?;
-    let cache = state.data_dir.join("cache").join("thumbs");
-    let (disk, root) = match &stored.art {
-        Some((disk, root)) => (disk.clone(), hex::encode(root)),
-        None => (stored.disk.clone(), hex::encode(&stored.root)),
+    let thumbs = state.data_dir.join("cache").join("thumbs");
+    let picture_of = match &stored.art {
+        Some((_, root)) => hex::encode(root),
+        None => hex::encode(&stored.root),
     };
-    let thumb = tokio::task::spawn_blocking(move || meta::thumbnail(&disk, &root, max, &cache))
-        .await
-        .map_err(anyhow::Error::from)?
-        .map_err(|e| {
-            tracing::warn!("preview: {e:#}");
-            ApiError::not_found("This file cannot be previewed")
-        })?;
-    let bytes = tokio::fs::read(thumb).await.map_err(anyhow::Error::from)?;
-    // The picture belongs to one content: when the link says which, it never changes.
-    let cache_control = if immutable { "private, max-age=31536000, immutable" } else { "private, max-age=86400" };
-    Ok(([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, cache_control)], bytes).into_response())
+    if let Ok(bytes) = tokio::fs::read(meta::cached_picture(&thumbs, &picture_of, max)).await {
+        // The picture belongs to one content: when the link says which, it never changes.
+        let cache_control = if immutable { "private, max-age=31536000, immutable" } else { "private, max-age=86400" };
+        return Ok(
+            ([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, cache_control)], bytes).into_response()
+        );
+    }
+    let job = serde_json::to_value(meta::ThumbJob {
+        id: Id(stored.id).to_string(),
+        device: stored.device.clone(),
+        path: stored.path.clone(),
+        root: hex::encode(&stored.root),
+        key: picture_of,
+        size: max,
+        version: stored.version,
+        current: stored.current,
+        deleted: stored.deleted,
+    })
+    .map_err(anyhow::Error::from)?;
+    let outcome = run(state, move |c| {
+        Ok(match jobs::status_of(c, "thumb", &job, unix_now() - FAILED_PICTURE_RETRY_SECS)?.as_deref() {
+            Some("failed") => Picture::Never,
+            Some("queued" | "running") => Picture::Coming,
+            _ => {
+                jobs::enqueue(c, "thumb", &job)?;
+                Picture::Coming
+            }
+        })
+    })
+    .await?;
+    match outcome {
+        Picture::Never => Err(ApiError::not_found("This file cannot be previewed")),
+        Picture::Coming => {
+            meta::wake();
+            Ok((
+                StatusCode::ACCEPTED,
+                [(header::CACHE_CONTROL, "no-store")],
+                Json(serde_json::json!({ "pending": true })),
+            )
+                .into_response())
+        }
+    }
 }
 
 pub async fn thumbnail(
@@ -216,7 +280,8 @@ pub async fn thumbnail(
     Query(q): Query<FileQuery>,
 ) -> Result<Response, ApiError> {
     let stored = run(&state, stored_version(&state, who, &q)).await?;
-    let max = q.size.unwrap_or(256).clamp(64, 1600);
+    // Two sizes only: every size asked for would be a file kept for good.
+    let max = if q.size.unwrap_or(meta::THUMB) <= meta::THUMB { meta::THUMB } else { meta::PREVIEW };
     preview_response(&state, &stored, max, false).await
 }
 
@@ -238,6 +303,12 @@ fn stored_by_id(
             size: row.size as u64,
             name: base_name(&path).to_string(),
             art: if deleted_at.is_none() { artwork::lookup(c, &store, &device, &path) } else { None },
+            id,
+            version,
+            current: Some(version),
+            deleted: deleted_at.is_some(),
+            device,
+            path,
         })
     }
 }
@@ -341,14 +412,24 @@ pub async fn zip(
     if entries.is_empty() {
         return Err(ApiError::not_found("Nothing to download"));
     }
-    let (mut writer, reader) = tokio::io::duplex(256 * 1024);
+    let (writer, reader) = tokio::io::duplex(256 * 1024);
     let state2 = state.clone();
+    let failed = Arc::new(AtomicBool::new(false));
+    let failed_here = failed.clone();
     tokio::spawn(async move {
         let _slot = state2.streams.acquire().await;
-        if let Err(e) = super::zip::write(&mut writer, entries).await {
+        if let Err(e) = super::zip::write(writer, entries, failed_here).await {
             tracing::debug!("zip download ended early: {e}");
         }
-        let _ = writer.shutdown().await;
+    });
+    // The end of the stream is an error when the archive could not be finished: the browser then reports a failed
+    // download instead of keeping a file that only looks complete.
+    let ended = futures_util::stream::once(async move {
+        if failed.load(Ordering::Relaxed) {
+            Err(std::io::Error::other("an entry of the archive could not be read"))
+        } else {
+            Ok(axum::body::Bytes::new())
+        }
     });
     let name = form.name.filter(|n| !n.is_empty()).unwrap_or_else(|| "fafnirx".into());
     // Any script is fine in the name; what a header or a file system would trip on is not.
@@ -366,7 +447,7 @@ pub async fn zip(
                 ),
             ),
         ],
-        Body::from_stream(ReaderStream::new(reader)),
+        Body::from_stream(ReaderStream::new(reader).chain(ended)),
     )
         .into_response())
 }

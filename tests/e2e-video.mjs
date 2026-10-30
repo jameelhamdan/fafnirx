@@ -30,7 +30,11 @@ fs.writeFileSync(
 const a = process.argv.slice(2)
 const at = (flag) => (a.includes(flag) ? a[a.indexOf(flag) + 1] : undefined)
 fs.appendFileSync(${JSON.stringify(calls)}, 'ss=' + at('-ss') + ' t=' + at('-t') + ' vf=' + at('-vf') + '\\n')
-fs.writeFileSync(a[a.length - 1], 'TS ss=' + at('-ss') + ' t=' + at('-t'))\n`,
+const out = a[a.length - 1]
+const text = 'TS ss=' + at('-ss') + ' t=' + at('-t')
+// A flag or '-' as the last word is no file: ffmpeg -version, and a frame sent to standard output.
+if (out.startsWith('-')) process.stdout.write(text)
+else fs.writeFileSync(out, text)\n`,
 )
 function program(name) {
   const script = path.join(fakes, `${name}.mjs`)

@@ -1,7 +1,7 @@
 # Deployment
 
 Inbound: `7443` (devices, token) and `8080` (users, password), both plain HTTP: trusted network/VPN, or TLS in front.
-Outbound: Google Drive, and the storage of your sources and mirrors, only.
+Outbound: the storage of your sources and mirrors, only.
 
 ## Storage
 
@@ -15,7 +15,7 @@ files/users/<user>/<device>/<path>  current tree; shareable as a network drive
 files/<path>                        master files
 versions/<id>/<user>/<device>/<path> replaced or deleted versions
 tmp/                                uploads being assembled (removed after a day untouched)
-cache/thumbs/                       pictures (30 days unused)
+cache/thumbs/                       thumbnails and previews, made on demand and kept
 plugins/<id>/                       plugins (FAFNIRX_PLUGINS installs them; not user data)
 updates/<platform>/                 your own signed client builds (optional)
 ```

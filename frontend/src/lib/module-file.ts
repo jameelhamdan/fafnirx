@@ -1,5 +1,5 @@
 import type { ModuleFile } from '@/sdk'
-import { downloadUrl, mediaUrl, thumbUrl } from './api'
+import { downloadUrl, mediaUrl } from './api'
 import type { Asset, FileInfo } from './types'
 
 /** A photo or video of the library, as the modules are given it. */
@@ -17,6 +17,6 @@ export const fileOfInfo = (info: FileInfo): ModuleFile => ({
   name: info.name,
   kind: info.mime.startsWith('video/') ? 'video' : info.mime.startsWith('image/') ? 'image' : null,
   src: downloadUrl(info.device, info.path, { inline: true }),
-  poster: info.preview ? thumbUrl(info.device, info.path, 1000) : undefined,
+  poster: info.preview ? mediaUrl(info.id, 'preview') : undefined,
   deleted: info.deleted_at !== null,
 })

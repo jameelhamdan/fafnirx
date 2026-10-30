@@ -121,13 +121,11 @@ pub fn add_place(
 }
 
 pub fn rename(c: &mut impl GenericClient, id: Uuid, name: &str) -> Result<(), Error> {
-    q::rename_album().params(&mut Pg(c), &q::RenameAlbumParams { id, name })?;
-    Ok(())
+    q::rename_album().params(&mut Pg(c), &q::RenameAlbumParams { id, name }).map(drop)
 }
 
 pub fn set_description(c: &mut impl GenericClient, id: Uuid, description: &str) -> Result<(), Error> {
-    q::set_album_description().params(&mut Pg(c), &q::SetAlbumDescriptionParams { id, description })?;
-    Ok(())
+    q::set_album_description().params(&mut Pg(c), &q::SetAlbumDescriptionParams { id, description }).map(drop)
 }
 
 /// Whether the file is in the album: picked into it, or below the folder it follows.
@@ -137,14 +135,12 @@ pub fn contains(c: &mut impl GenericClient, album_id: Uuid, file_id: Uuid) -> Re
 
 /// The file shown for the album, or `None` to show the newest again.
 pub fn set_cover(c: &mut impl GenericClient, id: Uuid, cover: Option<Uuid>) -> Result<(), Error> {
-    q::set_album_cover().params(&mut Pg(c), &q::SetAlbumCoverParams { id, cover })?;
-    Ok(())
+    q::set_album_cover().params(&mut Pg(c), &q::SetAlbumCoverParams { id, cover }).map(drop)
 }
 
 /// Notes when the album last changed.
 pub fn touch(c: &mut impl GenericClient, id: Uuid, now: i64) -> Result<(), Error> {
-    q::touch_album().params(&mut Pg(c), &q::TouchAlbumParams { id, now })?;
-    Ok(())
+    q::touch_album().params(&mut Pg(c), &q::TouchAlbumParams { id, now }).map(drop)
 }
 
 /// Deletes the user's album; the files stay where they are. Returns false when they have no such album.

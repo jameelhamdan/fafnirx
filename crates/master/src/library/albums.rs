@@ -9,7 +9,7 @@ use crate::platform::db;
 use crate::platform::id::{uuids, Id};
 use crate::repo::{albums, library};
 use crate::web::access::Access;
-use crate::web::{done, run, ApiError, Done, Res, Shared};
+use crate::web::{act, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use fafnirx_common::unix_now;
@@ -320,15 +320,14 @@ pub async fn delete(
     Extension(who): Extension<Access>,
     Path(Id(id)): Path<Id>,
 ) -> Res<Done> {
-    run(&state, move |c| {
+    act(&state, move |c| {
         if !albums::delete(c, who.user_id, id)? {
             return Err(ApiError::not_found("No such album").into());
         }
         db::notify(c, "library", "")?;
         Ok(())
     })
-    .await?;
-    done()
+    .await
 }
 
 #[derive(Deserialize)]
