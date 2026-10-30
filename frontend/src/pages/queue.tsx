@@ -112,6 +112,12 @@ export default function Queue() {
             >
               <RefreshCw className="size-4" />{t('Process missing')}
             </Button>
+            <Button
+              variant="outline"
+              onClick={() => act.mutate({ url: '/api/queue/rebuild', body: { everything: true }, message: (n) => t('{n} file(s) queued', { n }) })}
+            >
+              <RefreshCw className="size-4" />{t('Read everything again')}
+            </Button>
           </>
         ) : undefined}
       />

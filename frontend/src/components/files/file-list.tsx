@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom'
 import { ago, bytes, plural } from '@/lib/format'
 import type { Entry } from '@/lib/types'
 import { entryKey } from '@/lib/entries'
+import { useWatchState } from '@/lib/viewer-source'
 import { cn } from '@/lib/utils'
 import { Checkbox } from '../ui/checkbox'
 import { AccessBadge } from './access-badge'
@@ -45,6 +46,7 @@ export function FileList({
   onSort: (field: string) => void
   now: number
 }) {
+  const watch = useWatchState()
   const parent = useRef<HTMLDivElement>(null)
   const t = useT()
   const virtual = useVirtualizer({ count: entries.length, getScrollElement: () => parent.current, estimateSize: () => 44, overscan: 12 })
@@ -85,7 +87,7 @@ export function FileList({
                     {e.kind === 'device' && <AccessBadge writable={e.writable} kind={e.device_kind} />}
                   </button>
                   {e.kind === 'file' && e.id && !gone && e.mime?.startsWith('video/') && (
-                    <Link to={`/watch/${e.id}`} className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={t('Open in viewer')} title={t('Open in viewer')}><Play className="size-4" /></Link>
+                    <Link to={`/watch/${e.id}`} state={watch} className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={t('Open in viewer')} title={t('Open in viewer')}><Play className="size-4" /></Link>
                   )}
                 </div>
                 <span className="text-right text-muted-foreground tabular-nums" title={e.size === null ? undefined : t('{n} bytes', { n: e.size.toLocaleString() })}>

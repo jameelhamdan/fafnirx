@@ -13,8 +13,7 @@ pub const DONE_KEEP_SECS: i64 = 24 * 3600;
 
 /// Queues background work of a kind, with its payload as JSON; the same work that is already waiting is not queued again.
 pub fn enqueue(c: &mut impl GenericClient, kind: &str, payload: &serde_json::Value) -> Result<(), Error> {
-    q::enqueue_job().bind(&mut Pg(c), &kind, &payload.to_string(), &unix_now())?;
-    Ok(())
+    q::enqueue_job().bind(&mut Pg(c), &kind, &payload.to_string(), &unix_now()).map(drop)
 }
 
 /// A job taken from the queue.
@@ -27,13 +26,27 @@ pub struct Claimed {
 }
 
 /// A restart interrupts whatever was running: it runs again.
+/// How the last job of this kind with this payload went (queued, running, failed or done), if there was one. It is failed
+/// only when it failed since `since` (unix seconds): after that it is worth another try.
+pub fn status_of(
+    c: &mut impl GenericClient,
+    kind: &str,
+    payload: &serde_json::Value,
+    since: i64,
+) -> Result<Option<String>, Error> {
+    q::job_status_of().bind(&mut Pg(c), &since, &kind, &payload.to_string()).opt()
+}
+
 pub fn requeue_running(c: &mut impl GenericClient) -> Result<(), Error> {
-    q::requeue_running_jobs().bind(&mut Pg(c))?;
-    Ok(())
+    q::requeue_running_jobs().bind(&mut Pg(c)).map(drop)
 }
 
 /// Takes one due job from the queue and marks it running. One statement, so a job is only taken once.
+/// A picture somebody is waiting for goes first.
 pub fn claim(c: &mut impl GenericClient, now: i64) -> Result<Option<Claimed>, Error> {
+    if let Some(j) = q::claim_thumb_job().bind(&mut Pg(c), &now).opt()? {
+        return Ok(Some(Claimed { id: j.id, kind: j.kind, payload: j.payload, attempts: j.attempts }));
+    }
     Ok(q::claim_job().bind(&mut Pg(c), &now).opt()?.map(|j| Claimed {
         id: j.id,
         kind: j.kind,
@@ -44,15 +57,13 @@ pub fn claim(c: &mut impl GenericClient, now: i64) -> Result<Option<Claimed>, Er
 
 /// A job that worked is done; it stays in the list for a day.
 pub fn complete(c: &mut impl GenericClient, id: Uuid, note: Option<&str>) -> Result<(), Error> {
-    q::complete_job().bind(&mut Pg(c), &unix_now(), &note, &id)?;
-    Ok(())
+    q::complete_job().bind(&mut Pg(c), &unix_now(), &note, &id).map(drop)
 }
 
 /// A job that failed: queued again after `run_after`, or failed for good, with what went wrong.
 pub fn fail(c: &mut impl GenericClient, id: Uuid, give_up: bool, run_after: i64, error: &str) -> Result<(), Error> {
     let status = if give_up { "failed" } else { "queued" };
-    q::retry_job().params(&mut Pg(c), &q::RetryJobParams { id, status, run_after, error, now: unix_now() })?;
-    Ok(())
+    q::retry_job().params(&mut Pg(c), &q::RetryJobParams { id, status, run_after, error, now: unix_now() }).map(drop)
 }
 
 /// Forgets the jobs that worked more than a day ago.
@@ -126,17 +137,22 @@ pub fn drop_where(c: &mut impl GenericClient, status: &str, id: Option<Uuid>) ->
     q::drop_jobs().bind(&mut Pg(c), &status, &id)
 }
 
-/// A photo or video to read again: (device folder, path, root hash).
+/// A photo or video to read: (file id, device folder, path, content hash).
+pub type ToRead = (Uuid, String, String, Vec<u8>);
+
+/// The photos and videos to read again, newest first, from the file after `after` on: see `ToRead`.
 pub fn media_to_read(
     c: &mut impl GenericClient,
     everything: bool,
+    after: Option<Uuid>,
     limit: i64,
-) -> Result<Vec<(String, String, Vec<u8>)>, Error> {
+) -> Result<Vec<ToRead>, Error> {
+    let params = q::MediaToReadParams { everything, after, limit };
     Ok(q::media_to_read()
-        .bind(&mut Pg(c), &everything, &limit)
+        .params(&mut Pg(c), &params)
         .all()?
         .into_iter()
-        .map(|r| (r.folder, r.path, r.root_hash))
+        .map(|r| (r.id, r.folder, r.path, r.root_hash))
         .collect())
 }
 

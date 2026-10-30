@@ -8,7 +8,6 @@ import { Empty, ErrorNote, PageHeader } from '@/components/common'
 import { DayGrid } from '@/components/library/day-grid'
 import { FolderGrid } from '@/components/library/folder-grid'
 import { SelectionBar } from '@/components/library/selection-bar'
-import { Viewer } from '@/components/library/viewer'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -17,6 +16,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { api, mediaUrl, query } from '@/lib/api'
 import { bytes, plural } from '@/lib/format'
 import { useRefreshLibrary } from '@/lib/library'
+import { useOpenMedia, useViewerSource } from '@/lib/viewer-source'
 import type { AlbumInfo, Asset } from '@/lib/types'
 import { useT } from '@/lib/i18n'
 
@@ -64,7 +64,7 @@ export default function Album() {
   const refresh = useRefreshLibrary()
   const { data, error } = useQuery({ queryKey: ['album', id], queryFn: () => api.get<{ album: AlbumInfo; assets: Asset[] }>(`/api/albums/${id}`), enabled: id !== "" })
   const [selected, setSelected] = useState<Map<string, Asset>>(new Map())
-  const [viewing, setViewing] = useState<string | null>(null)
+  const openMedia = useOpenMedia()
   const [dialog, setDialog] = useState<'edit' | 'delete' | null>(null)
   const [showAll, setShowAll] = useState(false)
 
@@ -75,6 +75,8 @@ export default function Album() {
   const toggle = useCallback((id: string) => setSelected((s) => { const n = new Map(s); const a = byId.get(id); if (!n.delete(id) && a) n.set(id, a); return n }), [byId])
   const toggleMany = useCallback((list: string[], on: boolean) => setSelected((s) => { const n = new Map(s); list.forEach((id) => { const a = byId.get(id); if (on && a) n.set(id, a); else n.delete(id) }); return n }), [byId])
   const clear = useCallback(() => setSelected(new Map()), [])
+  const source = useMemo(() => (assets ? { assets } : null), [assets])
+  useViewerSource(source)
 
   const cover = useMutation({
     mutationFn: (file: string) => api.patch(`/api/albums/${id}`, { cover: file }),
@@ -133,9 +135,9 @@ export default function Album() {
       ) : (
         <>
           {folder ? (
-            <FolderGrid assets={shown} root={folder.path} src={(a) => mediaUrl(a.id, 'thumb', a.hash)} selected={ids} onOpen={(a) => setViewing(a.id)} onToggle={toggle} />
+            <FolderGrid assets={shown} root={folder.path} src={(a) => mediaUrl(a.id, 'thumb', a.hash)} selected={ids} onOpen={(a) => openMedia(a.id)} onToggle={toggle} />
           ) : (
-            <DayGrid assets={shown} src={(a) => mediaUrl(a.id, 'thumb', a.hash)} selected={ids} onOpen={(a) => setViewing(a.id)} onToggle={toggle} onToggleMany={toggleMany} />
+            <DayGrid assets={shown} src={(a) => mediaUrl(a.id, 'thumb', a.hash)} selected={ids} onOpen={(a) => openMedia(a.id)} onToggle={toggle} onToggleMany={toggleMany} />
           )}
           {assets && assets.length > shown.length && (
             <div className="py-4 text-center"><Button variant="outline" onClick={() => setShowAll(true)}>{t('Show all {count}', { count: assets.length.toLocaleString() })}</Button></div>
@@ -143,7 +145,6 @@ export default function Album() {
         </>
       )}
 
-      {viewing !== null && assets && <Viewer assets={assets} id={viewing} onChange={setViewing} onClose={() => setViewing(null)} />}
       {dialog === 'edit' && <EditAlbum album={album} onClose={() => setDialog(null)} />}
       <Confirm
         open={dialog === 'delete'}

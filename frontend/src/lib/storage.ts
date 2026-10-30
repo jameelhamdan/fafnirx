@@ -32,7 +32,7 @@ export function storageProblem(s: Storage, t: ReturnType<typeof useT>): string |
   const preset = presetOf(s)
   const missing = preset.fields.find((f) => !f.optional && !(s.values[f.key] ?? '').trim())
   if (missing) return t('Fill in: {field}', { field: t(missing.label) })
-  if (!s.path.trim() && preset.id !== 'b2' && preset.id !== 's3') return t('Say where to put the files.')
+  if (!s.path.trim() && !preset.pathOptional) return t('Say where to put the files.')
   if (preset.id === 'conf' && !s.path.includes(':')) return t('Write the remote as name:folder.')
   return null
 }

@@ -28,12 +28,7 @@ fn users_have_roles_and_the_last_administrator_stays() {
         // Only an administrator asks for a rescan of the file store.
         assert_eq!(api.json(Method::POST, "/api/files/rescan", json!({})).await.0, StatusCode::FORBIDDEN);
         // Sources are per user: bob has his own, which nobody but an administrator sees.
-        let source = |name: &str| {
-            json!({"name": name, "folders": "abcdefghij0123456789", "service_account": json!({"client_email": "a@b.iam", "private_key": "-----BEGIN PRIVATE KEY-----
-x
------END PRIVATE KEY-----
-"}).to_string()})
-        };
+        let source = |name: &str| json!({"name": name, "remote_type": "local", "remote_path": "/tmp"});
         assert_eq!(api.json(Method::POST, "/api/sources", source("bobs")).await.0, StatusCode::OK);
         assert_eq!(api.get("/api/sources").await.1.as_array().unwrap().len(), 1);
         api.cookie = admin.clone();

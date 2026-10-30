@@ -17,6 +17,17 @@ printf 'FAFNIRX_ADMIN_PASSWORD=choose-one\nFAFNIRX_DB_PASSWORD=another-one\n' > 
 docker compose up -d
 ```
 
+**Hardware**, from `tests/bench-local.mjs` (thumbnails off; one fast desktop core; Windows 11, release build, PostgreSQL 17):
+
+| | Minimum | Recommended |
+|---|---|---|
+| CPU | 1 core. The master used 0.2-0.25 core while importing, uploading and downloading; pinned to 1 core, throughput was the same as on 12 | 2 cores. Thumbnails on: picture jobs use about 0.2 CPU-s per 3000 × 2000 photo, on 2-6 workers |
+| RAM | 256 MB for the whole stack: master 13 MiB idle and 17-34 MiB at peak, PostgreSQL (default settings) 40-70 MiB idle and about 100 MiB at peak | 1 GB, for PostgreSQL and file caching. 2 GB with thumbnails on and photos of 12 MP or more: each picture worker holds the decoded photo (about 24 MiB per 6 MP, 6 workers at most) |
+| Disk | Files, plus PostgreSQL (1-3 GB for a large library) | SSD for PostgreSQL. `cache/thumbs/` adds 10-20% of the library when thumbnails are on (not measured here) |
+
+Not measured: slower CPUs (a Raspberry Pi class core), the video module (ffmpeg), several users at once, libraries above
+5,200 files. Disable thumbnails under **Settings** to avoid the picture jobs' CPU and cache.
+
 Log in at `http://<server>:8080` as `admin`. The admin password is read once, at the first start. Check: `docker compose ps`.
 
 Optional `.env` (before first start; create the folders and give them to `FAFNIRX_UID:FAFNIRX_GID`):
@@ -45,7 +56,6 @@ FAFNIRX_IMAGE=jameelh99/fafnirx:3.0.1   # pin to upgrade on purpose
 | `FAFNIRX_TICK_SECS` | `15` | How often due sources and mirrors are looked for |
 | `FAFNIRX_TRUSTED_PROXY` | none | Proxies whose `X-Forwarded-For` is believed ([proxy](deployment.md#reverse-proxy-with-caddy)) |
 | `FAFNIRX_INSTANCE_LEASE_SECS` | `90` | Silence before another computer may take over a device |
-| `FAFNIRX_MAP_TILES` | OpenStreetMap | Tile URL with `{z}/{x}/{y}`; set your own offline |
 | `RUST_LOG` | `info` | Log level |
 | Compose: `FAFNIRX_DB_PASSWORD`, `*_DIR`, `FAFNIRX_UID/GID`, `FAFNIRX_IMAGE`; with proxy `FAFNIRX_WEB_ADDRESS`, `FAFNIRX_DEVICE_ADDRESS`, `FAFNIRX_HTTP_PORT`, `FAFNIRX_HTTPS_PORT`, `FAFNIRX_DEVICE_PORT`, `FAFNIRX_SUBNET` | | Compose only |
 

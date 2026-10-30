@@ -6,7 +6,6 @@ import { Empty, ErrorNote, PageHeader } from '@/components/common'
 import { DayGrid } from '@/components/library/day-grid'
 import { Scrubber } from '@/components/library/scrubber'
 import { SelectionBar } from '@/components/library/selection-bar'
-import { Viewer } from '@/components/library/viewer'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api, mediaUrl, query } from '@/lib/api'
@@ -15,6 +14,7 @@ import { monthBodyHeight, monthHeight, useGrid } from '@/lib/grid'
 import { monthQuery, useTags, type TimelineFilters } from '@/lib/library'
 import { msg, useT } from '@/lib/i18n'
 import { MASTER } from '@/lib/session'
+import { useOpenMedia, useViewerSource } from '@/lib/viewer-source'
 import type { Asset, Buckets, DeviceSummary, Scope } from '@/lib/types'
 
 const TITLES: Record<Scope, string> = { timeline: msg('Photos'), favorites: msg('Favorites'), archive: msg('Archive') }
@@ -129,8 +129,10 @@ export default function Timeline({ scope }: { scope: Scope }) {
   })
   const starts = months.map((_, i) => (virtual.measurementsCache[i]?.start ?? margin) - margin)
 
-  // The viewer: the months around the one that was opened, loaded as far as you page.
-  const [viewer, setViewer] = useState<{ months: string[]; id: string } | null>(null)
+  // The viewer (it has an address of its own, see `viewer-source`) steps through the months around the one that was opened,
+  // loaded as far as you page.
+  const openMedia = useOpenMedia()
+  const [viewer, setViewer] = useState<{ months: string[] } | null>(null)
   const viewedAssets = useQueries({ queries: (viewer?.months ?? []).map((m) => monthQuery(filters, m)), combine: combineAssets })
   const extending = useRef(false)
   const extend = useCallback(
@@ -150,6 +152,9 @@ export default function Timeline({ scope }: { scope: Scope }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [viewer, months, client, filters.scope, filters.device, filters.kind, filters.tag],
   )
+
+  const source = useMemo(() => (viewer ? { assets: viewedAssets, onEdge: extend } : null), [viewer, viewedAssets, extend])
+  useViewerSource(source)
 
   const total = buckets.data?.total ?? 0
   const filtering = filters.device !== '' || filters.kind !== '' || filters.tag !== ''
@@ -224,7 +229,10 @@ export default function Timeline({ scope }: { scope: Scope }) {
                     bodyHeight={monthBodyHeight(m.days, cols, cell)}
                     filters={filters}
                     selected={selected}
-                    onOpen={(month, a) => setViewer({ months: [month], id: a.id })}
+                    onOpen={(month, a) => {
+                      setViewer({ months: [month] })
+                      openMedia(a.id)
+                    }}
                     onToggle={toggle}
                     onToggleMany={toggleMany}
                   />
@@ -237,15 +245,6 @@ export default function Timeline({ scope }: { scope: Scope }) {
 
       <Scrubber months={months} starts={starts} total={virtual.getTotalSize()} scrollMargin={margin} />
 
-      {viewer && (
-        <Viewer
-          assets={viewedAssets}
-          id={viewer.id}
-          onChange={(id) => setViewer((v) => (v ? { ...v, id } : v))}
-          onClose={() => setViewer(null)}
-          onEdge={extend}
-        />
-      )}
     </div>
   )
 }

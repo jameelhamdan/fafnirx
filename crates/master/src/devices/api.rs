@@ -4,7 +4,7 @@ use crate::monitoring::api::{recent, Recent};
 use crate::platform::db;
 use crate::repo::{alerts, devices, settings};
 use crate::web::access::Access;
-use crate::web::{done, run, ApiError, Done, Res, Shared};
+use crate::web::{act, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use fafnirx_common::{unix_now, valid_device_name};
@@ -220,7 +220,7 @@ pub async fn release(
     Path(folder): Path<String>,
 ) -> Res<Done> {
     who.check_write(&folder)?;
-    run(&state, move |c| {
+    act(&state, move |c| {
         if !devices::release(c, &folder)? {
             return Err(ApiError::not_found("No such device").into());
         }
@@ -228,8 +228,7 @@ pub async fn release(
         db::notify(c, "devices", &folder)?;
         Ok(())
     })
-    .await?;
-    done()
+    .await
 }
 
 pub async fn revoke(
@@ -238,7 +237,7 @@ pub async fn revoke(
     Path(folder): Path<String>,
 ) -> Res<Done> {
     who.check_write(&folder)?;
-    run(&state, move |c| {
+    act(&state, move |c| {
         if !devices::revoke(c, &folder, unix_now())? {
             // A local folder has no token to revoke: nothing to do. Only a name that is no device is an error.
             return if devices::is_device_or_local(c, &folder)? {
@@ -252,14 +251,20 @@ pub async fn revoke(
         db::notify(c, "devices", &folder)?;
         Ok(())
     })
-    .await?;
-    done()
+    .await
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct Settings {
     version_count: i64,
     retention_days: i64,
+    /// Whether pictures (thumbnails and previews) are made, when somebody looks at a photo or video. Off: none is made.
+    #[serde(default = "on")]
+    thumbnails: bool,
+}
+
+fn on() -> bool {
+    true
 }
 
 pub async fn settings(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Settings> {
@@ -268,6 +273,7 @@ pub async fn settings(State(state): State<Shared>, Extension(who): Extension<Acc
         Ok(Settings {
             version_count: settings::get_i64(c, "version_count", 5),
             retention_days: settings::get_i64(c, "retention_days", 30),
+            thumbnails: settings::get_i64(c, crate::library::meta::THUMBNAILS, 1) != 0,
         })
     })
     .await?;
@@ -284,9 +290,14 @@ pub async fn save_settings(
         return Err(ApiError::bad("Versions kept: 1-1000. Retention: 1-3650 days."));
     }
     let saved = run(&state, move |c| {
-        for (key, value) in [("version_count", s.version_count), ("retention_days", s.retention_days)] {
+        for (key, value) in [
+            ("version_count", s.version_count),
+            ("retention_days", s.retention_days),
+            (crate::library::meta::THUMBNAILS, i64::from(s.thumbnails)),
+        ] {
             settings::set(c, key, &value.to_string())?;
         }
+        crate::library::meta::set_thumbnails(s.thumbnails);
         Ok(s)
     })
     .await?;

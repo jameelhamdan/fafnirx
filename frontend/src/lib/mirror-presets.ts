@@ -21,6 +21,10 @@ export interface Preset {
   hint: string
   pathLabel: string
   pathPlaceholder: string
+  /** The folder may be left empty (the bucket or the whole storage). */
+  pathOptional?: boolean
+  /** Only offered for a source: a mirror cannot write there. */
+  sourceOnly?: boolean
   fields: PresetField[]
 }
 
@@ -35,6 +39,7 @@ export const PRESETS: Preset[] = [
     hint: msg('Cheap object storage. Use an application key limited to one bucket.'),
     pathLabel: msg('Bucket and folder'),
     pathPlaceholder: 'my-bucket/fafnirx',
+    pathOptional: true,
     fields: [
       { key: 'account', label: msg('Key ID'), placeholder: '0012345abcde' },
       { key: 'key', label: msg('Application key'), secret: true },
@@ -47,6 +52,7 @@ export const PRESETS: Preset[] = [
     hint: msg('Amazon S3, Wasabi, Cloudflare R2, MinIO and others.'),
     pathLabel: msg('Bucket and folder'),
     pathPlaceholder: 'my-bucket/fafnirx',
+    pathOptional: true,
     fields: [
       { key: 'provider', label: msg('Provider'), placeholder: 'AWS, Wasabi, Cloudflare, Minio, Other' },
       { key: 'endpoint', label: msg('Endpoint'), placeholder: 'https://…', optional: true },
@@ -81,6 +87,20 @@ export const PRESETS: Preset[] = [
       { key: 'vendor', label: msg('Server'), placeholder: 'nextcloud, owncloud or other', optional: true },
       { key: 'user', label: msg('User') },
       { key: 'pass', label: msg('Password or app password'), secret: true, obscure: true },
+    ],
+  },
+  {
+    id: 'drive',
+    type: 'drive',
+    label: msg('Google Drive'),
+    hint: msg('Folders shared with a service account: paste its JSON key and the id of a shared folder.'),
+    pathLabel: msg('Folder'),
+    pathPlaceholder: 'Photos',
+    pathOptional: true,
+    sourceOnly: true,
+    fields: [
+      { key: 'service_account_credentials', label: msg('Service account key (JSON)'), secret: true },
+      { key: 'root_folder_id', label: msg('Folder id') },
     ],
   },
   {

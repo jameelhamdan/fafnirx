@@ -1,6 +1,7 @@
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useEffect, useState, type ReactNode } from 'react'
 import { LiveContext } from './live-state'
+import { pictureReady } from './pictures'
 
 /** What the master announces: a topic and a key (a device name, a table, or empty). */
 interface Change {
@@ -12,9 +13,9 @@ interface Change {
 function staleKeys(change: Change): string[][] {
   switch (change.topic) {
     case 'files':
-      return [['files'], ['info'], ['dashboard'], ['devices'], ['timeline'], ['asset'], ['map'], ['trash'], ['albums'], ['album']]
+      return [['files'], ['info'], ['dashboard'], ['devices'], ['timeline'], ['asset'], ['trash'], ['albums'], ['album']]
     case 'library':
-      return [['timeline'], ['asset'], ['map'], ['albums'], ['album'], ['tags']]
+      return [['timeline'], ['asset'], ['albums'], ['album'], ['tags']]
     case 'activity':
       return [['dashboard'], ['device']]
     case 'devices':
@@ -59,7 +60,10 @@ export function LiveUpdates({ children }: { children: ReactNode }) {
     }
     source.onmessage = (e) => {
       try {
-        refresh(client, pending, JSON.parse(e.data) as Change)
+        const change = JSON.parse(e.data) as Change
+        // A picture that somebody asked for is made: only what waits for it looks again.
+        if (change.topic === 'thumbs') pictureReady(change.key)
+        else refresh(client, pending, change)
       } catch {
         /* not one of ours */
       }

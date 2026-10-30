@@ -315,10 +315,22 @@ fn install_for_user(dry: bool, exe: &Path, config: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Installs the service and the tray of every user, and starts the service; then removes the older versions of the client that
+/// are left on the computer, so that only this one remains.
+pub fn install(config_path: &Path, dry: bool) -> Result<()> {
+    install_service(config_path, dry)?;
+    if !dry {
+        if let Ok(exe) = std::env::current_exe() {
+            crate::update::purge::announce(&fafnirx_common::plain_path(&exe), true);
+        }
+    }
+    Ok(())
+}
+
 /// Installs the service and the tray of every user, and starts the service. Needs an administrator; the config of the computer
 /// (`fafnirx enroll`) comes first, because the service starts with it. On Windows the client of a user is installed instead,
 /// unless the computer has the config of an older version's service.
-pub fn install(config_path: &Path, dry: bool) -> Result<()> {
+fn install_service(config_path: &Path, dry: bool) -> Result<()> {
     let exe = std::env::current_exe()?;
     let exe = fafnirx_common::plain_path(&exe);
     if cfg!(windows) && !is_system_config(config_path) {

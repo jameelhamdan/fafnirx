@@ -30,15 +30,17 @@ cargo run -p fafnirx -- enroll --no-service --server http://127.0.0.1:7443   # t
 | Rust unit and API tests | `cargo test --workspace` | `FAFNIRX_TEST_DATABASE_URL` |
 | Web app | `cd frontend && npx tsc -b && npx oxlint && npm run i18n -- --check` | |
 | E2E: devices, uploads, watcher, renames, updates | `cd tests && npm i && node e2e.mjs` | Built binaries, test DB |
-| E2E: Drive (fake) and mirrors | `node e2e-io.mjs` | `rclone` (`FAFNIRX_RCLONE`) |
+| E2E: sources and mirrors | `node e2e-io.mjs` | `rclone` (`FAFNIRX_RCLONE`) |
 | E2E: video module | `node e2e-video.mjs` | `fafnirx-video` built |
 | E2E: plugins (FAFNIRX_PLUGINS install, update, UI files) | `node e2e-plugin.mjs` | `fafnirx-video` built |
 | E2E: delete and retention | `node e2e-retention.mjs` | ~2 min |
 | E2E: shared folders (several clients, two users) | `node e2e-shared.mjs` | Built binaries, test DB |
+| Benchmark of a running master (GET only) | `node bench-readonly.mjs http://host` | Optional `FAFNIRX_USER`, `FAFNIRX_PASSWORD` |
+| Benchmark of a release build with a synthetic library | `node bench-local.mjs [tiny] [large]` | `FAFNIRX_BIN_DIR` (release), test DB, Python with Pillow |
 
 Database tests use a schema of their own, so they run in parallel. `crates/master/src/web/tests/` drives the real router in
 memory; `routes.rs` pins the access rule of every route. Video parts need ffmpeg, which tests do not: they check parsing and
-the contract with the module (a stand-in module in `web/tests/library.rs`, stand-in programs in `e2e-video.mjs`). E2E scripts start the real master, client and a fake Drive (binaries from `target/debug` or `$FAFNIRX_BIN_DIR`);
+the contract with the module (a stand-in module in `web/tests/library.rs`, stand-in programs in `e2e-video.mjs`). E2E scripts start the real master and client (binaries from `target/debug` or `$FAFNIRX_BIN_DIR`);
 run them on a normal disk (Docker Desktop bind mounts report no file events). Unit tests never wait on the clock.
 
 Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cd frontend && npx tsc -b && npx oxlint`.
@@ -63,14 +65,14 @@ Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targ
 | `files` | Content in and out | `ingest.rs` (commit, delete, rename, move), `livetree.rs`, `browse.rs`, `transfer.rs`, `zip.rs` |
 | `library` | Photos and videos | `meta.rs` (jobs, pictures), `artwork.rs`, `photos.rs`, `albums.rs` |
 | `modules` | The optional [modules](modules.md): found by environment, asked for capabilities, proxied for the web app | `mod.rs` (registry, `probe_video`, `poster`), `plugins.rs` (run, install, remove), `proxy.rs` |
-| `integrations` | Sources, mirrors | `mod.rs`, `gdrive.rs`, `rclone_source.rs`, `syncsource.rs`, `mirror.rs`, `scope.rs`, `spec.rs`, `api.rs` |
+| `integrations` | Sources, mirrors | `mod.rs`, `rclone_source.rs`, `syncsource.rs`, `mirror.rs`, `scope.rs`, `spec.rs`, `api.rs` |
 | `monitoring` | Dashboard, schedules, queue | `api.rs`, `jobs.rs`, `queue.rs` |
 
 New endpoints go in the app's `api.rs` and are registered in `web/mod.rs`. Apps use `platform` and each other's public
 functions; `platform` knows no app. SQL lives only in `queries/*.sql` and `repo/`. No ORM.
 
 **Core vs add-ons.** Core: client, `common`, and in the master `devices`, `files`, `monitoring`, `platform`, `repo` (minus
-library), `web`, mirrors. Add-ons: the library, Drive sources, and the [modules](modules.md) (separate services; the master asks them for capabilities and works without them). Add-ons use the core, not the reverse; known
+library), `web`, mirrors. Add-ons: the library, and the [modules](modules.md) (separate services; the master asks them for capabilities and works without them). Add-ons use the core, not the reverse; known
 exceptions: `ingest.rs` queues metadata jobs and calls `repo::albums::follow_folder_move`; `browse.rs`/`transfer.rs` use
 `library::meta`; `repo/files.rs` and `repo/jobs.rs` hold library queries; `monitoring/jobs.rs` cleans the library cache.
 
@@ -91,7 +93,7 @@ Synchronous `postgres` behind an `r2d2` pool.
   alerts are `uuid::Uuid`, and anything sent to the API uses `Id` (`platform/id.rs`).
 - Changing a path: `db::lock_path` first, move files before the transaction ends, `db::notify` in the same transaction
   (`ingest::commit_version` is the model).
-- A rename is `commit_version` with `renamed_from` (clients, sources), `adopt_live` with `renamed_from` (watcher) or
+- A rename is `commit_version` with `renamed_from` (clients), `adopt_live` with `renamed_from` (watcher) or
   `move_path` (web app; only `local`, `shared` and `master` devices). Each logs one `rename`, calls `files::vacate_renamed` (never
   `delete_path`) and `albums::follow_folder_move`.
 - A job returns `Ok(Some(note))` to show a note in Processing.
@@ -113,10 +115,10 @@ with `Id` and check visibility like any input. Test each role.
 and the user's shared folders; any other call that reads, lists or deletes stored data changes the security model (see
 [CONTRIBUTING](../CONTRIBUTING.md)).
 
-**A source.** Models: `integrations/gdrive.rs` (has file ids), `integrations/rclone_source.rs` (paths only). A `sources` row
+**A source.** Model: `integrations/rclone_source.rs` (a file is known by its path). A `sources` row
 plus a `source-<name>` device (`integrations/api.rs`), claimed by `integrations::claim_source`, dispatched by `kind`. A source
 lists its files as `syncsource::Item`s and fetches one; `syncsource::apply` compares the listing with `source_items` and live
-`files`, downloads to temp files, records with `ingest::commit_version` (`renamed_from` for renames) and `mark_deleted`, and
+`files`, downloads to temp files, records with `ingest::commit_version` and `mark_deleted`, and
 deletes nothing if listing fails.
 
 ## The web app

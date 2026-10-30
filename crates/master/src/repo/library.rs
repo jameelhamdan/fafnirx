@@ -91,30 +91,6 @@ pub fn assets(c: &mut impl GenericClient, who: Viewer, f: &Filter, limit: i64) -
     q::timeline_assets().params(&mut Pg(c), &params).all()
 }
 
-/// A place on the map: (file id, latitude, longitude, when it was taken).
-pub type Point = (Uuid, f64, f64, i64);
-
-/// The files of a view that have a place, newest first, at most `limit`.
-pub fn map_points(c: &mut impl GenericClient, who: Viewer, f: &Filter, limit: i64) -> Result<Vec<Point>, Error> {
-    let params = q::MapPointsParams {
-        uid: who.uid,
-        all: who.all,
-        scope_user: who.scope_user,
-        scope: f.scope.as_str(),
-        device: f.device,
-        kind: f.kind.map(Media::as_str),
-        tag: f.tag,
-        month: f.month,
-        limit,
-    };
-    Ok(q::map_points()
-        .params(&mut Pg(c), &params)
-        .all()?
-        .into_iter()
-        .map(|p| (p.id, p.lat, p.lon, p.shown_at))
-        .collect())
-}
-
 /// Some files by id, as long as they are not deleted and the viewer can see them.
 pub fn by_ids(c: &mut impl GenericClient, who: Viewer, ids: &[Uuid]) -> Result<Vec<Asset>, Error> {
     let params = q::AssetsByIdsParams { uid: who.uid, all: who.all, scope_user: who.scope_user, ids };

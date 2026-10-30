@@ -77,7 +77,7 @@ checked login and file access; modules have no users.
 |---|---|---|
 | `GET /manifest` | master | `{id, version, contract, capabilities, ui?, setup?}`; `setup` lists what is missing for it to work (shown under Settings as "Running, not set up") |
 | `GET /probe?p&h` | master, `probe.video` | length, size, codec, date, place |
-| `GET /poster?p&h&max` | master, `poster` | JPEG ≤ `max` px (videos, HEIC/AVIF master can't decode) |
+| `GET /poster?p&h&max[&at_ms]` | master, `poster` | JPEG ≤ `max` px (videos, HEIC/AVIF the master can't decode). A video's frame at `at_ms`; without it the module finds the first non-black frame at 10%, 20%, … and says where in `x-poster-ms` (ms), which the master stores and sends back as `at_ms` |
 | `GET /status` | master, `status` | `active`, `failed` tasks, each with `path`; other fields are the module's own |
 | `GET /files/<rest>?p&h` | browser via `/api/m/<id>/<file id>/<rest>` | module-specific, per file |
 | `GET /ui/<file>` | browser via `/api/m/<id>/ui/<file>` | web part (script, style), same for everybody |

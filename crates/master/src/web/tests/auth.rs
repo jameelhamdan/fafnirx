@@ -60,7 +60,6 @@ fn every_response_carries_the_security_headers() {
         assert_eq!(status, StatusCode::OK, "the health check needs no login");
         let csp = page[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
         assert!(csp.contains("script-src 'self'") && csp.contains("frame-ancestors 'none'"), "{csp}");
-        assert!(csp.contains("https://tile.openstreetmap.org"), "the map tiles may be loaded: {csp}");
         assert_eq!(page[header::X_FRAME_OPTIONS], "DENY");
         assert_eq!(page[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
 

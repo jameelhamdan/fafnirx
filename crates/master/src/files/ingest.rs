@@ -651,7 +651,7 @@ mod tests {
 
         // A file that a source collected is remembered as removed in the web app in the source's own record.
         c.execute(
-            "INSERT INTO sources (name, kind, config, device_id, created_at) VALUES ('s', 'gdrive', '{}', 1, 0)",
+            "INSERT INTO sources (name, kind, config, device_id, created_at) VALUES ('s', 'rclone', '{}', 1, 0)",
             &[],
         )
         .unwrap();

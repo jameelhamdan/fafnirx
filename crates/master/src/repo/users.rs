@@ -31,15 +31,13 @@ pub fn exists(c: &mut impl GenericClient, name: &str) -> Result<bool, Error> {
 }
 
 pub fn insert(c: &mut impl GenericClient, name: &str, role: &str, password_hash: &str, now: i64) -> Result<(), Error> {
-    q::insert_user().bind(&mut Pg(c), &name, &role, &password_hash, &now)?;
-    Ok(())
+    q::insert_user().bind(&mut Pg(c), &name, &role, &password_hash, &now).map(drop)
 }
 
 /// Serializes changes to the administrators until the transaction ends, so that two requests cannot each leave the
 /// other as the last one.
 pub fn lock(c: &mut impl GenericClient) -> Result<(), Error> {
-    q::lock_users().bind(&mut Pg(c))?;
-    Ok(())
+    q::lock_users().bind(&mut Pg(c)).map(drop)
 }
 
 pub fn by_name(c: &mut impl GenericClient, name: &str) -> Result<Option<Account>, Error> {
@@ -56,23 +54,19 @@ pub fn other_active_admins(c: &mut impl GenericClient, id: i64) -> Result<i64, E
 }
 
 pub fn set_role(c: &mut impl GenericClient, id: i64, role: &str) -> Result<(), Error> {
-    q::set_user_role().bind(&mut Pg(c), &role, &id)?;
-    Ok(())
+    q::set_user_role().bind(&mut Pg(c), &role, &id).map(drop)
 }
 
 pub fn disable(c: &mut impl GenericClient, id: i64, now: i64) -> Result<(), Error> {
-    q::disable_user().bind(&mut Pg(c), &now, &id)?;
-    Ok(())
+    q::disable_user().bind(&mut Pg(c), &now, &id).map(drop)
 }
 
 pub fn enable(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
-    q::enable_user().bind(&mut Pg(c), &id)?;
-    Ok(())
+    q::enable_user().bind(&mut Pg(c), &id).map(drop)
 }
 
 pub fn set_password_hash(c: &mut impl GenericClient, id: i64, hash: &str) -> Result<(), Error> {
-    q::set_password_hash().bind(&mut Pg(c), &hash, &id)?;
-    Ok(())
+    q::set_password_hash().bind(&mut Pg(c), &hash, &id).map(drop)
 }
 
 /// The id and password hash of the administrator the master starts with.

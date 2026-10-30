@@ -8,7 +8,7 @@ first: replaced and deleted files stay as versions until retention ends.
 flowchart LR
     D["Devices<br/>(client)"] -->|"upload<br/>gRPC :7443"| M["Master"]
     M -.->|"shared folders"| D
-    G["Google Drive"] -->|"collected by the master"| M
+    G["Other storage"] -->|"collected by the master"| M
     A["Browser"] <-->|"web app and API :8080"| M
     M --- PG[("PostgreSQL<br/>metadata")]
     M --- FS[("Disk<br/>files/ and versions/")]

@@ -23,7 +23,9 @@ import { useNow } from '@/hooks/use-now'
 import { api, downloadZip, query } from '@/lib/api'
 import { count, joinPath, plural } from '@/lib/format'
 import { msg, useT } from '@/lib/i18n'
+import { isLibraryFile } from '@/lib/entries'
 import { MASTER, hasWorkspace, useRole } from '@/lib/session'
+import { useOpenMedia } from '@/lib/viewer-source'
 import { AccessBadge } from '@/components/files/access-badge'
 import { AlbumPicker } from '@/components/library/album-picker'
 import { RescanButton } from '@/components/files/rescan-button'
@@ -156,9 +158,12 @@ export default function Files() {
   // a device or a source sends cannot.
   const canUpload = listing.data?.pages[0]?.writable ?? false
 
+  const openMedia = useOpenMedia()
   const open = (e: Entry) => {
     if (e.kind === 'device') go({ device: e.device, path: null, q: null, type: null, file: null })
     else if (e.kind === 'dir') go({ path: e.path, q: null, file: null })
+    // A photo or video is shown in the viewer, at an address of its own that can be sent on; the rest in the details.
+    else if (e.id && e.deleted_at === null && isLibraryFile(e.name)) openMedia(e.id)
     else go({ file: e.path })
   }
   const toggle = (key: string) =>

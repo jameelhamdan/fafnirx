@@ -6,7 +6,7 @@ import type { AlbumInfo, Asset, Scope, TagInfo } from './types'
 import { useT } from '@/lib/i18n'
 
 /** Everything that shows library data: refreshed after any change. */
-const LIBRARY_KEYS = ['timeline', 'asset', 'folder', 'map', 'albums', 'album', 'tags', 'trash', 'files', 'info']
+const LIBRARY_KEYS = ['timeline', 'asset', 'folder', 'albums', 'album', 'tags', 'trash', 'files', 'info']
 
 export function useRefreshLibrary() {
   const client = useQueryClient()

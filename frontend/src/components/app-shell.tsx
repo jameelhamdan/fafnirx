@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Archive, Cog, FolderOpen, FolderSync, GalleryVerticalEnd, HardDrive, Heart, Images, LayoutDashboard, LogOut, MapPin, Menu, Monitor, Moon, Settings, Sun, Trash2, UploadCloud, Users } from 'lucide-react'
+import { Archive, Cog, FolderOpen, FolderSync, GalleryVerticalEnd, HardDrive, Heart, Images, LayoutDashboard, LogOut, Menu, Monitor, Moon, Settings, Sun, Trash2, UploadCloud, Users } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
@@ -28,7 +28,6 @@ const NAV: { title: string; items: { to: string; label: string; icon: typeof Ima
       { to: '/timeline', label: msg('Timeline'), icon: Images, for: 'all' },
       { to: '/favorites', label: msg('Favorites'), icon: Heart, for: 'workspace' },
       { to: '/albums', label: msg('Albums'), icon: GalleryVerticalEnd, for: 'workspace' },
-      { to: '/map', label: msg('Map'), icon: MapPin, for: 'all' },
       { to: '/archive', label: msg('Archive'), icon: Archive, for: 'workspace' },
       { to: '/trash', label: msg('Trash'), icon: Trash2, for: 'workspace' },
     ],

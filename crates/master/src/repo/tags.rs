@@ -24,8 +24,7 @@ pub fn of_file(c: &mut impl GenericClient, uid: i64, file_id: Uuid) -> Result<Ve
 /// Makes `tag_ids` the user's tags of the file: the others of the user come off, the others' tags stay.
 pub fn replace_on_file(c: &mut impl GenericClient, uid: i64, file_id: Uuid, tag_ids: &[Uuid]) -> Result<(), Error> {
     q::keep_only_tags().params(&mut Pg(&mut *c), &q::KeepOnlyTagsParams { file_id, tag_ids, uid })?;
-    q::tag_file().params(&mut Pg(c), &q::TagFileParams { file_id, tag_ids })?;
-    Ok(())
+    q::tag_file().params(&mut Pg(c), &q::TagFileParams { file_id, tag_ids }).map(drop)
 }
 
 /// Puts the tags on the files the viewer can see. Returns how many were added.
@@ -36,8 +35,7 @@ pub fn add_to_files(c: &mut impl GenericClient, who: Viewer, ids: &[Uuid], tag_i
 
 /// Removes the tags no file carries any more.
 pub fn drop_unused(c: &mut impl GenericClient) -> Result<(), Error> {
-    q::drop_unused_tags().bind(&mut Pg(c))?;
-    Ok(())
+    q::drop_unused_tags().bind(&mut Pg(c)).map(drop)
 }
 
 /// The viewer's tags with how many visible files carry each.

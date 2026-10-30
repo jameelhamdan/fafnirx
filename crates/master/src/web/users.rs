@@ -2,7 +2,7 @@
 
 use super::access::{Access, Role};
 use super::auth::{self, MIN_PASSWORD};
-use super::{done, run, ApiError, Done, Res, Shared};
+use super::{act, run, ApiError, Done, Res, Shared};
 use crate::devices::api::NAME_RULE;
 use crate::platform::db;
 use crate::repo::{sessions, users};
@@ -96,14 +96,13 @@ pub async fn create(
     check_password(&body.password)?;
     let root = state.store.live_root().to_path_buf();
     let password = body.password;
-    run(&state, move |c| {
+    act(&state, move |c| {
         let hash = auth::hash_password(&password)?;
         add_user(c, &root, &name, role, &hash)?;
         db::notify(c, "users", &name)?;
         Ok(())
     })
-    .await?;
-    done()
+    .await
 }
 
 #[derive(Deserialize)]
@@ -128,7 +127,7 @@ pub async fn update(
     if let Some(password) = &body.password {
         check_password(password)?;
     }
-    run(&state, move |c| {
+    act(&state, move |c| {
         let mut tx = c.transaction()?;
         // Serializes changes to the administrators, so that two requests cannot each leave the other as the last.
         users::lock(&mut tx)?;
@@ -161,6 +160,5 @@ pub async fn update(
         tx.commit()?;
         Ok(())
     })
-    .await?;
-    done()
+    .await
 }

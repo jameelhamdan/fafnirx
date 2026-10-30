@@ -53,6 +53,23 @@ impl Api {
         let app = router(state.clone()).layer(MockConnectInfo("127.0.0.1:1".parse::<SocketAddr>().unwrap()));
         Self { app, db, store, cookie: String::new(), _dir: dir }
     }
+    /// What the workers do for the pictures that were asked for.
+    async fn make_pictures(&self) {
+        let (db, store, cache) = (self.db.clone(), self.store.clone(), self._dir.path().join("cache"));
+        tokio::task::spawn_blocking(move || crate::library::meta::make_queued_pictures(&db, &store, &cache))
+            .await
+            .unwrap();
+    }
+
+    /// How many jobs for pictures there are, whatever their state.
+    async fn picture_jobs(&self) -> i64 {
+        crate::platform::db::with(&self.db, |c| {
+            Ok(c.query_one("SELECT COUNT(*) FROM jobs WHERE kind = 'thumb'", &[])?.get(0))
+        })
+        .await
+        .unwrap()
+    }
+
     /// What the minute job does: the totals shown for devices catch up with their files.
     async fn catch_up_totals(&self) {
         crate::platform::db::with(&self.db, crate::devices::totals::refresh_stale).await.unwrap();

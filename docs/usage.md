@@ -7,7 +7,7 @@ icon in the top bar. Pages update live.
 |---|---|
 | Dashboard | Alerts, totals (as of each device's last finished sync), disk, online devices, 2-week activity, recent changes |
 | Timeline, Favorites, Archive | Photos and videos by month and day |
-| Albums, Map, Trash | Group media; where it was taken; deleted files until retention ends |
+| Albums, Trash | Group media; deleted files until retention ends |
 | Files | Browse, search, preview, download, upload, move, delete; open media in the viewer |
 | Processing | Background work ([details](#processing)) |
 | Devices, Sources, Mirrors | Computers that send; Google Drive and other storage; offsite backups and replicas |
@@ -37,7 +37,7 @@ use their names.
 | URL | Opens |
 |---|---|
 | `/albums/<id>` | An album |
-| `/watch/<id>` | A photo or video in the viewer, with the media of its folder |
+| `/watch/<id>` | A photo or video in the viewer. Opening one from the Timeline, an album or Files shows this address (Back closes it, and the page keeps its place); send it to anyone who can see the file. Opened on its own it steps through the media of its folder |
 | `/files?device=<user/device>&path=<folder>&file=<path>` | A file's details |
 
 Anyone who cannot see a file gets 404 for it.
@@ -68,12 +68,14 @@ untouched and are not re-fetched. Shared folders: deleted on every computer ([De
 A view of the same files; originals are never changed.
 
 - **Timeline:** by month and day; drag the scrubber at the right edge. Filter by device, kind and tag. Dates are read as UTC.
-- **Viewer:** arrows or swipe, `Esc` closes, `i` info, `f` favorite. A video browsers cannot play gets a converted copy in the background.
-- **Info:** description, rating (click a star again to clear), tags, date, place. Corrections are notes beside the file;
-  **Use the original** reverts.
+- **Viewer:** arrows or swipe, `Esc` closes, `i` info, `f` favorite, **Copy link** in the menu (the address of the file on its own).
+- **Info:** description, rating (click a star again to clear), tags, date, place (latitude and longitude). Corrections are notes
+  beside the file; **Use the original** reverts.
+- **Where date and place come from:** the EXIF time taken, else the time digitised or saved, else the GPS clock, then XMP; the
+  EXIF GPS position, then XMP; for a video, its tags. A damaged EXIF block keeps what could be read. After an update that
+  reads more, **Processing → Read everything again** reads the files already in the library again.
 - **Select** (circle on a picture, box by a day): Favorite, Add to album, Add tags, Archive, Download, Delete.
 - **Archive** hides from the Timeline. **Delete** goes to the Trash, restorable with albums, tags and favorite.
-- **Map:** pictures with a place, grouped in bubbles.
 
 ### Albums
 
@@ -112,11 +114,14 @@ nothing leaves the host.
 |---|---|---|---|
 | `meta` | Reads details | Image: size, EXIF (camera, exposure, date, GPS). Video: duration, size, codec, date, place (from the [video module](video.md)) | One `file_meta` row per content |
 | `artwork` | Looks for the picture and `.nfo` beside a video | File names in its folder and two above | Nothing stored; the note says what was found |
-| `thumb` | Draws 320 px and 1600 px JPEGs | The photo, a video frame (video module), or the artwork picture | `cache/thumbs/`, removed after 30 days unused |
+| `thumb` | Makes one JPEG: 320 px (thumbnail) or 1600 px (preview) | The photo, a video frame (video module), or the artwork picture | `cache/thumbs/`, kept |
 
-Order: `meta` → `artwork` (videos) → `thumb`. Without the [video module](video.md) a video plays as the original in the browser: no details and
-no frame (a picture beside it is still used), and HEIC/AVIF get no pictures. After setting the module up, **Process missing**
-reads those videos again.
+`meta` and `artwork` run when a file arrives; `thumb` runs when a photo or video is first looked at (a grid cell, the viewer, a
+poster): the request is answered `202`, queued, and the web app shows the picture when the master announces it. Pictures take
+about 10–20% of the library in `cache/thumbs/`. **Settings → Thumbnails and previews** off: nothing is made, even on demand,
+and icons are shown. Without the [video module](video.md) a video plays as the original in the browser: no details and no frame
+(a picture beside it is still used), and HEIC/AVIF get no pictures. After setting the module up, **Process missing** reads
+those videos again.
 
 **Logged per job:** kind, state (queued, running, failed, done), device and path, attempts, error, note, created, started
 and finished times. Counts per kind show waiting, running, failed and done in the last 24 h; done jobs stay a day. A job is
@@ -358,6 +363,12 @@ The file is replaced by the client, which may write it (Windows `%LocalAppData%\
 `.deb` (under `/usr`): updated through the package. **Update** / `fafnirx update` downloads the release `.deb` for this arch,
 verifies `.sha256`, runs `dpkg -i` via `sudo` (terminal) or `pkexec` (tray). If neither can ask: keeps the file and prints
 `sudo dpkg -i <file>`. The background check only reports.
+
+Only one version stays on the computer. When a client installs (`fafnirx install-service`, the setup, `enroll`) and whenever it
+starts, it looks for other `fafnirx` programs in the places setups use (`%LocalAppData%\Programsafnirx`, `%LocalAppData%afnirx`,
+Program Files, `/usr/local/bin`, `/usr/bin`, `/opt/fafnirx`, `~/.local/bin`) and in the `PATH`. One that answers `--version` as an
+older fafnirx is stopped and removed; a newer or equal one is left alone, and one that cannot be removed is reported in the
+log. A copy from a `.deb` is removed with `dpkg -r` only at install, not when the client starts.
 
 Restart ends the client and starts it again on Windows (a client of the user); on macOS it is `launchctl kickstart -k`, on Linux `systemctl restart`.
 

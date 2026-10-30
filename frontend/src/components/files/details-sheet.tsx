@@ -11,14 +11,17 @@ import { Separator } from '../ui/separator'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../ui/sheet'
 import { Skeleton } from '../ui/skeleton'
 import { useNow } from '@/hooks/use-now'
-import { api, downloadUrl, thumbUrl } from '@/lib/api'
+import { api, downloadUrl, mediaUrl } from '@/lib/api'
 import { isLibraryFile } from '@/lib/entries'
 import { useLibraryActions } from '@/lib/library'
 import { ago, bytes, dateTime } from '@/lib/format'
 import { fileOfInfo } from '@/lib/module-file'
+import { useReadyUrl } from '@/lib/pictures'
 import { hasWorkspace, useRole } from '@/lib/session'
+import { useWatchState } from '@/lib/viewer-source'
 import type { AssetDetail, FileInfo } from '@/lib/types'
 import { AlbumPicker } from '../library/album-picker'
+import { Thumb } from '../library/thumb'
 import { WorkNote } from '../work-note'
 import { FileIcon } from './file-icon'
 import { useT } from '@/lib/i18n'
@@ -33,7 +36,9 @@ const InfoPanel = lazy(() => import('../library/info-panel'))
  */
 function VideoPreview({ info }: { info: FileInfo }) {
   const t = useT()
-  const file = fileOfInfo(info)
+  const made = fileOfInfo(info)
+  const poster = useReadyUrl(made.poster)
+  const file = { ...made, poster }
   const hasViewer = useHasViewer(file)
   const [started, setStarted] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -78,7 +83,7 @@ function Preview({ info }: { info: FileInfo }) {
   if (info.preview) {
     return (
       <a href={url} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg border bg-muted/40">
-        <img src={thumbUrl(info.device, info.path, 1000)} alt={info.name} className="mx-auto max-h-80 w-full object-contain" />
+        <Thumb src={mediaUrl(info.id, 'preview')} fit="contain" className="mx-auto max-h-80 w-full" fallback={<FileIcon entry={{ kind: 'file', mime: info.mime }} className="size-10" />} />
       </a>
     )
   }
@@ -123,6 +128,7 @@ function LibrarySection({ id }: { id: string }) {
 /** Everything about one file: a preview, its metadata, and its history with download and restore. */
 export function DetailsSheet({ device, path, onClose, onDeleted }: { device: string; path: string | null; onClose: () => void; onDeleted: () => void }) {
   const t = useT()
+  const watch = useWatchState()
   const client = useQueryClient()
   const now = useNow()
   const [confirm, setConfirm] = useState<'delete' | number | null>(null)
@@ -165,7 +171,7 @@ export function DetailsSheet({ device, path, onClose, onDeleted }: { device: str
               {(info.preview || info.mime.startsWith('video/') || info.mime === 'application/pdf') && (
                 <Button variant="outline" asChild><a href={downloadUrl(device, info.path, { inline: true })} target="_blank" rel="noreferrer"><ExternalLink className="size-4" />{t('Open')}</a></Button>
               )}
-              {inLibrary && <Button variant="outline" asChild><Link to={`/watch/${info.id}`}><Clapperboard className="size-4" />{t('Open in viewer')}</Link></Button>}
+              {inLibrary && <Button variant="outline" asChild><Link to={`/watch/${info.id}`} state={watch}><Clapperboard className="size-4" />{t('Open in viewer')}</Link></Button>}
               {!info.deleted_at && <Button variant="outline" onClick={() => setConfirm('delete')}><Trash2 className="size-4" />{t('Delete')}</Button>}
             </div>
             {info.deleted_at && (

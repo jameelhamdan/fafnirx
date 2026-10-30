@@ -4,7 +4,7 @@ use crate::devices::api::{device_summaries, DeviceSummary};
 use crate::integrations::api::{job_states, JobState};
 use crate::repo::{alerts, devices, events};
 use crate::web::access::Access;
-use crate::web::{done, run, Done, Res, Shared};
+use crate::web::{act, run, Done, Res, Shared};
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use fafnirx_common::unix_now;
@@ -162,7 +162,7 @@ pub async fn dismiss(
     Extension(who): Extension<Access>,
     Path(crate::platform::id::Id(id)): Path<crate::platform::id::Id>,
 ) -> Res<Done> {
-    run(&state, move |c| {
+    act(&state, move |c| {
         // Only the alerts of a device the user can see.
         let key = alerts::key_of(c, id)?;
         if key.is_some_and(|k| !who.is_admin() && !who.can_see(&k)) {
@@ -171,6 +171,5 @@ pub async fn dismiss(
         alerts::dismiss(c, id)?;
         Ok(())
     })
-    .await?;
-    done()
+    .await
 }

@@ -178,6 +178,7 @@ export interface FileInfo {
 export interface Settings {
   version_count: number
   retention_days: number
+  thumbnails: boolean
 }
 
 export type Role = 'admin' | 'normal' | 'readonly'
@@ -239,8 +240,6 @@ export interface Session {
   user: { name: string; role: Role } | null
   /** Master version; only sent to a logged-in user. */
   version?: string
-  /** Tile address of the map, with {z}, {x} and {y} in it. */
-  map_tiles?: string
   /** The modules that are up on the master, by id (see `sdk`); only sent to a logged-in user. */
   modules?: Record<string, ModuleInfo>
 }
@@ -370,8 +369,3 @@ export interface Trash {
   retention_days: number
 }
 
-export interface MapData {
-  /** [id, latitude, longitude, when] */
-  points: [string, number, number, number][]
-  truncated: boolean
-}

@@ -19,10 +19,8 @@
 //!   FAFNIRX_MODULE_<ID>_URL   where the optional module <ID> is, for example FAFNIRX_MODULE_VIDEO_URL=http://video:8090 (the
 //!                           module is off without it); FAFNIRX_MODULE_<ID>_TOKEN is the secret shared with it
 //!                           (at least 16 characters)
-//!   FAFNIRX_GDRIVE_API      Google Drive API base URL (default https://www.googleapis.com; for tests)
 //!   FAFNIRX_TRUSTED_PROXY   addresses or ranges (comma separated) of reverse proxies in front of the master, whose
 //!                           X-Forwarded-For is believed about the client's address (default: none)
-//!   FAFNIRX_MAP_TILES       tile URL of the map, e.g. https://tile.openstreetmap.org/{z}/{x}/{y}.png (the default)
 //!
 //! There is no TLS in the master: run it on a trusted network or VPN, or put a TLS proxy (a Cloudflare
 //! tunnel, a reverse proxy) in front.
@@ -82,8 +80,11 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(web::AppState::new(db.clone(), store.clone(), data_dir.clone())?);
     modules::start(state.modules.clone(), state.plugins.clone(), store.live_root().to_path_buf());
-    // Playable copies of videos, which the master used to make, are not used any more.
-    let _ = std::fs::remove_dir_all(data_dir.join("cache").join("video"));
+    platform::db::with(&db, |c| {
+        library::meta::load_thumbnails(c);
+        Ok(())
+    })
+    .await?;
     library::meta::run_queue(db.clone(), store.clone(), data_dir.join("cache"));
     monitoring::jobs::spawn(db.clone(), store.clone(), data_dir.clone());
     tokio::spawn(integrations::spawn(db.clone(), store.clone(), data_dir.clone()));

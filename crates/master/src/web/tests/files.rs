@@ -71,7 +71,7 @@ fn upload_browse_download_history_and_delete() {
             .await;
         assert_eq!(status, StatusCode::OK);
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zipped)).unwrap();
-        let mut names: Vec<_> = archive.file_names().map(String::from).collect();
+        let mut names: Vec<_> = archive.file_names().map(|n| n.unwrap().into_owned()).collect();
         names.sort();
         assert_eq!(names, ["2024/a.txt", "2024/b.txt"], "the zip starts at the selected folder");
         let mut text = String::new();
@@ -219,7 +219,10 @@ fn names_in_any_script_are_listed_downloaded_and_found() {
         let disposition = headers.get("content-disposition").unwrap().to_str().unwrap();
         assert!(disposition.contains("filename*=UTF-8''%D8%A7%D9%86%D8%A7%D8%B4%D9%8A%D8%AF.zip"), "{disposition}");
         let archive = zip::ZipArchive::new(std::io::Cursor::new(zipped)).unwrap();
-        assert_eq!(archive.file_names().collect::<Vec<_>>(), ["اناشيد/ألبوم الطفل/ملف.txt"]);
+        assert_eq!(
+            archive.file_names().map(|n| n.unwrap().into_owned()).collect::<Vec<_>>(),
+            ["اناشيد/ألبوم الطفل/ملف.txt"]
+        );
     });
 }
 

@@ -4,7 +4,7 @@
 use crate::platform::db;
 use crate::repo::devices;
 use crate::web::access::{Access, Role};
-use crate::web::{done, run, ApiError, Done, Res, Shared};
+use crate::web::{act, done, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use fafnirx_common::{unix_now, valid_device_name};
@@ -81,7 +81,7 @@ pub async fn delete(
 ) -> Res<Done> {
     who.require_workspace()?;
     let store = state.store.clone();
-    run(&state, move |c| {
+    act(&state, move |c| {
         let folder = own(c, &who, &name)?;
         let Some(versions) = devices::purge_shared_folder(c, folder.id)? else {
             return Err(ApiError::conflict(
@@ -96,8 +96,7 @@ pub async fn delete(
         db::notify(c, "devices", &folder.folder)?;
         Ok(())
     })
-    .await?;
-    done()
+    .await
 }
 
 /// Removes the folder of a deleted shared folder when nothing but empty folders is left in it. A file that is there anyway (put
@@ -128,7 +127,7 @@ pub async fn leave(
     Json(body): Json<Leave>,
 ) -> Res<Done> {
     who.require_workspace()?;
-    run(&state, move |c| {
+    act(&state, move |c| {
         let folder = devices::shared_folder(c, who.user_id, &body.folder)?
             .filter(|s| !s.mine)
             .ok_or_else(|| ApiError::not_found("No folder is shared with you under that name"))?;
@@ -136,8 +135,7 @@ pub async fn leave(
         db::notify(c, "devices", &folder.folder)?;
         Ok(())
     })
-    .await?;
-    done()
+    .await
 }
 
 #[derive(Serialize)]
@@ -178,7 +176,7 @@ pub async fn add_member(
 ) -> Res<Done> {
     who.require_workspace()?;
     let user = body.user.trim().to_lowercase();
-    run(&state, move |c| {
+    act(&state, move |c| {
         let folder = own(c, &who, &name)?;
         if user == who.name {
             return Err(ApiError::bad("You use your own shared folders on all your computers already").into());
@@ -192,8 +190,7 @@ pub async fn add_member(
         db::notify(c, "devices", &folder.folder)?;
         Ok(())
     })
-    .await?;
-    done()
+    .await
 }
 
 pub async fn remove_member(
@@ -202,7 +199,7 @@ pub async fn remove_member(
     Path((name, user)): Path<(String, String)>,
 ) -> Res<Done> {
     who.require_workspace()?;
-    run(&state, move |c| {
+    act(&state, move |c| {
         let folder = own(c, &who, &name)?;
         let (user_id, _) = devices::user_for_device(c, &user.trim().to_lowercase())?
             .ok_or_else(|| ApiError::not_found("No such user"))?;
@@ -212,6 +209,5 @@ pub async fn remove_member(
         db::notify(c, "devices", &folder.folder)?;
         Ok(())
     })
-    .await?;
-    done()
+    .await
 }

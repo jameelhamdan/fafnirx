@@ -63,24 +63,20 @@ pub fn key_of(c: &mut impl GenericClient, name: &str) -> Result<Option<Key>, Err
 
 /// Forgets what was uploaded: the next run sends everything again.
 pub fn forget_items(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
-    q::delete_mirror_items().bind(&mut Pg(c), &id)?;
-    Ok(())
+    q::delete_mirror_items().bind(&mut Pg(c), &id).map(drop)
 }
 
 pub fn delete(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
     q::delete_mirror_items().bind(&mut Pg(&mut *c), &id)?;
-    q::delete_mirror().bind(&mut Pg(c), &id)?;
-    Ok(())
+    q::delete_mirror().bind(&mut Pg(c), &id).map(drop)
 }
 
 pub fn request_run(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
-    q::request_mirror_run().bind(&mut Pg(c), &id)?;
-    Ok(())
+    q::request_mirror_run().bind(&mut Pg(c), &id).map(drop)
 }
 
 pub fn toggle(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
-    q::toggle_mirror().bind(&mut Pg(c), &id)?;
-    Ok(())
+    q::toggle_mirror().bind(&mut Pg(c), &id).map(drop)
 }
 
 /// Picks one due mirror and marks it running. One statement, so a mirror can only be claimed once.
@@ -96,14 +92,12 @@ pub fn finish(
     message: &str,
     ok_at: Option<i64>,
 ) -> Result<(), Error> {
-    q::finish_mirror().params(&mut Pg(c), &q::FinishMirrorParams { status, message, ok_at, id })?;
-    Ok(())
+    q::finish_mirror().params(&mut Pg(c), &q::FinishMirrorParams { status, message, ok_at, id }).map(drop)
 }
 
 /// How many files and bytes the last run left on the mirror.
 pub fn set_totals(c: &mut impl GenericClient, id: i64, files: i64, bytes: i64) -> Result<(), Error> {
-    q::set_mirror_totals().bind(&mut Pg(c), &files, &bytes, &id)?;
-    Ok(())
+    q::set_mirror_totals().bind(&mut Pg(c), &files, &bytes, &id).map(drop)
 }
 
 /// Every live file at or below the folder `scope` (everything when it is empty), in the order they are uploaded.
@@ -128,13 +122,13 @@ pub fn remember_item(
     path: &str,
     root_hash: &[u8],
 ) -> Result<(), Error> {
-    q::upsert_mirror_item().params(&mut Pg(c), &q::UpsertMirrorItemParams { mirror_id, device_id, path, root_hash })?;
-    Ok(())
+    q::upsert_mirror_item()
+        .params(&mut Pg(c), &q::UpsertMirrorItemParams { mirror_id, device_id, path, root_hash })
+        .map(drop)
 }
 
 pub fn forget_item(c: &mut impl GenericClient, mirror_id: i64, device_id: i64, path: &str) -> Result<(), Error> {
-    q::delete_mirror_item().params(&mut Pg(c), &q::DeleteMirrorItemParams { mirror_id, device_id, path })?;
-    Ok(())
+    q::delete_mirror_item().params(&mut Pg(c), &q::DeleteMirrorItemParams { mirror_id, device_id, path }).map(drop)
 }
 
 /// The folder of every device, by id.
@@ -159,6 +153,5 @@ pub fn folders_below(c: &mut impl GenericClient, device_id: i64, prefix: &str) -
 
 /// Marks the mirrors that were running when the master stopped as failed.
 pub fn fail_interrupted(c: &mut impl GenericClient) -> Result<(), Error> {
-    q::fail_interrupted_mirrors().bind(&mut Pg(c))?;
-    Ok(())
+    q::fail_interrupted_mirrors().bind(&mut Pg(c)).map(drop)
 }

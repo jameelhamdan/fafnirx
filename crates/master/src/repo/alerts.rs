@@ -59,12 +59,10 @@ pub fn dismiss(c: &mut impl GenericClient, id: Uuid) -> Result<(), Error> {
 /// Closes the open alerts of a kind that were last raised before `quiet_since`. Whoever raises such an alert does it again
 /// every time it still holds (a client with every heartbeat), so one that went quiet has been fixed or is no longer reported.
 pub fn expire_quiet(c: &mut impl GenericClient, kind: &str, quiet_since: i64) -> Result<(), Error> {
-    q::expire_quiet_alerts().bind(&mut Pg(c), &unix_now(), &kind, &quiet_since)?;
-    Ok(())
+    q::expire_quiet_alerts().bind(&mut Pg(c), &unix_now(), &kind, &quiet_since).map(drop)
 }
 
 /// Forgets alerts that were closed before `before`.
 pub fn purge_resolved(c: &mut impl GenericClient, before: i64) -> Result<(), Error> {
-    q::purge_resolved_alerts().bind(&mut Pg(c), &before)?;
-    Ok(())
+    q::purge_resolved_alerts().bind(&mut Pg(c), &before).map(drop)
 }

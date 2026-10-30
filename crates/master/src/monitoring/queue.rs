@@ -1,4 +1,4 @@
-//! The queue of background work, to look at and to steer: what is being read or drawn, what waits, what failed and
+//! The queue of background work, to look at and to steer: what is being read or made, what waits, what failed and
 //! why, and what the modules that are set up report (the video module: segments being cut, subtitle tracks).
 //!
 //! Everybody sees the jobs of the devices they can see. Only an administrator holds the queue back, retries, cancels or asks
@@ -16,8 +16,8 @@ use std::collections::BTreeMap;
 
 /// Jobs listed at most.
 const LIST: i64 = 200;
-/// Files asked to be read again at most, in one request.
-const REBUILD_MAX: i64 = 5000;
+/// Files looked up at a time when queueing them to be read again.
+const REBUILD_BATCH: i64 = 1000;
 
 #[derive(Serialize, Default)]
 pub struct Summary {
@@ -206,7 +206,7 @@ pub struct Rebuild {
     everything: bool,
 }
 
-/// Queues reading (and drawing the pictures of) photos and videos: those never read, or all of them.
+/// Queues reading photos and videos: those never read, or all of them.
 pub async fn rebuild(
     State(state): State<Shared>,
     Extension(who): Extension<Access>,
@@ -214,14 +214,20 @@ pub async fn rebuild(
 ) -> Res<Changed> {
     who.require_admin()?;
     let changed = run(&state, move |c| {
-        let files = jobs::media_to_read(c, b.everything, REBUILD_MAX)?;
-        let n = files.len() as u64;
-        for (device, path, root) in files {
-            jobs::enqueue(
-                c,
-                "meta",
-                &serde_json::json!({ "device": device, "path": path, "root": hex::encode(root) }),
-            )?;
+        let (mut after, mut n) = (None, 0u64);
+        // Batch by batch, newest first, until there are no more.
+        loop {
+            let files = jobs::media_to_read(c, b.everything, after, REBUILD_BATCH)?;
+            let Some((last, ..)) = files.last() else { break };
+            after = Some(*last);
+            n += files.len() as u64;
+            for (_, device, path, root) in files {
+                jobs::enqueue(
+                    c,
+                    "meta",
+                    &serde_json::json!({ "device": device, "path": path, "root": hex::encode(root) }),
+                )?;
+            }
         }
         Ok(n)
     })
@@ -262,10 +268,13 @@ mod tests {
             .unwrap();
         }
         let mut missing: Vec<String> =
-            jobs::media_to_read(&mut *c, false, 100).unwrap().into_iter().map(|(_, path, _)| path).collect();
+            jobs::media_to_read(&mut *c, false, None, 100).unwrap().into_iter().map(|(_, _, path, _)| path).collect();
         missing.sort();
         assert_eq!(missing, ["a/blind.mp4", "a/new.jpg"], "never read, and a video without details");
-        assert_eq!(jobs::media_to_read(&mut *c, true, 100).unwrap().len(), 4, "everything");
+        assert_eq!(jobs::media_to_read(&mut *c, true, None, 100).unwrap().len(), 4, "everything");
+        let first = jobs::media_to_read(&mut *c, true, None, 3).unwrap();
+        let rest = jobs::media_to_read(&mut *c, true, first.last().map(|f| f.0), 3).unwrap();
+        assert_eq!((first.len(), rest.len()), (3, 1), "in batches, each after the one before");
     }
 
     #[test]

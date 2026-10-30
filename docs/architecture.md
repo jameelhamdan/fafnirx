@@ -160,8 +160,8 @@ name it `<owner>/<name>`. Clients reach it like this:
 | Offline and disk alerts, upload-error and held-deletion expiry | `monitoring/jobs.rs`, every minute | |
 | Retention, version pruning, stale uploads, cache cleaning | `monitoring/jobs.rs`, hourly | Removes files with their records |
 | Sources, mirrors | `integrations/` | `FOR UPDATE SKIP LOCKED` |
-| `meta` → `artwork` → `thumb` | `library/meta.rs`, table `jobs` | 3 attempts; videos are probed and drawn by a module (`modules/`, capabilities `probe.video`, `poster`); a job returns a note shown in Processing |
-| Pictures on request | `library/meta.rs` | `cache/thumbs/`, at most 4 decoded at once |
+| `meta` (videos then `artwork`) | `library/meta.rs`, table `jobs` | 3 attempts; videos are probed by a module (`modules/`, capability `probe.video`); a job returns a note shown in Processing |
+| `thumb` (on request) | `library/meta.rs`, `files/transfer.rs` | Queued by the first request for a picture, answered `202`; done → `thumbs` event (key: file id). Workers: cores, 2–6; newest request first. Result in `cache/thumbs/`, kept |
 | Segments, subtitles | `modules/video/service` | On request; in memory, `GET /status` |
 
 `done` jobs stay a day; queueing the same `(kind, payload)` while one is queued or running is a no-op; setting `jobs_paused`
@@ -238,13 +238,13 @@ JSON under `/api` behind the login cookie (random token, hash stored, `SameSite=
 | Shared folders | `GET/POST /api/shared`, `DELETE /api/shared/:name` (409 while it has files; then removes the rest), `POST /api/shared/:name/members` (`{user, can_write}`), `DELETE .../members/:user`; only the owner manages a folder. Members use it through `/api/files` like any folder |
 | Files | `GET /api/files` (entries carry `id`, `processing`), `GET /api/files/info` (carries `work`), `POST /api/files/delete`, `/restore`, `/move` (`{device, from, to}`; local folders, shared folders and master files, 409 otherwise), `/rescan` (admin) |
 | Transfers | `GET /api/files/download` (ranges, versions), `/thumb`, `POST /api/files/zip`, `POST /api/uploads`, `PUT/GET/DELETE /api/uploads/:id`, `POST /api/uploads/:id/finish` |
-| Library | `GET /api/timeline/buckets`, `/timeline?month=`, `/library?ids=`, `GET/PATCH /api/library/:id` (carries `work`), `GET /api/library/:id/folder`, `POST /api/library/bulk`, `GET /api/tags`, `DELETE /api/tags/:id`, `GET /api/map`, `GET /api/trash`. Assets carry `processing` |
+| Library | `GET /api/timeline/buckets`, `/timeline?month=`, `/library?ids=`, `GET/PATCH /api/library/:id` (carries `work`), `GET /api/library/:id/folder`, `POST /api/library/bulk`, `GET /api/tags`, `DELETE /api/tags/:id`, `GET /api/trash`. Assets carry `processing` |
 | Pictures | `GET /api/media/:id/{thumb,preview,original,download}` (`?v=<hash>` caches for good) |
 | Albums | `GET/POST /api/albums` (a `folder` body makes or returns the folder's album), `GET/PATCH/DELETE /api/albums/:id`, `POST .../files` and `.../files/remove` (by `ids` or `items` of `{device, path}`) |
 | Modules | `GET /api/m/:module/:id/*rest` asks the module for `/files/<rest>` about the file (login and right to the file first); video: `hls/{master.m3u8,<quality>/index.m3u8,<quality>/seg<n>.ts,subtitles.json,subtitles/<n>.vtt}`. `GET /api/m/:module/ui/:file` their web part. `GET /api/session` lists the modules that are up, `GET /api/queue` carries their reports |
 | Plugins (admin) | `GET /api/plugins` (installed, with state; read only, plugins are set up with `FAFNIRX_PLUGINS`) |
 | Processing | `GET /api/queue`; admin: `POST /api/queue/pause`, `/retry`, `/cancel`, `/rebuild` |
-| Integrations | `GET/POST /api/sources`, `POST /api/sources/rclone` (any rclone storage), `/:user/:name`, `/run`, `/toggle`; admin: `GET/POST /api/mirrors` (`kind` replica or backup) + `/:name`, `/run`, `/toggle`, `/resync`, `GET /api/mirrors/:name/restore-kit` (backups), `GET /api/mirrors/scope?path=` (folders to pick from) |
+| Integrations | `GET/POST /api/sources` (any rclone storage), `/:user/:name`, `/run`, `/toggle`; admin: `GET/POST /api/mirrors` (`kind` replica or backup) + `/:name`, `/run`, `/toggle`, `/resync`, `GET /api/mirrors/:name/restore-kit` (backups), `GET /api/mirrors/scope?path=` (folders to pick from) |
 | Settings | `GET/PUT /api/settings` |
 
 Browser uploads are chunked: pieces are `PUT` at an offset (409 with the expected offset if misaligned); `finish` verifies the

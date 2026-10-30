@@ -166,8 +166,7 @@ pub fn lock(c: &mut impl GenericClient, id: i64) -> Result<Option<String>, Error
 
 /// Adds up the files of a device and stores the result on its row.
 pub fn store_totals(c: &mut impl GenericClient, id: i64, now: i64) -> Result<(), Error> {
-    q::update_totals().bind(&mut Pg(c), &now, &id)?;
-    Ok(())
+    q::update_totals().bind(&mut Pg(c), &now, &id).map(drop)
 }
 
 /// Devices whose totals are stale and that have not reported progress since `syncing_since`.
@@ -188,26 +187,22 @@ pub fn visible_totals(c: &mut impl GenericClient, all: bool, user: i64) -> Resul
 
 /// Makes the totals of these devices be added up again.
 pub fn mark_totals_stale(c: &mut impl GenericClient, ids: &[i64]) -> Result<(), Error> {
-    q::mark_totals_stale().bind(&mut Pg(c), &ids)?;
-    Ok(())
+    q::mark_totals_stale().bind(&mut Pg(c), &ids).map(drop)
 }
 
 /// Notes that a device was heard from and that its totals are out of date.
 pub fn touch(c: &mut impl GenericClient, id: i64, now: i64) -> Result<(), Error> {
-    fafnirx_db::queries::files::touch_device().bind(&mut Pg(c), &now, &id)?;
-    Ok(())
+    fafnirx_db::queries::files::touch_device().bind(&mut Pg(c), &now, &id).map(drop)
 }
 
 /// Notes that a device collected something and that its totals are out of date.
 pub fn touch_collected(c: &mut impl GenericClient, id: i64, now: i64) -> Result<(), Error> {
-    fafnirx_db::queries::files::touch_collected().bind(&mut Pg(c), &now, &id)?;
-    Ok(())
+    fafnirx_db::queries::files::touch_collected().bind(&mut Pg(c), &now, &id).map(drop)
 }
 
 /// Makes the totals of a device be added up again.
 pub fn mark_stale(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
-    fafnirx_db::queries::files::mark_stale().bind(&mut Pg(c), &id)?;
-    Ok(())
+    fafnirx_db::queries::files::mark_stale().bind(&mut Pg(c), &id).map(drop)
 }
 
 /// (files, bytes) of the master files.
@@ -396,8 +391,7 @@ pub fn add_shared_member(
     can_write: bool,
     now: i64,
 ) -> Result<(), Error> {
-    q::add_shared_member().bind(&mut Pg(c), &folder_id, &user_id, &can_write, &now)?;
-    Ok(())
+    q::add_shared_member().bind(&mut Pg(c), &folder_id, &user_id, &can_write, &now).map(drop)
 }
 
 pub fn remove_shared_member(c: &mut impl GenericClient, folder_id: i64, user_id: i64) -> Result<bool, Error> {

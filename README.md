@@ -8,7 +8,7 @@ cannot read or list what the master holds, except the shared folders of its own 
 flowchart LR
     D["Devices<br/>(client: fafnirx)"] -->|"upload"| M["Master<br/>(fafnirx-master + web app + PostgreSQL)"]
     M -.->|"shared folders"| D
-    G["Google Drive<br/>(sources)"] --> M
+    G["Other storage<br/>(sources)"] --> M
     U["Users, in the browser"] <-->|"browse, upload, download"| M
     M -->|"rclone"| O["Offsite mirrors"]
 ```
@@ -24,9 +24,9 @@ flowchart LR
 - **File browser**: search, filter, sort, preview, version history, zip download, drag-and-drop upload, delete and restore.
   Photos and videos can be opened in the viewer and rated or favorited from here.
 - **Photo and video library** over the same files: timeline, favorites, archive, trash, albums (a folder can be an album),
-  map, tags, ratings, corrected dates and places. Originals are never changed.
+  tags, ratings, corrected dates and places. Originals are never changed.
 - **Video player** with subtitles and adaptive quality, as the optional [video module](docs/video.md), installed from the web app, so a server without videos carries no ffmpeg.
-- **Sources and mirrors**: Google Drive folders in; any [rclone](https://rclone.org) remote out.
+- **Sources and mirrors**: Google Drive and any other [rclone](https://rclone.org) storage in; any rclone remote out.
 - **Users and roles**: administrator, normal, read-only. Six languages (English, Spanish, Chinese, Arabic, Russian, Japanese).
 
 ## Quick start
@@ -45,6 +45,29 @@ from the [latest release](https://github.com/jameelhamdan/fafnirx/releases/lates
 fafnirx enroll --server http://<server>:7443     # asks for the token
 fafnirx add-folder ~/Documents
 ```
+
+## Performance
+
+Measured with thumbnails off, on one desktop (12 threads, PostgreSQL 17 in Docker, loopback) with 5,200 photos. Script:
+`tests/bench-local.mjs`.
+
+| | |
+| --- | --- |
+| Memory | master 13 MiB idle, 34 MiB peak; PostgreSQL about 100 MiB |
+| CPU | 0.2 core importing; same speed on 1 core as on 12 |
+| Import | 58 small or 15 large (3 MB) photos per second |
+| Upload / download | about 500 / 700 MiB/s |
+| Page load (p50) | 10-17 ms for the timeline, folders and dashboard |
+
+Minimum and recommended hardware: [Installation](docs/installation.md#1-the-master-docker).
+
+Stated requirements of similar projects (they do more, so this is for scale only):
+
+| | RAM and CPU |
+| --- | --- |
+| [Nextcloud](https://docs.nextcloud.com/server/stable/admin_manual/installation/system_requirements.html) | 128 MB minimum per PHP process, 512 MB recommended |
+| [Immich](https://docs.immich.app/install/requirements) | 6 GB minimum, 8 GB recommended; 2 cores, 4 recommended |
+| [Jellyfin](https://jellyfin.org/docs/general/administration/hardware-selection/) | 8 GB; an i5-11400 or N100 class CPU for transcoding |
 
 ## Documentation
 

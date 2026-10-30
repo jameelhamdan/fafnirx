@@ -14,7 +14,7 @@ use crate::platform::id::{uuids, Id};
 use crate::repo::library::{self, Media, Scope};
 use crate::repo::{albums, file_state, files, settings, snapshot, tags};
 use crate::web::access::Access;
-use crate::web::{done, run, ApiError, Done, Res, Shared};
+use crate::web::{act, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
 use fafnirx_common::{base_name, unix_now, DAY_SECS};
@@ -23,7 +23,6 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 /// More than a library of one household holds in one month, and few enough to answer in one go.
 pub const MAX_ASSETS: i64 = 20_000;
-const MAX_POINTS: i64 = 200_000;
 const MAX_BULK: usize = 10_000;
 const MAX_TAGS_PER_FILE: usize = 50;
 const MAX_DESCRIPTION: usize = 5000;
@@ -504,15 +503,14 @@ pub async fn edit(
     Path(Id(id)): Path<Id>,
     Json(e): Json<Edit>,
 ) -> Res<Done> {
-    run(&state, move |c| {
+    act(&state, move |c| {
         let mut tx = c.transaction()?;
         apply(&mut tx, &who, id, &e)?;
         db::notify(&mut tx, "library", "")?;
         tx.commit()?;
         Ok(())
     })
-    .await?;
-    done()
+    .await
 }
 
 #[derive(Deserialize)]
@@ -585,41 +583,14 @@ pub async fn delete_tag(
     Extension(who): Extension<Access>,
     Path(Id(id)): Path<Id>,
 ) -> Res<Done> {
-    run(&state, move |c| {
+    act(&state, move |c| {
         if !tags::delete(c, who.user_id, id)? {
             return Err(ApiError::not_found("No such tag").into());
         }
         db::notify(c, "library", "")?;
         Ok(())
     })
-    .await?;
-    done()
-}
-
-#[derive(Serialize)]
-pub struct MapPoints {
-    /// `[id, latitude, longitude, when]`
-    points: Vec<(Id, f64, f64, i64)>,
-    /// More photos have a place than are listed.
-    truncated: bool,
-}
-
-/// Every photo and video that has a place, for the map.
-pub async fn map(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Query(filter): Query<Filter>,
-) -> Res<MapPoints> {
-    filter.checked()?;
-    let out = run(&state, move |c| {
-        let mut points = library::map_points(c, who.viewer(), &filter.checked()?, MAX_POINTS + 1)?;
-        let truncated = points.len() as i64 > MAX_POINTS;
-        points.truncate(MAX_POINTS as usize);
-        let points = points.into_iter().map(|(id, lat, lon, when)| (Id(id), lat, lon, when)).collect();
-        Ok(MapPoints { points, truncated })
-    })
-    .await?;
-    Ok(Json(out))
+    .await
 }
 
 #[derive(Serialize)]

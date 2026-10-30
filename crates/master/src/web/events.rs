@@ -62,8 +62,9 @@ fn is_for(who: &Access, payload: &str) -> bool {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else { return false };
     let key = value["key"].as_str().unwrap_or("");
     match value["topic"].as_str() {
-        // Not about one device, or only a hint to look again.
-        Some("resync" | "library") => true,
+        // Not about one device, or only a hint to look again. A picture that is ready: its key is the id of the file, which only
+        // the ones who know it can use.
+        Some("resync" | "library" | "thumbs") => true,
         Some("files" | "devices" | "activity" | "alerts") => key.is_empty() || who.can_see(key),
         // The key of a mirror is not a folder.
         Some("jobs") => key.contains('/') && who.can_see(key),

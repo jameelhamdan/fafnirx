@@ -47,8 +47,7 @@ pub fn recent(
 
 /// Forgets events older than `before`.
 pub fn purge(c: &mut impl GenericClient, before: i64) -> Result<(), Error> {
-    q::purge_events().bind(&mut Pg(c), &before)?;
-    Ok(())
+    q::purge_events().bind(&mut Pg(c), &before).map(drop)
 }
 
 /// Appends to the change log shown in the web app.
@@ -63,8 +62,7 @@ pub fn record(
 ) -> Result<(), Error> {
     use fafnirx_db::client::Params;
     let params = q::InsertEventParams { device_id, path, action, ts, hash, detail };
-    q::insert_event().params(&mut Pg(c), &params)?;
-    Ok(())
+    q::insert_event().params(&mut Pg(c), &params).map(drop)
 }
 
 /// The latest events of one path of a device.

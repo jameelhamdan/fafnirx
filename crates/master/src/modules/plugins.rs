@@ -582,8 +582,9 @@ fn unzip(archive: &Path, to: &Path) -> Result<()> {
     let mut unpacked = 0u64;
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i)?;
-        let relative =
-            entry.enclosed_name().with_context(|| format!("{:?} leads out of the plugin's folder", entry.name()))?;
+        let relative = entry
+            .enclosed_name()
+            .with_context(|| format!("{:?} leads out of the plugin's folder", entry.name().unwrap_or_default()))?;
         let path = to.join(relative);
         if entry.is_dir() {
             std::fs::create_dir_all(&path)?;

@@ -391,6 +391,10 @@ pub async fn run(config_path: PathBuf) -> Result<()> {
         println!("fafnirx is already running for {}", config_path.display());
         return Ok(());
     }
+    // An update or an install leaves an older program behind now and then: only this version may be on the computer.
+    if let Ok(exe) = std::env::current_exe() {
+        tokio::task::spawn_blocking(move || crate::update::purge::announce(&fafnirx_common::plain_path(&exe), false));
+    }
     let result = serve(config_path, cfg, state_dir.clone()).await;
     if let Err(e) = &result {
         StatusFile::new(status_file(&state_dir)).edit(|s| s.fatal = format!("{e:#}"));

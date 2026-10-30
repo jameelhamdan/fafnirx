@@ -1,4 +1,4 @@
-//! Sources: folders of another service (Google Drive) the master collects on a schedule. A source owns a device of
+//! Sources: folders of another storage (via rclone) the master collects on a schedule. A source owns a device of
 //! kind `source`, so its files live in the same tables as a client's.
 
 use crate::platform::pg::Pg;
@@ -53,19 +53,16 @@ pub fn device_of(c: &mut impl GenericClient, id: i64) -> Result<Option<(i64, Str
 /// Forgets a source and what it remembered of the remote files.
 pub fn delete(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
     q::delete_source_items().bind(&mut Pg(&mut *c), &id)?;
-    q::delete_source().bind(&mut Pg(c), &id)?;
-    Ok(())
+    q::delete_source().bind(&mut Pg(c), &id).map(drop)
 }
 
 /// Asks for a run as soon as the worker looks.
 pub fn request_run(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
-    q::request_source_run().bind(&mut Pg(c), &id)?;
-    Ok(())
+    q::request_source_run().bind(&mut Pg(c), &id).map(drop)
 }
 
 pub fn toggle(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
-    q::toggle_source().bind(&mut Pg(c), &id)?;
-    Ok(())
+    q::toggle_source().bind(&mut Pg(c), &id).map(drop)
 }
 
 /// Picks one due source and marks it running. One statement, so a source can only be claimed once.
@@ -81,8 +78,7 @@ pub fn finish(
     message: &str,
     ok_at: Option<i64>,
 ) -> Result<(), Error> {
-    q::finish_source().params(&mut Pg(c), &q::FinishSourceParams { status, message, ok_at, id })?;
-    Ok(())
+    q::finish_source().params(&mut Pg(c), &q::FinishSourceParams { status, message, ok_at, id }).map(drop)
 }
 
 /// Remembers a remote file: where it is stored and the version of it that was collected. Brings back a file that
@@ -121,12 +117,10 @@ pub fn removed_in_web_app(c: &mut impl GenericClient, device_id: i64, source_id:
 }
 
 pub fn forget_item(c: &mut impl GenericClient, source_id: i64, remote_id: &str) -> Result<(), Error> {
-    q::delete_source_item().bind(&mut Pg(c), &source_id, &remote_id)?;
-    Ok(())
+    q::delete_source_item().bind(&mut Pg(c), &source_id, &remote_id).map(drop)
 }
 
 /// Marks the sources that were running when the master stopped as failed.
 pub fn fail_interrupted(c: &mut impl GenericClient) -> Result<(), Error> {
-    q::fail_interrupted_sources().bind(&mut Pg(c))?;
-    Ok(())
+    q::fail_interrupted_sources().bind(&mut Pg(c)).map(drop)
 }
