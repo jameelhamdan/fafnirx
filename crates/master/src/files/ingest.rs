@@ -47,26 +47,13 @@ fn prune_versions(conn: &mut impl GenericClient, file_id: uuid::Uuid, ts: i64) -
 }
 
 /// Makes a version the current one of its file (undeleting it) and prunes the ones that are too old.
-fn make_current(
-    conn: &mut impl GenericClient,
-    file_id: uuid::Uuid,
-    version_id: i64,
-    ts: i64,
-) -> Result<(), postgres::Error> {
+fn make_current(conn: &mut impl GenericClient, file_id: uuid::Uuid, version_id: i64, ts: i64) -> Result<(), postgres::Error> {
     files::make_current(conn, file_id, version_id)?;
     prune_versions(conn, file_id, ts)
 }
 
 /// Appends to the change log shown in the web UI.
-fn log_event(
-    conn: &mut impl GenericClient,
-    device: &Device,
-    path: &str,
-    action: &str,
-    ts: i64,
-    hash: Option<&str>,
-    detail: Option<&str>,
-) -> Result<(), postgres::Error> {
+fn log_event(conn: &mut impl GenericClient, device: &Device, path: &str, action: &str, ts: i64, hash: Option<&str>, detail: Option<&str>) -> Result<(), postgres::Error> {
     events::record(conn, device.id, path, action, ts, hash, detail)?;
     db::notify(conn, "files", &device.name)?;
     db::notify(conn, "activity", &device.name)
@@ -78,11 +65,7 @@ fn queue_meta(conn: &mut impl GenericClient, device: &Device, path: &str, root: 
         return Ok(());
     }
     if !files::content_known(conn, root)? {
-        jobs::enqueue(
-            conn,
-            "meta",
-            &serde_json::json!({ "device": device.name, "path": path, "root": hex::encode(root) }),
-        )?;
+        jobs::enqueue(conn, "meta", &serde_json::json!({ "device": device.name, "path": path, "root": hex::encode(root) }))?;
     }
     Ok(())
 }
@@ -105,10 +88,7 @@ pub fn check_master_path(device: &Device, path: &str) -> Result<()> {
     }
     let first = path.split('/').next().unwrap_or("").to_lowercase();
     if first == crate::platform::store::USERS_DIR {
-        return Err(crate::web::ApiError::conflict(
-            "users is where the folders of the users are kept: the master files cannot use that name",
-        )
-        .into());
+        return Err(crate::web::ApiError::conflict("users is where the folders of the users are kept: the master files cannot use that name").into());
     }
     Ok(())
 }
@@ -116,13 +96,7 @@ pub fn check_master_path(device: &Device, path: &str) -> Result<()> {
 /// Rules of the most limited computer: no name Windows cannot keep, no two paths (or folders above them) differing only in
 /// case. Always for shared folders; for local folders and master files (SMB-visible) only with `from_web`. The watcher and
 /// computer backups bypass it. An existing path can always be updated; a rename's source does not count (case-only renames work).
-pub fn check_names(
-    conn: &mut impl GenericClient,
-    device: &Device,
-    path: &str,
-    renamed_from: Option<&str>,
-    from_web: bool,
-) -> Result<()> {
+pub fn check_names(conn: &mut impl GenericClient, device: &Device, path: &str, renamed_from: Option<&str>, from_web: bool) -> Result<()> {
     let kind = devices::kind_of(conn, device.id)?;
     let in_ = match kind.as_str() {
         "shared" => "this shared folder",
@@ -144,9 +118,7 @@ pub fn check_names(
         let leaving = renamed_from.map(|from| from.split('/').take(depth).collect::<Vec<_>>().join("/"));
         for spelling in sql::files::folder_spellings().bind(conn, &folder, &device.id).all()? {
             if Some(&spelling) != leaving.as_ref() {
-                return conflict(format!(
-                    "the folder {spelling} is in {in_} already, and {folder} differs from it only by case"
-                ));
+                return conflict(format!("the folder {spelling} is in {in_} already, and {folder} differs from it only by case"));
             }
         }
     }
@@ -260,8 +232,7 @@ pub fn move_path(conn: &mut Client, store: &Store, device: &Device, from: &str, 
     if target.as_ref().is_some_and(|r| r.live_version().is_some()) {
         return Err(crate::web::ApiError::conflict(format!("{to} exists already")).into());
     }
-    let record =
-        files::version_record(&mut tx, version)?.ok_or_else(|| crate::web::ApiError::not_found("No such file"))?;
+    let record = files::version_record(&mut tx, version)?.ok_or_else(|| crate::web::ApiError::not_found("No such file"))?;
     let (root, size, mtime, mode) = (record.root_hash, record.size, record.mtime, record.mode);
     let (src, dst) = (store.live_path(&device.name, from)?, store.live_path(&device.name, to)?);
     if dst.exists() {
@@ -317,13 +288,7 @@ fn remove_empty_dirs(moved: &Path, stop: &Path) {
 
 /// Marks a live path deleted and logs it. Returns the version that was current if the path was live;
 /// the caller moves its file out of the live tree with [`archive_deleted`].
-fn delete_path(
-    conn: &mut impl GenericClient,
-    device: &Device,
-    path: &str,
-    ts: i64,
-    in_web_app: bool,
-) -> Result<Option<i64>> {
+fn delete_path(conn: &mut impl GenericClient, device: &Device, path: &str, ts: i64, in_web_app: bool) -> Result<Option<i64>> {
     let Some(version) = files::delete_path(conn, device.id, path, ts, in_web_app)? else { return Ok(None) };
     log_event(conn, device, path, "delete", ts, None, None)?;
     Ok(Some(version))
@@ -353,13 +318,7 @@ pub fn mark_deleted(conn: &mut Client, store: &Store, device: &Device, path: &st
 }
 
 /// [`mark_deleted`] for a path whose lock the transaction already holds.
-fn delete_locked(
-    tx: &mut postgres::Transaction,
-    store: &Store,
-    device: &Device,
-    path: &str,
-    in_web_app: bool,
-) -> Result<bool> {
+fn delete_locked(tx: &mut postgres::Transaction, store: &Store, device: &Device, path: &str, in_web_app: bool) -> Result<bool> {
     let ts = unix_now();
     let deleted = delete_path(tx, device, path, ts, in_web_app)?;
     if in_web_app && deleted.is_some() {
@@ -378,14 +337,7 @@ fn delete_locked(
 /// place, so only the database changes; a file it overwrote is gone, there is nothing to keep as the
 /// previous version. Returns whether a version was added. Nothing happens if the file changed again
 /// since it was hashed (`seen` no longer matches); the next scan sees it.
-pub fn adopt_live(
-    conn: &mut Client,
-    store: &Store,
-    device: &Device,
-    path: &str,
-    seen: &Seen,
-    renamed_from: Option<&str>,
-) -> Result<bool> {
+pub fn adopt_live(conn: &mut Client, store: &Store, device: &Device, path: &str, seen: &Seen, renamed_from: Option<&str>) -> Result<bool> {
     let mut tx = conn.transaction()?;
     let mut locked = vec![path];
     locked.extend(renamed_from);
@@ -393,8 +345,7 @@ pub fn adopt_live(
     for p in locked {
         db::lock_path(&mut tx, device.id, p)?;
     }
-    let still_there = std::fs::metadata(store.live_path(&device.name, path)?)
-        .is_ok_and(|m| m.len() == seen.size && fafnirx_common::mtime_ns(&m) == seen.mtime);
+    let still_there = std::fs::metadata(store.live_path(&device.name, path)?).is_ok_and(|m| m.len() == seen.size && fafnirx_common::mtime_ns(&m) == seen.mtime);
     if !still_there {
         return Ok(false);
     }
@@ -623,15 +574,16 @@ mod tests {
         assert!(live(&store, "b").is_none());
         assert!(!mark_deleted(&mut c, &store, &device, "b", false).unwrap(), "deleting twice changes nothing");
         assert!(!deleted_in_web_app(&mut *c, device.id, "b").unwrap(), "a delete on the device is the device's own");
-        let actions: Vec<String> =
-            c.query("SELECT action FROM events ORDER BY id", &[]).unwrap().iter().map(|r| r.get(0)).collect();
+        let actions: Vec<String> = c.query("SELECT action FROM events ORDER BY id", &[]).unwrap().iter().map(|r| r.get(0)).collect();
         assert_eq!(
             actions,
             ["add", "update", "rename", "delete"],
             "a rename is one event: the old path is vacated, not deleted"
         );
-        let hidden: i64 =
-            c.query_one("SELECT COUNT(*) FROM files WHERE path = 'a' AND deleted_by = 'rename'", &[]).unwrap().get(0);
+        let hidden: i64 = c
+            .query_one("SELECT COUNT(*) FROM files WHERE path = 'a' AND deleted_by = 'rename'", &[])
+            .unwrap()
+            .get(0);
         assert_eq!(hidden, 1, "the old path is kept, marked as renamed, until retention removes it");
         let (in_trash, in_listing): (i64, i64) = (
             crate::repo::library::trash(&mut *c, crate::repo::Viewer { uid: 1, all: true, scope_user: -1 }, 10, 0)
@@ -657,10 +609,12 @@ mod tests {
             &[],
         )
         .unwrap();
-        c.execute("INSERT INTO source_items (source_id, remote_id, path, remote_version) SELECT id, 'r', 'b', 'm' FROM sources", &[]).unwrap();
-        let flag = |c: &mut postgres::Client| -> bool {
-            c.query_one("SELECT removed_in_web_app FROM source_items", &[]).unwrap().get(0)
-        };
+        c.execute(
+            "INSERT INTO source_items (source_id, remote_id, path, remote_version) SELECT id, 'r', 'b', 'm' FROM sources",
+            &[],
+        )
+        .unwrap();
+        let flag = |c: &mut postgres::Client| -> bool { c.query_one("SELECT removed_in_web_app FROM source_items", &[]).unwrap().get(0) };
         assert!(mark_deleted(&mut c, &store, &device, "b", false).unwrap());
         assert!(!flag(&mut c), "a delete by the source itself is not one made in the web app");
         commit(&mut c, &store, "b", b"again", None).unwrap();

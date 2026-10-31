@@ -46,9 +46,7 @@ pub fn status(config_path: &Path, json: bool) -> Result<()> {
         let paused = daemon::paused_marker(&dir).exists();
         println!(
             "{}",
-            serde_json::to_string_pretty(
-                &serde_json::json!({ "running": running, "paused": paused, "status": status, "shared": shared })
-            )?
+            serde_json::to_string_pretty(&serde_json::json!({ "running": running, "paused": paused, "status": status, "shared": shared }))?
         );
         return Ok(());
     }

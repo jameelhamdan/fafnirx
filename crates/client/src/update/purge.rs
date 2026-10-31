@@ -55,8 +55,7 @@ fn install_dirs() -> Vec<PathBuf> {
 /// The programs named `fafnirx` in `dirs` (each once), other than `current`.
 fn programs_in(dirs: &[PathBuf], current: &Path) -> Vec<PathBuf> {
     // Windows gives such paths a `\?\` prefix, which a process list does not have.
-    let plain =
-        |path: &Path| fafnirx_common::plain_path(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    let plain = |path: &Path| fafnirx_common::plain_path(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
     let current = plain(current);
     let mut found: Vec<PathBuf> = Vec::new();
     for dir in dirs {
@@ -74,8 +73,7 @@ fn programs_in(dirs: &[PathBuf], current: &Path) -> Vec<PathBuf> {
 fn parse_version(output: &str) -> Option<String> {
     let mut words = output.split_whitespace();
     let (name, version) = (words.next()?, words.next()?);
-    (name == "fafnirx" && version.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())))
-        .then(|| version.to_string())
+    (name == "fafnirx" && version.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))).then(|| version.to_string())
 }
 
 /// Asks a program its version. Nothing but a client that answers in time and in the words above gives one.
@@ -167,9 +165,7 @@ fn remove(program: &Path) -> Result<()> {
     }
     match std::fs::remove_file(program) {
         Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && !cfg!(windows) => {
-            crate::service::elevate::run("rm", &["-f", &program.to_string_lossy()])
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && !cfg!(windows) => crate::service::elevate::run("rm", &["-f", &program.to_string_lossy()]),
         Err(e) => bail!(e),
     }
 }
@@ -284,12 +280,10 @@ mod tests {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
             path
         };
-        let (old, newer_copy, current) =
-            (make("old", "0.0.1"), make("newer", "99.0.0"), make("current", super::super::VERSION));
+        let (old, newer_copy, current) = (make("old", "0.0.1"), make("newer", "99.0.0"), make("current", super::super::VERSION));
         // The same steps as `older_versions`, with the folders given.
         let folders: Vec<_> = ["old", "newer", "current"].iter().map(|n| dir.path().join(n)).collect();
-        let found: Vec<_> =
-            programs_in(&folders, &current).into_iter().filter_map(|p| version_of(&p).map(|v| (p, v))).collect();
+        let found: Vec<_> = programs_in(&folders, &current).into_iter().filter_map(|p| version_of(&p).map(|v| (p, v))).collect();
         let older = older_than(super::super::VERSION, found);
         assert_eq!(older.len(), 1);
         remove(&older[0].0).unwrap();

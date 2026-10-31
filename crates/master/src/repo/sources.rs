@@ -12,24 +12,11 @@ pub fn by_owner(c: &mut impl GenericClient, owner: &str, name: &str) -> Result<O
 }
 
 /// Adds the device a source stores its files in. `None` when the user already has one of that name.
-pub fn insert_device(
-    c: &mut impl GenericClient,
-    user_id: i64,
-    name: &str,
-    now: i64,
-) -> Result<Option<(i64, String)>, Error> {
+pub fn insert_device(c: &mut impl GenericClient, user_id: i64, name: &str, now: i64) -> Result<Option<(i64, String)>, Error> {
     Ok(q::insert_source_device().bind(c, &name, &now, &user_id).opt()?.map(|d| (d.id, d.folder)))
 }
 
-pub fn insert(
-    c: &mut impl GenericClient,
-    device_id: i64,
-    name: &str,
-    kind: &str,
-    config: &str,
-    interval_secs: i64,
-    now: i64,
-) -> Result<(), Error> {
+pub fn insert(c: &mut impl GenericClient, device_id: i64, name: &str, kind: &str, config: &str, interval_secs: i64, now: i64) -> Result<(), Error> {
     q::insert_source().params(c, &q::InsertSourceParams { name, kind, config, interval_secs, device_id, now })?;
     Ok(())
 }
@@ -46,25 +33,13 @@ pub fn delete(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
 }
 
 /// Records how a run went; `ok_at` is when it worked, if it did.
-pub fn finish(
-    c: &mut impl GenericClient,
-    id: i64,
-    status: &str,
-    message: &str,
-    ok_at: Option<i64>,
-) -> Result<(), Error> {
+pub fn finish(c: &mut impl GenericClient, id: i64, status: &str, message: &str, ok_at: Option<i64>) -> Result<(), Error> {
     q::finish_source().params(c, &q::FinishSourceParams { status, message, ok_at, id }).map(drop)
 }
 
 /// Remembers a remote file: where it is stored and the version of it that was collected. Brings back a file that
 /// had been removed in the web app, since it changed at the source.
-pub fn remember_item(
-    c: &mut impl GenericClient,
-    source_id: i64,
-    remote_id: &str,
-    path: &str,
-    remote_version: &str,
-) -> Result<(), Error> {
+pub fn remember_item(c: &mut impl GenericClient, source_id: i64, remote_id: &str, path: &str, remote_version: &str) -> Result<(), Error> {
     q::upsert_source_item().params(c, &q::UpsertSourceItemParams { source_id, remote_id, path, remote_version })?;
     Ok(())
 }

@@ -40,12 +40,7 @@ impl std::fmt::Display for InUse {
 
 impl std::error::Error for InUse {}
 
-pub async fn send_heartbeat(
-    client: &mut Client,
-    cfg: &Config,
-    errors: &Mutex<Vec<String>>,
-    status: &Status,
-) -> Result<String> {
+pub async fn send_heartbeat(client: &mut Client, cfg: &Config, errors: &Mutex<Vec<String>>, status: &Status) -> Result<String> {
     let drained: Vec<String> = std::mem::take(&mut *errors.locked());
     let (total, free) = cfg.folders.first().and_then(|f| fafnirx_common::disk_usage(&f.path)).unwrap_or((0, 0));
     let req = pb::HeartbeatRequest {
@@ -270,9 +265,7 @@ fn spawn_heartbeat(shared: Shared, mut client: Client, config_path: PathBuf, ide
 /// Keeps a call open that tells when another computer changed one of the shared folders attached here, and wakes the sync
 /// loop. Without it (a master that does not know the call, a connection that drops) the folders are still asked every minute.
 fn spawn_shared_watch(shared: Shared, mut client: Client, config_path: PathBuf) {
-    let attached = |path: &Path| -> Vec<String> {
-        Config::load(path).map(|c| c.shared.into_iter().map(|s| s.name).collect()).unwrap_or_default()
-    };
+    let attached = |path: &Path| -> Vec<String> { Config::load(path).map(|c| c.shared.into_iter().map(|s| s.name).collect()).unwrap_or_default() };
     tokio::spawn(async move {
         loop {
             let names = attached(&config_path);
@@ -507,14 +500,7 @@ const SHARED_POLL: Duration = Duration::from_secs(60);
 
 /// Syncs the shared folders attached to this computer, both ways, after the device's own folders. A problem with one
 /// folder is shown and the next one goes on; a master that cannot be reached ends the cycle.
-async fn sync_attached(
-    attached: &mut Vec<crate::shared::Attached>,
-    cfg: &Config,
-    token: &str,
-    state_dir: &Path,
-    daemon: &Shared,
-    result: &mut Result<Report, SyncError>,
-) {
+async fn sync_attached(attached: &mut Vec<crate::shared::Attached>, cfg: &Config, token: &str, state_dir: &Path, daemon: &Shared, result: &mut Result<Report, SyncError>) {
     attached.retain(|a| cfg.shared.iter().any(|s| a.is(s)));
     if matches!(result, Err(SyncError::Offline(_) | SyncError::Paused)) {
         return;

@@ -57,14 +57,7 @@ impl App {
     pub fn new(cfg: Config) -> Arc<Self> {
         let jobs = Semaphore::new(cfg.jobs.max(1));
         let derive = Semaphore::new(cfg.jobs.max(1));
-        Arc::new(Self {
-            cfg,
-            jobs,
-            derive,
-            tasks: Tasks::default(),
-            locks: Mutex::default(),
-            setup: Default::default(),
-        })
+        Arc::new(Self { cfg, jobs, derive, tasks: Tasks::default(), locks: Mutex::default(), setup: Default::default() })
     }
 
     pub(crate) fn lock_for(&self, path: &Path) -> Arc<tokio::sync::Mutex<()>> {
@@ -78,13 +71,7 @@ impl App {
     /// Makes the cached file `out` unless it is there: `make` writes it to the path it is given (`out` with the extension
     /// `tmp`), which is moved to `out` once it worked, so nobody reads half a file and a failure leaves nothing behind.
     /// One request makes a file while the others for it wait, and at most `jobs` files are made at once.
-    pub(crate) async fn make_once<F, Fut>(
-        &self,
-        video: &Video,
-        kind: &'static str,
-        out: &Path,
-        make: F,
-    ) -> anyhow::Result<()>
+    pub(crate) async fn make_once<F, Fut>(&self, video: &Video, kind: &'static str, out: &Path, make: F) -> anyhow::Result<()>
     where
         F: FnOnce(PathBuf) -> Fut,
         Fut: std::future::Future<Output = anyhow::Result<()>>,
@@ -271,31 +258,25 @@ async fn master(State(app): State<Arc<App>>, Query(q): Query<Which>) -> Result<R
 }
 
 fn pick(variants: Vec<Variant>, name: &str) -> Result<Variant, Failure> {
-    variants.into_iter().find(|v| v.name == name).ok_or_else(|| fail(StatusCode::NOT_FOUND, "no such quality"))
+    variants
+        .into_iter()
+        .find(|v| v.name == name)
+        .ok_or_else(|| fail(StatusCode::NOT_FOUND, "no such quality"))
 }
 
-async fn media(
-    State(app): State<Arc<App>>,
-    UrlPath(variant): UrlPath<String>,
-    Query(q): Query<Which>,
-) -> Result<Response, Failure> {
+async fn media(State(app): State<Arc<App>>, UrlPath(variant): UrlPath<String>, Query(q): Query<Which>) -> Result<Response, Failure> {
     let video = locate(&app, &q)?;
     let source = describe(&app, &video).await?;
     pick(hls::variants(&source), &variant)?;
     Ok(reply(PLAYLIST, "private, max-age=60", hls::media_playlist(source.duration)))
 }
 
-async fn segment(
-    State(app): State<Arc<App>>,
-    UrlPath((variant, name)): UrlPath<(String, String)>,
-    Query(q): Query<Which>,
-) -> Result<Response, Failure> {
+async fn segment(State(app): State<Arc<App>>, UrlPath((variant, name)): UrlPath<(String, String)>, Query(q): Query<Which>) -> Result<Response, Failure> {
     let n = hls::parse_segment(&name).ok_or_else(|| fail(StatusCode::NOT_FOUND, "no such segment"))?;
     let video = locate(&app, &q)?;
     let source = describe(&app, &video).await?;
     let v = pick(hls::variants(&source), &variant)?;
-    let (start, len) =
-        hls::segment_span(n, source.duration).ok_or_else(|| fail(StatusCode::NOT_FOUND, "no such segment"))?;
+    let (start, len) = hls::segment_span(n, source.duration).ok_or_else(|| fail(StatusCode::NOT_FOUND, "no such segment"))?;
 
     let out = video.dir.join(format!("{}-seg{n}.ts", v.name));
     let cfg = &app.cfg;
@@ -488,10 +469,7 @@ mod tests {
             assert!(status == StatusCode::BAD_REQUEST || status == StatusCode::NOT_FOUND, "{p}: {status}");
         }
         assert_eq!(get(&f, "/files/hls/master.m3u8?p=pc/clip.mkv&h=nothex", T).await.0, StatusCode::BAD_REQUEST);
-        assert_eq!(
-            get(&f, &format!("/files/hls/master.m3u8?p=pc/missing.mkv&h={H}"), T).await.0,
-            StatusCode::NOT_FOUND
-        );
+        assert_eq!(get(&f, &format!("/files/hls/master.m3u8?p=pc/missing.mkv&h={H}"), T).await.0, StatusCode::NOT_FOUND);
         assert_eq!(get(&f, "/files/hls/master.m3u8", T).await.0, StatusCode::BAD_REQUEST, "p and h are needed");
     }
 

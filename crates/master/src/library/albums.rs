@@ -65,7 +65,10 @@ impl From<albums::Album> for AlbumInfo {
 /// or its first picture when there are no videos.
 fn first_of(media: Vec<(uuid::Uuid, String)>) -> Option<uuid::Uuid> {
     let video = |path: &str| crate::library::meta::kind(path) == Some("video");
-    media.into_iter().min_by(|(_, a), (_, b)| video(b).cmp(&video(a)).then_with(|| natural_cmp(a, b))).map(|(id, _)| id)
+    media
+        .into_iter()
+        .min_by(|(_, a), (_, b)| video(b).cmp(&video(a)).then_with(|| natural_cmp(a, b)))
+        .map(|(id, _)| id)
 }
 
 fn with_cover(c: &mut impl GenericClient, mut album: albums::Album) -> anyhow::Result<AlbumInfo> {
@@ -89,7 +92,10 @@ fn load_album(c: &mut impl GenericClient, who: &Access, id: uuid::Uuid) -> anyho
 
 pub async fn list(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Vec<AlbumInfo>> {
     let out = run(&state, move |c| {
-        albums::of_user(c, who.user_id)?.into_iter().map(|album| with_cover(c, album)).collect::<anyhow::Result<_>>()
+        albums::of_user(c, who.user_id)?
+            .into_iter()
+            .map(|album| with_cover(c, album))
+            .collect::<anyhow::Result<_>>()
     })
     .await?;
     Ok(Json(out))
@@ -125,11 +131,7 @@ pub struct NewAlbum {
     folder: Option<Folder>,
 }
 
-pub async fn create(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Json(body): Json<NewAlbum>,
-) -> Res<AlbumInfo> {
+pub async fn create(State(state): State<Shared>, Extension(who): Extension<Access>, Json(body): Json<NewAlbum>) -> Res<AlbumInfo> {
     who.require_workspace()?;
     clean_ids(body.ids.len() + body.items.len())?;
     let out = run(&state, move |c| {
@@ -190,12 +192,7 @@ fn find_folder(c: &mut postgres::Client, who: &Access, folder: &Folder) -> anyho
 }
 
 /// Puts the files in the album: those the user can see.
-fn add_files(
-    tx: &mut impl GenericClient,
-    who: &Access,
-    album: uuid::Uuid,
-    ids: &[uuid::Uuid],
-) -> Result<u64, postgres::Error> {
+fn add_files(tx: &mut impl GenericClient, who: &Access, album: uuid::Uuid, ids: &[uuid::Uuid]) -> Result<u64, postgres::Error> {
     albums::add_files(tx, who.viewer(), album, ids, unix_now())
 }
 
@@ -217,16 +214,14 @@ pub struct AlbumAssets {
 
 /// An album and what is in it: newest first, or for an album that shows a folder in the order of the files' names, in which
 /// "Episode 2" comes before "Episode 10".
-pub async fn detail(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(Id(id)): Path<Id>,
-) -> Res<AlbumAssets> {
+pub async fn detail(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>) -> Res<AlbumAssets> {
     let out = run(&state, move |c| {
         let album = load_album(c, &who, id)?;
         let by_path = album.folder.is_some();
-        let mut assets: Vec<Asset> =
-            library::album_assets(c, who.viewer(), id, by_path, MAX_ASSETS)?.into_iter().map(Asset::from).collect();
+        let mut assets: Vec<Asset> = library::album_assets(c, who.viewer(), id, by_path, MAX_ASSETS)?
+            .into_iter()
+            .map(Asset::from)
+            .collect();
         if by_path {
             assets.sort_by(|a, b| natural_cmp(&a.device, &b.device).then_with(|| natural_cmp(&a.path, &b.path)));
         }
@@ -281,12 +276,7 @@ pub struct AlbumEdit {
     cover: Option<Option<Id>>,
 }
 
-pub async fn edit(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(Id(id)): Path<Id>,
-    Json(body): Json<AlbumEdit>,
-) -> Res<AlbumInfo> {
+pub async fn edit(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>, Json(body): Json<AlbumEdit>) -> Res<AlbumInfo> {
     let name = body.name.as_deref().map(clean_name).transpose()?.map(str::to_string);
     let out = change(&state, "library", move |tx| {
         load_album(tx, &who, id)?;
@@ -313,11 +303,7 @@ pub async fn edit(
 }
 
 /// Deletes the album. The photos stay where they are.
-pub async fn delete(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(Id(id)): Path<Id>,
-) -> Res<Done> {
+pub async fn delete(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>) -> Res<Done> {
     act(&state, move |c| {
         if !albums::delete(c, who.user_id, id)? {
             return Err(ApiError::not_found("No such album").into());
@@ -342,12 +328,7 @@ pub struct Count {
     count: u64,
 }
 
-pub async fn add(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(Id(id)): Path<Id>,
-    Json(body): Json<Ids>,
-) -> Res<Count> {
+pub async fn add(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>, Json(body): Json<Ids>) -> Res<Count> {
     clean_ids(body.ids.len() + body.items.len())?;
     let count = change(&state, "library", move |tx| {
         load_album(tx, &who, id)?;
@@ -359,12 +340,7 @@ pub async fn add(
     Ok(Json(Count { count }))
 }
 
-pub async fn remove(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(Id(id)): Path<Id>,
-    Json(body): Json<Ids>,
-) -> Res<Count> {
+pub async fn remove(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>, Json(body): Json<Ids>) -> Res<Count> {
     clean_ids(body.ids.len())?;
     let count = change(&state, "library", move |tx| {
         load_album(tx, &who, id)?;
@@ -403,10 +379,7 @@ mod tests {
     fn names_sort_the_way_people_read_them() {
         let mut names = ["Episode 10.mkv", "episode 2.mkv", "Episode 1.mkv", "Season 2/E01.mkv", "Season 10/E01.mkv"];
         names.sort_by(|a, b| natural_cmp(a, b));
-        assert_eq!(
-            names,
-            ["Episode 1.mkv", "episode 2.mkv", "Episode 10.mkv", "Season 2/E01.mkv", "Season 10/E01.mkv"]
-        );
+        assert_eq!(names, ["Episode 1.mkv", "episode 2.mkv", "Episode 10.mkv", "Season 2/E01.mkv", "Season 10/E01.mkv"]);
         assert_eq!(natural_cmp("Episode 02", "episode 2"), Ordering::Equal, "leading zeros and case do not count");
         assert_eq!(natural_cmp("a", "a"), Ordering::Equal);
         assert_eq!(natural_cmp("a1", "a"), Ordering::Greater);

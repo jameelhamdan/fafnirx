@@ -24,17 +24,7 @@ pub struct Entry {
 fn dated(unix: i64) -> DateTime {
     time::OffsetDateTime::from_unix_timestamp(unix)
         .ok()
-        .and_then(|t| {
-            DateTime::from_date_and_time(
-                t.year().try_into().ok()?,
-                t.month().into(),
-                t.day(),
-                t.hour(),
-                t.minute(),
-                t.second(),
-            )
-            .ok()
-        })
+        .and_then(|t| DateTime::from_date_and_time(t.year().try_into().ok()?, t.month().into(), t.day(), t.hour(), t.minute(), t.second()).ok())
         .unwrap_or_default()
 }
 
@@ -63,10 +53,7 @@ impl<W: io::Write> io::Write for Gate<W> {
     }
 }
 
-fn add_all(
-    zip: &mut ZipWriter<StreamWriter<Gate<SyncIoBridge<impl AsyncWrite + Unpin>>>>,
-    entries: Vec<Entry>,
-) -> io::Result<()> {
+fn add_all(zip: &mut ZipWriter<StreamWriter<Gate<SyncIoBridge<impl AsyncWrite + Unpin>>>>, entries: Vec<Entry>) -> io::Result<()> {
     for e in entries {
         let options = SimpleFileOptions::default()
             .compression_method(CompressionMethod::Stored)
@@ -96,13 +83,11 @@ fn write_all(out: SyncIoBridge<impl AsyncWrite + Unpin>, entries: Vec<Entry>, fa
 /// Writes the entries as one archive and ends `out`. A file that cannot be read stops the archive with an error, leaves
 /// what was sent unfinished (no central directory) and sets `failed` before `out` ends, so that the download fails
 /// visibly instead of being quietly incomplete.
-pub async fn write<W: AsyncWrite + Unpin + Send + 'static>(
-    out: W,
-    entries: Vec<Entry>,
-    failed: Arc<AtomicBool>,
-) -> io::Result<()> {
+pub async fn write<W: AsyncWrite + Unpin + Send + 'static>(out: W, entries: Vec<Entry>, failed: Arc<AtomicBool>) -> io::Result<()> {
     let out = SyncIoBridge::new(out);
-    tokio::task::spawn_blocking(move || write_all(out, entries, &failed)).await.map_err(io::Error::other)?
+    tokio::task::spawn_blocking(move || write_all(out, entries, &failed))
+        .await
+        .map_err(io::Error::other)?
 }
 
 #[cfg(test)]
@@ -139,8 +124,7 @@ mod tests {
         std::fs::write(dir.path().join("a"), b"hello").unwrap();
         std::fs::write(dir.path().join("b"), &big).unwrap();
         std::fs::write(dir.path().join("empty"), b"").unwrap();
-        let entry =
-            |name: &str, file: &str| Entry { name: name.into(), path: dir.path().join(file), mtime: 1_700_000_000 };
+        let entry = |name: &str, file: &str| Entry { name: name.into(), path: dir.path().join(file), mtime: 1_700_000_000 };
         let bytes = archive_of(vec![entry("x/a.txt", "a"), entry("x/ü b.bin", "b"), entry("empty", "empty")]).await;
 
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();

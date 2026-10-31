@@ -14,7 +14,10 @@ pub mod pb {
 
 /// Current time in unix seconds.
 pub fn unix_now() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Whether `name` can name a device (and so its folder): 1-63 characters, lowercase letters, digits,
@@ -22,20 +25,18 @@ pub fn unix_now() -> i64 {
 /// enforces the same rule.
 pub fn valid_device_name(name: &str) -> bool {
     let mut chars = name.chars();
-    let shape = name.len() <= 63
-        && chars.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'));
+    let shape = name.len() <= 63 && chars.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit()) && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'));
     let stem = name.split('.').next().unwrap_or(name);
-    let reserved = matches!(stem, "con" | "prn" | "aux" | "nul")
-        || (stem.len() == 4
-            && (stem.starts_with("com") || stem.starts_with("lpt"))
-            && stem.ends_with(|c: char| c.is_ascii_digit()));
+    let reserved = matches!(stem, "con" | "prn" | "aux" | "nul") || (stem.len() == 4 && (stem.starts_with("com") || stem.starts_with("lpt")) && stem.ends_with(|c: char| c.is_ascii_digit()));
     shape && !reserved
 }
 
 /// Modification time of a file in unix nanoseconds (0 when unknown).
 pub fn mtime_ns(meta: &std::fs::Metadata) -> i64 {
-    meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos() as i64)
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos() as i64)
 }
 
 /// Permission bits of a file (0 where the platform has none).
@@ -165,10 +166,7 @@ pub fn not_portable(path: &str) -> Option<String> {
             return Some(format!("{part:?} ends with a space or a dot, which Windows does not allow"));
         }
         let stem = part.split('.').next().unwrap_or(part).to_ascii_lowercase();
-        let device = matches!(stem.as_str(), "con" | "prn" | "aux" | "nul")
-            || (stem.len() == 4
-                && (stem.starts_with("com") || stem.starts_with("lpt"))
-                && stem.ends_with(|c: char| c.is_ascii_digit()));
+        let device = matches!(stem.as_str(), "con" | "prn" | "aux" | "nul") || (stem.len() == 4 && (stem.starts_with("com") || stem.starts_with("lpt")) && stem.ends_with(|c: char| c.is_ascii_digit()));
         if device {
             return Some(format!("{part:?} is a name Windows reserves"));
         }
@@ -301,8 +299,11 @@ mod tests {
     #[test]
     fn the_device_protocol_reads_nothing_but_updates_and_shared_folders() {
         let proto = include_str!("../../../proto/fafnirx.proto");
-        let rpcs: Vec<&str> =
-            proto.lines().filter_map(|l| l.trim().strip_prefix("rpc ")).map(|l| l.split('(').next().unwrap()).collect();
+        let rpcs: Vec<&str> = proto
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("rpc "))
+            .map(|l| l.split('(').next().unwrap())
+            .collect();
         assert_eq!(
             rpcs,
             [

@@ -27,13 +27,7 @@ pub async fn list(State(state): State<Shared>, Extension(who): Extension<Access>
     let users = run(&state, |c| {
         Ok(users::list(c)?
             .into_iter()
-            .map(|u| UserInfo {
-                name: u.name,
-                role: u.role,
-                disabled: u.disabled,
-                created_at: u.created_at,
-                devices: u.devices,
-            })
+            .map(|u| UserInfo { name: u.name, role: u.role, disabled: u.disabled, created_at: u.created_at, devices: u.devices })
             .collect())
     })
     .await?;
@@ -49,13 +43,7 @@ pub fn ensure_dirs(conn: &mut postgres::Client, store: &crate::platform::store::
 }
 
 /// Adds a user and their folder.
-pub fn add_user(
-    c: &mut impl GenericClient,
-    live_root: &std::path::Path,
-    name: &str,
-    role: Role,
-    password_hash: &str,
-) -> anyhow::Result<()> {
+pub fn add_user(c: &mut impl GenericClient, live_root: &std::path::Path, name: &str, role: Role, password_hash: &str) -> anyhow::Result<()> {
     if !valid_device_name(name) {
         return Err(ApiError::bad(format!("User name: {}", NAME_RULE.trim_start_matches("Name: "))).into());
     }
@@ -86,11 +74,7 @@ fn check_password(password: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-pub async fn create(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Json(body): Json<NewUser>,
-) -> Res<Done> {
+pub async fn create(State(state): State<Shared>, Extension(who): Extension<Access>, Json(body): Json<NewUser>) -> Res<Done> {
     who.require_admin()?;
     let name = body.name.trim().to_lowercase();
     let role = role_of(&body.role)?;
@@ -117,12 +101,7 @@ pub struct UserChange {
     password: Option<String>,
 }
 
-pub async fn update(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(name): Path<String>,
-    Json(body): Json<UserChange>,
-) -> Res<Done> {
+pub async fn update(State(state): State<Shared>, Extension(who): Extension<Access>, Path(name): Path<String>, Json(body): Json<UserChange>) -> Res<Done> {
     who.require_admin()?;
     let role = body.role.as_deref().map(role_of).transpose()?;
     if let Some(password) = &body.password {

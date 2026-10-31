@@ -77,8 +77,7 @@ pub struct Found {
 const COLUMNS: &str = "f.path, v.size, v.mtime, v.created_at, f.deleted_at, m.mime, m.width, m.height, m.taken_at,
     (SELECT COUNT(*) FROM versions x WHERE x.file_id = f.id), COUNT(*) OVER (), f.id";
 
-const SCOPE: &str =
-    "f.device_id = $1 AND f.path LIKE $2 AND (f.deleted_at IS NULL OR ($3 AND f.deleted_by IS DISTINCT FROM 'rename'))";
+const SCOPE: &str = "f.device_id = $1 AND f.path LIKE $2 AND (f.deleted_at IS NULL OR ($3 AND f.deleted_by IS DISTINCT FROM 'rename'))";
 
 fn found(rows: &[postgres::Row]) -> Found {
     let total = rows.first().map_or(0, |r| r.get(10));
@@ -110,12 +109,7 @@ fn direction(page: &Page) -> &'static str {
 }
 
 /// Files below a folder (any depth) whose path contains `search` or ends with one of the extensions in `type_regex`.
-pub fn search(
-    c: &mut impl GenericClient,
-    page: &Page,
-    search: Option<&str>,
-    type_regex: Option<&str>,
-) -> Result<Found, Error> {
+pub fn search(c: &mut impl GenericClient, page: &Page, search: Option<&str>, type_regex: Option<&str>) -> Result<Found, Error> {
     let sql = format!(
         "SELECT {COLUMNS} FROM files f JOIN versions v ON v.id = f.current_version_id
          LEFT JOIN file_meta m ON m.root_hash = v.root_hash
@@ -141,7 +135,6 @@ pub fn files_in(c: &mut impl GenericClient, page: &Page, from: i32) -> Result<Fo
         order = page.sort.sql(),
         direction = direction(page),
     );
-    let rows =
-        c.query(&sql, &[&page.device_id, &page.below, &page.include_deleted, &from, &page.limit, &page.offset])?;
+    let rows = c.query(&sql, &[&page.device_id, &page.below, &page.include_deleted, &from, &page.limit, &page.offset])?;
     Ok(found(&rows))
 }

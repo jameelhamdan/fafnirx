@@ -47,7 +47,7 @@ Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targ
 
 ## Conventions
 
-- Match the surrounding code: sparse comments that say *why*, plain names. Rust `max_width = 120`; TypeScript without
+- Match the surrounding code: sparse comments that say *why*, plain names. Rust `rustfmt.toml` (calls, chains and literals longer than 100 columns break at their brackets, one item per line); TypeScript without
   semicolons, single quotes; `src/components/ui` stays as generated. UI text: short sentences, sentence case.
 - A behaviour change comes with a test; no dead code; update the docs it touches.
 - Log each change once and accurately: a rename is `rename`, never `delete`.

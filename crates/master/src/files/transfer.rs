@@ -69,11 +69,7 @@ struct Stored {
     deleted: bool,
 }
 
-fn stored_version(
-    state: &Shared,
-    who: Access,
-    q: &FileQuery,
-) -> impl FnOnce(&mut postgres::Client) -> anyhow::Result<Stored> {
+fn stored_version(state: &Shared, who: Access, q: &FileQuery) -> impl FnOnce(&mut postgres::Client) -> anyhow::Result<Stored> {
     let (store, device, path, version) = (state.store.clone(), q.device.clone(), q.path.clone(), q.version);
     move |c| {
         let dev = find_device(c, &who, &device)?;
@@ -81,8 +77,7 @@ fn stored_version(
         let file = files::locate(c, dev.id, &path)?.ok_or_else(|| ApiError::not_found("No such file"))?;
         let (file_id, current, deleted) = (file.id, file.current, file.deleted_at);
         let version = version.or(current).ok_or_else(|| ApiError::not_found("No such version"))?;
-        let (root, size) =
-            files::version_content(c, file_id, version)?.ok_or_else(|| ApiError::not_found("No such version"))?;
+        let (root, size) = files::version_content(c, file_id, version)?.ok_or_else(|| ApiError::not_found("No such version"))?;
         let disk = version_file(&store, &dev.name, &path, version, current, deleted.is_some())?;
         let art = if deleted.is_none() && Some(version) == current {
             artwork::lookup(c, &store, &dev.name, &path)
@@ -117,12 +112,7 @@ fn percent_encode(name: &str) -> String {
 
 /// Kinds a browser may show in place. HTML and SVG can run script, so they are always downloaded.
 fn shows_inline(mime: &str) -> bool {
-    mime != "image/svg+xml"
-        && (mime.starts_with("image/")
-            || mime.starts_with("video/")
-            || mime.starts_with("audio/")
-            || mime == "application/pdf"
-            || mime == "text/plain")
+    mime != "image/svg+xml" && (mime.starts_with("image/") || mime.starts_with("video/") || mime.starts_with("audio/") || mime == "application/pdf" || mime == "text/plain")
 }
 
 /// The byte range a `Range` header asks for, as (first, last) inclusive.
@@ -140,16 +130,10 @@ fn parse_range(header: &str, size: u64) -> Option<(u64, u64)> {
     (start <= end && start < size).then_some((start, end))
 }
 
-pub async fn download(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Query(q): Query<FileQuery>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
+pub async fn download(State(state): State<Shared>, Extension(who): Extension<Access>, Query(q): Query<FileQuery>, headers: HeaderMap) -> Result<Response, ApiError> {
     let stored = run(&state, stored_version(&state, who, &q)).await?;
     let etag = format!("\"{}\"", hex::encode(&stored.root));
-    let file =
-        SendFile { disk: &stored.disk, etag, size: stored.size, name: &stored.name, inline: q.inline == Some(1) };
+    let file = SendFile { disk: &stored.disk, etag, size: stored.size, name: &stored.name, inline: q.inline == Some(1) };
     send_file(&state, &headers, file).await
 }
 
@@ -201,7 +185,11 @@ async fn send_file(state: &Shared, headers: &HeaderMap, f: SendFile<'_>) -> Resu
     set(h, header::ETAG, f.etag);
     set(h, header::CACHE_CONTROL, "private, max-age=3600".into());
     set(h, header::X_CONTENT_TYPE_OPTIONS, "nosniff".into());
-    set(h, header::CONTENT_DISPOSITION, format!("{disposition}; filename*=UTF-8''{}", percent_encode(f.name)));
+    set(
+        h,
+        header::CONTENT_DISPOSITION,
+        format!("{disposition}; filename*=UTF-8''{}", percent_encode(f.name)),
+    );
     if let Some((a, b)) = range {
         set(h, header::CONTENT_RANGE, format!("bytes {a}-{b}/{size}"));
     }
@@ -234,9 +222,7 @@ async fn preview_response(state: &Shared, stored: &Stored, max: u32, immutable: 
     if let Ok(bytes) = tokio::fs::read(meta::cached_picture(&thumbs, &picture_of, max)).await {
         // The picture belongs to one content: when the link says which, it never changes.
         let cache_control = if immutable { "private, max-age=31536000, immutable" } else { "private, max-age=86400" };
-        return Ok(
-            ([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, cache_control)], bytes).into_response()
-        );
+        return Ok(([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, cache_control)], bytes).into_response());
     }
     let job = serde_json::to_value(meta::ThumbJob {
         id: Id(stored.id).to_string(),
@@ -275,11 +261,7 @@ async fn preview_response(state: &Shared, stored: &Stored, max: u32, immutable: 
     }
 }
 
-pub async fn thumbnail(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Query(q): Query<FileQuery>,
-) -> Result<Response, ApiError> {
+pub async fn thumbnail(State(state): State<Shared>, Extension(who): Extension<Access>, Query(q): Query<FileQuery>) -> Result<Response, ApiError> {
     let stored = run(&state, stored_version(&state, who, &q)).await?;
     // Two sizes only: every size asked for would be a file kept for good.
     let max = if q.size.unwrap_or(meta::THUMB) <= meta::THUMB { meta::THUMB } else { meta::PREVIEW };
@@ -287,11 +269,7 @@ pub async fn thumbnail(
 }
 
 /// The file with this id as the library knows it: its current content, deleted or not.
-fn stored_by_id(
-    state: &Shared,
-    who: Access,
-    id: uuid::Uuid,
-) -> impl FnOnce(&mut postgres::Client) -> anyhow::Result<Stored> {
+fn stored_by_id(state: &Shared, who: Access, id: uuid::Uuid) -> impl FnOnce(&mut postgres::Client) -> anyhow::Result<Stored> {
     let store = state.store.clone();
     move |c| {
         let row = sql::files::file_by_id().bind(c, &id).opt()?.ok_or_else(|| ApiError::not_found("No such file"))?;
@@ -342,13 +320,7 @@ pub struct MediaQuery {
 }
 
 /// Answers a request for one of the views of a file.
-pub async fn media(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path((Id(id), variant)): Path<(Id, String)>,
-    Query(q): Query<MediaQuery>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
+pub async fn media(State(state): State<Shared>, Extension(who): Extension<Access>, Path((Id(id), variant)): Path<(Id, String)>, Query(q): Query<MediaQuery>, headers: HeaderMap) -> Result<Response, ApiError> {
     let variant = Variant::parse(&variant).ok_or_else(|| ApiError::not_found("No such view"))?;
     let stored = run(&state, stored_by_id(&state, who, id)).await?;
     let root_hex = hex::encode(&stored.root);
@@ -356,21 +328,13 @@ pub async fn media(
     match variant {
         Variant::Thumb => preview_response(&state, &stored, meta::THUMB, immutable).await,
         Variant::Preview => preview_response(&state, &stored, meta::PREVIEW, immutable).await,
-        Variant::Original | Variant::Download => {
-            send_original(&state, &headers, &stored, variant == Variant::Original).await
-        }
+        Variant::Original | Variant::Download => send_original(&state, &headers, &stored, variant == Variant::Original).await,
     }
 }
 
-async fn send_original(
-    state: &Shared,
-    headers: &HeaderMap,
-    stored: &Stored,
-    inline: bool,
-) -> Result<Response, ApiError> {
+async fn send_original(state: &Shared, headers: &HeaderMap, stored: &Stored, inline: bool) -> Result<Response, ApiError> {
     let etag = format!("\"{}\"", hex::encode(&stored.root));
-    send_file(state, headers, SendFile { disk: &stored.disk, etag, size: stored.size, name: &stored.name, inline })
-        .await
+    send_file(state, headers, SendFile { disk: &stored.disk, etag, size: stored.size, name: &stored.name, inline }).await
 }
 
 #[derive(Deserialize)]
@@ -380,13 +344,8 @@ pub struct ZipForm {
     name: Option<String>,
 }
 
-pub async fn zip(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Form(form): Form<ZipForm>,
-) -> Result<Response, ApiError> {
-    let items: Vec<FileRef> =
-        serde_json::from_str(&form.items).map_err(|_| ApiError::bad("items must be a JSON list"))?;
+pub async fn zip(State(state): State<Shared>, Extension(who): Extension<Access>, Form(form): Form<ZipForm>) -> Result<Response, ApiError> {
+    let items: Vec<FileRef> = serde_json::from_str(&form.items).map_err(|_| ApiError::bad("items must be a JSON list"))?;
     if items.is_empty() {
         return Err(ApiError::bad("Nothing selected"));
     }
@@ -402,8 +361,7 @@ pub async fn zip(
             for path in expand(c, &dev, selected, false)? {
                 let mtime = secs_of_ns(sql::files::current_mtime().bind(c, &dev.id, &path).one()?);
                 let inner = &path[parent.min(path.len())..];
-                let name =
-                    if several || selected.is_empty() { format!("{}/{inner}", dev.name) } else { inner.to_string() };
+                let name = if several || selected.is_empty() { format!("{}/{inner}", dev.name) } else { inner.to_string() };
                 entries.push(super::zip::Entry { name, path: store.live_path(&dev.name, &path)?, mtime });
             }
         }
@@ -434,7 +392,10 @@ pub async fn zip(
     });
     let name = form.name.filter(|n| !n.is_empty()).unwrap_or_else(|| "fafnirx".into());
     // Any script is fine in the name; what a header or a file system would trip on is not.
-    let name = name.chars().filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ' ')).collect::<String>();
+    let name = name
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ' '))
+        .collect::<String>();
     let name = if name.trim().is_empty() { "fafnirx".to_string() } else { name };
     let ascii = name.chars().map(|c| if c.is_ascii() { c } else { '_' }).collect::<String>();
     Ok((
@@ -442,10 +403,7 @@ pub async fn zip(
             (header::CONTENT_TYPE, "application/zip".to_string()),
             (
                 header::CONTENT_DISPOSITION,
-                format!(
-                    "attachment; filename=\"{ascii}.zip\"; filename*=UTF-8''{}",
-                    percent_encode(&format!("{name}.zip"))
-                ),
+                format!("attachment; filename=\"{ascii}.zip\"; filename*=UTF-8''{}", percent_encode(&format!("{name}.zip"))),
             ),
         ],
         Body::from_stream(ReaderStream::new(reader).chain(ended)),
@@ -468,11 +426,7 @@ pub struct UploadId {
     received: u64,
 }
 
-pub async fn start_upload(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Json(b): Json<NewUpload>,
-) -> Res<UploadId> {
+pub async fn start_upload(State(state): State<Shared>, Extension(who): Extension<Access>, Json(b): Json<NewUpload>) -> Res<UploadId> {
     let path = clean_remote_path(&b.path).map_err(|e| ApiError::bad(e.to_string()))?;
     let device = b.device.clone();
     let user = who.clone();
@@ -504,8 +458,9 @@ pub async fn start_upload(
         let _ = std::fs::remove_file(&file);
         return Err(ApiError::conflict("Too many uploads in progress"));
     }
-    let mtime_ns =
-        b.mtime_ms.map_or_else(|| unix_now().saturating_mul(1_000_000_000), |ms| ms.saturating_mul(1_000_000));
+    let mtime_ns = b
+        .mtime_ms
+        .map_or_else(|| unix_now().saturating_mul(1_000_000_000), |ms| ms.saturating_mul(1_000_000));
     uploads.insert(
         id.clone(),
         Upload {
@@ -538,11 +493,7 @@ pub struct Received {
     size: u64,
 }
 
-pub async fn upload_status(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(id): Path<String>,
-) -> Res<Received> {
+pub async fn upload_status(State(state): State<Shared>, Extension(who): Extension<Access>, Path(id): Path<String>) -> Res<Received> {
     Ok(Json(session(&state, who.user_id, &id, |u| Received { received: u.received, size: u.size })?))
 }
 
@@ -551,15 +502,8 @@ pub struct Offset {
     offset: u64,
 }
 
-pub async fn upload_chunk(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(id): Path<String>,
-    Query(q): Query<Offset>,
-    body: Body,
-) -> Result<Json<Received>, Response> {
-    let (file, received, size) = session(&state, who.user_id, &id, |u| (u.file.clone(), u.received, u.size))
-        .map_err(IntoResponse::into_response)?;
+pub async fn upload_chunk(State(state): State<Shared>, Extension(who): Extension<Access>, Path(id): Path<String>, Query(q): Query<Offset>, body: Body) -> Result<Json<Received>, Response> {
+    let (file, received, size) = session(&state, who.user_id, &id, |u| (u.file.clone(), u.received, u.size)).map_err(IntoResponse::into_response)?;
     if q.offset != received {
         let wrong = Json(serde_json::json!({ "error": format!("expected offset {received}"), "received": received }));
         return Err((StatusCode::CONFLICT, wrong).into_response());
@@ -593,11 +537,7 @@ pub struct Finished {
     size: u64,
 }
 
-pub async fn finish_upload(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(id): Path<String>,
-) -> Res<Finished> {
+pub async fn finish_upload(State(state): State<Shared>, Extension(who): Extension<Access>, Path(id): Path<String>) -> Res<Finished> {
     let upload = {
         let mut uploads = state.uploads.locked();
         let u = uploads
@@ -617,8 +557,9 @@ pub async fn finish_upload(
         name.push(".again");
         PathBuf::from(name)
     };
-    let kept =
-        std::fs::hard_link(&upload.file, &spare).is_ok().then(|| Upload { file: spare.clone(), ..upload.clone() });
+    let kept = std::fs::hard_link(&upload.file, &spare)
+        .is_ok()
+        .then(|| Upload { file: spare.clone(), ..upload.clone() });
     let result = run(&state, move |c| {
         let (root, size) = crate::platform::store::hash_file(&upload.file)?;
         // Checked again: the user may have lost the right while the file was on its way.
@@ -628,15 +569,7 @@ pub async fn finish_upload(
             c,
             &store,
             &upload.file,
-            &NewVersion {
-                device: &dev,
-                path: &upload.path,
-                root,
-                size,
-                mtime: upload.mtime_ns,
-                mode: 0,
-                renamed_from: None,
-            },
+            &NewVersion { device: &dev, path: &upload.path, root, size, mtime: upload.mtime_ns, mode: 0, renamed_from: None },
         )?;
         Ok(Finished { device: upload.device, path: upload.path, size })
     })
@@ -654,11 +587,7 @@ pub async fn finish_upload(
     Ok(Json(result?))
 }
 
-pub async fn abort_upload(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(id): Path<String>,
-) -> Res<crate::web::Done> {
+pub async fn abort_upload(State(state): State<Shared>, Extension(who): Extension<Access>, Path(id): Path<String>) -> Res<crate::web::Done> {
     {
         let mut uploads = state.uploads.locked();
         if uploads.get(&id).is_some_and(|u| u.user_id == who.user_id) {

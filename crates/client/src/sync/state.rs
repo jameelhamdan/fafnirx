@@ -164,10 +164,7 @@ impl State {
         let tx = self.conn.transaction()?;
         tx.execute("DELETE FROM held", [])?;
         for (folder, (files, since)) in holds {
-            tx.execute(
-                "INSERT INTO held (folder, files, since) VALUES (?1, ?2, ?3)",
-                params![folder, *files as i64, since],
-            )?;
+            tx.execute("INSERT INTO held (folder, files, since) VALUES (?1, ?2, ?3)", params![folder, *files as i64, since])?;
         }
         Ok(tx.commit()?)
     }
@@ -310,9 +307,7 @@ impl State {
 
     pub fn all_synced(&self) -> Result<Vec<Synced>> {
         let mut stmt = self.conn.prepare("SELECT path, size, mtime_ns, root_hash FROM synced")?;
-        let rows = stmt.query_map([], |r| {
-            Ok(Synced { path: r.get(0)?, size: r.get(1)?, mtime_ns: r.get(2)?, root_hash: r.get(3)? })
-        })?;
+        let rows = stmt.query_map([], |r| Ok(Synced { path: r.get(0)?, size: r.get(1)?, mtime_ns: r.get(2)?, root_hash: r.get(3)? }))?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
@@ -355,9 +350,9 @@ impl State {
 
     /// (number of files, their total size) the master has from this device.
     pub fn totals(&self) -> Result<(usize, u64)> {
-        let (n, bytes): (i64, i64) =
-            self.conn
-                .query_row("SELECT COUNT(*), COALESCE(SUM(size), 0) FROM synced", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let (n, bytes): (i64, i64) = self
+            .conn
+            .query_row("SELECT COUNT(*), COALESCE(SUM(size), 0) FROM synced", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok((n as usize, bytes as u64))
     }
 

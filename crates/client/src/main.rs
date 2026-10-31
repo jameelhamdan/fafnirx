@@ -116,12 +116,7 @@ impl Cmd {
     fn needs_admin(&self) -> bool {
         match self {
             Cmd::InstallService { dry_run } | Cmd::UninstallService { dry_run } => !dry_run,
-            Cmd::Enroll { .. }
-            | Cmd::AddFolder { .. }
-            | Cmd::RemoveFolder { .. }
-            | Cmd::Sync
-            | Cmd::ReleaseDeletes
-            | Cmd::Shared(_) => true,
+            Cmd::Enroll { .. } | Cmd::AddFolder { .. } | Cmd::RemoveFolder { .. } | Cmd::Sync | Cmd::ReleaseDeletes | Cmd::Shared(_) => true,
             _ => false,
         }
     }
@@ -203,8 +198,7 @@ fn main() -> Result<()> {
 fn run(cli: Cli) -> Result<()> {
     let config_path = cli.config.clone().unwrap_or_else(default_config_path);
     // The system-wide install belongs to the computer: what changes it, or reads its token, is done by an administrator.
-    let system = config::is_system_config(&config_path)
-        || (!cfg!(windows) && matches!(cli.cmd, Cmd::InstallService { .. } | Cmd::UninstallService { .. }));
+    let system = config::is_system_config(&config_path) || (!cfg!(windows) && matches!(cli.cmd, Cmd::InstallService { .. } | Cmd::UninstallService { .. }));
     if cli.cmd.needs_admin() && system && !service::elevate::is_admin() {
         use std::io::IsTerminal;
         let mut args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
@@ -250,15 +244,9 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Folders => commands::list_folders(&config_path),
         Cmd::Shared(SharedCmd::List) => tokio_main(commands::shared_list(config_path)),
         Cmd::Shared(SharedCmd::Create { name }) => tokio_main(commands::shared_create(config_path, name)),
-        Cmd::Shared(SharedCmd::Attach { name, path, create, conflict }) => {
-            tokio_main(commands::shared_attach(config_path, name, path, create, conflict))
-        }
-        Cmd::Shared(SharedCmd::Conflict { name, policy, ask_timeout_hours }) => {
-            commands::shared_conflict(&config_path, &name, policy, ask_timeout_hours)
-        }
-        Cmd::Shared(SharedCmd::Resolve { name, keep, path }) => {
-            commands::shared_resolve(&config_path, &name, &keep, path.as_deref())
-        }
+        Cmd::Shared(SharedCmd::Attach { name, path, create, conflict }) => tokio_main(commands::shared_attach(config_path, name, path, create, conflict)),
+        Cmd::Shared(SharedCmd::Conflict { name, policy, ask_timeout_hours }) => commands::shared_conflict(&config_path, &name, policy, ask_timeout_hours),
+        Cmd::Shared(SharedCmd::Resolve { name, keep, path }) => commands::shared_resolve(&config_path, &name, &keep, path.as_deref()),
         Cmd::Shared(SharedCmd::Detach { name }) => commands::shared_detach(&config_path, &name),
         Cmd::Shared(SharedCmd::Keep { name }) => commands::shared_keep(&config_path, &name),
         Cmd::Status { json } => commands::status(&config_path, json),

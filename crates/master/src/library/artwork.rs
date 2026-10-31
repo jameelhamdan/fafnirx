@@ -56,7 +56,9 @@ fn find<'a>(neighbours: &'a [Neighbour], dir: &str, wanted: &str, extensions: &[
 pub fn picture<'a>(video: &str, neighbours: &'a [Neighbour]) -> Option<&'a Neighbour> {
     let (dir, name) = split(video);
     let stem = stem(name);
-    EPISODE_SUFFIXES.iter().find_map(|suffix| find(neighbours, dir, &format!("{stem}{suffix}"), &IMAGE_EXTENSIONS))
+    EPISODE_SUFFIXES
+        .iter()
+        .find_map(|suffix| find(neighbours, dir, &format!("{stem}{suffix}"), &IMAGE_EXTENSIONS))
 }
 
 /// The picture that stands for a folder (`poster.jpg`, `folder.png` ...) among the files that are directly in it.
@@ -122,13 +124,7 @@ pub fn lookup(c: &mut postgres::Client, store: &Store, device: &str, path: &str)
 /// The .nfo that describes a video.
 pub fn description<'a>(video: &str, neighbours: &'a [Neighbour]) -> Option<&'a Neighbour> {
     let (dir, name) = split(video);
-    find(neighbours, dir, stem(name), &["nfo"]).or_else(|| {
-        if is_alone(video, neighbours) {
-            find(neighbours, dir, "movie", &["nfo"])
-        } else {
-            None
-        }
-    })
+    find(neighbours, dir, stem(name), &["nfo"]).or_else(|| if is_alone(video, neighbours) { find(neighbours, dir, "movie", &["nfo"]) } else { None })
 }
 
 /// What an .nfo says about an episode or a film.
@@ -192,13 +188,7 @@ mod tests {
 
     #[test]
     fn an_episode_uses_its_own_picture_before_a_shared_one() {
-        let n = files(&[
-            "Show/S01E01.mkv",
-            "Show/S01E02.mkv",
-            "Show/poster.jpg",
-            "Show/S01E01-thumb.jpg",
-            "Show/S01E02.png",
-        ]);
+        let n = files(&["Show/S01E01.mkv", "Show/S01E02.mkv", "Show/poster.jpg", "Show/S01E01-thumb.jpg", "Show/S01E02.png"]);
         assert_eq!(picture("Show/S01E01.mkv", &n).unwrap().0, "Show/S01E01-thumb.jpg");
         assert_eq!(picture("Show/S01E02.mkv", &n).unwrap().0, "Show/S01E02.png");
     }

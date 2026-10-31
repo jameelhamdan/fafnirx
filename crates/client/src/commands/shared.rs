@@ -70,13 +70,7 @@ pub async fn shared_create(config_path: PathBuf, name: String) -> Result<()> {
 
 /// Attaches a local folder to a shared folder: what is in the folder goes to the master and what the other computers
 /// put there comes here. With `create` the shared folder is made first when it does not exist.
-pub async fn shared_attach(
-    config_path: PathBuf,
-    name: String,
-    dir: PathBuf,
-    create: bool,
-    conflict: Conflict,
-) -> Result<()> {
+pub async fn shared_attach(config_path: PathBuf, name: String, dir: PathBuf, create: bool, conflict: Conflict) -> Result<()> {
     conflict.check_available()?;
     let mut client = connect(&config_path)?.client;
     let full = match shared_names(&mut client).await?.find(&name) {
@@ -123,12 +117,7 @@ pub fn shared_keep(config_path: &Path, name: &str) -> Result<()> {
 }
 
 /// Shows what a shared folder does with a file changed here and on the master, or sets it.
-pub fn shared_conflict(
-    config_path: &Path,
-    name: &str,
-    policy: Option<Conflict>,
-    ask_timeout_hours: Option<u64>,
-) -> Result<()> {
+pub fn shared_conflict(config_path: &Path, name: &str, policy: Option<Conflict>, ask_timeout_hours: Option<u64>) -> Result<()> {
     let cfg = Config::load(config_path)?;
     let shared = cfg.shared_named(name)?;
     if policy.is_none() && ask_timeout_hours.is_none() {

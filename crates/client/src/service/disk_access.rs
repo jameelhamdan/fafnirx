@@ -6,8 +6,7 @@
 use std::path::Path;
 
 /// What to do, as one sentence for a message.
-pub const STEPS: &str =
-    "open System Settings > Privacy & Security > Full Disk Access, add fafnirx and switch it on, then run `sudo fafnirx restart`";
+pub const STEPS: &str = "open System Settings > Privacy & Security > Full Disk Access, add fafnirx and switch it on, then run `sudo fafnirx restart`";
 
 /// Whether this process has Full Disk Access: `Some` on macOS only. The service is the one whose answer counts, because it
 /// is the one that changes the files; it keeps the answer in its status file.
@@ -30,9 +29,7 @@ pub fn is_protected(path: &Path) -> bool {
     let parts: Vec<&str> = path.split('/').collect();
     matches!(
         parts.as_slice(),
-        ["", "volumes", _, ..]
-            | ["", "users", _, "documents" | "desktop" | "downloads", ..]
-            | ["", "users", _, "library", "mobile documents" | "cloudstorage", ..]
+        ["", "volumes", _, ..] | ["", "users", _, "documents" | "desktop" | "downloads", ..] | ["", "users", _, "library", "mobile documents" | "cloudstorage", ..]
     )
 }
 
@@ -46,7 +43,10 @@ pub fn first_blocked<'a>(access: Option<bool>, paths: impl IntoIterator<Item = &
 
 /// The sentence for a folder that is blocked.
 pub fn blocked_text(path: &Path) -> String {
-    format!("macOS blocks fafnirx from changing files in {} until it has Full Disk Access: {STEPS}.", path.display())
+    format!(
+        "macOS blocks fafnirx from changing files in {} until it has Full Disk Access: {STEPS}.",
+        path.display()
+    )
 }
 
 /// A warning about `dir` when the service cannot reach it, read from its status file: for the commands and the tray, before a

@@ -87,7 +87,15 @@ fn relative(folder: &str, path: &str) -> String {
 /// Sortable UTC timestamp used for version directories.
 pub fn run_stamp(unix: i64) -> String {
     let t = time::OffsetDateTime::from_unix_timestamp(unix).unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
-    format!("{:04}{:02}{:02}T{:02}{:02}{:02}Z", t.year(), t.month() as u8, t.day(), t.hour(), t.minute(), t.second())
+    format!(
+        "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
+        t.year(),
+        t.month() as u8,
+        t.day(),
+        t.hour(),
+        t.minute(),
+        t.second()
+    )
 }
 
 /// Where a mirror's uploads go, as rclone writes it: the remote of the config file, or the one made from the options.
@@ -111,13 +119,7 @@ pub fn rclone_env(m: &MirrorRow, empty_config: &Path, config_file: &Path) -> Res
 }
 
 /// The same for any storage given as `remote`, or as `remote_type` with JSON `options` (a mirror or a source).
-pub fn backend_env(
-    remote: &str,
-    remote_type: &str,
-    options: &str,
-    empty_config: &Path,
-    config_file: &Path,
-) -> Result<Vec<(String, String)>> {
+pub fn backend_env(remote: &str, remote_type: &str, options: &str, empty_config: &Path, config_file: &Path) -> Result<Vec<(String, String)>> {
     if !remote.is_empty() {
         if !config_file.is_file() {
             bail!(
@@ -194,10 +196,7 @@ pub fn restore_config(m: &crate::repo::mirrors::Key, password: &str, salt: &str)
         }
         format!("fafnirx-storage:{}", m.remote_path.trim_end_matches('/'))
     } else {
-        out.push_str(&format!(
-            "# The storage is {} in your own rclone.conf: keep that remote in this file.\n",
-            m.remote
-        ));
+        out.push_str(&format!("# The storage is {} in your own rclone.conf: keep that remote in this file.\n", m.remote));
         m.remote.trim_end_matches('/').to_string()
     };
     out.push_str(&format!(
@@ -388,8 +387,12 @@ fn diff<'a>(live: &'a [LiveFile], mirrored: &Mirrored) -> Diff<'a> {
             },
         }
     }
-    let removed =
-        removed.into_iter().enumerate().filter(|(i, _)| !taken.contains(i)).map(|(_, (d, p, _))| (d, p)).collect();
+    let removed = removed
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| !taken.contains(i))
+        .map(|(_, (d, p, _))| (d, p))
+        .collect();
     Diff { changed, removed, renamed }
 }
 
@@ -425,8 +428,7 @@ fn metadata(m: &MirrorRow, live: &[LiveFile], stamp: &str, run: &MirrorOutcome) 
             .iter()
             .map(|f| serde_json::json!({ "path": f.path, "size": f.size, "mtime_ns": f.mtime, "root_hash": hex::encode(f.root) }))
             .collect();
-        files
-            .insert(format!("{}.json", ns.replace('/', "_")), serde_json::json!({ "namespace": ns, "files": entries }));
+        files.insert(format!("{}.json", ns.replace('/', "_")), serde_json::json!({ "namespace": ns, "files": entries }));
     }
     files.insert(
         "stats.json".into(),
@@ -497,8 +499,7 @@ impl Job {
         self.rc.run(&["mkdir", &self.remotes.root], &[]).await.context("cannot reach the mirror")?;
 
         let (mirror_id, scope) = (self.m.id, self.m.scope.clone());
-        let (live, mirrored) =
-            db::with(&self.db, move |c| Ok((load_live(c, &scope)?, load_mirrored(c, mirror_id)?))).await?;
+        let (live, mirrored) = db::with(&self.db, move |c| Ok((load_live(c, &scope)?, load_mirrored(c, mirror_id)?))).await?;
         let Diff { mut changed, mut removed, renamed } = diff(&live, &mirrored);
         let mut out = MirrorOutcome { total_files: live.len(), ..Default::default() };
 
@@ -520,9 +521,7 @@ impl Job {
         for (n, files) in batches.iter().enumerate() {
             let stage = self.stage_root.join(format!("batch{n}"));
             // Rebuilding reads and hashes a lot of data: tell the runtime this thread is about to block.
-            let staged = tokio::task::block_in_place(|| {
-                files.iter().map(|f| (*f, stage_file(&self.store, &stage.join(f.rel()), f))).collect::<Vec<_>>()
-            });
+            let staged = tokio::task::block_in_place(|| files.iter().map(|f| (*f, stage_file(&self.store, &stage.join(f.rel()), f))).collect::<Vec<_>>());
             let mut good = Vec::new();
             for (f, result) in staged {
                 match result {
@@ -551,8 +550,7 @@ impl Job {
                     .run(&args, &[])
                     .await
                     .with_context(|| format!("upload batch {} of {}", n + 1, batches.len()))?;
-                let rows: Vec<(i64, String, Vec<u8>)> =
-                    good.iter().map(|f| (f.device_id, f.path.clone(), f.root.to_vec())).collect();
+                let rows: Vec<(i64, String, Vec<u8>)> = good.iter().map(|f| (f.device_id, f.path.clone(), f.root.to_vec())).collect();
                 let mirror_id = self.m.id;
                 db::with(&self.db, move |c| {
                     let mut tx = c.transaction()?;
@@ -575,8 +573,7 @@ impl Job {
         if renamed.is_empty() {
             return Ok(renamed);
         }
-        let namespaces: HashMap<i64, String> =
-            db::with(&self.db, |c| Ok(mirrors::device_folders(c)?.into_iter().collect())).await?;
+        let namespaces: HashMap<i64, String> = db::with(&self.db, |c| Ok(mirrors::device_folders(c)?.into_iter().collect())).await?;
         let mut failed = Vec::new();
         for chunk in renamed.chunks(RENAME_PARALLEL) {
             let moves = chunk.iter().map(|r| async {
@@ -614,10 +611,8 @@ impl Job {
         if removed.is_empty() {
             return Ok(());
         }
-        let namespaces: HashMap<i64, String> =
-            db::with(&self.db, |c| Ok(mirrors::device_folders(c)?.into_iter().collect())).await?;
-        let list: Vec<String> =
-            removed.iter().filter_map(|(d, p)| namespaces.get(d).map(|ns| relative(ns, p))).collect();
+        let namespaces: HashMap<i64, String> = db::with(&self.db, |c| Ok(mirrors::device_folders(c)?.into_iter().collect())).await?;
+        let list: Vec<String> = removed.iter().filter_map(|(d, p)| namespaces.get(d).map(|ns| relative(ns, p))).collect();
         let list_file = self.stage_root.join("removed.txt");
         std::fs::write(&list_file, list.join("\n"))?;
         // Exit 3/4: the file or directory is already gone from the mirror, which is the goal.
@@ -722,12 +717,7 @@ mod tests {
 
     #[test]
     fn rclone_options_become_environment() {
-        let env = rclone_env(
-            &row(r#"{"access_key_id":"k","secret_access_key":"s"}"#),
-            Path::new("/tmp/c"),
-            Path::new("/none"),
-        )
-        .unwrap();
+        let env = rclone_env(&row(r#"{"access_key_id":"k","secret_access_key":"s"}"#), Path::new("/tmp/c"), Path::new("/none")).unwrap();
         assert!(env.contains(&("RCLONE_CONFIG_FXMIRROR_TYPE".into(), "s3".into())));
         assert!(env.contains(&("RCLONE_CONFIG_FXMIRROR_SECRET_ACCESS_KEY".into(), "s".into())));
         assert!(
@@ -763,7 +753,11 @@ type = local
         let r = Remotes::new(&base_of(&m), "20240101T000000Z");
         assert_eq!(
             (r.root.as_str(), r.files.as_str(), r.run.as_str()),
-            ("crypt:backups/fafnirx", "crypt:backups/fafnirx/files", "crypt:backups/fafnirx/versions/20240101T000000Z")
+            (
+                "crypt:backups/fafnirx",
+                "crypt:backups/fafnirx/files",
+                "crypt:backups/fafnirx/versions/20240101T000000Z"
+            )
         );
         m.remote = "crypt:".into();
         assert_eq!(Remotes::new(&base_of(&m), "s").files, "crypt:files", "a remote without a path");
@@ -779,7 +773,10 @@ type = local
         assert!(env.contains(&("RCLONE_CONFIG_FXMIRRORCRYPT_REMOTE".into(), "FXMIRROR:bucket/prefix".into())));
         assert!(env.contains(&("RCLONE_CONFIG_FXMIRRORZ_REMOTE".into(), "FXMIRRORCRYPT:".into())));
         assert!(env.contains(&("RCLONE_CONFIG_FXMIRRORCRYPT_PASSWORD2".into(), "salt".into())));
-        assert!(env.contains(&("RCLONE_CONFIG_FXMIRRORZ_LEVEL".into(), "6".into())), "compression must be switched on");
+        assert!(
+            env.contains(&("RCLONE_CONFIG_FXMIRRORZ_LEVEL".into(), "6".into())),
+            "compression must be switched on"
+        );
     }
 
     #[test]
@@ -794,9 +791,13 @@ type = local
             crypt_salt: String::new(),
         };
         let conf = restore_config(&key, "OBS1", "OBS2");
-        for line in
-            ["type = b2", "account = id", "remote = fafnirx-storage:bucket/fx", "password = OBS1", "password2 = OBS2"]
-        {
+        for line in [
+            "type = b2",
+            "account = id",
+            "remote = fafnirx-storage:bucket/fx",
+            "password = OBS1",
+            "password2 = OBS2",
+        ] {
             assert!(conf.contains(line), "{line} in {conf}");
         }
         let own = crate::repo::mirrors::Key { remote: "mine:fx/".into(), ..key };
@@ -813,10 +814,7 @@ type = local
         let mut m = row("{}");
         m.remote_path = "b/x".into();
         let r = Remotes::new(&base_of(&m), "20240101T000000Z");
-        assert_eq!(
-            (r.files.as_str(), r.run.as_str()),
-            ("FXMIRROR:b/x/files", "FXMIRROR:b/x/versions/20240101T000000Z")
-        );
+        assert_eq!((r.files.as_str(), r.run.as_str()), ("FXMIRROR:b/x/files", "FXMIRROR:b/x/versions/20240101T000000Z"));
     }
 
     #[test]
@@ -837,19 +835,14 @@ type = local
         let d = diff(&live, &mirrored);
         let mut changed: Vec<_> = d.changed.iter().map(|f| (f.device_id, f.path.as_str())).collect();
         changed.sort();
-        assert_eq!(
-            changed,
-            [(1, "edited"), (1, "new"), (2, "same")],
-            "same path on another device is a different file"
-        );
+        assert_eq!(changed, [(1, "edited"), (1, "new"), (2, "same")], "same path on another device is a different file");
         assert_eq!(d.removed, [(1, "deleted".to_string())]);
         assert!(d.renamed.is_empty());
     }
 
     #[test]
     fn a_new_path_with_the_content_of_a_vanished_one_is_a_rename() {
-        let live =
-            [file(1, "kept", 1, 10), file(1, "new/name", 2, 10), file(2, "moved", 3, 10), file(1, "fresh", 7, 10)];
+        let live = [file(1, "kept", 1, 10), file(1, "new/name", 2, 10), file(2, "moved", 3, 10), file(1, "fresh", 7, 10)];
         let mut mirrored = Mirrored::new();
         mirrored.entry(1).or_default().insert("kept".into(), vec![1; HASH_LEN]);
         mirrored.entry(1).or_default().insert("old/name".into(), vec![2; HASH_LEN]);

@@ -81,8 +81,7 @@ impl Module {
     }
 
     async fn fetch_manifest(&self) -> Result<Manifest> {
-        let reply =
-            self.get(MANIFEST_PATH).timeout(Duration::from_secs(5)).send().await.context("cannot be reached")?;
+        let reply = self.get(MANIFEST_PATH).timeout(Duration::from_secs(5)).send().await.context("cannot be reached")?;
         if reply.status() == reqwest::StatusCode::UNAUTHORIZED {
             bail!("refused the token");
         }
@@ -278,8 +277,7 @@ pub fn probe_video(file: &Path, hash: &str) -> Result<Option<Probe>> {
     let Some(module) = run.registry.provider(capability::PROBE_VIDEO) else { return Ok(None) };
     let p = tree_path(&run.files, file)?;
     run.runtime.block_on(async {
-        let reply =
-            module.get("/probe").query(&[("p", p.as_str()), ("h", hash)]).timeout(DERIVE_TIMEOUT).send().await?;
+        let reply = module.get("/probe").query(&[("p", p.as_str()), ("h", hash)]).timeout(DERIVE_TIMEOUT).send().await?;
         if reply.status() == reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE {
             return Ok(Some(Probe::default())); // not a video it can read: that is its answer, not a failure
         }

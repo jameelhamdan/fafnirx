@@ -83,9 +83,7 @@ pub fn scan_folder(folder: &Folder, exclude: Option<&Path>) -> Result<Scan> {
             continue;
         }
         // A file of a shared folder that is being received.
-        if top.is_empty()
-            && path.file_name().is_some_and(|n| n.to_string_lossy().starts_with(crate::shared::PART_PREFIX))
-        {
+        if top.is_empty() && path.file_name().is_some_and(|n| n.to_string_lossy().starts_with(crate::shared::PART_PREFIX)) {
             continue;
         }
         let Some(remote) = remote_path(&top, root, path) else {
@@ -110,13 +108,7 @@ pub fn scan_folder(folder: &Folder, exclude: Option<&Path>) -> Result<Scan> {
             unreadable.push(remote);
             continue;
         }
-        entries.push(Entry {
-            remote,
-            local: path.to_path_buf(),
-            size: meta.len(),
-            mtime_ns: mtime_ns(&meta),
-            mode: mode_of(&meta),
-        });
+        entries.push(Entry { remote, local: path.to_path_buf(), size: meta.len(), mtime_ns: mtime_ns(&meta), mode: mode_of(&meta) });
     }
 
     entries.sort_by(|a, b| a.remote.cmp(&b.remote));

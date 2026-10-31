@@ -39,33 +39,34 @@ fn choice(name: &str, kind: &str) -> Choice {
 /// anything is a typing mistake.
 pub fn exists(places: &[Place], scope: &str) -> bool {
     scope.is_empty()
-        || places.iter().any(|p| {
-            p.folder == scope
-                || p.folder.starts_with(&format!("{scope}/"))
-                || scope.starts_with(&format!("{}/", p.folder))
-        })
+        || places
+            .iter()
+            .any(|p| p.folder == scope || p.folder.starts_with(&format!("{scope}/")) || scope.starts_with(&format!("{}/", p.folder)))
 }
 
 /// What can be chosen inside `path` (empty for the top): the master files and the users, a user's devices and folders, then
 /// the folders inside one. `below` lists the folders directly inside a folder of a device, given as `a/b/` or empty.
 pub fn choices(places: &[Place], path: &str, mut below: impl FnMut(i64, &str) -> Vec<String>) -> Vec<Choice> {
     if path.is_empty() {
-        let mut users: Vec<&str> =
-            places.iter().filter(|p| p.folder != MASTER_FOLDER).filter_map(|p| p.folder.split('/').next()).collect();
+        let mut users: Vec<&str> = places
+            .iter()
+            .filter(|p| p.folder != MASTER_FOLDER)
+            .filter_map(|p| p.folder.split('/').next())
+            .collect();
         users.sort_unstable();
         users.dedup();
         let master = places.iter().any(|p| p.folder == MASTER_FOLDER).then(|| choice(MASTER_FOLDER, "master"));
         return master.into_iter().chain(users.into_iter().map(|u| choice(u, "user"))).collect();
     }
-    if let Some((place, rest)) =
-        places.iter().find_map(|p| path.strip_prefix(&p.folder).and_then(|r| rest_of(r)).map(|r| (p, r)))
-    {
+    if let Some((place, rest)) = places.iter().find_map(|p| path.strip_prefix(&p.folder).and_then(|r| rest_of(r)).map(|r| (p, r))) {
         let prefix = if rest.is_empty() { String::new() } else { format!("{rest}/") };
         return below(place.id, &prefix).iter().map(|name| choice(name, "folder")).collect();
     }
     let owned = format!("{path}/");
-    let mut inside: Vec<Choice> =
-        places.iter().filter_map(|p| p.folder.strip_prefix(&owned).map(|name| choice(name, &p.kind))).collect();
+    let mut inside: Vec<Choice> = places
+        .iter()
+        .filter_map(|p| p.folder.strip_prefix(&owned).map(|name| choice(name, &p.kind)))
+        .collect();
     inside.sort_by(|a, b| a.name.cmp(&b.name));
     inside
 }

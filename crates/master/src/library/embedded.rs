@@ -105,13 +105,10 @@ fn user_comment(bytes: &[u8]) -> Option<String> {
         b"UNICODE\0" => {
             let big = !body.starts_with(&[0xFF, 0xFE]) && body.first() == Some(&0);
             let body = body.strip_prefix(&[0xFE, 0xFF]).or_else(|| body.strip_prefix(&[0xFF, 0xFE])).unwrap_or(body);
-            let units = body.chunks(2).filter(|p| p.len() == 2).map(|p| {
-                if big {
-                    u16::from_be_bytes([p[0], p[1]])
-                } else {
-                    u16::from_le_bytes([p[0], p[1]])
-                }
-            });
+            let units = body
+                .chunks(2)
+                .filter(|p| p.len() == 2)
+                .map(|p| if big { u16::from_be_bytes([p[0], p[1]]) } else { u16::from_le_bytes([p[0], p[1]]) });
             text(&char::decode_utf16(units).map(|c| c.unwrap_or('\u{FFFD}')).collect::<String>())
         }
         _ => text(&String::from_utf8_lossy(body)),
@@ -131,9 +128,7 @@ fn xp_text(value: &exif::Value) -> Option<String> {
 fn from_exif(data: &exif::Exif) -> Embedded {
     let field = |tag| data.get_field(tag, exif::In::PRIMARY);
     let ascii = |tag| match &field(tag)?.value {
-        exif::Value::Ascii(parts) => {
-            text(&parts.iter().map(|p| String::from_utf8_lossy(p)).collect::<Vec<_>>().join(" "))
-        }
+        exif::Value::Ascii(parts) => text(&parts.iter().map(|p| String::from_utf8_lossy(p)).collect::<Vec<_>>().join(" ")),
         _ => None,
     };
     let xp = |number| field(exif::Tag(exif::Context::Tiff, number)).and_then(|f| xp_text(&f.value));
@@ -152,9 +147,7 @@ fn from_exif(data: &exif::Exif) -> Embedded {
 /// The text of an EXIF field of ASCII text.
 fn ascii_of(data: &exif::Exif, tag: exif::Tag) -> Option<String> {
     match &data.get_field(tag, exif::In::PRIMARY)?.value {
-        exif::Value::Ascii(parts) => {
-            Some(parts.iter().map(|p| String::from_utf8_lossy(p)).collect::<Vec<_>>().join(" "))
-        }
+        exif::Value::Ascii(parts) => Some(parts.iter().map(|p| String::from_utf8_lossy(p)).collect::<Vec<_>>().join(" ")),
         _ => None,
     }
 }
@@ -200,9 +193,7 @@ pub fn gps(data: &exif::Exif) -> Option<(f64, f64)> {
         let value = degrees_of(&data.get_field(tag, exif::In::PRIMARY)?.value)?;
         // A reference that is missing or unreadable means north and east.
         let behind = data.get_field(reference, exif::In::PRIMARY).is_some_and(|f| match &f.value {
-            exif::Value::Ascii(r) => {
-                r.first().and_then(|r| r.first()).is_some_and(|b| b.to_ascii_uppercase() == negative)
-            }
+            exif::Value::Ascii(r) => r.first().and_then(|r| r.first()).is_some_and(|b| b.to_ascii_uppercase() == negative),
             _ => false,
         });
         Some(if behind { -value.abs() } else { value })
@@ -709,7 +700,10 @@ mod tests {
     #[test]
     fn the_gps_clock_comes_before_the_date_a_program_wrote() {
         let gps = |day: &str| {
-            vec![field(Tag::GPSDateStamp, ascii(day)), field(Tag::GPSTimeStamp, rational(&[(22, 1), (13, 1), (20, 1)]))]
+            vec![
+                field(Tag::GPSDateStamp, ascii(day)),
+                field(Tag::GPSTimeStamp, rational(&[(22, 1), (13, 1), (20, 1)])),
+            ]
         };
         assert_eq!(taken(gps("2023:11:14")), Some(1_700_000_000));
         assert_eq!(taken(gps("0000:00:00")), None);

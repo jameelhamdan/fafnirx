@@ -141,9 +141,7 @@ pub(crate) async fn poster(State(app): State<Arc<App>>, Query(q): Query<PosterQu
     for (i, seek) in chosen_seek.iter().map(String::as_str).chain(["1", "0"]).enumerate() {
         let _ = std::fs::remove_file(&out);
         let args = crate::ffmpeg::poster_args(&source, &out, q.max, seek);
-        if crate::ffmpeg::run(&app.cfg.ffmpeg, &args).await.is_ok()
-            && std::fs::metadata(&out).is_ok_and(|m| m.len() > 0)
-        {
+        if crate::ffmpeg::run(&app.cfg.ffmpeg, &args).await.is_ok() && std::fs::metadata(&out).is_ok_and(|m| m.len() > 0) {
             made = true;
             // The place is said only when it was the one looked for.
             at_ms = if i == 0 { chosen } else { None };
@@ -155,7 +153,9 @@ pub(crate) async fn poster(State(app): State<Arc<App>>, Query(q): Query<PosterQu
     let bytes = bytes.map_err(|_| fail(StatusCode::UNPROCESSABLE_ENTITY, "no frame could be taken from the file"))?;
     let mut reply = crate::service::reply("image/jpeg", "no-store", bytes);
     if let Some(ms) = at_ms {
-        reply.headers_mut().insert(POSTER_AT_HEADER, ms.to_string().parse().expect("a number is a header value"));
+        reply
+            .headers_mut()
+            .insert(POSTER_AT_HEADER, ms.to_string().parse().expect("a number is a header value"));
     }
     Ok(reply)
 }
@@ -208,15 +208,13 @@ mod tests {
         let p = describe(&crate::probe::parse(json).unwrap());
         assert_eq!(p.taken_at, Some(1_700_000_000), "the wall clock of the phone, the same as its photos");
         assert_eq!(p.position, Some((52.52, 13.405)));
-        let zero =
-            br#"{"streams": [{"codec_type": "video"}], "format": {"tags": {"creation_time": "1904-01-01T00:00:00Z"}}}"#;
+        let zero = br#"{"streams": [{"codec_type": "video"}], "format": {"tags": {"creation_time": "1904-01-01T00:00:00Z"}}}"#;
         assert_eq!(describe(&crate::probe::parse(zero).unwrap()).taken_at, None, "the QuickTime epoch is no date");
     }
 
     #[test]
     fn a_file_without_tags_has_only_what_it_says() {
-        let json =
-            br#"{"streams": [{"codec_type": "video", "codec_name": "vp9", "width": 4, "height": 2}], "format": {}}"#;
+        let json = br#"{"streams": [{"codec_type": "video", "codec_name": "vp9", "width": 4, "height": 2}], "format": {}}"#;
         let p = describe(&crate::probe::parse(json).unwrap());
         assert_eq!((p.width, p.height, p.duration_ms, p.taken_at, p.position), (Some(4), Some(2), None, None, None));
     }
@@ -231,8 +229,7 @@ mod tests {
 
     #[test]
     fn a_poster_is_one_frame_scaled_down() {
-        let args =
-            crate::ffmpeg::poster_args(std::path::Path::new("in.mp4"), std::path::Path::new("out.jpg"), 320, "1");
+        let args = crate::ffmpeg::poster_args(std::path::Path::new("in.mp4"), std::path::Path::new("out.jpg"), 320, "1");
         assert!(args.windows(2).any(|w| w == ["-ss", "1"]) && args.windows(2).any(|w| w == ["-frames:v", "1"]));
         assert!(args.iter().any(|a| a.starts_with("scale=min(320")));
     }

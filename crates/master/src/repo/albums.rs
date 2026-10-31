@@ -60,24 +60,12 @@ pub fn media(c: &mut impl GenericClient, album_id: Uuid) -> Result<Vec<(Uuid, St
 }
 
 /// The id of the user's album that follows this folder (`prefix` is what the paths below it start with).
-pub fn following(
-    c: &mut impl GenericClient,
-    user_id: i64,
-    device_id: i64,
-    prefix: &str,
-) -> Result<Option<Uuid>, Error> {
+pub fn following(c: &mut impl GenericClient, user_id: i64, device_id: i64, prefix: &str) -> Result<Option<Uuid>, Error> {
     q::album_of_folder().params(c, &q::AlbumOfFolderParams { user_id, device_id, prefix }).opt()
 }
 
 /// A new album, optionally following the folder `(device id, prefix)`. Returns its id.
-pub fn insert(
-    c: &mut impl GenericClient,
-    user_id: i64,
-    name: &str,
-    description: &str,
-    folder: Option<(i64, &str)>,
-    now: i64,
-) -> Result<Uuid, Error> {
+pub fn insert(c: &mut impl GenericClient, user_id: i64, name: &str, description: &str, folder: Option<(i64, &str)>, now: i64) -> Result<Uuid, Error> {
     let params = q::InsertAlbumParams {
         name,
         description,
@@ -90,27 +78,14 @@ pub fn insert(
 }
 
 /// Puts files in the album: those the viewer can see. Returns how many were added.
-pub fn add_files(
-    c: &mut impl GenericClient,
-    who: Viewer,
-    album_id: Uuid,
-    ids: &[Uuid],
-    now: i64,
-) -> Result<u64, Error> {
+pub fn add_files(c: &mut impl GenericClient, who: Viewer, album_id: Uuid, ids: &[Uuid], now: i64) -> Result<u64, Error> {
     let params = q::AddFilesToAlbumParams { album_id, now, ids, all: who.all, scope_user: who.scope_user };
     q::add_files_to_album().params(c, &params)
 }
 
 /// Puts the photos and videos at a place in the album: a file, or everything below a folder (`path` empty for the
 /// whole device), of a device the viewer can see. Returns how many were added.
-pub fn add_place(
-    c: &mut impl GenericClient,
-    who: Viewer,
-    album_id: Uuid,
-    device: &str,
-    path: &str,
-    now: i64,
-) -> Result<u64, Error> {
+pub fn add_place(c: &mut impl GenericClient, who: Viewer, album_id: Uuid, device: &str, path: &str, now: i64) -> Result<u64, Error> {
     let params = q::AddPlaceToAlbumParams { album_id, now, device, path, all: who.all, scope_user: who.scope_user };
     q::add_place_to_album().params(c, &params)
 }
@@ -181,13 +156,7 @@ fn moved_folder(old: &str, new: &str) -> Option<(String, String)> {
 /// place once nothing is left in the old one (a folder is renamed file by file, so this is true after its last file), and
 /// an album named after the folder is named after the new one. An album of a folder that exists already is left alone.
 /// Returns whether an album changed.
-pub fn follow_folder_move(
-    c: &mut impl GenericClient,
-    device_id: i64,
-    old: &str,
-    new: &str,
-    now: i64,
-) -> Result<bool, Error> {
+pub fn follow_folder_move(c: &mut impl GenericClient, device_id: i64, old: &str, new: &str, now: i64) -> Result<bool, Error> {
     let Some((from, to)) = moved_folder(old, new) else { return Ok(false) };
     // Only a folder renamed in place (same parent) is followed; one emptied into an unrelated place stays where it was.
     let parent = |p: &str| p.trim_end_matches('/').rsplit_once('/').map_or(String::new(), |(d, _)| d.to_string());
@@ -206,8 +175,7 @@ pub fn follow_folder_move(
         }
         let last = |p: &str| p.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
         let name = if album.name == last(&prefix) { last(&target) } else { album.name };
-        q::move_album_folder()
-            .params(&mut *c, &q::MoveAlbumFolderParams { id: album.id, prefix: &target, name: &name, now })?;
+        q::move_album_folder().params(&mut *c, &q::MoveAlbumFolderParams { id: album.id, prefix: &target, name: &name, now })?;
         moved = true;
     }
     Ok(moved)

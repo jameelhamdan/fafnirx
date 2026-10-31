@@ -191,8 +191,7 @@ mod tests {
         let first = step(1, "CREATE TABLE t (a BIGINT)");
         apply(&mut db.conn, LOCK, &[first]).unwrap();
         db.conn.execute("INSERT INTO t VALUES (7)", &[]).unwrap();
-        let (first, second) =
-            (step(1, "CREATE TABLE t (a BIGINT)"), step(2, "ALTER TABLE t ADD COLUMN b BIGINT DEFAULT 5"));
+        let (first, second) = (step(1, "CREATE TABLE t (a BIGINT)"), step(2, "ALTER TABLE t ADD COLUMN b BIGINT DEFAULT 5"));
         apply(&mut db.conn, LOCK, &[first, second]).unwrap();
         assert_eq!(db.versions(), [1, 2]);
         let row = db.conn.query_one("SELECT a, b FROM t", &[]).unwrap();
@@ -222,17 +221,35 @@ mod tests {
 
         let one = |c: &mut Client, sql: &str| -> String { c.query_one(sql, &[]).unwrap().get::<_, String>(0) };
         let c = &mut db.conn;
-        assert_eq!(one(c, "SELECT data_type FROM information_schema.columns WHERE table_name = 'files' AND column_name = 'id' AND table_schema = current_schema()"), "uuid");
         assert_eq!(
-            one(c, "SELECT f.path FROM files f JOIN file_state s ON s.file_id = f.id WHERE s.favorite"),
+            one(
+                c,
+                "SELECT data_type FROM information_schema.columns WHERE table_name = 'files' AND column_name = 'id' AND table_schema = current_schema()"
+            ),
+            "uuid"
+        );
+        assert_eq!(one(c, "SELECT f.path FROM files f JOIN file_state s ON s.file_id = f.id WHERE s.favorite"), "b.jpg");
+        assert_eq!(
+            one(
+                c,
+                "SELECT f.path FROM files f JOIN versions v ON v.file_id = f.id AND v.id = f.current_version_id ORDER BY f.path LIMIT 1"
+            ),
+            "a.jpg"
+        );
+        assert_eq!(
+            one(
+                c,
+                "SELECT f.path FROM files f JOIN file_tags ft ON ft.file_id = f.id JOIN tags t ON t.id = ft.tag_id"
+            ),
             "b.jpg"
         );
-        assert_eq!(one(c, "SELECT f.path FROM files f JOIN versions v ON v.file_id = f.id AND v.id = f.current_version_id ORDER BY f.path LIMIT 1"), "a.jpg");
         assert_eq!(
-            one(c, "SELECT f.path FROM files f JOIN file_tags ft ON ft.file_id = f.id JOIN tags t ON t.id = ft.tag_id"),
+            one(
+                c,
+                "SELECT f.path FROM files f JOIN albums a ON a.cover_file_id = f.id JOIN album_files af ON af.album_id = a.id AND af.file_id = f.id"
+            ),
             "b.jpg"
         );
-        assert_eq!(one(c, "SELECT f.path FROM files f JOIN albums a ON a.cover_file_id = f.id JOIN album_files af ON af.album_id = a.id AND af.file_id = f.id"), "b.jpg");
         assert_eq!(
             one(c, "SELECT string_agg(payload, ',' ORDER BY seq) FROM jobs WHERE payload IN ('{}', '{\"n\":2}')"),
             "{},{\"n\":2}",
@@ -263,8 +280,13 @@ mod tests {
             .map(|r| (r.get(0), r.get(1)))
             .collect();
         assert_eq!(by, [("gone".to_string(), None), ("old".to_string(), Some("rename".to_string()))]);
-        let actions: Vec<String> =
-            db.conn.query("SELECT action FROM events ORDER BY id", &[]).unwrap().iter().map(|r| r.get(0)).collect();
+        let actions: Vec<String> = db
+            .conn
+            .query("SELECT action FROM events ORDER BY id", &[])
+            .unwrap()
+            .iter()
+            .map(|r| r.get(0))
+            .collect();
         assert_eq!(actions, ["rename", "delete"], "only the delete of the rename is gone");
     }
 
@@ -274,7 +296,9 @@ mod tests {
         let list = [step(1, "CREATE TABLE t (a BIGINT)"), step(2, "this is not sql")];
         let err = apply(&mut db.conn, LOCK, &list).unwrap_err();
         assert!(format!("{err:#}").contains("migration 2"), "{err:#}");
-        let t = db.conn.query_one("SELECT to_regclass('t') IS NULL AND to_regclass('schema_migrations') IS NULL", &[]);
+        let t = db
+            .conn
+            .query_one("SELECT to_regclass('t') IS NULL AND to_regclass('schema_migrations') IS NULL", &[]);
         assert!(t.unwrap().get::<_, bool>(0), "the first migration was rolled back with the second");
     }
 

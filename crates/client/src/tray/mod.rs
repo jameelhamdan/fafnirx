@@ -15,10 +15,7 @@ use crate::service::disk_access;
 use anyhow::{Context, Result};
 use fafnirx_common::{unix_now, LockExt};
 use icon::{icon, Light};
-use open::{
-    asked_to_restart, change_folders, check_for_updates, install_update, open_path, open_url, restart_if_updated,
-    restart_tray, start_client, Updates,
-};
+use open::{asked_to_restart, change_folders, check_for_updates, install_update, open_path, open_url, restart_if_updated, restart_tray, start_client, Updates};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -247,8 +244,7 @@ impl Menus {
 
     /// Rebuilds the shared folders when the config or the master's list of them changed.
     fn sync_shared(&mut self, attached: &[Shared], on_master: &[String]) {
-        let available: Vec<String> =
-            on_master.iter().filter(|n| !attached.iter().any(|s| &s.name == *n)).cloned().collect();
+        let available: Vec<String> = on_master.iter().filter(|n| !attached.iter().any(|s| &s.name == *n)).cloned().collect();
         if (attached, available.as_slice()) != (self.shown_shared.0.as_slice(), self.shown_shared.1.as_slice()) {
             (self.shared_actions, self.shared_states) = fill_shared_menu(&self.shared, attached, &available);
             self.shown_shared = (attached.to_vec(), available);
@@ -319,8 +315,7 @@ fn fill_shared_menu(menu: &Submenu, attached: &[Shared], available: &[String]) -
         let (conflicts, conflict_actions) = conflict_menu(s);
         actions.extend(conflict_actions);
         let title = format!("{} \u{21c4}", s.name);
-        let items: [&dyn tray_icon::menu::IsMenuItem; 6] =
-            [&state.item, &path, &PredefinedMenuItem::separator(), &open, &conflicts, &stop];
+        let items: [&dyn tray_icon::menu::IsMenuItem; 6] = [&state.item, &path, &PredefinedMenuItem::separator(), &open, &conflicts, &stop];
         if let Ok(sub) = Submenu::with_items(&title, true, &items) {
             let _ = menu.append(&sub);
         }
@@ -379,8 +374,7 @@ fn ask_about_conflicts(config_path: &Path, status: Option<&daemon::Status>) {
     let mut asked = ASKED.locked();
     // No status (the client is restarting): not a reason to forget what was asked.
     let Some(status) = status else { return };
-    let waiting: Vec<(String, daemon::ConflictInfo)> =
-        status.shared.iter().flat_map(|f| f.conflicts.iter().map(|c| (f.name.clone(), c.clone()))).collect();
+    let waiting: Vec<(String, daemon::ConflictInfo)> = status.shared.iter().flat_map(|f| f.conflicts.iter().map(|c| (f.name.clone(), c.clone()))).collect();
     asked.retain(|(folder, path)| waiting.iter().any(|(f, c)| f == folder && &c.path == path));
     let new: Vec<_> = waiting.into_iter().filter(|(f, c)| !asked.contains(&(f.clone(), c.path.clone()))).collect();
     if new.is_empty() {
@@ -435,11 +429,7 @@ fn ask_which(folder: &str, file: &daemon::ConflictInfo) -> Option<&'static str> 
         when(file.local_mtime),
     );
     let first = message(rfd::MessageLevel::Warning, body)
-        .set_buttons(MessageButtons::YesNoCancelCustom(
-            "Keep the server's".into(),
-            "Keep both".into(),
-            "Other...".into(),
-        ))
+        .set_buttons(MessageButtons::YesNoCancelCustom("Keep the server's".into(), "Keep both".into(), "Other...".into()))
         .show();
     match first {
         Custom(c) if c == "Keep the server's" => Some("theirs"),
@@ -464,8 +454,7 @@ fn ask_which(folder: &str, file: &daemon::ConflictInfo) -> Option<&'static str> 
 /// A name the master accepts for a shared folder, made from the name of a directory.
 fn shared_name_of(dir: &Path) -> Option<String> {
     let raw = dir.file_name()?.to_string_lossy().to_lowercase();
-    let name: String =
-        raw.chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '-' }).collect();
+    let name: String = raw.chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '-' }).collect();
     let name = name.trim_matches(['-', '.', '_']).chars().take(63).collect::<String>();
     fafnirx_common::valid_device_name(&name).then_some(name)
 }
@@ -481,7 +470,11 @@ fn attach_shared_dialog(config_path: &Path, name: &str, dir: &Path, create: bool
 
 /// The first folder of `config` that the client cannot reach for want of Full Disk Access (macOS).
 fn blocked_folder(status: Option<&daemon::Status>, config: &Config) -> Option<PathBuf> {
-    let paths = config.folders.iter().map(|f| f.path.as_path()).chain(config.shared.iter().map(|s| s.path.as_path()));
+    let paths = config
+        .folders
+        .iter()
+        .map(|f| f.path.as_path())
+        .chain(config.shared.iter().map(|s| s.path.as_path()));
     disk_access::first_blocked(status.and_then(|s| s.full_disk_access), paths).map(Path::to_path_buf)
 }
 
@@ -524,9 +517,7 @@ fn confirm_then(text: String, change: impl FnOnce() -> anyhow::Result<()>) {
 
 /// Syncs a folder chosen by the user with an existing shared folder.
 fn attach_existing_shared(config_path: &Path, name: &str) {
-    let Some(dir) =
-        rfd::FileDialog::new().set_title(format!("Choose the folder to sync with \"{name}\"")).pick_folder()
-    else {
+    let Some(dir) = rfd::FileDialog::new().set_title(format!("Choose the folder to sync with \"{name}\"")).pick_folder() else {
         return;
     };
     let text = format!(
@@ -582,7 +573,11 @@ fn new_shared(config_path: &Path, on_master: &[(String, bool)], owner: &str) {
         }
     } else if ask_yes_no(
         rfd::MessageLevel::Info,
-        format!("Make the shared folder \"{}\" and keep {} in sync with it?", with_owner(owner, &name), dir.display()),
+        format!(
+            "Make the shared folder \"{}\" and keep {} in sync with it?",
+            with_owner(owner, &name),
+            dir.display()
+        ),
     ) {
         attach_shared_dialog(config_path, &name, &dir, true);
     }
@@ -677,8 +672,7 @@ impl Env {
                 if let Ok(mut asked) = ASKED.lock() {
                     asked.retain(|(folder, _)| *folder != name);
                 }
-                let waiting = daemon::read_status(&self.state_dir)
-                    .is_some_and(|s| s.shared.iter().any(|f| f.name == name && !f.conflicts.is_empty()));
+                let waiting = daemon::read_status(&self.state_dir).is_some_and(|s| s.shared.iter().any(|f| f.name == name && !f.conflicts.is_empty()));
                 if !waiting {
                     message(rfd::MessageLevel::Info, format!("No file of \"{name}\" is waiting for a choice.")).show();
                 }

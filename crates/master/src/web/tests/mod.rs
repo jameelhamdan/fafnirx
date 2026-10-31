@@ -63,11 +63,9 @@ impl Api {
 
     /// How many jobs for pictures there are, whatever their state.
     async fn picture_jobs(&self) -> i64 {
-        crate::platform::db::with(&self.db, |c| {
-            Ok(c.query_one("SELECT COUNT(*) FROM jobs WHERE kind = 'thumb'", &[])?.get(0))
-        })
-        .await
-        .unwrap()
+        crate::platform::db::with(&self.db, |c| Ok(c.query_one("SELECT COUNT(*) FROM jobs WHERE kind = 'thumb'", &[])?.get(0)))
+            .await
+            .unwrap()
     }
 
     /// What the minute job does: the totals shown for devices catch up with their files.
@@ -75,14 +73,7 @@ impl Api {
         crate::platform::db::with(&self.db, crate::devices::totals::refresh_stale).await.unwrap();
     }
 
-    async fn send(
-        &self,
-        method: Method,
-        uri: &str,
-        body: Body,
-        content_type: Option<&str>,
-        extra: &[(&str, &str)],
-    ) -> (StatusCode, header::HeaderMap, Vec<u8>) {
+    async fn send(&self, method: Method, uri: &str, body: Body, content_type: Option<&str>, extra: &[(&str, &str)]) -> (StatusCode, header::HeaderMap, Vec<u8>) {
         let mut req = Request::builder().method(method).uri(uri).header("x-requested-with", "test");
         if !self.cookie.is_empty() {
             req = req.header(header::COOKIE, &self.cookie);
@@ -109,8 +100,7 @@ impl Api {
     }
 
     async fn json(&self, method: Method, uri: &str, body: Value) -> (StatusCode, Value) {
-        let (status, _, bytes) =
-            self.send(method, uri, Body::from(body.to_string()), Some("application/json"), &[]).await;
+        let (status, _, bytes) = self.send(method, uri, Body::from(body.to_string()), Some("application/json"), &[]).await;
         (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
     }
 
@@ -120,8 +110,9 @@ impl Api {
     }
 
     async fn upload(&self, device: &str, path: &str, data: &[u8]) {
-        let (status, started) =
-            self.json(Method::POST, "/api/uploads", json!({"device": device, "path": path, "size": data.len()})).await;
+        let (status, started) = self
+            .json(Method::POST, "/api/uploads", json!({"device": device, "path": path, "size": data.len()}))
+            .await;
         assert_eq!(status, StatusCode::OK, "{started}");
         let id = started["id"].as_str().unwrap();
         let mut offset = 0;
@@ -191,8 +182,9 @@ async fn photo_id(api: &Api, name: &str) -> String {
 /// Makes a user as the administrator and returns their session cookie. The API is left logged in as the administrator.
 async fn add_user(api: &mut Api, name: &str, role: &str) -> String {
     api.cookie = login(api).await;
-    let made =
-        api.json(Method::POST, "/api/users", json!({"name": name, "role": role, "password": "password-1"})).await;
+    let made = api
+        .json(Method::POST, "/api/users", json!({"name": name, "role": role, "password": "password-1"}))
+        .await;
     assert_eq!(made.0, StatusCode::OK, "{}", made.1);
     let cookie = login_as(api, name, "password-1").await;
     assert!(!cookie.is_empty(), "{name} can log in");
@@ -201,12 +193,14 @@ async fn add_user(api: &mut Api, name: &str, role: &str) -> String {
 
 /// Uploads a file to a device as whoever is logged in; the status of the start and the finish.
 async fn try_upload(api: &Api, device: &str, path: &str, data: &[u8]) -> StatusCode {
-    let (status, started) =
-        api.json(Method::POST, "/api/uploads", json!({"device": device, "path": path, "size": data.len()})).await;
+    let (status, started) = api
+        .json(Method::POST, "/api/uploads", json!({"device": device, "path": path, "size": data.len()}))
+        .await;
     if status != StatusCode::OK {
         return status;
     }
     let id = started["id"].as_str().unwrap();
-    api.send(Method::PUT, &format!("/api/uploads/{id}?offset=0"), Body::from(data.to_vec()), None, &[]).await;
+    api.send(Method::PUT, &format!("/api/uploads/{id}?offset=0"), Body::from(data.to_vec()), None, &[])
+        .await;
     api.json(Method::POST, &format!("/api/uploads/{id}/finish"), json!({})).await.0
 }

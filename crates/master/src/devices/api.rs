@@ -54,11 +54,7 @@ pub struct DeviceSummary {
 
 /// The devices `who` can see (or just the one with this `folder`) with their totals (as of the last sync, see
 /// `totals`), online state and current activity. The master files are not a device and are not listed.
-pub fn device_summaries(
-    c: &mut Client,
-    who: &Access,
-    folder: Option<&str>,
-) -> Result<Vec<DeviceSummary>, postgres::Error> {
+pub fn device_summaries(c: &mut Client, who: &Access, folder: Option<&str>) -> Result<Vec<DeviceSummary>, postgres::Error> {
     let offline_after = settings::get_i64(c, "offline_after_secs", 60);
     let now = unix_now();
     let (all, user) = who.scope_args();
@@ -128,11 +124,7 @@ fn detail_of(c: &mut Client, who: &Access, folder: &str, token: Option<String>) 
 }
 
 /// A device is named by its folder (`<user>/<name>`) in the address, with the slash encoded.
-pub async fn detail(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(folder): Path<String>,
-) -> Res<DeviceDetail> {
+pub async fn detail(State(state): State<Shared>, Extension(who): Extension<Access>, Path(folder): Path<String>) -> Res<DeviceDetail> {
     Ok(Json(run(&state, move |c| detail_of(c, &who, &folder, None)).await?))
 }
 
@@ -147,14 +139,9 @@ pub struct NewDevice {
     user: Option<String>,
 }
 
-pub const NAME_RULE: &str =
-    "Name: 1-63 characters, lowercase letters, digits, '.', '_' or '-'; not a reserved Windows name";
+pub const NAME_RULE: &str = "Name: 1-63 characters, lowercase letters, digits, '.', '_' or '-'; not a reserved Windows name";
 
-pub async fn create(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Json(body): Json<NewDevice>,
-) -> Res<DeviceDetail> {
+pub async fn create(State(state): State<Shared>, Extension(who): Extension<Access>, Json(body): Json<NewDevice>) -> Res<DeviceDetail> {
     who.require_workspace()?;
     let name = body.name.trim().to_lowercase();
     let kind = body.kind.unwrap_or_else(|| "device".into());
@@ -171,8 +158,7 @@ pub async fn create(
     let out = run(&state, move |c| {
         // Every device belongs to a user who has a workspace.
         let owner = owner.unwrap_or_else(|| who.name.clone());
-        let (user_id, role) = devices::user_for_device(c, &owner)?
-            .ok_or_else(|| ApiError::bad(format!("There is no user named {owner}")))?;
+        let (user_id, role) = devices::user_for_device(c, &owner)?.ok_or_else(|| ApiError::bad(format!("There is no user named {owner}")))?;
         if role == "readonly" {
             return Err(ApiError::bad(format!("{owner} can only read the master files and cannot have devices")).into());
         }
@@ -195,11 +181,7 @@ fn add_device(c: &mut Client, who: &Access, user_id: i64, name: &str, kind: &str
     detail_of(c, who, &folder, token)
 }
 
-pub async fn rotate_token(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(folder): Path<String>,
-) -> Res<DeviceDetail> {
+pub async fn rotate_token(State(state): State<Shared>, Extension(who): Extension<Access>, Path(folder): Path<String>) -> Res<DeviceDetail> {
     who.check_write(&folder)?;
     let out = run(&state, move |c| {
         let token = db::new_token();
@@ -215,11 +197,7 @@ pub async fn rotate_token(
 
 /// Lets the next computer that connects with the token of the device take it over, without waiting for the one that holds
 /// it to go quiet (a computer was replaced, or the client was reinstalled).
-pub async fn release(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(folder): Path<String>,
-) -> Res<Done> {
+pub async fn release(State(state): State<Shared>, Extension(who): Extension<Access>, Path(folder): Path<String>) -> Res<Done> {
     who.check_write(&folder)?;
     act(&state, move |c| {
         if !devices::release(c, &folder)? {
@@ -232,11 +210,7 @@ pub async fn release(
     .await
 }
 
-pub async fn revoke(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(folder): Path<String>,
-) -> Res<Done> {
+pub async fn revoke(State(state): State<Shared>, Extension(who): Extension<Access>, Path(folder): Path<String>) -> Res<Done> {
     who.check_write(&folder)?;
     act(&state, move |c| {
         if !devices::revoke(c, &folder, unix_now())? {
@@ -288,11 +262,7 @@ pub async fn settings(State(state): State<Shared>, Extension(who): Extension<Acc
     Ok(Json(s))
 }
 
-pub async fn save_settings(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Json(s): Json<SettingsChange>,
-) -> Res<Settings> {
+pub async fn save_settings(State(state): State<Shared>, Extension(who): Extension<Access>, Json(s): Json<SettingsChange>) -> Res<Settings> {
     who.require_admin()?;
     if !(1..=1000).contains(&s.version_count) || !(1..=3650).contains(&s.retention_days) {
         return Err(ApiError::bad("Versions kept: 1-1000. Retention: 1-3650 days."));

@@ -77,8 +77,10 @@ pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
         )?,
     };
     let base = mirror::backend_base(&cfg.remote, &cfg.remote_path);
-    let listing =
-        rc.run(&["lsjson", "-R", "--files-only", "--no-mimetype", &base], &[]).await.context("list the remote")?;
+    let listing = rc
+        .run(&["lsjson", "-R", "--files-only", "--no-mimetype", &base], &[])
+        .await
+        .context("list the remote")?;
     let (items, skipped) = items_of(&listing)?;
     let (rc, base) = (&rc, &base);
     let fetch_store = store.clone();
@@ -90,8 +92,7 @@ pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
                 let from = mirror::join(base, &item.path);
                 rc.run(&["copyto", &from, &path.to_string_lossy(), "--stats", "0", "--retries", "3"], &[]).await?;
                 let target = path.clone();
-                let (root, size) =
-                    tokio::task::spawn_blocking(move || crate::platform::store::hash_file(&target)).await??;
+                let (root, size) = tokio::task::spawn_blocking(move || crate::platform::store::hash_file(&target)).await??;
                 if size != item.size {
                     bail!("received {size} bytes, the remote lists {}", item.size);
                 }

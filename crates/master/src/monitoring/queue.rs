@@ -70,8 +70,7 @@ struct JobPayload {
 
 impl From<jobs::Item> for Job {
     fn from(j: jobs::Item) -> Self {
-        let p: JobPayload =
-            serde_json::from_str(&j.payload).unwrap_or(JobPayload { device: String::new(), path: String::new() });
+        let p: JobPayload = serde_json::from_str(&j.payload).unwrap_or(JobPayload { device: String::new(), path: String::new() });
         let waiting_to_retry = j.status == "queued" && j.attempts > 0;
         Job {
             id: Id(j.id),
@@ -94,7 +93,9 @@ impl From<jobs::Item> for Job {
 fn summarize(counts: Vec<jobs::Count>) -> Vec<Summary> {
     let mut by_kind: BTreeMap<String, Summary> = BTreeMap::new();
     for c in counts {
-        let s = by_kind.entry(c.kind.clone()).or_insert_with(|| Summary { kind: c.kind.clone(), ..Default::default() });
+        let s = by_kind
+            .entry(c.kind.clone())
+            .or_insert_with(|| Summary { kind: c.kind.clone(), ..Default::default() });
         match c.status.as_str() {
             "queued" => s.queued = c.n,
             "running" => s.running = c.n,
@@ -134,8 +135,13 @@ pub async fn show(State(state): State<Shared>, Extension(who): Extension<Access>
         Ok((paused, summarize(jobs::counts(c, all, user)?), jobs::items(c, all, user, LIST)?))
     })
     .await?;
-    let modules =
-        state.modules.statuses().await.into_iter().map(|(id, report)| (id, visible_tasks(&who, report))).collect();
+    let modules = state
+        .modules
+        .statuses()
+        .await
+        .into_iter()
+        .map(|(id, report)| (id, visible_tasks(&who, report)))
+        .collect();
     Ok(Json(Queue {
         paused,
         can_control: who.is_admin(),
@@ -168,11 +174,7 @@ pub struct Changed {
 }
 
 /// Failed jobs run again from the start.
-pub async fn retry(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Json(b): Json<Target>,
-) -> Res<Changed> {
+pub async fn retry(State(state): State<Shared>, Extension(who): Extension<Access>, Json(b): Json<Target>) -> Res<Changed> {
     who.require_admin()?;
     let changed = run(&state, move |c| Ok(jobs::retry_failed(c, b.id.map(|i| i.0))?)).await?;
     Ok(Json(Changed { changed }))
@@ -186,11 +188,7 @@ pub struct Cancel {
 }
 
 /// Forgets failed jobs, or cancels jobs that have not started. A running job cannot be stopped: it ends by itself.
-pub async fn cancel(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Json(b): Json<Cancel>,
-) -> Res<Changed> {
+pub async fn cancel(State(state): State<Shared>, Extension(who): Extension<Access>, Json(b): Json<Cancel>) -> Res<Changed> {
     who.require_admin()?;
     if !matches!(b.status.as_str(), "failed" | "queued") {
         return Err(ApiError::bad("Only failed or waiting jobs can be removed"));
@@ -207,11 +205,7 @@ pub struct Rebuild {
 }
 
 /// Queues reading photos and videos: those never read, or all of them.
-pub async fn rebuild(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Json(b): Json<Rebuild>,
-) -> Res<Changed> {
+pub async fn rebuild(State(state): State<Shared>, Extension(who): Extension<Access>, Json(b): Json<Rebuild>) -> Res<Changed> {
     who.require_admin()?;
     let changed = run(&state, move |c| {
         let (mut after, mut n) = (None, 0u64);
@@ -222,11 +216,7 @@ pub async fn rebuild(
             after = Some(*last);
             n += files.len() as u64;
             for (_, device, path, root) in files {
-                jobs::enqueue(
-                    c,
-                    "meta",
-                    &serde_json::json!({ "device": device, "path": path, "root": hex::encode(root) }),
-                )?;
+                jobs::enqueue(c, "meta", &serde_json::json!({ "device": device, "path": path, "root": hex::encode(root) }))?;
             }
         }
         Ok(n)
@@ -267,8 +257,11 @@ mod tests {
             )
             .unwrap();
         }
-        let mut missing: Vec<String> =
-            jobs::media_to_read(&mut *c, false, None, 100).unwrap().into_iter().map(|(_, _, path, _)| path).collect();
+        let mut missing: Vec<String> = jobs::media_to_read(&mut *c, false, None, 100)
+            .unwrap()
+            .into_iter()
+            .map(|(_, _, path, _)| path)
+            .collect();
         missing.sort();
         assert_eq!(missing, ["a/blind.mp4", "a/new.jpg"], "never read, and a video without details");
         assert_eq!(jobs::media_to_read(&mut *c, true, None, 100).unwrap().len(), 4, "everything");
@@ -305,11 +298,7 @@ mod tests {
         jobs::complete(c, job.id, Some("picture: poster.jpg")).unwrap();
         let summary = summarize(jobs::counts(c, true, -1).unwrap());
         assert_eq!((summary[0].queued, summary[0].failed, summary[0].done), (0, 0, 1));
-        assert_eq!(
-            jobs::items(c, false, -1, LIST).unwrap().len(),
-            0,
-            "a user who sees no device of it does not see it"
-        );
+        assert_eq!(jobs::items(c, false, -1, LIST).unwrap().len(), 0, "a user who sees no device of it does not see it");
         jobs::enqueue(c, "thumb", &work).unwrap();
         assert_eq!(jobs::items(c, true, -1, LIST).unwrap().len(), 2, "once done, the work may be queued again");
         assert_eq!(jobs::purge_done(c).unwrap(), 0, "a job done just now is kept");

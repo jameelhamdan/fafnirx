@@ -66,8 +66,7 @@ fn sidecar_subtitles(video: &Video) -> Vec<hls::Subtitle> {
 /// `ffprobe` cannot read has none (and is asked again next time).
 async fn embedded_subtitles(app: &App, video: &Video) -> Vec<ffmpeg::Embedded> {
     let file = video.dir.join("embedded.json");
-    let known =
-        |file: &Path| std::fs::read(file).ok().and_then(|b| serde_json::from_slice::<Vec<ffmpeg::Embedded>>(&b).ok());
+    let known = |file: &Path| std::fs::read(file).ok().and_then(|b| serde_json::from_slice::<Vec<ffmpeg::Embedded>>(&b).ok());
     if let Some(found) = known(&file) {
         return found;
     }
@@ -103,10 +102,7 @@ async fn subtitles_of(app: &App, video: &Video) -> Vec<hls::Subtitle> {
     tracks
 }
 
-pub async fn list(
-    State(app): State<Arc<App>>,
-    Query(q): Query<Which>,
-) -> Result<axum::Json<Vec<hls::Subtitle>>, Failure> {
+pub async fn list(State(app): State<Arc<App>>, Query(q): Query<Which>) -> Result<axum::Json<Vec<hls::Subtitle>>, Failure> {
     let video = locate(&app, &q)?;
     Ok(axum::Json(subtitles_of(&app, &video).await))
 }
@@ -116,16 +112,10 @@ const MAX_SUBTITLE_BYTES: u64 = 8 << 20;
 
 /// One track as WebVTT, with times that are the video's own: the player shows it by the position in the video, so it
 /// does not matter how the video is cut into segments. Made once per version of the file, then kept.
-pub async fn track(
-    State(app): State<Arc<App>>,
-    UrlPath(file): UrlPath<String>,
-    Query(q): Query<Which>,
-) -> Result<Response, Failure> {
+pub async fn track(State(app): State<Arc<App>>, UrlPath(file): UrlPath<String>, Query(q): Query<Which>) -> Result<Response, Failure> {
     let index: usize = file
         .strip_suffix(".vtt")
-        .and_then(|n| {
-            (!n.is_empty() && n.len() <= 4 && n.bytes().all(|b| b.is_ascii_digit())).then(|| n.parse().ok())?
-        })
+        .and_then(|n| (!n.is_empty() && n.len() <= 4 && n.bytes().all(|b| b.is_ascii_digit())).then(|| n.parse().ok())?)
         .ok_or_else(|| fail(StatusCode::NOT_FOUND, "no such track"))?;
     let video = locate(&app, &q)?;
     let track = subtitles_of(&app, &video)
@@ -142,8 +132,11 @@ pub async fn track(
         return Err(fail(StatusCode::PAYLOAD_TOO_LARGE, "that subtitle file is too large"));
     }
     // A changed file is a new track: the cache is named by what the file was.
-    let mtime =
-        meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs());
     let key = hex::encode(&Sha256::digest(format!("{}\0{}\0{mtime}", track.file, meta.len()).as_bytes())[..8]);
     let out = video.dir.join(format!("sub-{key}.vtt"));
     let (app_ref, language) = (&*app, &track.language);

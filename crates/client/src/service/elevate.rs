@@ -111,10 +111,11 @@ fn by_hand(line: &[OsString]) -> String {
 /// Runs `program args` as root and waits for it. Linux and macOS: `sudo` or `pkexec` ask where the person is.
 pub fn run(program: &str, args: &[&str]) -> Result<()> {
     let args: Vec<OsString> = args.iter().map(OsString::from).collect();
-    let (program, args) = as_root(OsStr::new(program), &args)
-        .map_err(|by_hand| anyhow::anyhow!("this needs root and nothing here can ask for it: run `{by_hand}`"))?;
-    let status =
-        Command::new(&program).args(&args).status().with_context(|| format!("run {}", program.to_string_lossy()))?;
+    let (program, args) = as_root(OsStr::new(program), &args).map_err(|by_hand| anyhow::anyhow!("this needs root and nothing here can ask for it: run `{by_hand}`"))?;
+    let status = Command::new(&program)
+        .args(&args)
+        .status()
+        .with_context(|| format!("run {}", program.to_string_lossy()))?;
     if !status.success() {
         bail!("{} failed with {status}", program.to_string_lossy());
     }
@@ -147,8 +148,7 @@ pub fn rerun(args: &[OsString]) -> Result<i32> {
             .context("ask for administrator rights")?;
         return Ok(status.code().unwrap_or(1));
     }
-    let (program, line) = as_root(exe.as_os_str(), args)
-        .map_err(|by_hand| anyhow::anyhow!("this needs root and nothing here can ask for it: run `{by_hand}`"))?;
+    let (program, line) = as_root(exe.as_os_str(), args).map_err(|by_hand| anyhow::anyhow!("this needs root and nothing here can ask for it: run `{by_hand}`"))?;
     Ok(Command::new(&program).args(&line).status().context("run as root")?.code().unwrap_or(1))
 }
 

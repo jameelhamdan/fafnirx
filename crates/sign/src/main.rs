@@ -77,9 +77,7 @@ fn main() -> Result<()> {
             let dir = out.join(&platform);
             std::fs::create_dir_all(&dir)?;
             // The binary first, the signature last: a client only sees a complete release.
-            let write = |name: &str, content: &[u8]| -> Result<()> {
-                Ok(fafnirx_common::write_atomic(&dir.join(name), content)?)
-            };
+            let write = |name: &str, content: &[u8]| -> Result<()> { Ok(fafnirx_common::write_atomic(&dir.join(name), content)?) };
             write("bin", &data)?;
             write("version", version.as_bytes())?;
             write("signature", b64().encode(sig.to_bytes()).as_bytes())?;

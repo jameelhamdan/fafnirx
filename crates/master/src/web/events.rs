@@ -72,10 +72,7 @@ fn is_for(who: &Access, payload: &str) -> bool {
     }
 }
 
-pub async fn stream(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+pub async fn stream(State(state): State<Shared>, Extension(who): Extension<Access>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let events = BroadcastStream::new(state.events.subscribe())
         .map(|received| match received {
             Ok(payload) => payload,

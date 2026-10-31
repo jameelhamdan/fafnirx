@@ -156,7 +156,10 @@ fn find_source(c: &mut Client, who: &Access, user: &str, name: &str) -> anyhow::
 }
 
 fn mirror_id(c: &mut Client, name: &str) -> anyhow::Result<i64> {
-    Ok(sql::mirrors::mirror_id().bind(c, &name).opt()?.ok_or_else(|| ApiError::not_found("No such mirror"))?)
+    Ok(sql::mirrors::mirror_id()
+        .bind(c, &name)
+        .opt()?
+        .ok_or_else(|| ApiError::not_found("No such mirror"))?)
 }
 
 pub async fn sources(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Vec<JobState>> {
@@ -175,9 +178,7 @@ fn parse_options(text: &str) -> Result<serde_json::Map<String, Value>, ApiError>
     for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
         let (key, value) = line.split_once('=').unwrap_or((line, ""));
         let key = key.trim().to_lowercase().replace('-', "_");
-        let ok = !key.is_empty()
-            && key.len() <= 64
-            && key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+        let ok = !key.is_empty() && key.len() <= 64 && key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
         if !line.contains('=') || !ok {
             return Err(ApiError::bad(format!(
                 "Option {:?}: use key=value with lowercase letters, digits and _",
@@ -190,15 +191,13 @@ fn parse_options(text: &str) -> Result<serde_json::Map<String, Value>, ApiError>
 }
 
 /// The `key=value` lines of a form, plus passwords given plain that rclone keeps in a scrambled form.
-async fn backend_options(
-    text: &str,
-    secrets: &std::collections::BTreeMap<String, String>,
-) -> Result<Vec<(String, Value)>, ApiError> {
+async fn backend_options(text: &str, secrets: &std::collections::BTreeMap<String, String>) -> Result<Vec<(String, Value)>, ApiError> {
     let mut options: Vec<(String, Value)> = parse_options(text)?.into_iter().collect();
     let bin = crate::integrations::mirror::rclone_bin();
     for (key, plain) in secrets {
-        let scrambled =
-            crate::integrations::mirror::obscure(&bin, plain).await.map_err(|e| ApiError::bad(format!("{e:#}")))?;
+        let scrambled = crate::integrations::mirror::obscure(&bin, plain)
+            .await
+            .map_err(|e| ApiError::bad(format!("{e:#}")))?;
         options.push((key.clone(), Value::String(scrambled)));
     }
     Ok(options)
@@ -255,11 +254,7 @@ pub struct NewSource {
 }
 
 /// Adds a source that copies a folder of any storage rclone supports.
-pub async fn create_source(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Json(b): Json<NewSource>,
-) -> Res<Done> {
+pub async fn create_source(State(state): State<Shared>, Extension(who): Extension<Access>, Json(b): Json<NewSource>) -> Res<Done> {
     who.require_workspace()?;
     let name = slug(&b.name)?;
     let device = format!("{SOURCE_PREFIX}{name}");
@@ -269,8 +264,7 @@ pub async fn create_source(
     let options = backend_options(&b.options, &b.secrets).await?;
     let (mut remote, mut remote_type, mut remote_path) = (b.remote, b.remote_type, b.remote_path);
     let mut options: std::collections::BTreeMap<String, Value> = options.into_iter().collect();
-    normalize_storage(&mut remote, &mut remote_type, &mut remote_path, &mut options)
-        .map_err(|e| ApiError::bad(format!("{e:#}")))?;
+    normalize_storage(&mut remote, &mut remote_type, &mut remote_path, &mut options).map_err(|e| ApiError::bad(format!("{e:#}")))?;
     let secs = hours_to_secs(b.interval_hours)?;
     let config = json!({
         "remote": remote,
@@ -283,8 +277,7 @@ pub async fn create_source(
         let mut tx = c.transaction()?;
         // The source owns a device row (in the workspace of the user who added it), so its files use the
         // same tables as a device's. '!' can never equal a SHA-256 hex digest, so nothing can authenticate as a source.
-        let (device_id, folder) = sources::insert_device(&mut tx, who.user_id, &device, unix_now())?
-            .ok_or_else(|| ApiError::conflict(format!("You already have a source named {name}")))?;
+        let (device_id, folder) = sources::insert_device(&mut tx, who.user_id, &device, unix_now())?.ok_or_else(|| ApiError::conflict(format!("You already have a source named {name}")))?;
         sources::insert(&mut tx, device_id, &name, "rclone", &config.to_string(), secs, unix_now())?;
         db::notify(&mut tx, "jobs", &folder)?;
         tx.commit()?;
@@ -307,11 +300,7 @@ pub fn remove_source(c: &mut Client, store: &Store, id: i64) -> anyhow::Result<(
     Ok(())
 }
 
-pub async fn delete_source(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path((user, name)): Path<(String, String)>,
-) -> Res<Done> {
+pub async fn delete_source(State(state): State<Shared>, Extension(who): Extension<Access>, Path((user, name)): Path<(String, String)>) -> Res<Done> {
     who.require_workspace()?;
     let store = state.store.clone();
     act(&state, move |c| {
@@ -361,35 +350,19 @@ async fn touch_mirror(state: &Shared, who: Access, name: String, what: Touch) ->
     .await
 }
 
-pub async fn run_source(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path((user, name)): Path<(String, String)>,
-) -> Res<Done> {
+pub async fn run_source(State(state): State<Shared>, Extension(who): Extension<Access>, Path((user, name)): Path<(String, String)>) -> Res<Done> {
     touch_source(&state, who, user, name, Touch::RunNow).await
 }
 
-pub async fn toggle_source(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path((user, name)): Path<(String, String)>,
-) -> Res<Done> {
+pub async fn toggle_source(State(state): State<Shared>, Extension(who): Extension<Access>, Path((user, name)): Path<(String, String)>) -> Res<Done> {
     touch_source(&state, who, user, name, Touch::ToggleEnabled).await
 }
 
-pub async fn run_mirror(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(name): Path<String>,
-) -> Res<Done> {
+pub async fn run_mirror(State(state): State<Shared>, Extension(who): Extension<Access>, Path(name): Path<String>) -> Res<Done> {
     touch_mirror(&state, who, name, Touch::RunNow).await
 }
 
-pub async fn toggle_mirror(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(name): Path<String>,
-) -> Res<Done> {
+pub async fn toggle_mirror(State(state): State<Shared>, Extension(who): Extension<Access>, Path(name): Path<String>) -> Res<Done> {
     touch_mirror(&state, who, name, Touch::ToggleEnabled).await
 }
 
@@ -434,11 +407,7 @@ fn three() -> i64 {
     3
 }
 
-pub async fn create_mirror(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Json(b): Json<NewMirror>,
-) -> Res<Done> {
+pub async fn create_mirror(State(state): State<Shared>, Extension(who): Extension<Access>, Json(b): Json<NewMirror>) -> Res<Done> {
     who.require_admin()?;
     let options = backend_options(&b.options, &b.secrets).await?;
     let mut mirror = MirrorSpec {
@@ -490,11 +459,7 @@ pub struct ScopeQuery {
 }
 
 /// The folders a mirror can be told to hold inside `path` (the top when empty), for the form that adds one.
-pub async fn mirror_scope(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    axum::extract::Query(q): axum::extract::Query<ScopeQuery>,
-) -> Res<Vec<scope::Choice>> {
+pub async fn mirror_scope(State(state): State<Shared>, Extension(who): Extension<Access>, axum::extract::Query(q): axum::extract::Query<ScopeQuery>) -> Res<Vec<scope::Choice>> {
     who.require_admin()?;
     let path = scope::normalize(&q.path).map_err(|e| ApiError::bad(format!("{e:#}")))?;
     let choices = run(&state, move |c| {
@@ -513,11 +478,7 @@ pub async fn mirror_scope(
 }
 
 /// Forget what was uploaded: the next run re-sends everything (use after emptying the remote).
-pub async fn resync_mirror(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(name): Path<String>,
-) -> Res<Done> {
+pub async fn resync_mirror(State(state): State<Shared>, Extension(who): Extension<Access>, Path(name): Path<String>) -> Res<Done> {
     who.require_admin()?;
     act(&state, move |c| {
         let id = mirror_id(c, &name)?;
@@ -529,15 +490,13 @@ pub async fn resync_mirror(
 
 /// The rclone config that restores a backup mirror without fafnirx (administrators). The one place a credential
 /// leaves the master: a backup is worthless without its key.
-pub async fn mirror_restore_kit(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(name): Path<String>,
-) -> Res<Value> {
+pub async fn mirror_restore_kit(State(state): State<Shared>, Extension(who): Extension<Access>, Path(name): Path<String>) -> Res<Value> {
     who.require_admin()?;
     let key = run(&state, move |c| {
-        let key =
-            sql::mirrors::mirror_key().bind(c, &name).opt()?.ok_or_else(|| ApiError::not_found("No such mirror"))?;
+        let key = sql::mirrors::mirror_key()
+            .bind(c, &name)
+            .opt()?
+            .ok_or_else(|| ApiError::not_found("No such mirror"))?;
         Ok(key)
     })
     .await?;
@@ -555,11 +514,7 @@ pub async fn mirror_restore_kit(
     Ok(Json(json!({ "config": config })))
 }
 
-pub async fn delete_mirror(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(name): Path<String>,
-) -> Res<Done> {
+pub async fn delete_mirror(State(state): State<Shared>, Extension(who): Extension<Access>, Path(name): Path<String>) -> Res<Done> {
     who.require_admin()?;
     act(&state, move |c| {
         let id = mirror_id(c, &name)?;

@@ -55,8 +55,7 @@ impl From<tonic::Status> for SyncError {
         let msg = format!("{:?}: {}", s.code(), s.message());
         match s.code() {
             // PermissionDenied: another computer is using this device. Stop; the heartbeat says why.
-            Unavailable | DeadlineExceeded | Cancelled | Unknown | Unauthenticated | PermissionDenied
-            | ResourceExhausted | Internal => SyncError::Offline(msg),
+            Unavailable | DeadlineExceeded | Cancelled | Unknown | Unauthenticated | PermissionDenied | ResourceExhausted | Internal => SyncError::Offline(msg),
             FailedPrecondition => SyncError::Refused(msg),
             _ => SyncError::File(msg),
         }
@@ -149,13 +148,7 @@ struct Candidate {
 }
 
 impl Engine {
-    pub fn new(
-        client: Client,
-        state: State,
-        limiter: Arc<Limiter>,
-        errors: Arc<Mutex<Vec<String>>>,
-        pause_marker: PathBuf,
-    ) -> Self {
+    pub fn new(client: Client, state: State, limiter: Arc<Limiter>, errors: Arc<Mutex<Vec<String>>>, pause_marker: PathBuf) -> Self {
         Self {
             client,
             state,
@@ -288,12 +281,7 @@ impl Engine {
 
     /// Returns the files to hash (with whether they are new) and the synced paths that vanished from
     /// folders we could read.
-    fn detect_changes(
-        &self,
-        entries: &[Entry],
-        scanned: &HashSet<String>,
-        unreadable: &HashSet<String>,
-    ) -> Result<(Vec<Changed>, Vec<Synced>), SyncError> {
+    fn detect_changes(&self, entries: &[Entry], scanned: &HashSet<String>, unreadable: &HashSet<String>) -> Result<(Vec<Changed>, Vec<Synced>), SyncError> {
         let t = unix_now();
         let mut changed = Vec::new();
         for e in entries.iter().filter(|e| !self.skip.contains(&e.remote)) {
@@ -311,24 +299,14 @@ impl Engine {
             .state
             .all_synced()?
             .into_iter()
-            .filter(|s| {
-                scanned.contains((self.group)(&s.path))
-                    && !seen.contains(s.path.as_str())
-                    && !unreadable.contains(&s.path)
-                    && !self.skip.contains(&s.path)
-            })
+            .filter(|s| scanned.contains((self.group)(&s.path)) && !seen.contains(s.path.as_str()) && !unreadable.contains(&s.path) && !self.skip.contains(&s.path))
             .collect();
         Ok((changed, vanished))
     }
 
     /// Hashes the changed files and pairs new ones with vanished files of the same content (renames).
     /// A paired file is taken out of `vanished`.
-    async fn hash_changed(
-        &mut self,
-        changed: Vec<Changed>,
-        vanished: &mut Vec<Synced>,
-        report: &mut Report,
-    ) -> Result<Vec<Candidate>, SyncError> {
+    async fn hash_changed(&mut self, changed: Vec<Changed>, vanished: &mut Vec<Synced>, report: &mut Report) -> Result<Vec<Candidate>, SyncError> {
         let mut candidates = Vec::new();
         let total = changed.len();
         for (n, (entry, is_new)) in changed.into_iter().enumerate() {
@@ -389,15 +367,7 @@ impl Engine {
 
     /// Uploads one file and counts it. Only a problem with the master ends the cycle; a problem with the
     /// file is recorded and the next file goes on.
-    async fn upload_step(
-        &mut self,
-        c: &Candidate,
-        n: usize,
-        total: usize,
-        total_bytes: u64,
-        base_bytes: &mut u64,
-        report: &mut Report,
-    ) -> Result<(), SyncError> {
+    async fn upload_step(&mut self, c: &Candidate, n: usize, total: usize, total_bytes: u64, base_bytes: &mut u64, report: &mut Report) -> Result<(), SyncError> {
         self.set_uploading(c, n, total, total_bytes, *base_bytes);
         *base_bytes += c.hashed.size;
         match self.upload(c).await {
@@ -422,12 +392,7 @@ impl Engine {
     /// Tells the master which files are gone (it keeps the data and only marks the path deleted), except for the
     /// folders whose deletes the guard holds back. With nothing vanished it still runs, to end holds whose files
     /// came back.
-    async fn delete_vanished(
-        &mut self,
-        vanished: Vec<Synced>,
-        cfg: &Config,
-        report: &mut Report,
-    ) -> Result<(), SyncError> {
+    async fn delete_vanished(&mut self, vanished: Vec<Synced>, cfg: &Config, report: &mut Report) -> Result<(), SyncError> {
         let release = self.state.take_release()?;
         let now = unix_now();
         let before = self.state.holds()?;
@@ -465,9 +430,7 @@ impl Engine {
 
     fn fail(&self, e: &Entry, msg: &str) {
         match self.state.record_failure(&e.remote, e.size as i64, e.mtime_ns, unix_now(), msg) {
-            Ok(count) if count as usize >= BACKOFF_SECS.len() => {
-                self.report_error(format!("{}: {msg} (giving up until the file changes)", e.remote))
-            }
+            Ok(count) if count as usize >= BACKOFF_SECS.len() => self.report_error(format!("{}: {msg} (giving up until the file changes)", e.remote)),
             Ok(_) => self.report_error(format!("{}: {msg} (will retry)", e.remote)),
             Err(x) => self.report_error(format!("{}: {msg}; also failed to record it: {x}", e.remote)),
         }
@@ -509,12 +472,8 @@ impl Engine {
             // Otherwise the commit above already marked the old path deleted on the master.
             self.state.remove_synced(old)?;
         }
-        self.state.set_synced(&Synced {
-            path: c.entry.remote.clone(),
-            size: h.size as i64,
-            mtime_ns: h.mtime_ns,
-            root_hash: h.root.to_vec(),
-        })?;
+        self.state
+            .set_synced(&Synced { path: c.entry.remote.clone(), size: h.size as i64, mtime_ns: h.mtime_ns, root_hash: h.root.to_vec() })?;
         Ok(bytes)
     }
 
@@ -554,14 +513,7 @@ impl Engine {
 }
 
 /// Streams the chunks at `indexes` to the master over one gRPC stream.
-async fn send_group(
-    mut client: Client,
-    limiter: Arc<Limiter>,
-    sent: Arc<AtomicU64>,
-    path: PathBuf,
-    h: Hashed,
-    indexes: Vec<u32>,
-) -> Result<u64, SyncError> {
+async fn send_group(mut client: Client, limiter: Arc<Limiter>, sent: Arc<AtomicU64>, path: PathBuf, h: Hashed, indexes: Vec<u32>) -> Result<u64, SyncError> {
     let (tx, rx) = mpsc::channel::<pb::Chunk>(2);
     let producer = tokio::spawn(async move {
         let io = |e: std::io::Error| SyncError::File(format!("read failed: {e}"));
@@ -578,8 +530,7 @@ async fn send_group(
             }
             limiter.acquire(len).await;
             total += len as u64;
-            let chunk =
-                pb::Chunk { hash: h.chunks[idx as usize].to_vec(), data: buf, root_hash: h.root.to_vec(), index: idx };
+            let chunk = pb::Chunk { hash: h.chunks[idx as usize].to_vec(), data: buf, root_hash: h.root.to_vec(), index: idx };
             if tx.send(chunk).await.is_err() {
                 break;
             }

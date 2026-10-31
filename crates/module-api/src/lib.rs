@@ -112,12 +112,7 @@ pub fn valid_id(id: &str) -> bool {
 impl PluginFile {
     /// Why this cannot run as the plugin in folder `id` on `platform`, if it cannot.
     pub fn problem(&self, id: &str, platform: &str) -> Option<String> {
-        let relative = |p: &str| {
-            !p.is_empty()
-                && !p.starts_with('/')
-                && !p.contains('\\')
-                && p.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
-        };
+        let relative = |p: &str| !p.is_empty() && !p.starts_with('/') && !p.contains('\\') && p.split('/').all(|part| !part.is_empty() && part != "." && part != "..");
         if !valid_id(&self.id) || self.id != id {
             return Some(format!("it is called {:?}, not {id:?}", self.id));
         }
@@ -176,15 +171,10 @@ mod tests {
 
     #[test]
     fn a_manifest_says_what_it_provides() {
-        let m: Manifest =
-            serde_json::from_str(r#"{"id":"video","version":"1.0.0","contract":1,"capabilities":["poster","status"]}"#)
-                .unwrap();
+        let m: Manifest = serde_json::from_str(r#"{"id":"video","version":"1.0.0","contract":1,"capabilities":["poster","status"]}"#).unwrap();
         assert!(m.has(capability::POSTER) && m.has(capability::STATUS) && !m.has(capability::PROBE_VIDEO));
         assert!(m.ui.is_none(), "a module without screens says nothing of them");
-        let with: Manifest = serde_json::from_str(
-            r#"{"id":"video","version":"1","contract":1,"capabilities":[],"ui":{"entry":"index.js","sdk":1}}"#,
-        )
-        .unwrap();
+        let with: Manifest = serde_json::from_str(r#"{"id":"video","version":"1","contract":1,"capabilities":[],"ui":{"entry":"index.js","sdk":1}}"#).unwrap();
         assert_eq!(with.ui, Some(Ui { entry: "index.js".into(), css: None, sdk: WEB_SDK }));
     }
 

@@ -18,8 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// Extensions of images that get their metadata read and a preview.
-const IMAGE_EXTENSIONS: [&str; 11] =
-    ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "heic", "heif", "avif"];
+const IMAGE_EXTENSIONS: [&str; 11] = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "heic", "heif", "avif"];
 /// Extensions of videos.
 const VIDEO_EXTENSIONS: [&str; 11] = ["mp4", "mov", "mkv", "avi", "webm", "m4v", "wmv", "mts", "3gp", "mpg", "mpeg"];
 /// Extensions the `image` crate can decode here (HEIC and AVIF have metadata but need the video module for a preview).
@@ -132,7 +131,9 @@ const EXIF_FIELDS: [&str; 17] = [
 /// do not parse, and one of them must not lose the date and the place that are fine.
 fn read_exif(file: std::fs::File) -> Option<exif::Exif> {
     let found = exif::Reader::new().continue_on_error(true).read_from_container(&mut BufReader::new(file));
-    found.or_else(|e| e.distill_partial_result(|errors| tracing::debug!("damaged EXIF: {errors:?}"))).ok()
+    found
+        .or_else(|e| e.distill_partial_result(|errors| tracing::debug!("damaged EXIF: {errors:?}")))
+        .ok()
 }
 
 /// Reads the size and EXIF data of an image. A file without EXIF just has no fields.
@@ -259,8 +260,7 @@ pub fn thumbnail(src: &Path, root_hex: &str, max: u32, cache: &Path, poster_ms: 
 
 /// A frame of the file, drawn by a module, written to `tmp`. Returns where in the video it was taken, when the module says.
 fn module_poster(src: &Path, root_hex: &str, max: u32, poster_ms: Option<i64>, tmp: &Path) -> Result<Option<i64>> {
-    let (jpeg, at_ms) =
-        modules::poster(src, root_hex, max, poster_ms)?.context("no module can draw a frame of this file")?;
+    let (jpeg, at_ms) = modules::poster(src, root_hex, max, poster_ms)?.context("no module can draw a frame of this file")?;
     std::fs::write(tmp, jpeg)?;
     Ok(at_ms)
 }
@@ -281,9 +281,7 @@ fn make_thumbnail(src: &Path, root_hex: &str, max: u32, poster_ms: Option<i64>, 
             Ok(None)
         }
         // Formats the image crate cannot read (HEIC, AVIF) are left to a module that has ffmpeg, when there is one.
-        Err(e) if modules::can_poster() => {
-            module_poster(src, root_hex, max, None, tmp).with_context(|| format!("decode {}: {e}", src.display()))
-        }
+        Err(e) if modules::can_poster() => module_poster(src, root_hex, max, None, tmp).with_context(|| format!("decode {}: {e}", src.display())),
         Err(e) => Err(e).with_context(|| format!("decode {}", src.display())),
     }
 }
@@ -498,8 +496,7 @@ fn thumb_job(db: &Db, store: &Store, cache_root: &Path, payload: &str) -> Result
     if root_hex != p.key {
         return Ok(Some("the picture beside it changed".into()));
     }
-    let learned = thumbnail(&source, &root_hex, p.size, &cache_root.join("thumbs"), poster_ms)
-        .with_context(|| format!("the {}px picture of {}", p.size, p.path))?;
+    let learned = thumbnail(&source, &root_hex, p.size, &cache_root.join("thumbs"), poster_ms).with_context(|| format!("the {}px picture of {}", p.size, p.path))?;
     // Where the frame of a video was found is kept, so that it is always taken from the same place.
     if let (None, Some(ms)) = (poster_ms, learned) {
         sql::files::set_poster_ms().bind(&mut *c, &ms, &root).map(drop)?;
@@ -534,9 +531,7 @@ mod tests {
     #[test]
     fn photos_and_videos_are_recognised_by_extension() {
         let _on = THUMBNAILS_TEST.locked();
-        assert!(
-            wants("photos/IMG_1.JPG") && wants("a.heic") && wants("clip.MOV") && !wants("notes.txt") && !wants("jpg")
-        );
+        assert!(wants("photos/IMG_1.JPG") && wants("a.heic") && wants("clip.MOV") && !wants("notes.txt") && !wants("jpg"));
         assert_eq!((kind("a.png"), kind("a.mp4"), kind("a.pdf")), (Some("image"), Some("video"), None));
         assert!(can_preview("a.png"), "images are drawn here");
         assert!(
@@ -691,8 +686,7 @@ mod tests {
         use crate::platform::db::testing;
         let db = testing::db_with_device();
         let mut c = db.get().unwrap();
-        let mut paths: Vec<String> =
-            IMAGE_EXTENSIONS.iter().chain(&VIDEO_EXTENSIONS).map(|e| format!("a/x.{e}")).collect();
+        let mut paths: Vec<String> = IMAGE_EXTENSIONS.iter().chain(&VIDEO_EXTENSIONS).map(|e| format!("a/x.{e}")).collect();
         paths.extend(["a/X.JPG", "a/video.MP4", "a/x.jpg.txt", "a/jpg", "a/x.docx", "a/.mp4x"].map(String::from));
         for path in &paths {
             c.execute("INSERT INTO files (device_id, path) VALUES (1, $1)", &[path]).unwrap();

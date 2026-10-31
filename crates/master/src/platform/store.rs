@@ -76,12 +76,7 @@ impl Store {
     fn resolve(base: &Path, nested: bool, folder: &str, path: &str) -> Result<PathBuf> {
         let mut out = Self::folder_in(base, folder, nested)?;
         for part in path.split('/') {
-            if part.is_empty()
-                || part == "."
-                || part == ".."
-                || part.contains('\\')
-                || (cfg!(windows) && part.contains(':'))
-            {
+            if part.is_empty() || part == "." || part == ".." || part.contains('\\') || (cfg!(windows) && part.contains(':')) {
                 bail!("path component {part:?} cannot be stored");
             }
             out.push(part);
@@ -406,7 +401,10 @@ mod tests {
         assert_eq!(fs::read(store.live_path("u/d", "y").unwrap()).unwrap(), b"same");
 
         fs::write(store.live_path("u/d", "x").unwrap(), b"edited").unwrap();
-        assert!(store.copy_live_to_temp("u/d", "x", &root).is_err(), "a file edited since it was recorded is refused");
+        assert!(
+            store.copy_live_to_temp("u/d", "x", &root).is_err(),
+            "a file edited since it was recorded is refused"
+        );
     }
 
     #[test]

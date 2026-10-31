@@ -53,25 +53,13 @@ pub fn touch(c: &mut impl GenericClient, uid: i64, file_id: Uuid, now: i64) -> R
 }
 
 /// The same favorite for many files at once: those the viewer can see. Returns how many files changed.
-pub fn bulk_set_favorite(
-    c: &mut impl GenericClient,
-    who: Viewer,
-    ids: &[Uuid],
-    value: bool,
-    now: i64,
-) -> Result<u64, Error> {
+pub fn bulk_set_favorite(c: &mut impl GenericClient, who: Viewer, ids: &[Uuid], value: bool, now: i64) -> Result<u64, Error> {
     let params = q::BulkSetFavoriteParams { uid: who.uid, now, value, ids, all: who.all, scope_user: who.scope_user };
     q::bulk_set_favorite().params(c, &params)
 }
 
 /// The same archived state for many files at once: those the viewer can see. Returns how many files changed.
-pub fn bulk_set_archived(
-    c: &mut impl GenericClient,
-    who: Viewer,
-    ids: &[Uuid],
-    value: bool,
-    now: i64,
-) -> Result<u64, Error> {
+pub fn bulk_set_archived(c: &mut impl GenericClient, who: Viewer, ids: &[Uuid], value: bool, now: i64) -> Result<u64, Error> {
     let params = q::BulkSetArchivedParams { uid: who.uid, now, value, ids, all: who.all, scope_user: who.scope_user };
     q::bulk_set_archived().params(c, &params)
 }

@@ -77,10 +77,7 @@ impl Conflict {
 
     /// `ask` needs a dialog: a computer with no screen cannot offer it. On Linux that is a session with a display.
     pub fn ask_available() -> bool {
-        Self::ask_possible()
-            && (cfg!(any(target_os = "windows", target_os = "macos"))
-                || std::env::var_os("DISPLAY").is_some()
-                || std::env::var_os("WAYLAND_DISPLAY").is_some())
+        Self::ask_possible() && (cfg!(any(target_os = "windows", target_os = "macos")) || std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some())
     }
 
     /// Refuses `ask` where it cannot be answered.
@@ -319,8 +316,7 @@ pub fn add_folder_to_file(config_path: &Path, dir: &Path, name: Option<&str>) ->
                 .map(|n| n.to_string_lossy().into_owned())
                 .filter(|n| !n.is_empty())
                 .context("this folder has no name of its own; choose one with --name")?;
-            let taken: std::collections::HashSet<String> =
-                cfg.folders.iter().map(|f| fafnirx_common::fold_path(&f.name)).collect();
+            let taken: std::collections::HashSet<String> = cfg.folders.iter().map(|f| fafnirx_common::fold_path(&f.name)).collect();
             let mut candidate = base.clone();
             let mut n = 2;
             while taken.contains(&fafnirx_common::fold_path(&candidate)) {
@@ -348,9 +344,7 @@ pub fn add_folder_to_file(config_path: &Path, dir: &Path, name: Option<&str>) ->
 /// The directory as the client keeps it, if it can be collected or synced: it exists and is not, contain or lie inside
 /// a directory that already is.
 fn free_directory(cfg: &Config, dir: &Path) -> Result<PathBuf> {
-    let path = fafnirx_common::plain_path(
-        &std::fs::canonicalize(dir).with_context(|| format!("cannot read {}", dir.display()))?,
-    );
+    let path = fafnirx_common::plain_path(&std::fs::canonicalize(dir).with_context(|| format!("cannot read {}", dir.display()))?);
     if !path.is_dir() {
         bail!("{} is not a directory", path.display());
     }
@@ -394,12 +388,7 @@ pub fn attach_shared_to_file(config_path: &Path, name: &str, dir: &Path, conflic
 }
 
 /// Sets what a shared folder does with a file changed here and on the master. Returns the name of the folder in full.
-pub fn set_shared_conflict_in_file(
-    config_path: &Path,
-    name: &str,
-    conflict: Conflict,
-    ask_timeout_hours: Option<u64>,
-) -> Result<String> {
+pub fn set_shared_conflict_in_file(config_path: &Path, name: &str, conflict: Conflict, ask_timeout_hours: Option<u64>) -> Result<String> {
     let full = Config::load(config_path)?.shared_named(name)?.name.clone();
     edit_file(config_path, |doc| {
         let Some(list) = doc.get_mut("shared").and_then(|s| s.as_array_of_tables_mut()) else { return Ok(()) };
@@ -522,11 +511,7 @@ watch = false
     fn folders_are_added_and_removed_in_place() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path().join("config.toml");
-        std::fs::write(
-            &cfg,
-            "# my own notes\nserver = \"http://x:7443\"\nbandwidth_limit_kbps = 500 # keep it polite\n",
-        )
-        .unwrap();
+        std::fs::write(&cfg, "# my own notes\nserver = \"http://x:7443\"\nbandwidth_limit_kbps = 500 # keep it polite\n").unwrap();
         for d in ["a/photos", "b/photos", "c", "a/photos/raw"] {
             std::fs::create_dir_all(dir.path().join(d)).unwrap();
         }
@@ -668,20 +653,15 @@ conflict"
         assert!(std::fs::read_to_string(&cfg).unwrap().contains("# notes"), "comments survive");
 
         let err = |r: Result<Shared>| format!("{:#}", r.unwrap_err());
-        assert!(err(attach_shared_to_file(&cfg, "family", &dir.path().join("a"), Conflict::default()))
-            .contains("already collected"));
-        assert!(err(attach_shared_to_file(&cfg, "other", &dir.path().join("a/inner"), Conflict::default()))
-            .contains("overlaps"));
+        assert!(err(attach_shared_to_file(&cfg, "family", &dir.path().join("a"), Conflict::default())).contains("already collected"));
+        assert!(err(attach_shared_to_file(&cfg, "other", &dir.path().join("a/inner"), Conflict::default())).contains("overlaps"));
         assert!(
-            err(attach_shared_to_file(&cfg, "other", &dir.path().join("c"), Conflict::default()))
-                .contains("already collected"),
+            err(attach_shared_to_file(&cfg, "other", &dir.path().join("c"), Conflict::default())).contains("already collected"),
             "not a folder that is backed up either"
         );
         std::fs::create_dir_all(dir.path().join("d")).unwrap();
-        assert!(err(attach_shared_to_file(&cfg, "family", &dir.path().join("d"), Conflict::default()))
-            .contains("attached twice"));
-        assert!(err(attach_shared_to_file(&cfg, "Bad Name", &dir.path().join("d"), Conflict::default()))
-            .contains("lowercase"));
+        assert!(err(attach_shared_to_file(&cfg, "family", &dir.path().join("d"), Conflict::default())).contains("attached twice"));
+        assert!(err(attach_shared_to_file(&cfg, "Bad Name", &dir.path().join("d"), Conflict::default())).contains("lowercase"));
 
         // Folders of two owners with one name: the short name is ambiguous, the full one is not.
         attach_shared_to_file(&cfg, "bob/work", &dir.path().join("d"), Conflict::default()).unwrap();

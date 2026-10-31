@@ -7,10 +7,7 @@ fn devices_are_slugs_and_tokens_are_shown_once() {
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
-        assert_eq!(
-            api.json(Method::POST, "/api/devices", json!({"name": "Bad Name"})).await.0,
-            StatusCode::BAD_REQUEST
-        );
+        assert_eq!(api.json(Method::POST, "/api/devices", json!({"name": "Bad Name"})).await.0, StatusCode::BAD_REQUEST);
         let (status, made) = api.json(Method::POST, "/api/devices", json!({"name": " Laptop "})).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(made["device"]["name"], "laptop");
@@ -34,8 +31,7 @@ fn what_the_admin_sets_up_stays_in_the_database_and_the_file_is_not_touched() {
         assert_eq!(api.json(Method::POST, "/api/mirrors", json!({"name": "m"})).await.0, StatusCode::BAD_REQUEST);
         let mirror = json!({"name": "vault", "remote": "crypt:backups/fafnirx", "keep_runs": 5});
         assert_eq!(api.json(Method::POST, "/api/mirrors", mirror).await.0, StatusCode::OK);
-        let direct =
-            json!({"name": "offsite", "remote_type": "S3", "options": "region=eu\nprovider=AWS", "remote_path": "b/x"});
+        let direct = json!({"name": "offsite", "remote_type": "S3", "options": "region=eu\nprovider=AWS", "remote_path": "b/x"});
         assert_eq!(api.json(Method::POST, "/api/mirrors", direct).await.0, StatusCode::OK);
         api.json(Method::PUT, "/api/settings", json!({"version_count": 9, "retention_days": 45})).await;
 
@@ -76,8 +72,7 @@ fn a_device_can_be_released_for_another_computer() {
             let db = api.db.clone();
             async move {
                 crate::platform::db::with(&db, |c| {
-                    Ok(c.query_one("SELECT instance_id FROM devices WHERE name = 'pc'", &[])?
-                        .get::<_, Option<String>>(0))
+                    Ok(c.query_one("SELECT instance_id FROM devices WHERE name = 'pc'", &[])?.get::<_, Option<String>>(0))
                 })
                 .await
                 .unwrap()
@@ -145,8 +140,10 @@ fn a_mirror_copies_only_the_files_at_or_below_its_scope() {
     let folder: String = c.query_one("SELECT folder FROM devices WHERE id = 1", &[]).unwrap().get(0);
     let user = folder.split('/').next().unwrap().to_string();
     for path in ["docs/a", "docs/b", "docsx/c", "top"] {
-        let file: uuid::Uuid =
-            c.query_one("INSERT INTO files (device_id, path) VALUES (1, $1) RETURNING id", &[&path]).unwrap().get(0);
+        let file: uuid::Uuid = c
+            .query_one("INSERT INTO files (device_id, path) VALUES (1, $1) RETURNING id", &[&path])
+            .unwrap()
+            .get(0);
         let version: i64 = c
             .query_one(
                 "INSERT INTO versions (file_id, root_hash, size, mtime, created_at) VALUES ($1, decode('00', 'hex'), 1, 0, 0) RETURNING id",
@@ -156,9 +153,7 @@ fn a_mirror_copies_only_the_files_at_or_below_its_scope() {
             .get(0);
         c.execute("UPDATE files SET current_version_id = $1 WHERE id = $2", &[&version, &file]).unwrap();
     }
-    let paths = |c: &mut postgres::Client, scope: &str| -> Vec<String> {
-        crate::repo::mirrors::live_files(c, scope).unwrap().into_iter().map(|f| f.path).collect()
-    };
+    let paths = |c: &mut postgres::Client, scope: &str| -> Vec<String> { crate::repo::mirrors::live_files(c, scope).unwrap().into_iter().map(|f| f.path).collect() };
     assert_eq!(paths(&mut c, "").len(), 4, "no scope is everything");
     assert_eq!(paths(&mut c, &user), ["docs/a", "docs/b", "docsx/c", "top"]);
     assert_eq!(paths(&mut c, &folder), ["docs/a", "docs/b", "docsx/c", "top"]);

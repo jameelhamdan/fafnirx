@@ -36,7 +36,11 @@ impl Probe {
     /// The value of a tag whose name starts with `prefix`, such as the `location-eng` a phone writes. When there are
     /// several, the one that sorts first, so that the answer does not change from run to run.
     pub fn tag_starting(&self, prefix: &str) -> Option<&str> {
-        self.tags.iter().filter(|(k, _)| k.starts_with(prefix)).min_by_key(|(k, _)| *k).map(|(_, v)| v.as_str())
+        self.tags
+            .iter()
+            .filter(|(k, _)| k.starts_with(prefix))
+            .min_by_key(|(k, _)| *k)
+            .map(|(_, v)| v.as_str())
     }
 }
 
@@ -89,8 +93,10 @@ pub fn parse(json: &[u8]) -> Result<Probe> {
     let raw: Raw = serde_json::from_slice(json).context("ffprobe's answer is not JSON")?;
     let format = raw.format.unwrap_or_default();
     let has_audio = raw.streams.iter().any(|s| s.codec_type.as_deref() == Some("audio"));
-    let stream =
-        raw.streams.iter().find(|s| s.codec_type.as_deref() == Some("video") && s.disposition.attached_pic == 0);
+    let stream = raw
+        .streams
+        .iter()
+        .find(|s| s.codec_type.as_deref() == Some("video") && s.disposition.attached_pic == 0);
     let video = stream.map(|s| {
         let (mut width, mut height) = (s.width, s.height);
         // A phone films sideways and says so in a rotation (the newer way: side data; the older one: a `rotate` tag).
@@ -146,17 +152,13 @@ mod tests {
         assert_eq!(p.tag(&["creation_time"]), Some("2020-01-02T03:04:05Z"), "a stream's tag, found in lower case");
         assert_eq!(p.tag_starting("location"), Some("+52.5200+013.4050/"));
         assert_eq!(p.tag(&["com.apple.quicktime.creationdate"]), Some("2023-11-14T22:13:20+0100"));
-        let both = parse(
-            br#"{"streams":[{"codec_type":"video","tags":{"creation_time":"2000-01-01T00:00:00Z"}}],"format":{"tags":{"creation_time":"2021-01-01T00:00:00Z"}}}"#,
-        )
-        .unwrap();
+        let both = parse(br#"{"streams":[{"codec_type":"video","tags":{"creation_time":"2000-01-01T00:00:00Z"}}],"format":{"tags":{"creation_time":"2021-01-01T00:00:00Z"}}}"#).unwrap();
         assert_eq!(both.tag(&["creation_time"]), Some("2021-01-01T00:00:00Z"), "the file's own tag wins");
     }
 
     #[test]
     fn a_video_on_its_side_is_measured_the_way_it_is_shown() {
-        let newer =
-            br#"{"streams":[{"codec_type":"video","width":1920,"height":1080,"side_data_list":[{"rotation":-90}]}]}"#;
+        let newer = br#"{"streams":[{"codec_type":"video","width":1920,"height":1080,"side_data_list":[{"rotation":-90}]}]}"#;
         let older = br#"{"streams":[{"codec_type":"video","width":1920,"height":1080,"tags":{"rotate":"270"}}]}"#;
         let upside_down = br#"{"streams":[{"codec_type":"video","width":1920,"height":1080,"tags":{"rotate":"180"}}]}"#;
         for (json, size) in [(&newer[..], (1080, 1920)), (&older[..], (1080, 1920)), (&upside_down[..], (1920, 1080))] {
@@ -167,13 +169,9 @@ mod tests {
 
     #[test]
     fn cover_art_is_not_a_video_and_a_missing_length_falls_back_to_the_stream() {
-        let song = parse(
-            br#"{"streams":[{"codec_type":"audio"},{"codec_type":"video","width":5,"height":5,"disposition":{"attached_pic":1}}],"format":{"duration":"200"}}"#,
-        )
-        .unwrap();
+        let song = parse(br#"{"streams":[{"codec_type":"audio"},{"codec_type":"video","width":5,"height":5,"disposition":{"attached_pic":1}}],"format":{"duration":"200"}}"#).unwrap();
         assert!(song.video.is_none() && song.has_audio && song.duration == Some(200.0));
-        let clip = parse(br#"{"streams":[{"codec_type":"video","width":4,"height":2,"duration":"3.5"}],"format":{}}"#)
-            .unwrap();
+        let clip = parse(br#"{"streams":[{"codec_type":"video","width":4,"height":2,"duration":"3.5"}],"format":{}}"#).unwrap();
         assert_eq!(clip.duration, Some(3.5));
         let none = parse(br#"{"streams":[{"codec_type":"video","width":4,"height":2}]}"#).unwrap();
         assert_eq!(none.duration, None);

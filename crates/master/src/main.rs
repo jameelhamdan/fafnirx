@@ -45,7 +45,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 fn address(var: &str, default: &str) -> Result<SocketAddr> {
-    std::env::var(var).unwrap_or_else(|_| default.into()).parse().with_context(|| format!("invalid {var}"))
+    std::env::var(var)
+        .unwrap_or_else(|_| default.into())
+        .parse()
+        .with_context(|| format!("invalid {var}"))
 }
 
 #[tokio::main]
@@ -60,8 +63,7 @@ async fn main() -> Result<()> {
     let password = std::env::var("FAFNIRX_ADMIN_PASSWORD").unwrap_or_default();
     let data_dir = PathBuf::from(std::env::var("FAFNIRX_DATA").unwrap_or_else(|_| "data".into()));
     std::fs::create_dir_all(&data_dir)?;
-    let url = std::env::var("FAFNIRX_DATABASE_URL")
-        .context("FAFNIRX_DATABASE_URL must be set (postgres://user:password@host/database)")?;
+    let url = std::env::var("FAFNIRX_DATABASE_URL").context("FAFNIRX_DATABASE_URL must be set (postgres://user:password@host/database)")?;
     let db = {
         let url = url.clone();
         tokio::task::spawn_blocking(move || platform::db::open(&url)).await?.context("open database")?
@@ -105,7 +107,9 @@ async fn main() -> Result<()> {
     servers.spawn(async move {
         tonic::transport::Server::builder()
             .add_service(
-                CollectorServer::new(svc).max_decoding_message_size(MAX_MESSAGE).max_encoding_message_size(MAX_MESSAGE),
+                CollectorServer::new(svc)
+                    .max_decoding_message_size(MAX_MESSAGE)
+                    .max_encoding_message_size(MAX_MESSAGE),
             )
             .serve(addr)
             .await

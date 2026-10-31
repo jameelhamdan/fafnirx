@@ -15,23 +15,17 @@ pub struct Recent {
 }
 
 /// Changes per day since `since`, as (day number, action, count); `all`/`user` say which devices are visible.
-pub fn activity_by_day(
-    c: &mut impl GenericClient,
-    since: i64,
-    all: bool,
-    user: i64,
-) -> Result<Vec<(i64, String, i64)>, Error> {
-    Ok(q::activity_by_day().bind(c, &since, &user, &all).all()?.into_iter().map(|d| (d.day, d.action, d.n)).collect())
+pub fn activity_by_day(c: &mut impl GenericClient, since: i64, all: bool, user: i64) -> Result<Vec<(i64, String, i64)>, Error> {
+    Ok(q::activity_by_day()
+        .bind(c, &since, &user, &all)
+        .all()?
+        .into_iter()
+        .map(|d| (d.day, d.action, d.n))
+        .collect())
 }
 
 /// The latest events of the visible devices, or only of the device with this folder.
-pub fn recent(
-    c: &mut impl GenericClient,
-    folder: Option<&str>,
-    all: bool,
-    user: i64,
-    limit: i64,
-) -> Result<Vec<Recent>, Error> {
+pub fn recent(c: &mut impl GenericClient, folder: Option<&str>, all: bool, user: i64, limit: i64) -> Result<Vec<Recent>, Error> {
     Ok(q::recent_events()
         .bind(c, &folder, &user, &all, &limit)
         .all()?
@@ -41,15 +35,7 @@ pub fn recent(
 }
 
 /// Appends to the change log shown in the web app.
-pub fn record(
-    c: &mut impl GenericClient,
-    device_id: i64,
-    path: &str,
-    action: &str,
-    ts: i64,
-    hash: Option<&str>,
-    detail: Option<&str>,
-) -> Result<(), Error> {
+pub fn record(c: &mut impl GenericClient, device_id: i64, path: &str, action: &str, ts: i64, hash: Option<&str>, detail: Option<&str>) -> Result<(), Error> {
     use fafnirx_db::client::Params;
     let params = q::InsertEventParams { device_id, path, action, ts, hash, detail };
     q::insert_event().params(c, &params).map(drop)

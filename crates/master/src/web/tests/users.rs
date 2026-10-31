@@ -71,14 +71,8 @@ fn users_have_roles_and_the_last_administrator_stays() {
 
         // The last administrator can be neither demoted nor disabled; with another one, either is fine.
         api.cookie = admin.clone();
-        assert_eq!(
-            api.json(Method::PATCH, "/api/users/admin", json!({"role": "normal"})).await.0,
-            StatusCode::CONFLICT
-        );
-        assert_eq!(
-            api.json(Method::PATCH, "/api/users/admin", json!({"disabled": true})).await.0,
-            StatusCode::CONFLICT
-        );
+        assert_eq!(api.json(Method::PATCH, "/api/users/admin", json!({"role": "normal"})).await.0, StatusCode::CONFLICT);
+        assert_eq!(api.json(Method::PATCH, "/api/users/admin", json!({"disabled": true})).await.0, StatusCode::CONFLICT);
         let second = add_user(&mut api, "root2", "admin").await;
         api.cookie = admin.clone();
         assert_eq!(api.json(Method::PATCH, "/api/users/root2", json!({"disabled": true})).await.0, StatusCode::OK);
@@ -137,8 +131,7 @@ fn every_user_has_a_workspace_and_the_master_files_belong_to_everyone() {
         // The same device name for two users is two devices, each in the folder of its user.
         for (who, cookie) in [("bob", &bob), ("alice", &alice)] {
             api.cookie = cookie.clone();
-            let (status, made) =
-                api.json(Method::POST, "/api/devices", json!({"name": "phone", "kind": "local"})).await;
+            let (status, made) = api.json(Method::POST, "/api/devices", json!({"name": "phone", "kind": "local"})).await;
             assert_eq!(status, StatusCode::OK, "{made}");
             assert_eq!(made["device"]["folder"], format!("{who}/phone"));
             assert!(api._dir.path().join(format!("files/users/{who}/phone")).is_dir());
@@ -166,8 +159,9 @@ fn every_user_has_a_workspace_and_the_master_files_belong_to_everyone() {
         assert_eq!((inside["device_kind"].clone(), inside["writable"].clone()), (json!("local"), json!(true)));
         assert_eq!(api.get("/api/files?device=alice/phone").await.0, StatusCode::NOT_FOUND);
         assert_eq!(api.get("/api/files/info?device=alice/phone&path=me.txt").await.0, StatusCode::NOT_FOUND);
-        let (status, _, _) =
-            api.send(Method::GET, "/api/files/download?device=alice/phone&path=me.txt", Body::empty(), None, &[]).await;
+        let (status, _, _) = api
+            .send(Method::GET, "/api/files/download?device=alice/phone&path=me.txt", Body::empty(), None, &[])
+            .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(api.get("/api/devices/alice%2Fphone").await.0, StatusCode::NOT_FOUND);
         let revoke = api.json(Method::POST, "/api/devices/alice%2Fphone/revoke", json!({})).await;
@@ -216,8 +210,9 @@ fn every_user_has_a_workspace_and_the_master_files_belong_to_everyone() {
         let (_, devices) = api.get("/api/devices").await;
         let folders: Vec<_> = devices.as_array().unwrap().iter().map(|d| d["folder"].as_str().unwrap()).collect();
         assert_eq!(folders, ["alice/phone", "bob/phone"]);
-        let (status, _, body) =
-            api.send(Method::GET, "/api/files/download?device=bob/phone&path=me.txt", Body::empty(), None, &[]).await;
+        let (status, _, body) = api
+            .send(Method::GET, "/api/files/download?device=bob/phone&path=me.txt", Body::empty(), None, &[])
+            .await;
         assert_eq!((status, body.as_slice()), (StatusCode::OK, &b"bob"[..]));
         assert_eq!(try_upload(&api, "alice/phone", "from-admin.txt", b"x").await, StatusCode::OK);
         let (status, made) = api.json(Method::POST, "/api/devices", json!({"name": "tablet", "user": "bob"})).await;
@@ -260,7 +255,8 @@ fn what_people_say_about_a_master_file_is_their_own() {
         assert_eq!(api.get("/api/tags").await.1, json!([]));
         let del = api.send(Method::DELETE, &format!("/api/albums/{album_id}"), Body::empty(), None, &[]).await;
         assert_eq!(del.0, StatusCode::NOT_FOUND);
-        api.json(Method::PATCH, &format!("/api/library/{id}"), json!({"tags": ["Holiday"], "rating": 2})).await;
+        api.json(Method::PATCH, &format!("/api/library/{id}"), json!({"tags": ["Holiday"], "rating": 2}))
+            .await;
         let mine = api.get(&format!("/api/library/{id}")).await.1;
         assert_eq!((mine["rating"].clone(), mine["tags"][0]["name"].clone()), (json!(2), json!("Holiday")));
         api.json(Method::PATCH, &format!("/api/library/{id}"), json!({"tags": []})).await;
@@ -278,8 +274,7 @@ fn what_people_say_about_a_master_file_is_their_own() {
         assert_eq!(api.json(Method::PATCH, &format!("/api/library/{id}"), fav).await.0, StatusCode::FORBIDDEN);
         let bulk = json!({"ids": [id], "favorite": true});
         assert_eq!(api.json(Method::POST, "/api/library/bulk", bulk).await.0, StatusCode::FORBIDDEN);
-        let (status, _, _) =
-            api.send(Method::GET, &format!("/api/media/{id}/original"), Body::empty(), None, &[]).await;
+        let (status, _, _) = api.send(Method::GET, &format!("/api/media/{id}/original"), Body::empty(), None, &[]).await;
         assert_eq!(status, StatusCode::OK);
     });
 }

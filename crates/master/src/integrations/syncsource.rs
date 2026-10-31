@@ -61,14 +61,7 @@ fn plan<'a>(items: &'a [Item], known: &Known, live: &HashSet<String>, removed: &
     plan
 }
 
-fn commit(
-    conn: &mut postgres::Client,
-    store: &Store,
-    source_id: i64,
-    device: &Device,
-    item: &Item,
-    content: Download,
-) -> Result<()> {
+fn commit(conn: &mut postgres::Client, store: &Store, source_id: i64, device: &Device, item: &Item, content: Download) -> Result<()> {
     let version = NewVersion {
         device,
         path: &item.path,
@@ -84,15 +77,7 @@ fn commit(
 }
 
 /// Applies a listing: `fetch` downloads one file of it to a temporary place.
-pub async fn apply<F, Fut>(
-    db: Db,
-    store: Arc<Store>,
-    source_id: i64,
-    device: Device,
-    items: Vec<Item>,
-    skipped: usize,
-    fetch: F,
-) -> Result<Outcome>
+pub async fn apply<F, Fut>(db: Db, store: Arc<Store>, source_id: i64, device: Device, items: Vec<Item>, skipped: usize, fetch: F) -> Result<Outcome>
 where
     F: Fn(Item) -> Fut,
     Fut: Future<Output = Result<Download>>,

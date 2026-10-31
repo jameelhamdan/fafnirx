@@ -36,9 +36,7 @@ impl Range {
     fn contains(&self, ip: IpAddr) -> bool {
         let keep = |width: u32, bits: u8| if bits == 0 { 0 } else { u128::MAX << (width - u32::from(bits)) };
         match (self.network, ip.to_canonical()) {
-            (IpAddr::V4(n), IpAddr::V4(i)) => {
-                (u128::from(u32::from(n)) ^ u128::from(u32::from(i))) & keep(32, self.bits) & 0xffff_ffff == 0
-            }
+            (IpAddr::V4(n), IpAddr::V4(i)) => (u128::from(u32::from(n)) ^ u128::from(u32::from(i))) & keep(32, self.bits) & 0xffff_ffff == 0,
             (IpAddr::V6(n), IpAddr::V6(i)) => (u128::from(n) ^ u128::from(i)) & keep(128, self.bits) == 0,
             _ => false,
         }

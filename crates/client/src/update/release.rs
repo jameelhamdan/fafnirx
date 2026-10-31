@@ -114,12 +114,7 @@ pub fn latest_deb(agent: &ureq::Agent, arch: &str, current: &str) -> Result<Opti
     latest_with(agent, &api_url(), current, |release| pick_deb(release, arch))
 }
 
-fn latest_with(
-    agent: &ureq::Agent,
-    url: &str,
-    current: &str,
-    pick: impl Fn(&Value) -> Option<Found>,
-) -> Result<Option<Found>> {
+fn latest_with(agent: &ureq::Agent, url: &str, current: &str, pick: impl Fn(&Value) -> Option<Found>) -> Result<Option<Found>> {
     let release: Value = agent
         .get(url)
         .set("Accept", "application/vnd.github+json")

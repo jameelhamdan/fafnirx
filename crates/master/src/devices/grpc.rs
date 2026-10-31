@@ -186,10 +186,7 @@ fn check_manifest(m: &Manifest) -> Result<Checked, Status> {
 }
 
 /// A file as a stream of messages of 256 KiB, each made by `wrap`.
-fn stream_file<T: Send + 'static>(
-    mut file: tokio::fs::File,
-    wrap: fn(Vec<u8>) -> T,
-) -> ReceiverStream<Result<T, Status>> {
+fn stream_file<T: Send + 'static>(mut file: tokio::fs::File, wrap: fn(Vec<u8>) -> T) -> ReceiverStream<Result<T, Status>> {
     let (tx, rx) = tokio::sync::mpsc::channel(4);
     tokio::spawn(async move {
         let mut buf = vec![0u8; 256 * 1024];
@@ -222,8 +219,7 @@ fn on_shared_folder(who: Caller, shared: String) -> Result<Caller, Status> {
 /// A computer that holds back deletions waits for a person: an alert on its device says so until it is dealt with, and it
 /// closes by itself when the computer stops reporting any (or stops reporting at all, see the minute job).
 fn alert_held_deletions(c: &mut Client, device: &str, shared: &[devices::SharedState]) -> anyhow::Result<()> {
-    let held: Vec<String> =
-        shared.iter().filter(|s| s.held > 0).map(|s| format!("{} ({} files)", s.name, s.held)).collect();
+    let held: Vec<String> = shared.iter().filter(|s| s.held > 0).map(|s| format!("{} ({} files)", s.name, s.held)).collect();
     if held.is_empty() {
         alerts::resolve(c, "deletions_held", device)?;
         return Ok(());
@@ -409,8 +405,11 @@ impl Collector for Service {
         let who = caller_of(&req, &self.trusted)?;
         let r = req.into_inner();
         let m = check_manifest(r.manifest.as_ref().ok_or_else(|| Status::invalid_argument("missing manifest"))?)?;
-        let renamed_from =
-            if r.renamed_from.is_empty() { None } else { Some(clean_remote_path(&r.renamed_from).map_err(invalid)?) };
+        let renamed_from = if r.renamed_from.is_empty() {
+            None
+        } else {
+            Some(clean_remote_path(&r.renamed_from).map_err(invalid)?)
+        };
         let store = self.store.clone();
         let version_id = self
             .blocking(move |c| {
@@ -421,12 +420,12 @@ impl Collector for Service {
                 // Content the device already has under another path is taken from there; otherwise the
                 // upload must be complete and intact.
                 let staged = match files::live_path_with_root(c, dev.id, &m.root, renamed_from.as_deref())? {
-                    Some(from) => store.copy_live_to_temp(&dev.name, &from, &m.root).map_err(|e| {
-                        Status::failed_precondition(format!("the file this one is copied from changed: {e:#}"))
-                    })?,
-                    None => store.finish_upload(dev.id, &m.root, m.size).map_err(|e| {
-                        Status::failed_precondition(format!("the upload of this file is incomplete: {e:#}"))
-                    })?,
+                    Some(from) => store
+                        .copy_live_to_temp(&dev.name, &from, &m.root)
+                        .map_err(|e| Status::failed_precondition(format!("the file this one is copied from changed: {e:#}")))?,
+                    None => store
+                        .finish_upload(dev.id, &m.root, m.size)
+                        .map_err(|e| Status::failed_precondition(format!("the upload of this file is incomplete: {e:#}")))?,
                 };
                 ingest::commit_version(
                     c,
@@ -464,15 +463,12 @@ impl Collector for Service {
         let who = caller_of(&req, &self.trusted)?;
         self.check_token(who).await?;
         let dir = self.update_dir(&req.get_ref().platform)?;
-        let (Ok(version), Ok(signature)) =
-            (std::fs::read_to_string(dir.join("version")), std::fs::read_to_string(dir.join("signature")))
-        else {
+        let (Ok(version), Ok(signature)) = (std::fs::read_to_string(dir.join("version")), std::fs::read_to_string(dir.join("signature"))) else {
             return Ok(Response::new(UpdateInfo { available: false, ..Default::default() }));
         };
         let bin = dir.join("bin");
         let data = tokio::fs::read(&bin).await.map_err(|_| Status::not_found("update binary missing"))?;
-        let sig = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, signature.trim())
-            .map_err(|_| Status::internal("bad signature file"))?;
+        let sig = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, signature.trim()).map_err(|_| Status::internal("bad signature file"))?;
         Ok(Response::new(UpdateInfo {
             available: true,
             version: version.trim().to_string(),
@@ -484,10 +480,7 @@ impl Collector for Service {
 
     type DownloadUpdateStream = ReceiverStream<Result<UpdateChunk, Status>>;
 
-    async fn download_update(
-        &self,
-        req: Request<UpdateInfoRequest>,
-    ) -> Result<Response<Self::DownloadUpdateStream>, Status> {
+    async fn download_update(&self, req: Request<UpdateInfoRequest>) -> Result<Response<Self::DownloadUpdateStream>, Status> {
         let who = caller_of(&req, &self.trusted)?;
         self.check_token(who).await?;
         let bin = self.update_dir(&req.get_ref().platform)?.join("bin");
@@ -530,10 +523,7 @@ impl Collector for Service {
 
     type ListChangesStream = tokio_stream::Iter<std::vec::IntoIter<Result<ChangeEvent, Status>>>;
 
-    async fn list_changes(
-        &self,
-        req: Request<ListChangesRequest>,
-    ) -> Result<Response<Self::ListChangesStream>, Status> {
+    async fn list_changes(&self, req: Request<ListChangesRequest>) -> Result<Response<Self::ListChangesStream>, Status> {
         let who = caller_of(&req, &self.trusted)?;
         let r = req.into_inner();
         let who = on_shared_folder(who, r.shared)?;
@@ -570,10 +560,7 @@ impl Collector for Service {
 
     type WatchSharedStream = ReceiverStream<Result<SharedChanged, Status>>;
 
-    async fn watch_shared(
-        &self,
-        req: Request<WatchSharedRequest>,
-    ) -> Result<Response<Self::WatchSharedStream>, Status> {
+    async fn watch_shared(&self, req: Request<WatchSharedRequest>) -> Result<Response<Self::WatchSharedStream>, Status> {
         let who = caller_of(&req, &self.trusted)?;
         let asked = req.into_inner().shared;
         // The names the caller may use, with the folder each one is.
@@ -603,15 +590,11 @@ impl Collector for Service {
                 match announced.recv().await {
                     Ok(payload) => folders.extend(changed_folder(&payload)),
                     // Fell behind: every folder may have changed.
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        folders.extend(watched.iter().map(|(_, folder)| folder.clone()))
-                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => folders.extend(watched.iter().map(|(_, folder)| folder.clone())),
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 }
                 // An announcement without a folder (a delete of several files) may be about any of them.
-                let about = |folders: &std::collections::HashSet<String>, folder: &String| {
-                    folders.contains(folder) || folders.contains("")
-                };
+                let about = |folders: &std::collections::HashSet<String>, folder: &String| folders.contains(folder) || folders.contains("");
                 if !watched.iter().any(|(_, folder)| about(&folders, folder)) {
                     continue;
                 }
@@ -632,10 +615,7 @@ impl Collector for Service {
 
     type DownloadSharedStream = ReceiverStream<Result<FileData, Status>>;
 
-    async fn download_shared(
-        &self,
-        req: Request<DownloadSharedRequest>,
-    ) -> Result<Response<Self::DownloadSharedStream>, Status> {
+    async fn download_shared(&self, req: Request<DownloadSharedRequest>) -> Result<Response<Self::DownloadSharedStream>, Status> {
         let who = caller_of(&req, &self.trusted)?;
         let r = req.into_inner();
         let who = on_shared_folder(who, r.shared)?;
@@ -681,8 +661,7 @@ mod tests {
     }
 
     fn add_user(c: &mut Client, name: &str) -> i64 {
-        let insert =
-            "INSERT INTO users (name, role, password_hash, created_at) VALUES ($1, 'normal', '!', 0) RETURNING id";
+        let insert = "INSERT INTO users (name, role, password_hash, created_at) VALUES ($1, 'normal', '!', 0) RETURNING id";
         c.query_one(insert, &[&name]).unwrap().get(0)
     }
 
@@ -761,8 +740,7 @@ mod tests {
         let mut conn = db.get().unwrap();
         let c: &mut Client = &mut conn;
         let device = authenticate(c, &caller("first")).unwrap().id;
-        devices::save_shared_state(c, device, &[said("alice/family", 3, 0, ""), said("alice/work", 1, 0, "boom")], 500)
-            .unwrap();
+        devices::save_shared_state(c, device, &[said("alice/family", 3, 0, ""), said("alice/work", 1, 0, "boom")], 500).unwrap();
         let first = devices::shared_state_of_device(c, device).unwrap();
         assert_eq!(first.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["alice/family", "alice/work"]);
         assert_eq!((first[0].files, first[1].last_error.as_str(), first[0].updated_at), (3, "boom", 500));
@@ -853,15 +831,15 @@ mod tests {
         let root = [7u8; 32];
         for (path, at) in [("a.txt", 100), ("b.txt", 200)] {
             let file = files::ensure(c, id, path).unwrap();
-            let v = files::insert_version(
-                c,
-                &files::NewVersion { file_id: file, root: &root, size: 3, mtime: 5, mode: 0o644, created_at: at },
-            )
-            .unwrap();
+            let v = files::insert_version(c, &files::NewVersion { file_id: file, root: &root, size: 3, mtime: 5, mode: 0o644, created_at: at }).unwrap();
             files::make_current(c, file, v).unwrap();
         }
         let paths = |c: &mut Client, since| -> Vec<(String, bool)> {
-            files::changes_since(c, id, since).unwrap().into_iter().map(|x| (x.path, x.root.is_some())).collect()
+            files::changes_since(c, id, since)
+                .unwrap()
+                .into_iter()
+                .map(|x| (x.path, x.root.is_some()))
+                .collect()
         };
         assert_eq!(paths(c, 0), [("a.txt".into(), true), ("b.txt".into(), true)], "everything from the start");
         assert_eq!(paths(c, 150), [("b.txt".into(), true)], "only what is newer");
@@ -877,7 +855,10 @@ mod tests {
     /// A database with a device whose token is "secret".
     fn setup() -> Db {
         let db = db_with_device();
-        db.get().unwrap().execute("UPDATE devices SET token_hash = $1", &[&db::hash_token("secret")]).unwrap();
+        db.get()
+            .unwrap()
+            .execute("UPDATE devices SET token_hash = $1", &[&db::hash_token("secret")])
+            .unwrap();
         db
     }
 
@@ -908,8 +889,7 @@ mod tests {
         c.execute("UPDATE devices SET last_seen = $1", &[&(unix_now() - lease_secs() - 5)]).unwrap();
         authenticate(&mut c, &caller("new")).expect("the new computer takes the device over");
         assert_eq!(open_alerts(&mut c), 0, "the conflict is over");
-        let back =
-            authenticate(&mut c, &caller("old")).expect_err("and the old one, when it returns, is the one refused");
+        let back = authenticate(&mut c, &caller("old")).expect_err("and the old one, when it returns, is the one refused");
         assert_eq!(back.code(), tonic::Code::PermissionDenied);
     }
 
