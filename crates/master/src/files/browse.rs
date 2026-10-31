@@ -158,8 +158,12 @@ impl ListQuery {
                 extensions(k).ok_or_else(|| ApiError::bad(format!("unknown type {k}")))?.join("|")
             )),
         };
-        let search =
-            self.q.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(|s| format!("%{}%", db::like_escape(s)));
+        let search = self
+            .q
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| format!("%{}%", db::like_escape(s)));
         Ok(View {
             prefix: prefix_of(&self.path)?,
             path: self.path.trim_matches('/').to_string(),
@@ -187,19 +191,22 @@ fn top_level(c: &mut Client, who: &Access, path: String, retention_days: i64) ->
         writable: who.can_write(MASTER_FOLDER),
         ..Default::default()
     }];
-    entries.extend(device_summaries(c, who, None)?.into_iter().filter(|d| d.kind != "source" || d.files > 0).map(
-        |d| Entry {
-            kind: "device",
-            // A shared folder is always named with its owner, like the clients name it.
-            name: if d.user == who.name && d.kind != "shared" { d.name.clone() } else { d.folder.clone() },
-            writable: editable_kind(&d.kind) && who.can_write(&d.folder),
-            device_kind: Some(d.kind),
-            device: d.folder,
-            files: Some(d.files),
-            size: Some(d.bytes),
-            ..Default::default()
-        },
-    ));
+    entries.extend(
+        device_summaries(c, who, None)?
+            .into_iter()
+            .filter(|d| d.kind != "source" || d.files > 0)
+            .map(|d| Entry {
+                kind: "device",
+                // A shared folder is always named with its owner, like the clients name it.
+                name: if d.user == who.name && d.kind != "shared" { d.name.clone() } else { d.folder.clone() },
+                writable: editable_kind(&d.kind) && who.can_write(&d.folder),
+                device_kind: Some(d.kind),
+                device: d.folder,
+                files: Some(d.files),
+                size: Some(d.bytes),
+                ..Default::default()
+            }),
+    );
     let total = entries.len() as i64;
     Ok(Listing {
         device: None,
@@ -240,13 +247,7 @@ fn file_entry(f: Listed, strip: usize, device: &str, retention_days: i64) -> Ent
 
 /// The inside of a device: either what a search or a type filter finds below the folder, or the folder's own folders
 /// (on the first page only) and files.
-fn inside_device(
-    c: &mut Client,
-    who: &Access,
-    device_name: String,
-    view: View,
-    retention_days: i64,
-) -> anyhow::Result<Listing> {
+fn inside_device(c: &mut Client, who: &Access, device_name: String, view: View, retention_days: i64) -> anyhow::Result<Listing> {
     let dev = find_device(c, who, &device_name)?;
     let kind = devices::kind_of(c, dev.id)?;
     let writable = editable_kind(&kind) && who.can_write(&device_name);
@@ -298,11 +299,7 @@ fn inside_device(
     })
 }
 
-pub async fn list(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Query(q): Query<ListQuery>,
-) -> Res<Listing> {
+pub async fn list(State(state): State<Shared>, Extension(who): Extension<Access>, Query(q): Query<ListQuery>) -> Res<Listing> {
     let view = q.checked()?;
     let device = q.device;
     let listing = run(&state, move |c| {
@@ -362,14 +359,7 @@ pub struct Info {
 
 /// Where the content of a version is on disk: the live file for the current version of a live file,
 /// otherwise the folder of the version.
-pub fn version_file(
-    store: &crate::platform::store::Store,
-    dev: &str,
-    path: &str,
-    version: i64,
-    current: Option<i64>,
-    deleted: bool,
-) -> anyhow::Result<PathBuf> {
+pub fn version_file(store: &crate::platform::store::Store, dev: &str, path: &str, version: i64, current: Option<i64>, deleted: bool) -> anyhow::Result<PathBuf> {
     if Some(version) == current && !deleted {
         store.live_path(dev, path)
     } else {
@@ -377,11 +367,7 @@ pub fn version_file(
     }
 }
 
-pub async fn info(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Query(r): Query<FileRef>,
-) -> Res<Info> {
+pub async fn info(State(state): State<Shared>, Extension(who): Extension<Access>, Query(r): Query<FileRef>) -> Res<Info> {
     let store = state.store.clone();
     let out = run(&state, move |c| {
         let dev = find_device(c, &who, &r.device)?;
@@ -395,8 +381,7 @@ pub async fn info(
         let versions = files::versions(c, file_id)?
             .into_iter()
             .map(|v| {
-                let available = version_file(&store, &dev.name, &path, v.id, current, deleted_at.is_some())
-                    .is_ok_and(|p| p.is_file());
+                let available = version_file(&store, &dev.name, &path, v.id, current, deleted_at.is_some()).is_ok_and(|p| p.is_file());
                 VersionInfo {
                     id: v.id,
                     created_at: v.created_at,
@@ -471,11 +456,7 @@ pub async fn rescan(State(state): State<Shared>, Extension(who): Extension<Acces
     Ok(Json(Rescan { started: crate::files::livetree::rescan(state.db.clone(), state.store.clone()) }))
 }
 
-pub async fn remove(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Json(body): Json<Items>,
-) -> Res<Removed> {
+pub async fn remove(State(state): State<Shared>, Extension(who): Extension<Access>, Json(body): Json<Items>) -> Res<Removed> {
     let store = state.store.clone();
     let deleted = run(&state, move |c| {
         let mut deleted = 0;
@@ -501,11 +482,7 @@ pub struct Restore {
     version: i64,
 }
 
-pub async fn restore(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Json(r): Json<Restore>,
-) -> Res<Done> {
+pub async fn restore(State(state): State<Shared>, Extension(who): Extension<Access>, Json(r): Json<Restore>) -> Res<Done> {
     let store = state.store.clone();
     act(&state, move |c| {
         let dev = find_device_to_change(c, &who, &r.device)?;
@@ -521,10 +498,7 @@ pub async fn restore(
         // What a device or a source sends is theirs to change: here it can be brought back from the trash, not edited.
         let kind = devices::kind_of(c, dev.id)?;
         if !editable_kind(&kind) && deleted_at.is_none() {
-            return Err(ApiError::conflict(
-                "Files sent by a device cannot be changed here. Download the version instead.",
-            )
-            .into());
+            return Err(ApiError::conflict("Files sent by a device cannot be changed here. Download the version instead.").into());
         }
         let from = version_file(&store, &dev.name, &path, r.version, current, deleted_at.is_some())?;
         if !from.is_file() {
@@ -568,11 +542,7 @@ pub struct Moved {
 
 /// Renames or moves a file, or a folder with everything below it, within a device the master owns: a local folder or the
 /// master files. What a device or a source sent is theirs to move, so it answers 409 there.
-pub async fn move_files(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Json(b): Json<MoveBody>,
-) -> Res<Moved> {
+pub async fn move_files(State(state): State<Shared>, Extension(who): Extension<Access>, Json(b): Json<MoveBody>) -> Res<Moved> {
     let store = state.store.clone();
     let moved = run(&state, move |c| {
         let dev = find_device_to_change(c, &who, &b.device)?;
@@ -588,8 +558,7 @@ pub async fn move_files(
         if paths.is_empty() {
             return Err(ApiError::not_found("No such file or folder").into());
         }
-        let targets: Vec<(String, String)> =
-            paths.into_iter().map(|p| (format!("{to}{}", &p[from.len()..]), p)).collect();
+        let targets: Vec<(String, String)> = paths.into_iter().map(|p| (format!("{to}{}", &p[from.len()..]), p)).collect();
         // Nothing moves if something is in the way.
         for (new, _) in &targets {
             let parents = new.match_indices('/').map(|(i, _)| &new[..i]);

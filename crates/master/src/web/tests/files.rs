@@ -9,8 +9,9 @@ fn upload_browse_download_history_and_delete() {
         api.cookie = login(&api).await;
         // Uploads go to local folders only.
         api.json(Method::POST, "/api/devices", json!({"name": "pc"})).await;
-        let (status, _) =
-            api.json(Method::POST, "/api/uploads", json!({"device": "admin/pc", "path": "a.txt", "size": 1})).await;
+        let (status, _) = api
+            .json(Method::POST, "/api/uploads", json!({"device": "admin/pc", "path": "a.txt", "size": 1}))
+            .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(
             api.json(Method::POST, "/api/devices", json!({"name": "photos", "kind": "local"})).await.0,
@@ -132,12 +133,11 @@ fn an_upload_resumes_where_it_stopped_and_rejects_gaps() {
     block(async {
         api.cookie = login(&api).await;
         api.json(Method::POST, "/api/devices", json!({"name": "up", "kind": "local"})).await;
-        let (_, started) =
-            api.json(Method::POST, "/api/uploads", json!({"device": "admin/up", "path": "f.bin", "size": 10})).await;
+        let (_, started) = api
+            .json(Method::POST, "/api/uploads", json!({"device": "admin/up", "path": "f.bin", "size": 10}))
+            .await;
         let id = started["id"].as_str().unwrap();
-        let put = |offset: u64, data: &'static [u8]| {
-            api.send(Method::PUT, format!("/api/uploads/{id}?offset={offset}").leak(), Body::from(data), None, &[])
-        };
+        let put = |offset: u64, data: &'static [u8]| api.send(Method::PUT, format!("/api/uploads/{id}?offset={offset}").leak(), Body::from(data), None, &[]);
         assert_eq!(put(0, b"01234").await.0, StatusCode::OK);
         let (status, _, body) = put(7, b"789").await;
         assert_eq!(status, StatusCode::CONFLICT, "a gap is refused");
@@ -165,8 +165,9 @@ fn an_upload_that_could_not_be_finished_can_be_finished_again() {
         api.json(Method::POST, "/api/devices", json!({"name": "up", "kind": "local"})).await;
         assert_eq!(try_upload(&api, "admin/up", "a", b"one").await, StatusCode::OK);
         // `a` is a file now, so nothing can be placed below it.
-        let (_, started) =
-            api.json(Method::POST, "/api/uploads", json!({"device": "admin/up", "path": "a/b.txt", "size": 3})).await;
+        let (_, started) = api
+            .json(Method::POST, "/api/uploads", json!({"device": "admin/up", "path": "a/b.txt", "size": 3}))
+            .await;
         let id = started["id"].as_str().unwrap();
         api.send(Method::PUT, &format!("/api/uploads/{id}?offset=0"), Body::from("two"), None, &[]).await;
         let first = api.json(Method::POST, &format!("/api/uploads/{id}/finish"), json!({})).await;
@@ -192,7 +193,12 @@ fn names_in_any_script_are_listed_downloaded_and_found() {
             assert_eq!(try_upload(&api, "admin/d", path, path.as_bytes()).await, StatusCode::OK, "{path}");
         }
         let names = |listing: &Value| -> Vec<String> {
-            listing["entries"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap().to_string()).collect()
+            listing["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| e["name"].as_str().unwrap().to_string())
+                .collect()
         };
         let (_, top) = api.get("/api/files?device=admin%2Fd").await;
         let mut top = names(&top);
@@ -265,8 +271,9 @@ fn files_and_folders_of_the_master_can_be_moved_but_not_those_of_a_device() {
         // A computer's files are not moved from the web app.
         let (_, made) = api.json(Method::POST, "/api/devices", json!({"name": "laptop"})).await;
         assert!(made["token"].is_string());
-        let (status, _) =
-            api.json(Method::POST, "/api/files/move", json!({"device": "admin/laptop", "from": "a", "to": "b"})).await;
+        let (status, _) = api
+            .json(Method::POST, "/api/files/move", json!({"device": "admin/laptop", "from": "a", "to": "b"}))
+            .await;
         assert_eq!(status, StatusCode::CONFLICT);
     });
 }

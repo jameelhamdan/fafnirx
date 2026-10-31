@@ -48,15 +48,7 @@ pub fn tripped(vanished: usize, synced: usize) -> bool {
 /// - `holds`: when each folder's current hold began (from a previous cycle).
 /// - `release`: the user asked for held deletes to be applied now.
 /// - `group`: which folder a path belongs to.
-pub fn plan(
-    group: Grouping,
-    vanished: Vec<Synced>,
-    synced: &HashMap<String, usize>,
-    holds: &HashMap<String, i64>,
-    now: i64,
-    hold_secs: i64,
-    release: bool,
-) -> Plan {
+pub fn plan(group: Grouping, vanished: Vec<Synced>, synced: &HashMap<String, usize>, holds: &HashMap<String, i64>, now: i64, hold_secs: i64, release: bool) -> Plan {
     let mut count: HashMap<String, usize> = HashMap::new();
     for v in &vanished {
         *count.entry(group(&v.path).to_string()).or_default() += 1;
@@ -85,14 +77,7 @@ mod tests {
     const HOUR: i64 = 3600;
 
     /// A device with one folder per name, as most tests have it.
-    fn plan(
-        vanished: Vec<Synced>,
-        synced: &HashMap<String, usize>,
-        holds: &HashMap<String, i64>,
-        now: i64,
-        hold_secs: i64,
-        release: bool,
-    ) -> Plan {
+    fn plan(vanished: Vec<Synced>, synced: &HashMap<String, usize>, holds: &HashMap<String, i64>, now: i64, hold_secs: i64, release: bool) -> Plan {
         super::plan(folder_of, vanished, synced, holds, now, hold_secs, release)
     }
 
@@ -105,15 +90,7 @@ mod tests {
         let all = totals(&[("", 20)]);
         let top = super::plan(at_the_top, gone.clone(), &all, &HashMap::new(), 0, 12 * HOUR, false);
         assert_eq!((top.send.len(), top.held[""]), (0, (12, 0)), "12 of 20 files together is a large part");
-        let by_name = super::plan(
-            folder_of,
-            gone,
-            &totals(&[("a", 20), ("b", 20), ("c", 20)]),
-            &HashMap::new(),
-            0,
-            12 * HOUR,
-            false,
-        );
+        let by_name = super::plan(folder_of, gone, &totals(&[("a", 20), ("b", 20), ("c", 20)]), &HashMap::new(), 0, 12 * HOUR, false);
         assert_eq!(by_name.send.len(), 12, "counted per name, each is below the minimum");
     }
 

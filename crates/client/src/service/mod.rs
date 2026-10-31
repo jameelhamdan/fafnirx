@@ -11,9 +11,7 @@ pub mod instance;
 #[cfg(windows)]
 pub mod windows;
 
-use crate::config::{
-    control_dir, is_system_config, same_path, system_config_path, system_data_dir, system_state_dir, Config,
-};
+use crate::config::{control_dir, is_system_config, same_path, system_config_path, system_data_dir, system_state_dir, Config};
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 use std::process::Command;
@@ -88,7 +86,10 @@ pub fn spawn_detached(args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
-    Command::new(std::env::current_exe()?).args(args).creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS).spawn()?;
+    Command::new(std::env::current_exe()?)
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+        .spawn()?;
     Ok(())
 }
 
@@ -141,10 +142,7 @@ fn write(dry: bool, path: &Path, content: &str) -> Result<()> {
 fn is_under(path: &Path, root: &Path) -> bool {
     let (path, root) = (path.to_string_lossy().replace('/', "\\"), root.to_string_lossy().replace('/', "\\"));
     let root = root.trim_end_matches('\\');
-    !root.is_empty()
-        && path.len() > root.len()
-        && path[..root.len()].eq_ignore_ascii_case(root)
-        && path[root.len()..].starts_with('\\')
+    !root.is_empty() && path.len() > root.len() && path[..root.len()].eq_ignore_ascii_case(root) && path[root.len()..].starts_with('\\')
 }
 
 /// The service runs with the rights to read every user's folders, so the program file it starts must not be one a user can
@@ -156,8 +154,7 @@ fn check_exe_is_protected(exe: &Path) -> Result<()> {
     }
     #[cfg(windows)]
     {
-        let roots = ["ProgramFiles", "ProgramFiles(x86)", "SystemRoot"]
-            .map(|v| std::env::var_os(v).map(std::path::PathBuf::from));
+        let roots = ["ProgramFiles", "ProgramFiles(x86)", "SystemRoot"].map(|v| std::env::var_os(v).map(std::path::PathBuf::from));
         if !roots.iter().flatten().any(|root| is_under(exe, root)) {
             bail!(
                 "{} is not under Program Files: the service runs as the system, so its program must be in a place that users \
@@ -436,7 +433,10 @@ pub fn start_background(config_path: &Path) -> Result<()> {
     if cfg!(windows) {
         command.arg("--hidden");
     }
-    command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
     command.spawn().context("start the client")?;
     Ok(())
 }
@@ -488,25 +488,15 @@ mod tests {
         let exe = Path::new("/usr/local/bin/fafnirx");
         let cfg = Path::new("/etc/fafnirx/config.toml");
         let unit = systemd_unit(exe, cfg);
-        assert!(
-            unit.contains("ExecStart=\"/usr/local/bin/fafnirx\" --config \"/etc/fafnirx/config.toml\" run --log-file")
-        );
+        assert!(unit.contains("ExecStart=\"/usr/local/bin/fafnirx\" --config \"/etc/fafnirx/config.toml\" run --log-file"));
         assert!(
             unit.contains("Restart=on-failure") && unit.contains("WantedBy=multi-user.target"),
             "a system unit, not a user's"
         );
         let plist = client_plist(exe, cfg);
-        assert!(
-            plist.contains("<string>/usr/local/bin/fafnirx</string>")
-                && plist.contains("<key>SuccessfulExit</key><false/>")
-        );
+        assert!(plist.contains("<string>/usr/local/bin/fafnirx</string>") && plist.contains("<key>SuccessfulExit</key><false/>"));
         let tray = tray_plist(exe, cfg);
-        assert!(
-            tray.contains("io.fafnirx.tray")
-                && tray.contains("<string>tray</string>")
-                && !tray.contains("<string>run</string>")
-                && tray.contains("<key>KeepAlive</key><false/>")
-        );
+        assert!(tray.contains("io.fafnirx.tray") && tray.contains("<string>tray</string>") && !tray.contains("<string>run</string>") && tray.contains("<key>KeepAlive</key><false/>"));
         assert!(tray_desktop_entry(exe, cfg).contains("fafnirx\" --config \"/etc/fafnirx/config.toml\" tray"));
     }
 

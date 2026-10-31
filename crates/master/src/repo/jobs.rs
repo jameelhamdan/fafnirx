@@ -28,12 +28,7 @@ pub struct Claimed {
 /// A restart interrupts whatever was running: it runs again.
 /// How the last job of this kind with this payload went (queued, running, failed or done), if there was one. It is failed
 /// only when it failed since `since` (unix seconds): after that it is worth another try.
-pub fn status_of(
-    c: &mut impl GenericClient,
-    kind: &str,
-    payload: &serde_json::Value,
-    since: i64,
-) -> Result<Option<String>, Error> {
+pub fn status_of(c: &mut impl GenericClient, kind: &str, payload: &serde_json::Value, since: i64) -> Result<Option<String>, Error> {
     q::job_status_of().bind(c, &since, &kind, &payload.to_string()).opt()
 }
 
@@ -43,12 +38,10 @@ pub fn claim(c: &mut impl GenericClient, now: i64) -> Result<Option<Claimed>, Er
     if let Some(j) = q::claim_thumb_job().bind(c, &now).opt()? {
         return Ok(Some(Claimed { id: j.id, kind: j.kind, payload: j.payload, attempts: j.attempts }));
     }
-    Ok(q::claim_job().bind(c, &now).opt()?.map(|j| Claimed {
-        id: j.id,
-        kind: j.kind,
-        payload: j.payload,
-        attempts: j.attempts,
-    }))
+    Ok(q::claim_job()
+        .bind(c, &now)
+        .opt()?
+        .map(|j| Claimed { id: j.id, kind: j.kind, payload: j.payload, attempts: j.attempts }))
 }
 
 /// A job that worked is done; it stays in the list for a day.
@@ -59,7 +52,9 @@ pub fn complete(c: &mut impl GenericClient, id: Uuid, note: Option<&str>) -> Res
 /// A job that failed: queued again after `run_after`, or failed for good, with what went wrong.
 pub fn fail(c: &mut impl GenericClient, id: Uuid, give_up: bool, run_after: i64, error: &str) -> Result<(), Error> {
     let status = if give_up { "failed" } else { "queued" };
-    q::retry_job().params(c, &q::RetryJobParams { id, status, run_after, error, now: unix_now() }).map(drop)
+    q::retry_job()
+        .params(c, &q::RetryJobParams { id, status, run_after, error, now: unix_now() })
+        .map(drop)
 }
 
 /// Forgets the jobs that worked more than a day ago.
@@ -137,12 +132,7 @@ pub fn drop_where(c: &mut impl GenericClient, status: &str, id: Option<Uuid>) ->
 pub type ToRead = (Uuid, String, String, Vec<u8>);
 
 /// The photos and videos to read again, newest first, from the file after `after` on: see `ToRead`.
-pub fn media_to_read(
-    c: &mut impl GenericClient,
-    everything: bool,
-    after: Option<Uuid>,
-    limit: i64,
-) -> Result<Vec<ToRead>, Error> {
+pub fn media_to_read(c: &mut impl GenericClient, everything: bool, after: Option<Uuid>, limit: i64) -> Result<Vec<ToRead>, Error> {
     let params = q::MediaToReadParams { everything, after, limit };
     Ok(q::media_to_read()
         .params(c, &params)
@@ -154,5 +144,10 @@ pub fn media_to_read(
 
 /// The unfinished work of a file as (kind, status): queued, running or failed.
 pub fn pending_of(c: &mut impl GenericClient, device: &str, path: &str) -> Result<Vec<(String, String)>, Error> {
-    Ok(q::pending_jobs_of_file().bind(c, &device, &path).all()?.into_iter().map(|j| (j.kind, j.status)).collect())
+    Ok(q::pending_jobs_of_file()
+        .bind(c, &device, &path)
+        .all()?
+        .into_iter()
+        .map(|j| (j.kind, j.status))
+        .collect())
 }

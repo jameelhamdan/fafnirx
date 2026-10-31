@@ -9,9 +9,9 @@ use std::path::PathBuf;
 /// The rclone config file that mirrors with a `remote` read (`FAFNIRX_RCLONE_CONFIG`, default `rclone.conf` in the
 /// data directory).
 pub fn rclone_config() -> PathBuf {
-    std::env::var_os("FAFNIRX_RCLONE_CONFIG").map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(std::env::var("FAFNIRX_DATA").unwrap_or_else(|_| "data".into())).join("rclone.conf")
-    })
+    std::env::var_os("FAFNIRX_RCLONE_CONFIG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(std::env::var("FAFNIRX_DATA").unwrap_or_else(|_| "data".into())).join("rclone.conf"))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -40,28 +40,18 @@ pub struct MirrorSpec {
 /// with a letter or digit, so that it can never be taken for an option.
 fn valid_remote(remote: &str) -> bool {
     let Some((name, _)) = remote.split_once(':') else { return false };
-    name.len() <= 64
-        && name.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '+' | '@' | ' '))
-        && !remote.contains(['\0', '\n', '\r'])
+    name.len() <= 64 && name.chars().next().is_some_and(|c| c.is_ascii_alphanumeric()) && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '+' | '@' | ' ')) && !remote.contains(['\0', '\n', '\r'])
 }
 
 /// The name of an rclone backend option: what rclone calls it in lowercase, with `_` for `-`.
 fn option_name(key: &str) -> Option<String> {
     let key = key.trim().to_lowercase().replace('-', "_");
-    let ok = !key.is_empty()
-        && key.len() <= 64
-        && key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    let ok = !key.is_empty() && key.len() <= 64 && key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
     ok.then_some(key)
 }
 
 /// Checks and cleans where a mirror or a source keeps its files: a remote of the rclone config, or a backend with options.
-pub fn normalize_storage(
-    remote: &mut String,
-    remote_type: &mut String,
-    remote_path: &mut String,
-    options: &mut BTreeMap<String, Value>,
-) -> Result<()> {
+pub fn normalize_storage(remote: &mut String, remote_type: &mut String, remote_path: &mut String, options: &mut BTreeMap<String, Value>) -> Result<()> {
     *remote = remote.trim().to_string();
     if !remote.is_empty() {
         if !valid_remote(remote) {
@@ -73,10 +63,7 @@ pub fn normalize_storage(
         return Ok(());
     }
     *remote_type = remote_type.trim().to_lowercase();
-    if remote_type.is_empty()
-        || remote_type.len() > 32
-        || !remote_type.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-    {
+    if remote_type.is_empty() || remote_type.len() > 32 || !remote_type.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()) {
         bail!("set remote (a remote of the rclone config), or remote_type (an rclone backend such as s3, sftp, webdav, b2)");
     }
     *remote_path = remote_path.trim().to_string();

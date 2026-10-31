@@ -16,8 +16,7 @@ fn stand_in_module(contract: u32) -> String {
                 if !allowed(&h) {
                     return (StatusCode::UNAUTHORIZED, "no".to_string()).into_response();
                 }
-                axum::Json(json!({"id": "video", "version": "1.0.0", "contract": contract, "capabilities": ["status"]}))
-                    .into_response()
+                axum::Json(json!({"id": "video", "version": "1.0.0", "contract": contract, "capabilities": ["status"]})).into_response()
             }),
         )
         .route(
@@ -36,9 +35,7 @@ fn stand_in_module(contract: u32) -> String {
         .route(
             "/files/*rest",
             axum::routing::get(
-                move |Path(rest): Path<String>,
-                      Query(q): Query<std::collections::HashMap<String, String>>,
-                      h: HeaderMap| async move {
+                move |Path(rest): Path<String>, Query(q): Query<std::collections::HashMap<String, String>>, h: HeaderMap| async move {
                     if !allowed(&h) {
                         return (StatusCode::UNAUTHORIZED, "no".to_string()).into_response();
                     }
@@ -55,9 +52,11 @@ fn stand_in_module(contract: u32) -> String {
     listener.set_nonblocking(true).unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     std::thread::spawn(move || {
-        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async move {
-            axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), service).await.unwrap()
-        })
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move { axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), service).await.unwrap() })
     });
     url
 }
@@ -94,15 +93,14 @@ fn a_module_is_for_whoever_can_see_the_file_and_only_when_it_is_set_up() {
         assert_eq!(session["modules"]["video"]["capabilities"], json!(["status"]));
         api.json(Method::POST, "/api/devices", json!({"name": "videos", "kind": "local"})).await;
         api.upload("admin/videos", "trip/clip.mkv", b"video bytes").await;
-        let id: uuid::Uuid = crate::platform::db::with(&api.db, |c| {
-            Ok(c.query_one("SELECT id FROM files WHERE path = 'trip/clip.mkv'", &[])?.get(0))
-        })
-        .await
-        .unwrap();
+        let id: uuid::Uuid = crate::platform::db::with(&api.db, |c| Ok(c.query_one("SELECT id FROM files WHERE path = 'trip/clip.mkv'", &[])?.get(0)))
+            .await
+            .unwrap();
         let id = crate::platform::id::Id(id);
 
-        let (status, headers, body) =
-            api.send(Method::GET, &format!("/api/m/video/{id}/hls/720p/index.m3u8"), Body::empty(), None, &[]).await;
+        let (status, headers, body) = api
+            .send(Method::GET, &format!("/api/m/video/{id}/hls/720p/index.m3u8"), Body::empty(), None, &[])
+            .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers[header::CONTENT_TYPE], "application/vnd.apple.mpegurl");
         let text = String::from_utf8(body).unwrap();
@@ -292,8 +290,7 @@ fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers[header::CONTENT_TYPE], "image/jpeg");
         assert_eq!(image::load_from_memory(&thumb).unwrap().width(), 8);
-        let (_, _, original) =
-            api.send(Method::GET, &format!("/api/media/{a}/original"), Body::empty(), None, &[]).await;
+        let (_, _, original) = api.send(Method::GET, &format!("/api/media/{a}/original"), Body::empty(), None, &[]).await;
         assert_eq!(original, png(8, 4, [200, 10, 10]));
         let bogus = api.send(Method::GET, &format!("/api/media/{a}/bogus"), Body::empty(), None, &[]).await;
         assert_eq!(bogus.0, StatusCode::NOT_FOUND);
@@ -310,9 +307,7 @@ fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
         assert_eq!(trash["total"], 1);
         assert_eq!(trash["entries"][0]["name"], "a.png");
         assert_eq!(trash["entries"][0]["kind"], "image");
-        assert!(
-            trash["entries"][0]["purge_at"].as_i64().unwrap() > trash["entries"][0]["deleted_at"].as_i64().unwrap()
-        );
+        assert!(trash["entries"][0]["purge_at"].as_i64().unwrap() > trash["entries"][0]["deleted_at"].as_i64().unwrap());
         let in_trash = api.send(Method::GET, &format!("/api/media/{a}/thumb"), Body::empty(), None, &[]).await;
         assert_eq!(in_trash.0, StatusCode::OK);
         assert_eq!(edit(&a, json!({"favorite": false})).await.0, StatusCode::NOT_FOUND);
@@ -355,7 +350,12 @@ fn a_folder_can_be_an_album_and_files_are_added_from_the_file_browser() {
             (json!("Show"), json!(2), folder.clone())
         );
         let names = |detail: &Value| -> Vec<String> {
-            detail["assets"].as_array().unwrap().iter().map(|a| a["path"].as_str().unwrap().to_string()).collect()
+            detail["assets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a["path"].as_str().unwrap().to_string())
+                .collect()
         };
         let (_, detail) = api.get(&format!("/api/albums/{id}")).await;
         assert_eq!(
@@ -386,8 +386,7 @@ fn a_folder_can_be_an_album_and_files_are_added_from_the_file_browser() {
         // From the file browser: files and folders by where they are, without ids.
         let (_, trip) = api.json(Method::POST, "/api/albums", json!({"name": "Trip"})).await;
         let trip_id = trip["id"].as_str().unwrap().to_string();
-        let items =
-            json!({"items": [{"device": "admin/tv", "path": "Other/x.png"}, {"device": "admin/tv", "path": "Show"}]});
+        let items = json!({"items": [{"device": "admin/tv", "path": "Other/x.png"}, {"device": "admin/tv", "path": "Show"}]});
         let (_, added) = api.json(Method::POST, &format!("/api/albums/{trip_id}/files"), items).await;
         assert_eq!(added["count"], 4, "the file, and the three below the folder");
         let (_, detail) = api.get(&format!("/api/albums/{trip_id}")).await;
@@ -469,9 +468,7 @@ fn an_album_uses_its_poster_as_the_cover_and_a_viewer_steps_through_a_folder() {
     block(async {
         api.cookie = login(&api).await;
         api.json(Method::POST, "/api/devices", json!({"name": "tv", "kind": "local"})).await;
-        for (path, shade) in
-            [("Show/S1/E1.png", 1), ("Show/S1/E2.png", 2), ("Show/poster.png", 3), ("Show/S1/cover.png", 4)]
-        {
+        for (path, shade) in [("Show/S1/E1.png", 1), ("Show/S1/E2.png", 2), ("Show/poster.png", 3), ("Show/S1/cover.png", 4)] {
             api.upload("admin/tv", path, &png(4, 4, [shade, shade, shade])).await;
         }
         let poster = photo_id(&api, "poster.png").await;
@@ -489,8 +486,7 @@ fn an_album_uses_its_poster_as_the_cover_and_a_viewer_steps_through_a_folder() {
         // The viewer of a file lists the pictures of its folder in the order of their names.
         let (status, folder) = api.get(&format!("/api/library/{e1}/folder")).await;
         assert_eq!(status, StatusCode::OK);
-        let names: Vec<&str> =
-            folder["assets"].as_array().unwrap().iter().map(|a| a["name"].as_str().unwrap()).collect();
+        let names: Vec<&str> = folder["assets"].as_array().unwrap().iter().map(|a| a["name"].as_str().unwrap()).collect();
         assert_eq!(names, ["cover.png", "E1.png", "E2.png"]);
     });
 }
@@ -506,8 +502,7 @@ fn the_folder_of_a_viewer_takes_wildcards_in_names_literally() {
         }
         let one = photo_id(&api, "one.png").await;
         let (_, folder) = api.get(&format!("/api/library/{one}/folder")).await;
-        let names: Vec<&str> =
-            folder["assets"].as_array().unwrap().iter().map(|a| a["name"].as_str().unwrap()).collect();
+        let names: Vec<&str> = folder["assets"].as_array().unwrap().iter().map(|a| a["name"].as_str().unwrap()).collect();
         assert_eq!(names, ["one.png"], "neither axb/ nor the subfolder");
     });
 }
@@ -522,8 +517,7 @@ fn the_photos_switch_is_told_to_everybody_and_changes_nothing_else() {
         assert_eq!(api.get("/api/session").await.1["photos"], true, "on until it is turned off");
         assert_eq!(api.get("/api/settings").await.1["photos"], true);
 
-        let body =
-            |photos: bool| json!({"version_count": 5, "retention_days": 30, "thumbnails": true, "photos": photos});
+        let body = |photos: bool| json!({"version_count": 5, "retention_days": 30, "thumbnails": true, "photos": photos});
         assert_eq!(api.json(Method::PUT, "/api/settings", body(false)).await.0, StatusCode::OK);
         assert_eq!(api.get("/api/settings").await.1["photos"], false);
         assert_eq!(api.get("/api/session").await.1["photos"], false);

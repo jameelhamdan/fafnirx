@@ -82,9 +82,7 @@ fn home() -> PathBuf {
 /// Whether the job installed by `fafnirx install-service` / the install script exists for this label.
 fn launch_agent(label: &str) -> bool {
     let file = format!("{label}.plist");
-    cfg!(target_os = "macos")
-        && (std::path::Path::new("/Library/LaunchAgents").join(&file).is_file()
-            || home().join("Library/LaunchAgents").join(file).is_file())
+    cfg!(target_os = "macos") && (std::path::Path::new("/Library/LaunchAgents").join(&file).is_file() || home().join("Library/LaunchAgents").join(file).is_file())
 }
 
 /// Starts a launchd job again on the program file as it is now (`kickstart -k` ends it first if it is running). This is how a
@@ -140,8 +138,9 @@ pub fn restart_tray(config_path: &Path, updates: &Updates) {
 
 /// Runs `fafnirx <args>` and returns what it printed, or the first line it complained with.
 pub fn run_cli(config_path: &Path, args: &[std::ffi::OsString]) -> Result<String, String> {
-    let out =
-        quiet(Command::new(exe()).arg("--config").arg(config_path).args(args)).output().map_err(|e| e.to_string())?;
+    let out = quiet(Command::new(exe()).arg("--config").arg(config_path).args(args))
+        .output()
+        .map_err(|e| e.to_string())?;
     if out.status.success() {
         return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
     }
@@ -257,9 +256,7 @@ fn installed_version() -> Option<String> {
 /// Replaces this tray with a new one when the program file on disk is a newer version than the one running.
 pub fn restart_if_updated(config_path: PathBuf, updates: Updates) {
     std::thread::spawn(move || {
-        if installed_version().is_some_and(|v| update::newer(&v, update::VERSION))
-            && !updates.restart.load(Ordering::SeqCst)
-        {
+        if installed_version().is_some_and(|v| update::newer(&v, update::VERSION)) && !updates.restart.load(Ordering::SeqCst) {
             restart_tray(&config_path, &updates);
         }
     });

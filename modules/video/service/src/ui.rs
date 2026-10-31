@@ -15,11 +15,9 @@ const STYLE: &str = "style.css";
 /// What the manifest says of the module's screens: nothing when there is no built script to serve.
 pub(crate) fn describe(dir: Option<&Path>) -> Option<Ui> {
     let dir = dir?;
-    dir.join(ENTRY).is_file().then(|| Ui {
-        entry: ENTRY.into(),
-        css: dir.join(STYLE).is_file().then(|| STYLE.into()),
-        sdk: WEB_SDK,
-    })
+    dir.join(ENTRY)
+        .is_file()
+        .then(|| Ui { entry: ENTRY.into(), css: dir.join(STYLE).is_file().then(|| STYLE.into()), sdk: WEB_SDK })
 }
 
 fn content_type(name: &str) -> &'static str {
@@ -36,10 +34,7 @@ fn content_type(name: &str) -> &'static str {
 
 /// A plain file name, so that the address cannot lead out of the folder.
 fn plain(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 128
-        && !name.starts_with('.')
-        && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    !name.is_empty() && name.len() <= 128 && !name.starts_with('.') && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
 pub(crate) async fn file(State(app): State<Arc<App>>, UrlPath(name): UrlPath<String>) -> Result<Response, Failure> {

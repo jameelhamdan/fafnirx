@@ -130,8 +130,7 @@ pub async fn spawn(db: Db, store: Arc<Store>, data_dir: PathBuf) {
                 let (d2, s2) = (d.clone(), s.clone());
                 // On its own task, so that a panic fails this run instead of ending the scheduler.
                 if let Err(e) = tokio::spawn(async move { run_source(&d2, &s2, src).await }).await {
-                    finish_job(&d, Table::Sources, "source_failed", id, name, Err(anyhow!("the run panicked: {e}")))
-                        .await;
+                    finish_job(&d, Table::Sources, "source_failed", id, name, Err(anyhow!("the run panicked: {e}"))).await;
                 }
             }
         }
@@ -143,8 +142,7 @@ pub async fn spawn(db: Db, store: Arc<Store>, data_dir: PathBuf) {
                 let (id, name) = (m.id, m.name.clone());
                 let (d2, s2, dir) = (db.clone(), store.clone(), data_dir.clone());
                 if let Err(e) = tokio::spawn(async move { run_mirror(&d2, &s2, &dir, m).await }).await {
-                    finish_job(&db, Table::Mirrors, "mirror_failed", id, name, Err(anyhow!("the run panicked: {e}")))
-                        .await;
+                    finish_job(&db, Table::Mirrors, "mirror_failed", id, name, Err(anyhow!("the run panicked: {e}"))).await;
                 }
             }
         }
@@ -197,15 +195,7 @@ fn sentence(s: &str) -> String {
     c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
 }
 
-fn finish(
-    conn: &mut impl GenericClient,
-    table: Table,
-    alert_kind: &str,
-    id: i64,
-    name: &str,
-    status: &str,
-    message: &str,
-) {
+fn finish(conn: &mut impl GenericClient, table: Table, alert_kind: &str, id: i64, name: &str, status: &str, message: &str) {
     let message = &sentence(message);
     let ts = unix_now();
     let ok_at = if status == "failed" { None } else { Some(ts) };

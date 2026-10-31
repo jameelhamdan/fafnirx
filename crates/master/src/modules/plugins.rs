@@ -113,17 +113,11 @@ const BASICS: [&str; 12] = [
 
 /// What a plugin is given to run with: its own settings, then the ones the master decides. `passed` are the master's own
 /// variables; only the ones for this plugin (`FAFNIRX_<ID>_…`) and the plain basics go on to it.
-fn child_env(
-    file: &PluginFile,
-    dir: &Path,
-    data: &Path,
-    token: &str,
-    listen: &str,
-    passed: impl Iterator<Item = (String, String)>,
-) -> BTreeMap<String, String> {
+fn child_env(file: &PluginFile, dir: &Path, data: &Path, token: &str, listen: &str, passed: impl Iterator<Item = (String, String)>) -> BTreeMap<String, String> {
     let mine = format!("FAFNIRX_{}_", file.id.to_ascii_uppercase());
-    let mut env: BTreeMap<String, String> =
-        passed.filter(|(k, _)| k.starts_with(&mine) || BASICS.contains(&k.to_ascii_uppercase().as_str())).collect();
+    let mut env: BTreeMap<String, String> = passed
+        .filter(|(k, _)| k.starts_with(&mine) || BASICS.contains(&k.to_ascii_uppercase().as_str()))
+        .collect();
     let dir_text = dir.to_string_lossy();
     for (k, v) in &file.env {
         env.insert(k.clone(), v.replace("{dir}", &dir_text));
@@ -245,13 +239,9 @@ impl Plugins {
                 continue;
             }
             let now = Instant::now();
-            let run = started.entry(id.clone()).or_insert_with(|| Started {
-                child: None,
-                problem: None,
-                at: now,
-                failures: 0,
-                retry_at: now,
-            });
+            let run = started
+                .entry(id.clone())
+                .or_insert_with(|| Started { child: None, problem: None, at: now, failures: 0, retry_at: now });
             if let Some(child) = run.child.as_mut() {
                 match child.try_wait() {
                     Ok(None) => continue,
@@ -260,10 +250,7 @@ impl Plugins {
                         run.retry_at = now + backoff(run.failures);
                         run.problem = Some(format!("it stopped ({status})"));
                         self.registry.remove(&id); // not up while it is not running
-                        tracing::warn!(
-                            "plugin {id} stopped ({status}); it is started again in {:?}",
-                            backoff(run.failures)
-                        );
+                        tracing::warn!("plugin {id} stopped ({status}); it is started again in {:?}", backoff(run.failures));
                         run.child = None;
                     }
                     Err(e) => {
@@ -616,8 +603,7 @@ mod tests {
     use serde_json::json;
 
     fn release() -> Value {
-        let asset =
-            |name: &str| json!({ "name": name, "browser_download_url": format!("https://example.test/{name}") });
+        let asset = |name: &str| json!({ "name": name, "browser_download_url": format!("https://example.test/{name}") });
         json!({ "tag_name": "v3.12.0", "assets": [
             asset("fafnirx-plugin-video-3.12.0-linux-x86_64.zip"),
             asset("fafnirx-plugin-video-3.12.0-linux-x86_64.zip.sha256"),
@@ -710,8 +696,7 @@ mod tests {
     }
 
     fn manifest(id: &str, version: &str) -> String {
-        json!({ "id": id, "version": version, "contract": 1, "platform": "linux-x86_64", "exec": "bin/run" })
-            .to_string()
+        json!({ "id": id, "version": version, "contract": 1, "platform": "linux-x86_64", "exec": "bin/run" }).to_string()
     }
 
     /// Installs a bundle the way `install` does, once it is downloaded.

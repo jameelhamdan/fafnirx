@@ -104,8 +104,7 @@ impl Task<'_> {
                     failed.pop_front();
                 }
                 // The last line is what ffmpeg complained about; the rest is its banner.
-                let error =
-                    error.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("failed").chars().take(300).collect();
+                let error = error.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("failed").chars().take(300).collect();
                 failed.push_back(Failed { kind: self.kind, path: self.path.clone(), error, at: now() });
             }
         }

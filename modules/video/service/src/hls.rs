@@ -131,8 +131,7 @@ pub fn media_playlist(duration: f64) -> String {
 /// `seg12.ts` -> 12.
 pub fn parse_segment(name: &str) -> Option<usize> {
     let digits = name.strip_prefix("seg")?.strip_suffix(".ts")?;
-    (!digits.is_empty() && digits.len() <= 7 && digits.bytes().all(|b| b.is_ascii_digit()))
-        .then(|| digits.parse().ok())?
+    (!digits.is_empty() && digits.len() <= 7 && digits.bytes().all(|b| b.is_ascii_digit())).then(|| digits.parse().ok())?
 }
 
 /// A subtitle track of a video: a file next to it (or in its `Subs` folder), or a track inside the video file.
@@ -216,11 +215,7 @@ pub fn subtitles_in(video: &str, names: &[String], lone: bool) -> Vec<Subtitle> 
                 _ => {
                     if let Some((_, code, name)) = LANGUAGES.iter().find(|(names, _, _)| names.contains(&token)) {
                         (language, label) = ((*code).into(), (*name).into());
-                    } else if exact
-                        && language.is_empty()
-                        && (2..=3).contains(&token.len())
-                        && token.chars().all(|c| c.is_ascii_alphabetic())
-                    {
+                    } else if exact && language.is_empty() && (2..=3).contains(&token.len()) && token.chars().all(|c| c.is_ascii_alphabetic()) {
                         (language, label) = (token.into(), token.to_uppercase());
                     }
                 }
@@ -363,8 +358,7 @@ mod tests {
     fn segment_names_are_strict() {
         assert_eq!(parse_segment("seg0.ts"), Some(0));
         assert_eq!(parse_segment("seg123.ts"), Some(123));
-        for bad in ["seg.ts", "seg-1.ts", "seg1.mp4", "seg1.ts/", "../seg1.ts", "segx.ts", "seg99999999.ts", "SEG1.ts"]
-        {
+        for bad in ["seg.ts", "seg-1.ts", "seg1.mp4", "seg1.ts/", "../seg1.ts", "segx.ts", "seg99999999.ts", "SEG1.ts"] {
             assert_eq!(parse_segment(bad), None, "{bad}");
         }
     }
@@ -394,8 +388,7 @@ mod subtitle_tests {
             ]),
             false,
         );
-        let seen: Vec<(&str, &str, bool)> =
-            found.iter().map(|s| (s.file.as_str(), s.language.as_str(), s.forced)).collect();
+        let seen: Vec<(&str, &str, bool)> = found.iter().map(|s| (s.file.as_str(), s.language.as_str(), s.forced)).collect();
         assert_eq!(
             seen,
             [

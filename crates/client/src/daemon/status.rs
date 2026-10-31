@@ -158,12 +158,7 @@ pub struct StatusFile {
 
 impl StatusFile {
     pub fn new(path: PathBuf) -> Self {
-        let status = Status {
-            version: update::VERSION.into(),
-            pid: std::process::id(),
-            started: unix_now(),
-            ..Default::default()
-        };
+        let status = Status { version: update::VERSION.into(), pid: std::process::id(), started: unix_now(), ..Default::default() };
         Self { path, inner: Mutex::new(status) }
     }
 

@@ -92,8 +92,7 @@ fn activity(c: &mut Client, who: &Access) -> Result<Vec<Day>, postgres::Error> {
     let first = today - (DAYS - 1);
     let (all, user) = who.scope_args();
     let rows = events::activity_by_day(c, first * 86400, all, user)?;
-    let mut days: Vec<Day> =
-        (first..=today).map(|day| Day { day, added: 0, updated: 0, renamed: 0, deleted: 0 }).collect();
+    let mut days: Vec<Day> = (first..=today).map(|day| Day { day, added: 0, updated: 0, renamed: 0, deleted: 0 }).collect();
     for (day, action, n) in rows {
         if let Some(d) = days.get_mut((day - first) as usize) {
             match action.as_str() {
@@ -134,14 +133,9 @@ pub async fn dashboard(State(state): State<Shared>, Extension(who): Extension<Ac
                 updated_at: a.updated_at,
             })
             .collect();
-        let disk = fafnirx_common::disk_usage(&data_dir).filter(|(total, _)| *total > 0 && who.is_admin()).map(
-            |(total, free)| Disk {
-                total,
-                used: total.saturating_sub(free),
-                free,
-                percent: 100 * total.saturating_sub(free) / total,
-            },
-        );
+        let disk = fafnirx_common::disk_usage(&data_dir)
+            .filter(|(total, _)| *total > 0 && who.is_admin())
+            .map(|(total, free)| Disk { total, used: total.saturating_sub(free), free, percent: 100 * total.saturating_sub(free) / total });
         Ok(Dashboard {
             devices,
             online,
@@ -158,11 +152,7 @@ pub async fn dashboard(State(state): State<Shared>, Extension(who): Extension<Ac
     Ok(Json(out))
 }
 
-pub async fn dismiss(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(crate::platform::id::Id(id)): Path<crate::platform::id::Id>,
-) -> Res<Done> {
+pub async fn dismiss(State(state): State<Shared>, Extension(who): Extension<Access>, Path(crate::platform::id::Id(id)): Path<crate::platform::id::Id>) -> Res<Done> {
     act(&state, move |c| {
         // Only the alerts of a device the user can see.
         let key = sql::alerts::alert_key().bind(c, &id).opt()?;

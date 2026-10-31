@@ -60,13 +60,7 @@ pub fn toggle(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
 }
 
 /// Records how a run went; `ok_at` is when it worked, if it did.
-pub fn finish(
-    c: &mut impl GenericClient,
-    id: i64,
-    status: &str,
-    message: &str,
-    ok_at: Option<i64>,
-) -> Result<(), Error> {
+pub fn finish(c: &mut impl GenericClient, id: i64, status: &str, message: &str, ok_at: Option<i64>) -> Result<(), Error> {
     q::finish_mirror().params(c, &q::FinishMirrorParams { status, message, ok_at, id }).map(drop)
 }
 
@@ -82,21 +76,24 @@ pub fn live_files(c: &mut impl GenericClient, scope: &str) -> Result<Vec<Live>, 
 
 /// What a mirror holds, as (device id, path, root hash).
 pub fn items(c: &mut impl GenericClient, mirror_id: i64) -> Result<Vec<(i64, String, Vec<u8>)>, Error> {
-    Ok(q::mirror_items().bind(c, &mirror_id).all()?.into_iter().map(|i| (i.device_id, i.path, i.root_hash)).collect())
+    Ok(q::mirror_items()
+        .bind(c, &mirror_id)
+        .all()?
+        .into_iter()
+        .map(|i| (i.device_id, i.path, i.root_hash))
+        .collect())
 }
 
-pub fn remember_item(
-    c: &mut impl GenericClient,
-    mirror_id: i64,
-    device_id: i64,
-    path: &str,
-    root_hash: &[u8],
-) -> Result<(), Error> {
-    q::upsert_mirror_item().params(c, &q::UpsertMirrorItemParams { mirror_id, device_id, path, root_hash }).map(drop)
+pub fn remember_item(c: &mut impl GenericClient, mirror_id: i64, device_id: i64, path: &str, root_hash: &[u8]) -> Result<(), Error> {
+    q::upsert_mirror_item()
+        .params(c, &q::UpsertMirrorItemParams { mirror_id, device_id, path, root_hash })
+        .map(drop)
 }
 
 pub fn forget_item(c: &mut impl GenericClient, mirror_id: i64, device_id: i64, path: &str) -> Result<(), Error> {
-    q::delete_mirror_item().params(c, &q::DeleteMirrorItemParams { mirror_id, device_id, path }).map(drop)
+    q::delete_mirror_item()
+        .params(c, &q::DeleteMirrorItemParams { mirror_id, device_id, path })
+        .map(drop)
 }
 
 /// The folder of every device, by id.

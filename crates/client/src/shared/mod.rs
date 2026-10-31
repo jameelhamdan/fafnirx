@@ -135,13 +135,7 @@ pub fn status_of(shared: &Shared, state: &State) -> SharedStatus {
 }
 
 impl Attached {
-    pub fn open(
-        cfg: &Config,
-        token: &str,
-        state_dir: &Path,
-        shared: &Shared,
-        errors: Arc<Mutex<Vec<String>>>,
-    ) -> Result<Self> {
+    pub fn open(cfg: &Config, token: &str, state_dir: &Path, shared: &Shared, errors: Arc<Mutex<Vec<String>>>) -> Result<Self> {
         let client = net::shared_client(cfg, token, &crate::service::instance::client_id(state_dir), &shared.name)?;
         let mut state = State::open(&state_file(state_dir, &shared.name))?;
         state.adopt_folder(&shared.path.display().to_string())?;
@@ -257,8 +251,7 @@ impl Attached {
                 None => {}
             }
         }
-        let cursor = cursor
-            .ok_or_else(|| SyncError::Offline("the master listed no changes and no point to continue from".into()))?;
+        let cursor = cursor.ok_or_else(|| SyncError::Offline("the master listed no changes and no point to continue from".into()))?;
         Ok(Listing { cursor, complete, changes })
     }
 
@@ -303,13 +296,7 @@ impl Attached {
     }
 
     /// Adds a path deleted on the master to the plan when the file here is unchanged.
-    fn queue_deletion(
-        &self,
-        path: &str,
-        from_web: bool,
-        plan: &mut Plan,
-        report: &mut Report,
-    ) -> Result<(), SyncError> {
+    fn queue_deletion(&self, path: &str, from_web: bool, plan: &mut Plan, report: &mut Report) -> Result<(), SyncError> {
         let target = local_path(&self.shared.path, path);
         match self.deleted_on_master(path, &target, report) {
             Ok(Some(base)) => {
@@ -365,18 +352,9 @@ impl Attached {
     }
 
     /// A path has other content on the master than it had when it was last in step.
-    async fn changed_on_master(
-        &mut self,
-        path: &str,
-        target: &Path,
-        change: &pb::Change,
-        deletions: &mut Vec<(Synced, PathBuf)>,
-        report: &mut Report,
-    ) -> Result<(), SyncError> {
+    async fn changed_on_master(&mut self, path: &str, target: &Path, change: &pb::Change, deletions: &mut Vec<(Synced, PathBuf)>, report: &mut Report) -> Result<(), SyncError> {
         let base = self.engine.state.synced(path)?;
-        if base.as_ref().is_some_and(|b| b.root_hash == change.root_hash)
-            || self.answered.get(path).is_some_and(|answered| *answered == change.root_hash)
-        {
+        if base.as_ref().is_some_and(|b| b.root_hash == change.root_hash) || self.answered.get(path).is_some_and(|answered| *answered == change.root_hash) {
             return Ok(());
         }
         // Another spelling of this name is here (a different case, or of a folder above it). Every kind of computer treats that as
@@ -422,13 +400,7 @@ impl Attached {
     }
 
     /// Receives the master's version of a file into its place and notes it as in step.
-    async fn receive_here(
-        &mut self,
-        path: &str,
-        target: &Path,
-        change: &pb::Change,
-        report: &mut Report,
-    ) -> Result<(), SyncError> {
+    async fn receive_here(&mut self, path: &str, target: &Path, change: &pb::Change, report: &mut Report) -> Result<(), SyncError> {
         if self.download(path, target, change, report).await? {
             self.spellings.added(target);
             self.record(path, target, &change.root_hash)?;
@@ -440,14 +412,7 @@ impl Attached {
     /// The master renamed `old` to `path`, which differs from it only in case. The folders above are renamed here the same,
     /// whole: a file system that ignores case would keep the old spelling of one and send that back. Returns true when that
     /// was all (same content, the file is moved); false when the old file is gone and the new content is still to be received.
-    fn follow_case_rename(
-        &mut self,
-        path: &str,
-        target: &Path,
-        old: &Synced,
-        change: &pb::Change,
-        report: &mut Report,
-    ) -> Result<bool, SyncError> {
+    fn follow_case_rename(&mut self, path: &str, target: &Path, old: &Synced, change: &pb::Change, report: &mut Report) -> Result<bool, SyncError> {
         self.spellings.respell_folders(path)?;
         // Where the old file is now: under its own name if that is all that differs, otherwise already at the new one.
         let old_now = self.spellings.clash_with(path);
@@ -472,17 +437,10 @@ impl Attached {
 
     /// Deletes here what was deleted on the master. Deletions by other computers that are a large part of the folder wait
     /// until released or kept (see `Applied`).
-    fn apply_deletions(
-        &mut self,
-        deletions: Vec<(Synced, PathBuf)>,
-        from_web: &HashSet<String>,
-        folded: &HashSet<String>,
-        report: &mut Report,
-    ) -> Result<Applied, SyncError> {
+    fn apply_deletions(&mut self, deletions: Vec<(Synced, PathBuf)>, from_web: &HashSet<String>, folded: &HashSet<String>, report: &mut Report) -> Result<Applied, SyncError> {
         let synced = self.engine.state.totals()?.0;
         // What was deleted in the web app is applied whatever its number; the guard is for what other computers delete.
-        let (web, deletions): (Vec<_>, Vec<_>) =
-            deletions.into_iter().partition(|(base, _)| from_web.contains(&base.path));
+        let (web, deletions): (Vec<_>, Vec<_>) = deletions.into_iter().partition(|(base, _)| from_web.contains(&base.path));
         self.delete_here(web, folded, report)?;
         let state = &self.engine.state;
         if !deletions.is_empty() && !state.release_requested()? && guard::tripped(deletions.len(), synced) {
@@ -493,11 +451,8 @@ impl Attached {
                     state.remove_synced(&base.path)?;
                 }
                 state.clear_pull_hold()?;
-                self.engine.report_error(format!(
-                    "{}: kept the {} files that were deleted on the server",
-                    self.shared.name,
-                    deletions.len()
-                ));
+                self.engine
+                    .report_error(format!("{}: kept the {} files that were deleted on the server", self.shared.name, deletions.len()));
                 return Ok(Applied::Kept);
             }
             // Held until a person decides: there is no time after which it is applied by itself.
@@ -518,12 +473,7 @@ impl Attached {
     }
 
     /// `folded`: the paths being received, by folded spelling.
-    fn delete_here(
-        &mut self,
-        deletions: Vec<(Synced, PathBuf)>,
-        folded: &HashSet<String>,
-        report: &mut Report,
-    ) -> Result<(), SyncError> {
+    fn delete_here(&mut self, deletions: Vec<(Synced, PathBuf)>, folded: &HashSet<String>, report: &mut Report) -> Result<(), SyncError> {
         for (base, target) in deletions {
             // Where the file is here. Not under the spelling it was deleted with when a folder above it was renamed to another
             // case (whole, see `follow_case_rename`): it is then under the new one. When the path itself was renamed to another
@@ -601,18 +551,11 @@ impl Attached {
             }
             Conflict::Ask => {
                 let (local_size, local_mtime_ns) = local_stat(target)?.unwrap_or_default();
-                let mut pending = Pending {
-                    path: path.to_string(),
-                    local_size,
-                    local_mtime_ns,
-                    found_at: unix_now(),
-                    ..Default::default()
-                };
+                let mut pending = Pending { path: path.to_string(), local_size, local_mtime_ns, found_at: unix_now(), ..Default::default() };
                 match master {
                     Master::Deleted => pending.deleted = true,
                     Master::Live(c) => {
-                        (pending.root_hash, pending.size, pending.mtime, pending.mode, pending.from_web) =
-                            (c.root_hash.clone(), c.size, c.mtime, c.mode, c.from_web);
+                        (pending.root_hash, pending.size, pending.mtime, pending.mode, pending.from_web) = (c.root_hash.clone(), c.size, c.mtime, c.mode, c.from_web);
                     }
                 }
                 state.add_pending(&pending)?;
@@ -719,19 +662,10 @@ impl Attached {
     /// master gave, and only then renamed, so a half received file is never taken for the file.
     /// A local file edited while this runs (it can take minutes) is settled as a conflict, not replaced. Returns whether the
     /// master's version was put in place.
-    async fn download(
-        &mut self,
-        path: &str,
-        target: &Path,
-        change: &pb::Change,
-        report: &mut Report,
-    ) -> Result<bool, SyncError> {
+    async fn download(&mut self, path: &str, target: &Path, change: &pb::Change, report: &mut Report) -> Result<bool, SyncError> {
         make_parent(&self.shared.path, target)?;
         let before = local_stat(target)?;
-        let tmp = target.with_file_name(format!(
-            "{PART_PREFIX}{}",
-            hex::encode(&change.root_hash[..change.root_hash.len().min(6)])
-        ));
+        let tmp = target.with_file_name(format!("{PART_PREFIX}{}", hex::encode(&change.root_hash[..change.root_hash.len().min(6)])));
         if let Err(e) = self.receive_checked(path, &tmp, change).await {
             let _ = std::fs::remove_file(&tmp);
             return Err(e);
@@ -755,10 +689,7 @@ impl Attached {
         give_to_owner_of(&self.shared.path, &tmp);
         tokio::fs::rename(&tmp, target).await.map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
-            let why = if e.kind() == std::io::ErrorKind::PermissionDenied
-                && cfg!(target_os = "macos")
-                && crate::service::disk_access::is_protected(target)
-            {
+            let why = if e.kind() == std::io::ErrorKind::PermissionDenied && cfg!(target_os = "macos") && crate::service::disk_access::is_protected(target) {
                 format!(" (macOS: {})", crate::service::disk_access::STEPS)
             } else {
                 String::new()
@@ -810,10 +741,7 @@ fn make_parent(root: &Path, target: &Path) -> Result<(), SyncError> {
 fn no_link_between(root: &Path, dir: &Path) -> Result<(), SyncError> {
     for ancestor in dir.ancestors().take_while(|p| *p != root && p.starts_with(root)) {
         if std::fs::symlink_metadata(ancestor).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err(SyncError::File(format!(
-                "{} is a link: files are not written through links",
-                ancestor.display()
-            )));
+            return Err(SyncError::File(format!("{} is a link: files are not written through links", ancestor.display())));
         }
     }
     Ok(())
@@ -931,8 +859,7 @@ mod tests {
 
     #[test]
     fn a_read_only_share_stops_that_folder_not_the_client() {
-        let read_only =
-            SyncError::from(tonic::Status::failed_precondition("\"bob/family\" is shared with you to read only"));
+        let read_only = SyncError::from(tonic::Status::failed_precondition("\"bob/family\" is shared with you to read only"));
         assert!(matches!(read_only, SyncError::Refused(_)), "a problem with the folder, recorded against no file");
         let in_use = SyncError::from(tonic::Status::permission_denied("device in use: another computer is connected"));
         assert!(matches!(in_use, SyncError::Offline(_)), "a problem with the device: nothing can sync");
@@ -991,8 +918,7 @@ mod tests {
             };
             let mut cfg = Config::new(url);
             cfg.shared.push(shared.clone());
-            let attached =
-                Attached::open(&cfg, "token", state.path(), &shared, Arc::new(Mutex::new(Vec::new()))).unwrap();
+            let attached = Attached::open(&cfg, "token", state.path(), &shared, Arc::new(Mutex::new(Vec::new()))).unwrap();
             Self { attached, cfg, held, folder, _state: state }
         }
 
@@ -1174,9 +1100,7 @@ mod tests {
 
         #[tokio::test]
         async fn the_answer_is_applied_at_the_next_cycle() {
-            for (choice, name, ours_aside, sent) in
-                [("theirs", "theirs", true, false), ("mine", "mine", false, true), ("both", "theirs", false, false)]
-            {
+            for (choice, name, ours_aside, sent) in [("theirs", "theirs", true, false), ("mine", "mine", false, true), ("both", "theirs", false, false)] {
                 let mut rig = waiting().await;
                 assert_eq!(rig.attached.engine.state.answer_pending(Some("b.txt"), choice).unwrap(), 1);
                 rig.cycle().await;
@@ -1325,8 +1249,7 @@ mod tests {
             let mut h = rig.held.lock().unwrap();
             h.files.clear();
             h.files.insert("trip/a.txt".into(), b"first".to_vec());
-            h.changes =
-                vec![master::gone("Trip/a.txt"), master::gone("Trip/b.txt"), master::live("trip/a.txt", b"first")];
+            h.changes = vec![master::gone("Trip/a.txt"), master::gone("Trip/b.txt"), master::live("trip/a.txt", b"first")];
         }
         let report = rig.cycle().await;
         assert_eq!(rig.names(), ["trip"]);
@@ -1454,10 +1377,7 @@ mod tests {
         rig.cycle().await;
         let failed = rig.attached.status();
         assert!(failed.last_error.contains("b.txt"), "{}", failed.last_error);
-        assert!(
-            failed.summary(failed.last_cycle).contains("needs attention")
-                || failed.summary(failed.last_cycle).contains("last problem")
-        );
+        assert!(failed.summary(failed.last_cycle).contains("needs attention") || failed.summary(failed.last_cycle).contains("last problem"));
     }
 
     /// A folder with twelve files, in step with the master.
@@ -1495,7 +1415,11 @@ mod tests {
         assert_eq!((seen.held, seen.files), (12, 12));
         assert!(seen.last_cycle > 0, "and how the last cycle ended");
         assert_eq!(seen, rig.attached.status());
-        assert!(seen.last_error.contains("keep alice/family"), "the last problem says what to do: {}", seen.last_error);
+        assert!(
+            seen.last_error.contains("keep alice/family"),
+            "the last problem says what to do: {}",
+            seen.last_error
+        );
         // Held means held: no later cycle applies them by itself.
         let mut rig = rig;
         for _ in 0..3 {

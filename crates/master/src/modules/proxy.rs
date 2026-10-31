@@ -14,12 +14,7 @@ use axum::Extension;
 
 /// The parts of a module's address: short names, so that the address cannot lead anywhere else.
 fn safe_rest(rest: &str) -> bool {
-    let ok = |part: &str| {
-        !part.is_empty()
-            && part.len() <= 64
-            && !part.starts_with('.')
-            && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
-    };
+    let ok = |part: &str| !part.is_empty() && part.len() <= 64 && !part.starts_with('.') && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-');
     let parts: Vec<&str> = rest.split('/').collect();
     (1..=4).contains(&parts.len()) && parts.into_iter().all(ok)
 }
@@ -32,11 +27,7 @@ fn locate(c: &mut postgres::Client, who: &Access, id: uuid::Uuid) -> anyhow::Res
     Ok((crate::platform::store::tree_path(&folder, &path), hex::encode(root)))
 }
 
-pub async fn proxy(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path((module, Id(id), rest)): Path<(String, Id, String)>,
-) -> Result<Response, ApiError> {
+pub async fn proxy(State(state): State<Shared>, Extension(who): Extension<Access>, Path((module, Id(id), rest)): Path<(String, Id, String)>) -> Result<Response, ApiError> {
     let module = state.modules.up(&module).ok_or_else(|| ApiError::not_found("No such module"))?;
     if !safe_rest(&rest) {
         return Err(ApiError::not_found("No such resource"));
@@ -56,10 +47,7 @@ pub async fn proxy(
 
 /// What the web app asks for of a module's own screens: `GET /api/m/<module>/ui/<file>` becomes `GET /ui/<file>`. The same
 /// for every user, so only the login is checked.
-pub async fn ui(
-    State(state): State<Shared>,
-    Path((module, file)): Path<(String, String)>,
-) -> Result<Response, ApiError> {
+pub async fn ui(State(state): State<Shared>, Path((module, file)): Path<(String, String)>) -> Result<Response, ApiError> {
     let module = state.modules.up(&module).ok_or_else(|| ApiError::not_found("No such module"))?;
     if !safe_rest(&file) || file.contains('/') {
         return Err(ApiError::not_found("No such resource"));

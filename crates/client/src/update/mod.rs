@@ -62,11 +62,9 @@ pub async fn check(client: Option<&mut Client>, cfg: &Config) -> Result<Option<S
         let client = client.context("builds you signed are offered by the master: this needs its device token")?;
         return Ok(offer(client, public_key).await?.map(|info| info.version));
     }
-    let found = tokio::task::spawn_blocking(move || {
-        crate::update::release::latest(&crate::update::release::agent(), &platform, VERSION)
-    })
-    .await
-    .context("the check stopped")??;
+    let found = tokio::task::spawn_blocking(move || crate::update::release::latest(&crate::update::release::agent(), &platform, VERSION))
+        .await
+        .context("the check stopped")??;
     Ok(found.map(|f| f.version))
 }
 
@@ -91,8 +89,7 @@ pub fn installed_by_dpkg() -> bool {
 
 /// Installs a `.deb` that was downloaded and checked, asking for permission the way the situation allows.
 fn install_deb(package: &Path) -> Result<()> {
-    crate::service::elevate::run("dpkg", &["-i", &package.to_string_lossy()])
-        .with_context(|| format!("the package is checked and kept at {}", package.display()))
+    crate::service::elevate::run("dpkg", &["-i", &package.to_string_lossy()]).with_context(|| format!("the package is checked and kept at {}", package.display()))
 }
 #[cfg(unix)]
 fn set_mode(path: &Path, mode: u32) -> Result<()> {
@@ -105,13 +102,14 @@ fn set_mode(path: &Path, mode: u32) -> Result<()> {
 async fn from_package(work_dir: &Path, interactive: bool) -> Result<bool> {
     let arch = crate::update::release::deb_arch().context("there is no package for this kind of computer")?;
     if !interactive {
-        let found = tokio::task::spawn_blocking(move || {
-            crate::update::release::latest_deb(&crate::update::release::agent(), arch, VERSION)
-        })
-        .await
-        .context("the check stopped")??;
+        let found = tokio::task::spawn_blocking(move || crate::update::release::latest_deb(&crate::update::release::agent(), arch, VERSION))
+            .await
+            .context("the check stopped")??;
         if let Some(found) = found {
-            tracing::info!("version {} is available; this install is updated from the tray's Update entry or with `fafnirx update`", found.version);
+            tracing::info!(
+                "version {} is available; this install is updated from the tray's Update entry or with `fafnirx update`",
+                found.version
+            );
         }
         return Ok(false);
     }
@@ -188,8 +186,7 @@ async fn offer(client: &mut Client, public_key: &str) -> Result<Option<UpdateInf
         return Ok(None);
     }
     let sha_hex = hex::encode(&info.sha256);
-    verify(public_key, &update_message(&platform, &info.version, &sha_hex), &info.signature)
-        .context("refusing update")?;
+    verify(public_key, &update_message(&platform, &info.version, &sha_hex), &info.signature).context("refusing update")?;
     Ok(Some(info))
 }
 

@@ -63,7 +63,10 @@ pub fn client_id(state_dir: &Path) -> String {
         hasher.update(std::collections::hash_map::RandomState::new().build_hasher().finish().to_le_bytes());
     }
     hasher.update(
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()).to_le_bytes(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+            .to_le_bytes(),
     );
     hasher.update(std::process::id().to_le_bytes());
     let id = hex::encode(&hasher.finalize()[..16]);

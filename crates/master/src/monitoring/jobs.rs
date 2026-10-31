@@ -55,8 +55,9 @@ fn minute(db: &Db, data_dir: &std::path::Path) {
         Err(e) => return tracing::error!("alert job: no database connection: {e}"),
     };
     let conn = &mut *conn;
-    if let Err(e) =
-        offline_alerts(conn).and_then(|_| disk_alert(conn, data_dir)).and_then(|_| expire_quiet_alerts(conn))
+    if let Err(e) = offline_alerts(conn)
+        .and_then(|_| disk_alert(conn, data_dir))
+        .and_then(|_| expire_quiet_alerts(conn))
     {
         tracing::error!("alert job failed: {e}");
     }
@@ -113,8 +114,7 @@ pub fn hourly(db: &Db, store: &Store, cache_root: &Path) -> Result<()> {
     if abandoned > 0 {
         tracing::info!("removed {abandoned} abandoned uploads");
     }
-    let known: std::collections::HashSet<i64> =
-        sql::retention::all_version_ids().bind(&mut *db.get()?).all()?.into_iter().collect();
+    let known: std::collections::HashSet<i64> = sql::retention::all_version_ids().bind(&mut *db.get()?).all()?.into_iter().collect();
     let orphans = store.sweep_versions(&known, STALE_UPLOAD);
     if orphans > 0 {
         tracing::info!("removed {orphans} stored versions that no record points to");
@@ -141,7 +141,9 @@ fn retention(conn: &mut Client) -> Result<Vec<i64>> {
     sql::devices::mark_totals_stale().bind(&mut tx, &device_ids).map(drop)?;
     let pruned = sql::retention::delete_pruned_versions().bind(&mut tx, &cutoff).all()?;
     sql::events::purge_events().bind(&mut tx, &(unix_now() - EVENT_KEEP_DAYS * 86400)).map(drop)?;
-    sql::alerts::purge_resolved_alerts().bind(&mut tx, &(unix_now() - EVENT_KEEP_DAYS * 86400)).map(drop)?;
+    sql::alerts::purge_resolved_alerts()
+        .bind(&mut tx, &(unix_now() - EVENT_KEEP_DAYS * 86400))
+        .map(drop)?;
     tx.commit()?;
     if files > 0 || !pruned.is_empty() {
         tracing::info!("retention removed {files} files and {} old versions", pruned.len());
@@ -162,7 +164,8 @@ mod tests {
         let old = unix_now() - 40 * 86400;
         let fresh = unix_now() - 86400;
         c.execute("INSERT INTO files (device_id, path, deleted_at) VALUES (1, 'old', $1)", &[&old]).unwrap();
-        c.execute("INSERT INTO files (device_id, path, deleted_at) VALUES (1, 'fresh', $1)", &[&fresh]).unwrap();
+        c.execute("INSERT INTO files (device_id, path, deleted_at) VALUES (1, 'fresh', $1)", &[&fresh])
+            .unwrap();
         c.execute("INSERT INTO files (device_id, path) VALUES (1, 'live')", &[]).unwrap();
         c.execute(
             "INSERT INTO versions (file_id, root_hash, size, mtime, created_at)
@@ -242,7 +245,8 @@ mod tests {
         let db = testing::db_with_device();
         let mut c = db.get().unwrap();
         let c = &mut *c;
-        c.execute("UPDATE devices SET kind = 'source', last_seen = $1 WHERE id = 1", &[&(unix_now() - 600)]).unwrap();
+        c.execute("UPDATE devices SET kind = 'source', last_seen = $1 WHERE id = 1", &[&(unix_now() - 600)])
+            .unwrap();
         offline_alerts(c).unwrap();
         assert_eq!(testing::open_alerts(c), 0, "only clients send heartbeats");
     }

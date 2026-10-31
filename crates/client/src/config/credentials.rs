@@ -24,9 +24,7 @@ fn fallback_path(config_path: &Path) -> std::path::PathBuf {
 
 /// Stores the token; returns where it ended up.
 pub fn store(server: &str, config_path: &Path, token: &str) -> Result<&'static str> {
-    let in_keychain = use_keychain(config_path)
-        && entry(server).and_then(|e| Ok(e.set_password(token)?)).is_ok()
-        && load_keychain(server).as_deref() == Some(token);
+    let in_keychain = use_keychain(config_path) && entry(server).and_then(|e| Ok(e.set_password(token)?)).is_ok() && load_keychain(server).as_deref() == Some(token);
     if in_keychain {
         let _ = std::fs::remove_file(fallback_path(config_path));
         return Ok("OS keychain");

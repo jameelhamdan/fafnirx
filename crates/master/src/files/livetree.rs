@@ -311,12 +311,13 @@ fn sync_subtree(conn: &mut Client, store: &Store, dev: &Device, rel: &str, settl
     if !store.live_dir(&dev.name).is_dir() {
         return Ok((0, 0));
     }
-    let Ok(base) = (if rel.is_empty() { Ok(store.live_dir(&dev.name)) } else { store.live_path(&dev.name, rel) })
-    else {
+    let Ok(base) = (if rel.is_empty() { Ok(store.live_dir(&dev.name)) } else { store.live_path(&dev.name, rel) }) else {
         return Ok((0, 0)); // a name that cannot be stored cannot be tracked
     };
-    let known: HashMap<String, (i64, i64)> =
-        files::live_below(conn, dev.id, rel)?.into_iter().map(|(path, size, mtime)| (path, (size, mtime))).collect();
+    let known: HashMap<String, (i64, i64)> = files::live_below(conn, dev.id, rel)?
+        .into_iter()
+        .map(|(path, size, mtime)| (path, (size, mtime)))
+        .collect();
 
     // The master files share `files/` with `users/` (the folders of the users), which is not theirs to record.
     let skip = if dev.id == ingest::MASTER_DEVICE_ID && rel.is_empty() {
@@ -342,8 +343,7 @@ fn sync_subtree(conn: &mut Client, store: &Store, dev: &Device, rel: &str, settl
         .collect();
     let found: HashSet<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
     // A new file with the size and modification time of exactly one vanished path is that path renamed (a move keeps both).
-    let mut vanished: Vec<(&str, (i64, i64))> =
-        known.iter().filter(|(p, _)| !found.contains(p.as_str())).map(|(p, v)| (p.as_str(), *v)).collect();
+    let mut vanished: Vec<(&str, (i64, i64))> = known.iter().filter(|(p, _)| !found.contains(p.as_str())).map(|(p, v)| (p.as_str(), *v)).collect();
     let mut changed = 0;
     for (path, full) in &files {
         let renamed_from = if known.contains_key(path) { None } else { take_rename(&mut vanished, full) };
@@ -373,8 +373,10 @@ fn take_rename(vanished: &mut Vec<(&str, (i64, i64))>, full: &Path) -> Option<St
     if size == 0 {
         return None;
     }
-    let mut hits =
-        vanished.iter().enumerate().filter(|(_, (_, (s, m)))| *s == size && (m - mtime).abs() < MTIME_SLACK_NS);
+    let mut hits = vanished
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, (s, m)))| *s == size && (m - mtime).abs() < MTIME_SLACK_NS);
     let (index, _) = hits.next()?;
     if hits.next().is_some() {
         return None;
@@ -384,15 +386,7 @@ fn take_rename(vanished: &mut Vec<(&str, (i64, i64))>, full: &Path) -> Option<St
 
 /// Records a file if it differs from `known` (size, mtime of its current version). Returns whether a
 /// version was added.
-fn check_file(
-    conn: &mut Client,
-    store: &Store,
-    dev: &Device,
-    path: &str,
-    full: &Path,
-    before: Before,
-    settle: Duration,
-) -> Result<bool> {
+fn check_file(conn: &mut Client, store: &Store, dev: &Device, path: &str, full: &Path, before: Before, settle: Duration) -> Result<bool> {
     let Ok(meta) = std::fs::metadata(full) else { return Ok(false) };
     let (size, mtime) = (meta.len(), mtime_ns(&meta));
     let age = meta.modified().ok().and_then(|t| SystemTime::now().duration_since(t).ok()).unwrap_or_default();
@@ -508,8 +502,7 @@ mod tests {
         fs::remove_file(&p).unwrap();
         assert_eq!(sync_subtree(&mut c, &store, &dev, "", none).unwrap(), (0, 1));
         assert!(live(&mut c).is_empty());
-        let actions: Vec<String> =
-            c.query("SELECT action FROM events ORDER BY id", &[]).unwrap().iter().map(|r| r.get(0)).collect();
+        let actions: Vec<String> = c.query("SELECT action FROM events ORDER BY id", &[]).unwrap().iter().map(|r| r.get(0)).collect();
         assert_eq!(actions, ["add", "update", "delete"]);
     }
 
@@ -585,11 +578,7 @@ mod tests {
         assert_eq!(live(&mut c).len(), 2, "b/z was not looked at");
 
         fs::remove_dir_all(store.live_path("admin/d", "a").unwrap()).unwrap();
-        assert_eq!(
-            sync_subtree(&mut c, &store, &dev, "a", none).unwrap(),
-            (0, 2),
-            "a removed folder removes its files"
-        );
+        assert_eq!(sync_subtree(&mut c, &store, &dev, "a", none).unwrap(), (0, 2), "a removed folder removes its files");
         assert_eq!(sync_subtree(&mut c, &store, &dev, "", none).unwrap(), (1, 0));
         assert_eq!(live(&mut c).len(), 1);
     }
@@ -651,7 +640,10 @@ mod tests {
 
         let (found, rel) = resolve(&mut c, &store, "scans/2024/a.txt").unwrap().unwrap();
         assert_eq!((found.id, rel.as_str()), (0, "scans/2024/a.txt"));
-        assert!(resolve(&mut c, &store, "users/admin").unwrap().is_none(), "the folder of a user is not a master file");
+        assert!(
+            resolve(&mut c, &store, "users/admin").unwrap().is_none(),
+            "the folder of a user is not a master file"
+        );
     }
 
     #[test]
@@ -675,9 +667,7 @@ mod tests {
         c.execute("INSERT INTO files (device_id, path) VALUES (0, $1)", &[&"Users/old.txt"]).unwrap();
         scan(&db, &store, Duration::ZERO).unwrap();
 
-        let open = |c: &mut Client, kind: &str| -> Option<String> {
-            alerts::open(c).unwrap().into_iter().find(|a| a.kind == kind).map(|a| a.message)
-        };
+        let open = |c: &mut Client, kind: &str| -> Option<String> { alerts::open(c).unwrap().into_iter().find(|a| a.kind == kind).map(|a| a.message) };
         let misplaced = open(&mut c, "misplaced_files").expect("an alert for the files outside device folders");
         for named in ["users/stray.txt", "users/ghost", "users/admin/loose.txt", "users/admin/Bad Name"] {
             assert!(misplaced.contains(named), "{named} in: {misplaced}");

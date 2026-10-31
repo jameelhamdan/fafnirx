@@ -98,15 +98,8 @@ pub fn by_ids(c: &mut impl GenericClient, who: Viewer, ids: &[Uuid]) -> Result<V
 }
 
 /// What is in an album, at most `limit`: newest first, or by path (for the caller to sort the way people read names).
-pub fn album_assets(
-    c: &mut impl GenericClient,
-    who: Viewer,
-    album_id: Uuid,
-    by_path: bool,
-    limit: i64,
-) -> Result<Vec<Asset>, Error> {
-    let params =
-        q::AlbumAssetsParams { uid: who.uid, all: who.all, scope_user: who.scope_user, album_id, by_path, limit };
+pub fn album_assets(c: &mut impl GenericClient, who: Viewer, album_id: Uuid, by_path: bool, limit: i64) -> Result<Vec<Asset>, Error> {
+    let params = q::AlbumAssetsParams { uid: who.uid, all: who.all, scope_user: who.scope_user, album_id, by_path, limit };
     q::album_assets().params(c, &params).all()
 }
 

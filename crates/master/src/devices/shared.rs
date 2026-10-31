@@ -55,11 +55,7 @@ pub struct NewShared {
     name: String,
 }
 
-pub async fn create(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Json(body): Json<NewShared>,
-) -> Res<Done> {
+pub async fn create(State(state): State<Shared>, Extension(who): Extension<Access>, Json(body): Json<NewShared>) -> Res<Done> {
     who.require_workspace()?;
     let name = body.name.trim().to_lowercase();
     let folder = run(&state, move |c| make(c, who.user_id, &name)).await?;
@@ -75,20 +71,13 @@ fn own(c: &mut Client, who: &Access, name: &str) -> anyhow::Result<devices::Shar
         .ok_or_else(|| ApiError::not_found("You have no such shared folder").into())
 }
 
-pub async fn delete(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(name): Path<String>,
-) -> Res<Done> {
+pub async fn delete(State(state): State<Shared>, Extension(who): Extension<Access>, Path(name): Path<String>) -> Res<Done> {
     who.require_workspace()?;
     let store = state.store.clone();
     act(&state, move |c| {
         let folder = own(c, &who, &name)?;
         let Some(versions) = devices::purge_shared_folder(c, folder.id)? else {
-            return Err(ApiError::conflict(
-                "It still has files. Delete them first; deleting the folder then also removes the trash and the history",
-            )
-            .into());
+            return Err(ApiError::conflict("It still has files. Delete them first; deleting the folder then also removes the trash and the history").into());
         };
         for version in versions {
             store.remove_version(version);
@@ -105,9 +94,7 @@ pub async fn delete(
 fn remove_if_only_folders(dir: &std::path::Path) {
     fn has_files(dir: &std::path::Path) -> bool {
         std::fs::read_dir(dir)
-            .map(|entries| {
-                entries.flatten().any(|e| e.file_type().map_or(true, |t| !t.is_dir() || has_files(&e.path())))
-            })
+            .map(|entries| entries.flatten().any(|e| e.file_type().map_or(true, |t| !t.is_dir() || has_files(&e.path()))))
             .unwrap_or(false)
     }
     if !has_files(dir) {
@@ -122,11 +109,7 @@ pub struct Leave {
 }
 
 /// A user stops using a folder that another user shared with them.
-pub async fn leave(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Json(body): Json<Leave>,
-) -> Res<Done> {
+pub async fn leave(State(state): State<Shared>, Extension(who): Extension<Access>, Json(body): Json<Leave>) -> Res<Done> {
     who.require_workspace()?;
     act(&state, move |c| {
         let folder = devices::shared_folder(c, who.user_id, &body.folder)?
@@ -171,12 +154,7 @@ pub struct MemberBody {
 }
 
 /// Lets another user use the folder, or changes whether they may write to it.
-pub async fn add_member(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(name): Path<String>,
-    Json(body): Json<MemberBody>,
-) -> Res<Done> {
+pub async fn add_member(State(state): State<Shared>, Extension(who): Extension<Access>, Path(name): Path<String>, Json(body): Json<MemberBody>) -> Res<Done> {
     who.require_workspace()?;
     let user = body.user.trim().to_lowercase();
     act(&state, move |c| {
@@ -184,8 +162,7 @@ pub async fn add_member(
         if user == who.name {
             return Err(ApiError::bad("You use your own shared folders on all your computers already").into());
         }
-        let (user_id, role) = devices::user_for_device(c, &user)?
-            .ok_or_else(|| ApiError::bad(format!("There is no user named {user}")))?;
+        let (user_id, role) = devices::user_for_device(c, &user)?.ok_or_else(|| ApiError::bad(format!("There is no user named {user}")))?;
         if Role::parse(&role) == Some(Role::Readonly) && body.can_write {
             return Err(ApiError::bad(format!("{user} has a read-only account and can only read")).into());
         }
@@ -196,16 +173,11 @@ pub async fn add_member(
     .await
 }
 
-pub async fn remove_member(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path((name, user)): Path<(String, String)>,
-) -> Res<Done> {
+pub async fn remove_member(State(state): State<Shared>, Extension(who): Extension<Access>, Path((name, user)): Path<(String, String)>) -> Res<Done> {
     who.require_workspace()?;
     act(&state, move |c| {
         let folder = own(c, &who, &name)?;
-        let (user_id, _) = devices::user_for_device(c, &user.trim().to_lowercase())?
-            .ok_or_else(|| ApiError::not_found("No such user"))?;
+        let (user_id, _) = devices::user_for_device(c, &user.trim().to_lowercase())?.ok_or_else(|| ApiError::not_found("No such user"))?;
         if !devices::remove_shared_member(c, folder.id, user_id)? {
             return Err(ApiError::not_found("That user does not use this folder").into());
         }

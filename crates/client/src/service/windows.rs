@@ -9,11 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, OnceLock};
 use std::time::{Duration, Instant};
-use windows_service::service::{
-    Service, ServiceAccess, ServiceAction, ServiceActionType, ServiceControl, ServiceControlAccept,
-    ServiceErrorControl, ServiceExitCode, ServiceFailureActions, ServiceFailureResetPeriod, ServiceInfo,
-    ServiceStartType, ServiceState, ServiceStatus, ServiceType,
-};
+use windows_service::service::{Service, ServiceAccess, ServiceAction, ServiceActionType, ServiceControl, ServiceControlAccept, ServiceErrorControl, ServiceExitCode, ServiceFailureActions, ServiceFailureResetPeriod, ServiceInfo, ServiceStartType, ServiceState, ServiceStatus, ServiceType};
 use windows_service::service_control_handler::{self, ServiceControlHandlerResult, ServiceStatusHandle};
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 use windows_service::{define_windows_service, service_dispatcher};
@@ -39,8 +35,7 @@ define_windows_service!(ffi_service_main, service_main);
 pub fn run(config: PathBuf) -> Result<()> {
     let _ = CONFIG.set(config);
     IN_SERVICE.store(true, Ordering::SeqCst);
-    service_dispatcher::start(NAME, ffi_service_main)
-        .context("this is run by the Service Control Manager: use `fafnirx run` to run the client by hand")
+    service_dispatcher::start(NAME, ffi_service_main).context("this is run by the Service Control Manager: use `fafnirx run` to run the client by hand")
 }
 
 fn service_main(_: Vec<OsString>) {
@@ -130,7 +125,9 @@ fn manager(access: ServiceManagerAccess) -> Result<ServiceManager> {
 }
 
 fn open(access: ServiceAccess) -> Result<Service> {
-    manager(ServiceManagerAccess::CONNECT)?.open_service(NAME, access).context("the fafnirx service is not installed")
+    manager(ServiceManagerAccess::CONNECT)?
+        .open_service(NAME, access)
+        .context("the fafnirx service is not installed")
 }
 
 pub fn installed() -> bool {
@@ -200,8 +197,7 @@ pub fn install(exe: &Path, config: &Path) -> Result<()> {
         Err(_) => manager.create_service(&info, access).context("create the service")?,
     };
     service.set_description("Backs up folders to a fafnirx master, and keeps shared folders in step.")?;
-    let again =
-        |seconds| ServiceAction { action_type: ServiceActionType::Restart, delay: Duration::from_secs(seconds) };
+    let again = |seconds| ServiceAction { action_type: ServiceActionType::Restart, delay: Duration::from_secs(seconds) };
     service.update_failure_actions(ServiceFailureActions {
         reset_period: ServiceFailureResetPeriod::After(Duration::from_secs(86_400)),
         reboot_msg: None,

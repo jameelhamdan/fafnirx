@@ -69,8 +69,9 @@ async fn main() -> Result<()> {
         bail!("FAFNIRX_MODULE_TOKEN is too short: use at least 16 characters, for example the output of `openssl rand -hex 24`");
     }
     let data = PathBuf::from(var("FAFNIRX_DATA").unwrap_or_else(|| "data".into()));
-    let cache =
-        var("FAFNIRX_VIDEO_CACHE").map(PathBuf::from).unwrap_or_else(|| data.join("cache").join("video-module"));
+    let cache = var("FAFNIRX_VIDEO_CACHE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| data.join("cache").join("video-module"));
     std::fs::create_dir_all(&cache).with_context(|| format!("create {}", cache.display()))?;
     let keep = Duration::from_secs(number("FAFNIRX_VIDEO_KEEP_DAYS", 7)? * 86400);
     let addr: SocketAddr = var("FAFNIRX_MODULE_LISTEN")

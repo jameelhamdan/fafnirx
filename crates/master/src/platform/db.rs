@@ -132,8 +132,7 @@ pub mod testing {
 
     /// A fresh, empty database with the schema applied.
     pub fn db() -> Db {
-        let url = std::env::var("FAFNIRX_TEST_DATABASE_URL")
-            .expect("set FAFNIRX_TEST_DATABASE_URL to a PostgreSQL server the tests may create schemas in");
+        let url = std::env::var("FAFNIRX_TEST_DATABASE_URL").expect("set FAFNIRX_TEST_DATABASE_URL to a PostgreSQL server the tests may create schemas in");
         let mut config: Config = url.parse().expect("FAFNIRX_TEST_DATABASE_URL");
         let schema = format!("t_{}_{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
         config

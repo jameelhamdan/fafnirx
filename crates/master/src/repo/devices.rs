@@ -31,13 +31,7 @@ pub fn find_by_token(c: &mut impl GenericClient, token_hash: &str) -> Result<Opt
 
 /// Makes `instance` the holder of the device, unless another instance holds it and was heard from since `lease_start`.
 /// Returns whether it is the holder now. One statement, so two computers connecting at once cannot both win.
-pub fn take_over(
-    c: &mut impl GenericClient,
-    id: i64,
-    instance: &str,
-    now: i64,
-    lease_start: i64,
-) -> Result<bool, Error> {
+pub fn take_over(c: &mut impl GenericClient, id: i64, instance: &str, now: i64, lease_start: i64) -> Result<bool, Error> {
     let n = q::take_over_device().bind(c, &instance, &now, &id, &lease_start)?;
     Ok(n == 1)
 }
@@ -53,17 +47,7 @@ pub struct Heartbeat<'a> {
 }
 
 pub fn record_heartbeat(c: &mut impl GenericClient, id: i64, hb: &Heartbeat, now: i64) -> Result<(), Error> {
-    q::record_heartbeat().bind(
-        c,
-        &hb.hostname,
-        &hb.os,
-        &hb.ip,
-        &hb.client_version,
-        &hb.disk_total,
-        &hb.disk_free,
-        &now,
-        &id,
-    )?;
+    q::record_heartbeat().bind(c, &hb.hostname, &hb.os, &hb.ip, &hb.client_version, &hb.disk_total, &hb.disk_free, &now, &id)?;
     Ok(())
 }
 
@@ -107,14 +91,7 @@ pub fn user_for_device(c: &mut impl GenericClient, name: &str) -> Result<Option<
 }
 
 /// Adds a device to a user. Returns its folder, or `None` when the user already has a device of that name.
-pub fn insert(
-    c: &mut impl GenericClient,
-    user_id: i64,
-    name: &str,
-    kind: &str,
-    token_hash: &str,
-    now: i64,
-) -> Result<Option<String>, Error> {
+pub fn insert(c: &mut impl GenericClient, user_id: i64, name: &str, kind: &str, token_hash: &str, now: i64) -> Result<Option<String>, Error> {
     q::insert_device().bind(c, &name, &kind, &token_hash, &now, &user_id).opt()
 }
 
@@ -265,26 +242,10 @@ pub struct SharedState {
 }
 
 /// Keeps what a computer reports about its shared folders, in place of what it reported before.
-pub fn save_shared_state(
-    c: &mut impl GenericClient,
-    device_id: i64,
-    reported: &[SharedState],
-    now: i64,
-) -> Result<(), Error> {
+pub fn save_shared_state(c: &mut impl GenericClient, device_id: i64, reported: &[SharedState], now: i64) -> Result<(), Error> {
     q::clear_shared_state().bind(c, &device_id)?;
     for s in reported {
-        q::save_shared_state().bind(
-            c,
-            &device_id,
-            &s.name,
-            &s.files,
-            &s.bytes,
-            &s.last_cycle,
-            &s.last_error,
-            &s.held,
-            &s.failing,
-            &now,
-        )?;
+        q::save_shared_state().bind(c, &device_id, &s.name, &s.files, &s.bytes, &s.last_cycle, &s.last_error, &s.held, &s.failing, &now)?;
     }
     Ok(())
 }
@@ -309,12 +270,7 @@ pub fn shared_state_of_device(c: &mut impl GenericClient, device_id: i64) -> Res
 }
 
 /// What the computers that have a shared folder attached say about it: all of them (`all`), or only those of `user`.
-pub fn shared_state_of_folder(
-    c: &mut impl GenericClient,
-    shared: &str,
-    all: bool,
-    user: i64,
-) -> Result<Vec<SharedState>, Error> {
+pub fn shared_state_of_folder(c: &mut impl GenericClient, shared: &str, all: bool, user: i64) -> Result<Vec<SharedState>, Error> {
     Ok(q::shared_state_of_folder()
         .bind(c, &shared, &all, &user)
         .all()?
@@ -350,13 +306,7 @@ pub fn shared_members(c: &mut impl GenericClient, folder_id: i64) -> Result<Vec<
 }
 
 /// Lets a user use a shared folder (or changes whether they may write to it).
-pub fn add_shared_member(
-    c: &mut impl GenericClient,
-    folder_id: i64,
-    user_id: i64,
-    can_write: bool,
-    now: i64,
-) -> Result<(), Error> {
+pub fn add_shared_member(c: &mut impl GenericClient, folder_id: i64, user_id: i64, can_write: bool, now: i64) -> Result<(), Error> {
     q::add_shared_member().bind(c, &folder_id, &user_id, &can_write, &now).map(drop)
 }
 

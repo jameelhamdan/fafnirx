@@ -73,8 +73,7 @@ fn every_response_carries_the_security_headers() {
         let (status, refused, _) = api.send(Method::GET, "/api/dashboard", Body::empty(), None, &[]).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(refused[header::X_FRAME_OPTIONS], "DENY", "also on refusals");
-        let (_, behind_tls, _) =
-            api.send(Method::GET, "/healthz", Body::empty(), None, &[("x-forwarded-proto", "https")]).await;
+        let (_, behind_tls, _) = api.send(Method::GET, "/healthz", Body::empty(), None, &[("x-forwarded-proto", "https")]).await;
         assert!(behind_tls.get(header::STRICT_TRANSPORT_SECURITY).is_some());
     });
 }

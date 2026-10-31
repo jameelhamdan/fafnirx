@@ -68,8 +68,10 @@ const LOOK_H: usize = 18;
 
 /// The arguments that take one tiny frame of `source`, `seek` seconds in, as raw RGB on standard output.
 fn look_args(source: &Path, seek: f64) -> Vec<String> {
-    let mut a: Vec<String> =
-        ["-v", "error", "-nostdin", "-ss", &format!("{seek:.3}"), "-i"].iter().map(|s| s.to_string()).collect();
+    let mut a: Vec<String> = ["-v", "error", "-nostdin", "-ss", &format!("{seek:.3}"), "-i"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     a.push(source.to_string_lossy().into_owned());
     let filter = format!("scale={LOOK_W}:{LOOK_H},format=rgb24");
     a.extend(["-frames:v", "1", "-vf", &filter, "-f", "rawvideo", "-"].iter().map(|s| s.to_string()));
@@ -124,15 +126,7 @@ pub async fn pick_poster(ffmpeg: &str, source: &Path, duration: Option<f64>) -> 
 
 /// The arguments that make segment `start`..`start + len` (seconds) of `source` in quality `v`, as MPEG-TS with
 /// timestamps that continue from the segment before it, so that a player joins them without a gap.
-pub fn segment_args(
-    source: &Path,
-    out: &Path,
-    v: &Variant,
-    start: f64,
-    len: f64,
-    has_audio: bool,
-    vcodec: &str,
-) -> Vec<String> {
+pub fn segment_args(source: &Path, out: &Path, v: &Variant, start: f64, len: f64, has_audio: bool, vcodec: &str) -> Vec<String> {
     let mut a: Vec<String> = Vec::new();
     let mut add = |items: &[&str]| a.extend(items.iter().map(|s| s.to_string()));
     add(&["-nostdin", "-hide_banner", "-loglevel", "error"]);
@@ -214,19 +208,18 @@ pub fn parse_embedded(json: &str) -> Result<Vec<Embedded>> {
     }
     let out: Out = serde_json::from_str(json).context("ffprobe's answer is not JSON")?;
     let tag = |s: &S, name: &str| {
-        s.tags.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.clone()).unwrap_or_default()
+        s.tags
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
     };
     Ok(out
         .streams
         .iter()
         .enumerate()
         .filter(|(_, s)| s.codec_name.as_deref().is_some_and(|c| TEXT_SUBTITLES.contains(&c)))
-        .map(|(stream, s)| Embedded {
-            stream,
-            language: tag(s, "language"),
-            title: tag(s, "title"),
-            forced: s.disposition.forced != 0,
-        })
+        .map(|(stream, s)| Embedded { stream, language: tag(s, "language"), title: tag(s, "title"), forced: s.disposition.forced != 0 })
         .collect())
 }
 
@@ -347,8 +340,7 @@ mod tests {
     #[test]
     fn a_segment_is_cut_at_its_place_and_continues_the_clock() {
         let v = &variants(&parse_probe(PROBE).unwrap())[1];
-        let args =
-            segment_args(Path::new("/d/files/pc/a.mkv"), Path::new("/c/seg2.tmp"), v, 12.0, 6.0, true, "libx264");
+        let args = segment_args(Path::new("/d/files/pc/a.mkv"), Path::new("/c/seg2.tmp"), v, 12.0, 6.0, true, "libx264");
         let at = |flag: &str| args.iter().position(|a| a == flag).map(|i| args[i + 1].as_str());
         assert_eq!(at("-ss"), Some("12.000"));
         assert_eq!(at("-t"), Some("6.000"));

@@ -58,9 +58,7 @@ impl Request {
     /// The command line that does the same.
     pub fn args(&self) -> Vec<OsString> {
         match self {
-            Self::AddFolder { paths } => {
-                std::iter::once("add-folder".into()).chain(paths.iter().map(|p| p.as_os_str().to_owned())).collect()
-            }
+            Self::AddFolder { paths } => std::iter::once("add-folder".into()).chain(paths.iter().map(|p| p.as_os_str().to_owned())).collect(),
             Self::RemoveFolder { name } => vec!["remove-folder".into(), name.into()],
             Self::AttachShared { name, path, create } => {
                 let mut args = vec!["shared".into(), "attach".into(), name.into(), path.as_os_str().to_owned()];
@@ -108,11 +106,9 @@ pub fn submit(state_dir: &Path, request: &Request) -> Result<String> {
         bail!("the client is not running: start it from the menu first");
     }
     let control = control_dir(state_dir);
-    let id =
-        format!("{}-{}", std::process::id(), SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_millis());
+    let id = format!("{}-{}", std::process::id(), SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_millis());
     // The file appears whole: the service never reads a half-written request.
-    fafnirx_common::write_atomic(&request_file(&control, &id), serde_json::to_vec(request)?)
-        .context("leave the request for the client")?;
+    fafnirx_common::write_atomic(&request_file(&control, &id), serde_json::to_vec(request)?).context("leave the request for the client")?;
     let answer = answer_file(&control, &id);
     let started = std::time::Instant::now();
     loop {
@@ -176,8 +172,7 @@ async fn apply(config_path: &Path, request: Request, mine: &(dyn Fn(&Path) -> bo
         }
         Request::RemoveFolder { name } => {
             let cfg = Config::load(config_path)?;
-            let folder =
-                cfg.folders.iter().find(|f| f.name == name).with_context(|| format!("no folder named \"{name}\""))?;
+            let folder = cfg.folders.iter().find(|f| f.name == name).with_context(|| format!("no folder named \"{name}\""))?;
             if !mine(&folder.path) {
                 bail!("\"{name}\" is not yours; ask an administrator to remove it with `sudo fafnirx remove-folder`");
             }
@@ -245,8 +240,9 @@ async fn serve_one(config_path: &Path, control: &Path, name: &str) -> bool {
         return false;
     }
     let requester = owner_of(&meta);
-    let request =
-        std::fs::read(&path).context("read the request").and_then(|b| Ok(serde_json::from_slice::<Request>(&b)?));
+    let request = std::fs::read(&path)
+        .context("read the request")
+        .and_then(|b| Ok(serde_json::from_slice::<Request>(&b)?));
     let _ = std::fs::remove_file(&path);
     let mine = |folder: &Path| belongs_to(requester, folder);
     let result = match request {
@@ -347,7 +343,10 @@ mod tests {
         let text = serde_json::to_string(&request).unwrap();
         assert!(text.contains(r#""op":"attach-shared""#), "{text}");
         assert_eq!(serde_json::from_str::<Request>(&text).unwrap(), request);
-        assert!(serde_json::from_str::<Request>(r#"{"op":"enroll"}"#).is_err(), "only folder changes can be asked for");
+        assert!(
+            serde_json::from_str::<Request>(r#"{"op":"enroll"}"#).is_err(),
+            "only folder changes can be asked for"
+        );
     }
 
     #[test]

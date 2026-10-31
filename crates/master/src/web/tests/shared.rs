@@ -46,8 +46,9 @@ fn the_owner_makes_a_shared_folder_and_lets_other_users_in_one_by_one() {
 
         // Bob adds Alice to read only.
         api.cookie = bob.clone();
-        let (status, body) =
-            api.json(Method::POST, "/api/shared/family/members", json!({"user": "alice", "can_write": false})).await;
+        let (status, body) = api
+            .json(Method::POST, "/api/shared/family/members", json!({"user": "alice", "can_write": false}))
+            .await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(members(&api.get("/api/shared").await.1, "bob/family"), [("alice".to_string(), false)]);
         for (body, why) in [
@@ -55,14 +56,11 @@ fn the_owner_makes_a_shared_folder_and_lets_other_users_in_one_by_one() {
             (json!({"user": "ghost"}), "there is no such user"),
             (json!({"user": "carol", "can_write": true}), "a read-only account cannot be given write access"),
         ] {
-            assert_eq!(
-                api.json(Method::POST, "/api/shared/family/members", body).await.0,
-                StatusCode::BAD_REQUEST,
-                "{why}"
-            );
+            assert_eq!(api.json(Method::POST, "/api/shared/family/members", body).await.0, StatusCode::BAD_REQUEST, "{why}");
         }
-        let (status, body) =
-            api.json(Method::POST, "/api/shared/family/members", json!({"user": "carol", "can_write": false})).await;
+        let (status, body) = api
+            .json(Method::POST, "/api/shared/family/members", json!({"user": "carol", "can_write": false}))
+            .await;
         assert_eq!(status, StatusCode::OK, "{body}");
 
         // Alice now sees it, as Bob's and read-only, without the list of who else has it.
@@ -91,8 +89,9 @@ fn the_owner_makes_a_shared_folder_and_lets_other_users_in_one_by_one() {
         let (_, devices) = api.get("/api/devices").await;
         assert!(devices.as_array().unwrap().iter().any(|d| d["folder"] == "bob/family" && d["kind"] == "shared"));
         assert_eq!(try_upload(&api, "bob/family", "b.txt", b"hers").await, StatusCode::FORBIDDEN, "read-only");
-        let (status, _, _) =
-            api.send(Method::GET, "/api/files/download?device=bob/family&path=a.txt", Body::empty(), None, &[]).await;
+        let (status, _, _) = api
+            .send(Method::GET, "/api/files/download?device=bob/family&path=a.txt", Body::empty(), None, &[])
+            .await;
         assert_eq!(status, StatusCode::OK, "and she can download");
 
         // Carol can read it too, but a read-only account has no shared folders of its own.
@@ -103,7 +102,8 @@ fn the_owner_makes_a_shared_folder_and_lets_other_users_in_one_by_one() {
 
         // Bob lets Alice change it, and she can upload.
         api.cookie = bob.clone();
-        api.json(Method::POST, "/api/shared/family/members", json!({"user": "alice", "can_write": true})).await;
+        api.json(Method::POST, "/api/shared/family/members", json!({"user": "alice", "can_write": true}))
+            .await;
         assert_eq!(
             members(&api.get("/api/shared").await.1, "bob/family"),
             [("alice".to_string(), true), ("carol".to_string(), false)]
@@ -167,11 +167,7 @@ fn a_shared_folder_is_named_with_its_owner_and_a_member_can_leave_it() {
 
         // Only a member leaves; the owner deletes. A folder that is not shared with the user is not there for them.
         let leave = json!({"folder": "bob/family"});
-        assert_eq!(
-            api.json(Method::POST, "/api/shared/leave", leave.clone()).await.0,
-            StatusCode::NOT_FOUND,
-            "his own"
-        );
+        assert_eq!(api.json(Method::POST, "/api/shared/leave", leave.clone()).await.0, StatusCode::NOT_FOUND, "his own");
         api.cookie = alice.clone();
         assert_eq!(
             api.json(Method::POST, "/api/shared/leave", json!({"folder": "bob/none"})).await.0,

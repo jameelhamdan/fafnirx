@@ -32,7 +32,10 @@ pub fn lock(c: &mut impl GenericClient) -> Result<(), Error> {
 }
 
 pub fn by_name(c: &mut impl GenericClient, name: &str) -> Result<Option<Account>, Error> {
-    Ok(q::user_by_name().bind(c, &name).opt()?.map(|u| Account { id: u.id, role: u.role, disabled: u.disabled }))
+    Ok(q::user_by_name()
+        .bind(c, &name)
+        .opt()?
+        .map(|u| Account { id: u.id, role: u.role, disabled: u.disabled }))
 }
 
 pub fn enable(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {

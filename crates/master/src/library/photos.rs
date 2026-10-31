@@ -127,10 +127,7 @@ impl Filter {
 }
 
 fn valid_month(text: &str) -> Result<(), ApiError> {
-    let ok = text.len() >= 7
-        && text.as_bytes()[text.len() - 3] == b'-'
-        && text[..text.len() - 3].bytes().all(|b| b.is_ascii_digit())
-        && text[text.len() - 2..].parse::<u8>().is_ok_and(|m| (1..=12).contains(&m));
+    let ok = text.len() >= 7 && text.as_bytes()[text.len() - 3] == b'-' && text[..text.len() - 3].bytes().all(|b| b.is_ascii_digit()) && text[text.len() - 2..].parse::<u8>().is_ok_and(|m| (1..=12).contains(&m));
     if ok {
         Ok(())
     } else {
@@ -170,11 +167,7 @@ fn months_of(days: Vec<(String, i64)>) -> Vec<Month> {
 }
 
 /// How many photos and videos each month and day holds, newest first: the skeleton of the timeline.
-pub async fn buckets(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Query(filter): Query<Filter>,
-) -> Res<Buckets> {
+pub async fn buckets(State(state): State<Shared>, Extension(who): Extension<Access>, Query(filter): Query<Filter>) -> Res<Buckets> {
     filter.checked()?;
     let out = run(&state, move |c| {
         let days = library::days(c, who.viewer(), &filter.checked()?)?;
@@ -192,17 +185,16 @@ pub struct Assets {
 }
 
 /// The photos and videos of one month, newest first.
-pub async fn timeline(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Query(filter): Query<Filter>,
-) -> Res<Assets> {
+pub async fn timeline(State(state): State<Shared>, Extension(who): Extension<Access>, Query(filter): Query<Filter>) -> Res<Assets> {
     if filter.month.as_deref().unwrap_or("").is_empty() {
         return Err(ApiError::bad("month is required, like 2024-05"));
     }
     filter.checked()?;
     let assets = run(&state, move |c| {
-        Ok(library::assets(c, who.viewer(), &filter.checked()?, MAX_ASSETS)?.into_iter().map(Asset::from).collect())
+        Ok(library::assets(c, who.viewer(), &filter.checked()?, MAX_ASSETS)?
+            .into_iter()
+            .map(Asset::from)
+            .collect())
     })
     .await?;
     Ok(Json(Assets { assets }))
@@ -215,16 +207,9 @@ pub struct IdsQuery {
 }
 
 /// Some files by id (the map shows places, and opens the files that are there).
-pub async fn by_ids(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Query(q): Query<IdsQuery>,
-) -> Res<Assets> {
-    let ids: Vec<uuid::Uuid> =
-        q.ids.split(',').filter_map(|s| s.trim().parse::<Id>().ok()).map(|i| i.0).take(500).collect();
-    let assets =
-        run(&state, move |c| Ok(library::by_ids(c, who.viewer(), &ids)?.into_iter().map(Asset::from).collect()))
-            .await?;
+pub async fn by_ids(State(state): State<Shared>, Extension(who): Extension<Access>, Query(q): Query<IdsQuery>) -> Res<Assets> {
+    let ids: Vec<uuid::Uuid> = q.ids.split(',').filter_map(|s| s.trim().parse::<Id>().ok()).map(|i| i.0).take(500).collect();
+    let assets = run(&state, move |c| Ok(library::by_ids(c, who.viewer(), &ids)?.into_iter().map(Asset::from).collect())).await?;
     Ok(Json(Assets { assets }))
 }
 
@@ -273,14 +258,9 @@ pub struct Detail {
 
 /// The photos and videos in the folder of a file, in the order of their names: what the viewer opened from the file browser
 /// steps through. The file itself is in it.
-pub async fn folder(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(Id(id)): Path<Id>,
-) -> Res<Assets> {
+pub async fn folder(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>) -> Res<Assets> {
     let assets = run(&state, move |c| {
-        let mut assets: Vec<Asset> =
-            library::folder_of(c, who.viewer(), id, MAX_ASSETS)?.into_iter().map(Asset::from).collect();
+        let mut assets: Vec<Asset> = library::folder_of(c, who.viewer(), id, MAX_ASSETS)?.into_iter().map(Asset::from).collect();
         if !assets.iter().any(|a| a.id.0 == id) {
             return Err(ApiError::not_found("No such file").into());
         }
@@ -291,21 +271,21 @@ pub async fn folder(
     Ok(Json(Assets { assets }))
 }
 
-pub async fn detail(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(Id(id)): Path<Id>,
-) -> Res<Detail> {
+pub async fn detail(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>) -> Res<Detail> {
     let store = state.store.clone();
     let out = run(&state, move |c| {
         let viewer = who.viewer();
         let not_found = || ApiError::not_found("No such file");
         let asset = library::by_ids(c, viewer, &[id])?.into_iter().next().ok_or_else(not_found)?;
         let extras = library::extras(c, viewer.uid, id)?.ok_or_else(not_found)?;
-        let tags =
-            tags::of_file(c, viewer.uid, id)?.into_iter().map(|(id, name)| TagRef { id: Id(id), name }).collect();
-        let albums =
-            albums::of_file(c, viewer.uid, id)?.into_iter().map(|(id, name)| AlbumRef { id: Id(id), name }).collect();
+        let tags = tags::of_file(c, viewer.uid, id)?
+            .into_iter()
+            .map(|(id, name)| TagRef { id: Id(id), name })
+            .collect();
+        let albums = albums::of_file(c, viewer.uid, id)?
+            .into_iter()
+            .map(|(id, name)| AlbumRef { id: Id(id), name })
+            .collect();
         let asset = Asset::from(asset);
         let described = described(c, &store, &asset);
         let work = work_state(c, &asset.device, &asset.path, asset.processing)?;
@@ -336,12 +316,7 @@ pub async fn detail(
 
 /// Whether a file still has work to do, from its unfinished jobs: `running`, `waiting` or `failed`. A file whose details were
 /// never read counts as waiting even before its job is queued.
-pub fn work_state(
-    c: &mut impl GenericClient,
-    device: &str,
-    path: &str,
-    unread: bool,
-) -> Result<Option<String>, postgres::Error> {
+pub fn work_state(c: &mut impl GenericClient, device: &str, path: &str, unread: bool) -> Result<Option<String>, postgres::Error> {
     let jobs = crate::repo::jobs::pending_of(c, device, path)?;
     let has = |s: &str| jobs.iter().any(|(_, status)| status == s);
     Ok(if has("running") {
@@ -357,11 +332,7 @@ pub fn work_state(
 }
 
 /// What the .nfo next to a video says about it. Anything that goes wrong means no description, never an error.
-fn described(
-    c: &mut postgres::Client,
-    store: &crate::platform::store::Store,
-    asset: &Asset,
-) -> Option<artwork::Described> {
+fn described(c: &mut postgres::Client, store: &crate::platform::store::Store, asset: &Asset) -> Option<artwork::Described> {
     if asset.kind != "video" {
         return None;
     }
@@ -499,12 +470,7 @@ fn apply(tx: &mut impl GenericClient, who: &Access, id: uuid::Uuid, e: &Edit) ->
     Ok(())
 }
 
-pub async fn edit(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(Id(id)): Path<Id>,
-    Json(e): Json<Edit>,
-) -> Res<Done> {
+pub async fn edit(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>, Json(e): Json<Edit>) -> Res<Done> {
     change(&state, "library", move |tx| apply(tx, &who, id, &e)).await?;
     done()
 }
@@ -571,11 +537,7 @@ pub async fn tags(State(state): State<Shared>, Extension(who): Extension<Access>
     Ok(Json(out))
 }
 
-pub async fn delete_tag(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Path(Id(id)): Path<Id>,
-) -> Res<Done> {
+pub async fn delete_tag(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>) -> Res<Done> {
     act(&state, move |c| {
         if !tags::delete(c, who.user_id, id)? {
             return Err(ApiError::not_found("No such tag").into());
@@ -616,11 +578,7 @@ pub struct TrashQuery {
 
 /// Deleted files of the devices the user can see, newest deletion first. They are removed for good when the retention
 /// period ends; restoring one is `POST /api/files/restore` with its `version`.
-pub async fn trash(
-    State(state): State<Shared>,
-    Extension(who): Extension<Access>,
-    Query(q): Query<TrashQuery>,
-) -> Res<Trash> {
+pub async fn trash(State(state): State<Shared>, Extension(who): Extension<Access>, Query(q): Query<TrashQuery>) -> Res<Trash> {
     let out = run(&state, move |c| {
         let retention_days = settings::get_i64(c, "retention_days", 30);
         let rows = library::trash(c, who.viewer(), TRASH_PAGE, q.offset.max(0))?;
@@ -653,9 +611,7 @@ pub fn snapshot(c: &mut Client) -> anyhow::Result<serde_json::Value> {
     use std::collections::BTreeMap;
 
     /// The files of each album or tag, by the id of the album or tag.
-    fn files_by<'a>(
-        rows: impl Iterator<Item = (uuid::Uuid, &'a str, &'a str)>,
-    ) -> BTreeMap<uuid::Uuid, Vec<serde_json::Value>> {
+    fn files_by<'a>(rows: impl Iterator<Item = (uuid::Uuid, &'a str, &'a str)>) -> BTreeMap<uuid::Uuid, Vec<serde_json::Value>> {
         let mut map: BTreeMap<uuid::Uuid, Vec<serde_json::Value>> = BTreeMap::new();
         for (id, device, path) in rows {
             map.entry(id).or_default().push(json!({ "device": device, "path": path }));
@@ -682,7 +638,9 @@ pub fn snapshot(c: &mut Client) -> anyhow::Result<serde_json::Value> {
         .map(|t| json!({ "user": t.owner, "name": t.name, "files": files_of_tag.remove(&t.id).unwrap_or_default() }))
         .collect();
 
-    let states: Vec<_> = sql::library::snapshot_states().bind(c).all()?
+    let states: Vec<_> = sql::library::snapshot_states()
+        .bind(c)
+        .all()?
         .into_iter()
         .map(|s| {
             json!({ "user": s.owner, "device": s.folder, "path": s.path, "favorite": s.favorite, "archived": s.archived,

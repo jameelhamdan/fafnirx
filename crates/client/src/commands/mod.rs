@@ -3,9 +3,7 @@
 mod shared;
 mod status;
 
-pub use shared::{
-    shared_attach, shared_conflict, shared_create, shared_detach, shared_keep, shared_list, shared_resolve,
-};
+pub use shared::{shared_attach, shared_conflict, shared_create, shared_detach, shared_keep, shared_list, shared_resolve};
 pub use status::{release_deletes, status};
 
 use crate::config::credentials;
@@ -67,7 +65,10 @@ pub async fn enroll(config_path: PathBuf, server: String, token: String, start_s
     cfg.validate()?;
     cfg.save(&config_path)?;
     if cfg.is_plain_over_internet() {
-        println!("warning: {} is plain http on a public address; the token and your files can be read on the way. Use https (a TLS proxy or a Cloudflare tunnel).", cfg.server);
+        println!(
+            "warning: {} is plain http on a public address; the token and your files can be read on the way. Use https (a TLS proxy or a Cloudflare tunnel).",
+            cfg.server
+        );
     }
     let where_ = credentials::store(&cfg.server, &config_path, &token)?;
     println!("config written to {}", config_path.display());
@@ -83,9 +84,7 @@ pub async fn enroll(config_path: PathBuf, server: String, token: String, start_s
         // Enrolling is the last step of setting a device up, so it also makes the client run from now on.
         match service::install(&config_path, false) {
             Ok(()) => println!("the client runs in the background now and starts again with the computer"),
-            Err(e) => println!(
-                "warning: could not start the client as a service ({e:#}); run `fafnirx install-service` to retry"
-            ),
+            Err(e) => println!("warning: could not start the client as a service ({e:#}); run `fafnirx install-service` to retry"),
         }
     }
     println!("next: fafnirx add-folder <path> [<path>...]; it collects them as soon as they are added");

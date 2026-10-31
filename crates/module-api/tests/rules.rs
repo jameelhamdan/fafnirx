@@ -61,9 +61,11 @@ fn the_master_reaches_modules_over_http_not_through_a_crate() {
 
 #[test]
 fn the_web_app_and_the_contract_name_the_same_sdk_version() {
-    let runtime =
-        std::fs::read_to_string(workspace().join("frontend/src/sdk/runtime.ts")).expect("the web app's runtime");
-    let line = runtime.lines().find(|l| l.starts_with("export const SDK = ")).expect("runtime.ts says which SDK it is");
+    let runtime = std::fs::read_to_string(workspace().join("frontend/src/sdk/runtime.ts")).expect("the web app's runtime");
+    let line = runtime
+        .lines()
+        .find(|l| l.starts_with("export const SDK = "))
+        .expect("runtime.ts says which SDK it is");
     let version: u32 = line.trim_start_matches("export const SDK = ").trim().parse().expect("a number");
     assert_eq!(version, fafnirx_module_api::WEB_SDK, "frontend/src/sdk/runtime.ts and module-api's WEB_SDK differ");
 }

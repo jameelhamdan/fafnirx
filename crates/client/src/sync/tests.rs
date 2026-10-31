@@ -72,26 +72,17 @@ impl Collector for Recorder {
         Err(Status::unimplemented("not under test"))
     }
     type DownloadUpdateStream = tokio_stream::Empty<Result<pb::UpdateChunk, Status>>;
-    async fn download_update(
-        &self,
-        _: Request<pb::UpdateInfoRequest>,
-    ) -> Result<Response<Self::DownloadUpdateStream>, Status> {
+    async fn download_update(&self, _: Request<pb::UpdateInfoRequest>) -> Result<Response<Self::DownloadUpdateStream>, Status> {
         Err(Status::unimplemented("not under test"))
     }
     async fn list_shared(&self, _: Request<pb::ListSharedRequest>) -> Result<Response<pb::ListSharedResponse>, Status> {
         Err(Status::unimplemented("not under test"))
     }
-    async fn create_shared(
-        &self,
-        _: Request<pb::CreateSharedRequest>,
-    ) -> Result<Response<pb::CreateSharedResponse>, Status> {
+    async fn create_shared(&self, _: Request<pb::CreateSharedRequest>) -> Result<Response<pb::CreateSharedResponse>, Status> {
         Err(Status::unimplemented("not under test"))
     }
     type ListChangesStream = tokio_stream::Iter<std::vec::IntoIter<Result<pb::ChangeEvent, Status>>>;
-    async fn list_changes(
-        &self,
-        _: Request<pb::ListChangesRequest>,
-    ) -> Result<Response<Self::ListChangesStream>, Status> {
+    async fn list_changes(&self, _: Request<pb::ListChangesRequest>) -> Result<Response<Self::ListChangesStream>, Status> {
         use pb::change_event::Item;
         let calls = self.0.lock().unwrap();
         let mut events = vec![Ok(pb::ChangeEvent { item: Some(Item::Cursor(42)) })];
@@ -104,17 +95,11 @@ impl Collector for Recorder {
         Ok(Response::new(tokio_stream::iter(events)))
     }
     type WatchSharedStream = tokio_stream::Empty<Result<pb::SharedChanged, Status>>;
-    async fn watch_shared(
-        &self,
-        _: Request<pb::WatchSharedRequest>,
-    ) -> Result<Response<Self::WatchSharedStream>, Status> {
+    async fn watch_shared(&self, _: Request<pb::WatchSharedRequest>) -> Result<Response<Self::WatchSharedStream>, Status> {
         Err(Status::unimplemented("not under test"))
     }
     type DownloadSharedStream = tokio_stream::Iter<std::vec::IntoIter<Result<pb::FileData, Status>>>;
-    async fn download_shared(
-        &self,
-        r: Request<pb::DownloadSharedRequest>,
-    ) -> Result<Response<Self::DownloadSharedStream>, Status> {
+    async fn download_shared(&self, r: Request<pb::DownloadSharedRequest>) -> Result<Response<Self::DownloadSharedStream>, Status> {
         let data = self.0.lock().unwrap().files.get(&r.get_ref().path).cloned();
         let data = data.ok_or_else(|| Status::not_found("no such file"))?;
         Ok(Response::new(tokio_stream::iter(vec![Ok(pb::FileData { data })])))

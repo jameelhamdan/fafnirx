@@ -39,9 +39,10 @@ fn argon() -> Argon2<'static> {
 }
 
 pub fn hash_password(password: &str) -> anyhow::Result<String> {
-    let salt =
-        SaltString::encode_b64(&crate::platform::db::random_bytes::<16>()).map_err(|e| anyhow::anyhow!("salt: {e}"))?;
-    let hash = argon().hash_password(password.as_bytes(), &salt).map_err(|e| anyhow::anyhow!("hash password: {e}"))?;
+    let salt = SaltString::encode_b64(&crate::platform::db::random_bytes::<16>()).map_err(|e| anyhow::anyhow!("salt: {e}"))?;
+    let hash = argon()
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|e| anyhow::anyhow!("hash password: {e}"))?;
     Ok(hash.to_string())
 }
 
@@ -62,12 +63,7 @@ fn token_hash(token: &str) -> String {
 }
 
 /// Gives the user a password. Every session of the user ends, except `keep` (the one that asked for the change).
-pub fn set_password(
-    conn: &mut impl GenericClient,
-    user_id: i64,
-    password: &str,
-    keep: Option<&str>,
-) -> anyhow::Result<()> {
+pub fn set_password(conn: &mut impl GenericClient, user_id: i64, password: &str, keep: Option<&str>) -> anyhow::Result<()> {
     let hash = hash_password(password)?;
     sql::users::set_password_hash().bind(conn, &hash, &user_id).map(drop)?;
     sessions::end_others(conn, user_id, keep.unwrap_or(""))?;
@@ -82,9 +78,7 @@ pub fn bootstrap(conn: &mut impl GenericClient, env_password: &str) -> anyhow::R
         return Ok(());
     }
     if env_password.is_empty() {
-        anyhow::bail!(
-            "FAFNIRX_ADMIN_PASSWORD must be set: it is the password of the user \"admin\" until you change it"
-        );
+        anyhow::bail!("FAFNIRX_ADMIN_PASSWORD must be set: it is the password of the user \"admin\" until you change it");
     }
     set_password(conn, id, env_password, None)?;
     tracing::info!("the password of the user \"admin\" was set from FAFNIRX_ADMIN_PASSWORD");
@@ -129,19 +123,17 @@ fn cookie_header(value: &str, max_age: i64, secure: bool) -> (HeaderName, Header
 
 /// Whether the browser reached us over https (a TLS proxy says so in a header).
 pub fn is_secure(headers: &HeaderMap) -> bool {
-    headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("https"))
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("https"))
 }
 
 fn wrong() -> ApiError {
     ApiError(StatusCode::UNAUTHORIZED, "Wrong username or password".into())
 }
 
-pub async fn login(
-    State(state): State<Shared>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    Json(body): Json<Login>,
-) -> Result<impl IntoResponse, ApiError> {
+pub async fn login(State(state): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Json(body): Json<Login>) -> Result<impl IntoResponse, ApiError> {
     // The connection itself, unless it comes from a proxy the master was told to trust (`FAFNIRX_TRUSTED_PROXY`): then the
     // address the proxy saw. Otherwise forwarding headers are not believed, anyone who can reach the port could forge them.
     // Guesses are counted per address and per user name, so that neither one address trying many names nor many
@@ -242,12 +234,7 @@ pub struct ChangePassword {
 }
 
 /// Users change their own password; the session they do it in stays.
-pub async fn change_password(
-    State(state): State<Shared>,
-    Extension(access): Extension<Access>,
-    headers: HeaderMap,
-    Json(body): Json<ChangePassword>,
-) -> Res<Done> {
+pub async fn change_password(State(state): State<Shared>, Extension(access): Extension<Access>, headers: HeaderMap, Json(body): Json<ChangePassword>) -> Res<Done> {
     if body.new.chars().count() < MIN_PASSWORD {
         return Err(ApiError::bad(format!("The password needs at least {MIN_PASSWORD} characters")));
     }
