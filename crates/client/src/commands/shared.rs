@@ -1,7 +1,7 @@
 //! The commands for shared folders.
 
 use super::{connect, wake_client};
-use crate::config::{self, Config};
+use crate::config::{self, Config, Conflict};
 use crate::net;
 use crate::sync::state;
 use anyhow::{bail, Context, Result};
@@ -70,7 +70,14 @@ pub async fn shared_create(config_path: PathBuf, name: String) -> Result<()> {
 
 /// Attaches a local folder to a shared folder: what is in the folder goes to the master and what the other computers
 /// put there comes here. With `create` the shared folder is made first when it does not exist.
-pub async fn shared_attach(config_path: PathBuf, name: String, dir: PathBuf, create: bool) -> Result<()> {
+pub async fn shared_attach(
+    config_path: PathBuf,
+    name: String,
+    dir: PathBuf,
+    create: bool,
+    conflict: Conflict,
+) -> Result<()> {
+    conflict.check_available()?;
     let mut client = connect(&config_path)?.client;
     let full = match shared_names(&mut client).await?.find(&name) {
         Some(full) => full,
@@ -83,7 +90,7 @@ pub async fn shared_attach(config_path: PathBuf, name: String, dir: PathBuf, cre
     if let Some(warning) = crate::service::disk_access::warning_for(&config_path, &dir) {
         eprintln!("warning: {warning}");
     }
-    let shared = config::attach_shared_to_file(&config_path, &full, &dir)?;
+    let shared = config::attach_shared_to_file(&config_path, &full, &dir, conflict)?;
     println!("{} is shared as \"{}\"", shared.path.display(), shared.name);
     wake_client(&config_path);
     Ok(())
@@ -112,5 +119,47 @@ pub fn shared_keep(config_path: &Path, name: &str) -> Result<()> {
         "keeping the {files} files of \"{}\" that were deleted on the master: they stay here, and are sent again at the next cycle",
         shared.name
     );
+    Ok(())
+}
+
+/// Shows what a shared folder does with a file changed here and on the master, or sets it.
+pub fn shared_conflict(
+    config_path: &Path,
+    name: &str,
+    policy: Option<Conflict>,
+    ask_timeout_hours: Option<u64>,
+) -> Result<()> {
+    let cfg = Config::load(config_path)?;
+    let shared = cfg.shared_named(name)?;
+    if policy.is_none() && ask_timeout_hours.is_none() {
+        println!("{}: {}, ask timeout {} hours", shared.name, shared.conflict.name(), shared.ask_timeout_hours);
+        return Ok(());
+    }
+    if let Some(policy) = policy {
+        policy.check_available()?;
+    }
+    let policy = policy.unwrap_or(shared.conflict);
+    let full = config::set_shared_conflict_in_file(config_path, name, policy, ask_timeout_hours)?;
+    println!("\"{full}\": a file changed here and on the master is handled as \"{}\"", policy.name());
+    if policy == Conflict::Mine {
+        println!("note: this computer's version replaces the master's, and so the other computers'; the old one stays in the history");
+    }
+    wake_client(config_path);
+    Ok(())
+}
+
+/// Answers for the files of a shared folder that wait for a decision. The client applies the answer at its next cycle.
+pub fn shared_resolve(config_path: &Path, name: &str, keep: &str, path: Option<&str>) -> Result<()> {
+    let cfg = Config::load(config_path)?;
+    let dir = cfg.state_dir(config_path);
+    let shared = cfg.shared_named(name)?;
+    let state = state::State::open(&crate::shared::state_file(&dir, &shared.name))?;
+    let answered = state.answer_pending(path, keep)?;
+    if answered == 0 {
+        println!("no file of \"{}\" is waiting for a decision", shared.name);
+        return Ok(());
+    }
+    wake_client(config_path);
+    println!("{answered} files of \"{}\": keeping {keep}", shared.name);
     Ok(())
 }

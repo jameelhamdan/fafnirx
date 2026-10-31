@@ -15,6 +15,11 @@ export function useRole(): Role {
   return useSession()?.user?.role ?? 'readonly'
 }
 
+/** Whether the administrator offers the photo pages (timeline, favorites, albums, archive). */
+export function usePhotos() {
+  return useSession()?.photos !== false
+}
+
 /** Whether the role has a workspace of its own: devices, albums, tags and favorites. */
 export const hasWorkspace = (role: Role) => role !== 'readonly'
 

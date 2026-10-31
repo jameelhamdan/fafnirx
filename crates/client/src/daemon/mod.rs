@@ -13,7 +13,7 @@ use crate::sync::throttle::Limiter;
 use crate::sync::{Engine, Report, SyncError};
 use crate::update;
 use anyhow::Result;
-use fafnirx_common::{pb, unix_now};
+use fafnirx_common::{pb, unix_now, LockExt};
 use notify::{RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -46,7 +46,7 @@ pub async fn send_heartbeat(
     errors: &Mutex<Vec<String>>,
     status: &Status,
 ) -> Result<String> {
-    let drained: Vec<String> = errors.lock().map(|mut e| std::mem::take(&mut *e)).unwrap_or_default();
+    let drained: Vec<String> = std::mem::take(&mut *errors.locked());
     let (total, free) = cfg.folders.first().and_then(|f| fafnirx_common::disk_usage(&f.path)).unwrap_or((0, 0));
     let req = pb::HeartbeatRequest {
         hostname: gethostname::gethostname().to_string_lossy().into_owned(),
@@ -181,7 +181,7 @@ fn spawn_control(shared: Shared, activity: Arc<Mutex<Activity>>, sent: Arc<Atomi
                 let _ = std::fs::remove_file(status_file(&dir));
                 crate::service::exit_clean();
             }
-            let mut now = activity.lock().map(|a| a.clone()).unwrap_or_default();
+            let mut now = activity.locked().clone();
             let total_sent = sent.load(Ordering::Relaxed);
             let secs = prev_at.elapsed().as_secs_f64();
             if total_sent < prev_sent {
@@ -359,7 +359,7 @@ fn record_cycle(shared: &Shared, result: Result<Report, SyncError>) {
     match result {
         Ok(r) => {
             log_report(&r);
-            let last_error = shared.errors.lock().ok().and_then(|e| e.last().cloned()).unwrap_or_default();
+            let last_error = shared.errors.locked().last().cloned().unwrap_or_default();
             shared.status.edit(|s| {
                 s.last_cycle = unix_now();
                 s.last = r.clone();

@@ -1325,6 +1325,7 @@ dependencies = [
  "fs4",
  "prost",
  "protoc-bin-vendored",
+ "tempfile",
  "tokio",
  "tonic",
  "tonic-build",

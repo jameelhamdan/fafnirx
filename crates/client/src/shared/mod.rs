@@ -2,7 +2,8 @@
 //!
 //! A cycle receives what changed on the master, then sends what changed here with the engine that uploads the collected
 //! folders, so a file changed on both sides is noticed before the upload replaces the other side's version. Nothing is
-//! overwritten silently: this computer's version is kept as `name (conflict <computer> <date>).ext`.
+//! overwritten silently: what becomes of this computer's version depends on the folder's `Conflict` policy (the master's is
+//! kept and this one put aside; this one is sent; both are kept; or a person is asked).
 //!
 //! `State::synced` records each path as it was when last in step. A local file that still matches it is unchanged here, so
 //! the master's change is safe to apply; one that does not was changed here too.
@@ -10,12 +11,12 @@
 mod spellings;
 
 use self::spellings::Spellings;
-use crate::config::{Config, Folder, Shared};
+use crate::config::{Config, Conflict, Folder, Shared};
 use crate::daemon::{self, SharedStatus};
 use crate::net;
 use crate::sync::guard;
 use crate::sync::hash::{hash_file, stat};
-use crate::sync::state::{State, Synced};
+use crate::sync::state::{Pending, State, Synced};
 use crate::sync::throttle::Limiter;
 use crate::sync::{Engine, Report, SyncError};
 use anyhow::Result;
@@ -28,6 +29,9 @@ use tokio::io::AsyncWriteExt;
 /// A file being received is written under this prefix next to its place and renamed when it is complete and checked.
 pub const PART_PREFIX: &str = ".fafnirx-part-";
 
+/// Where this computer's version of a file goes when the master's is kept (`Conflict::Theirs`): beside the files, never synced.
+pub const CONFLICT_DIR: &str = ".fafnirx-conflicts";
+
 /// Where in the state the point up to which the master's changes were seen is kept.
 const CURSOR: &str = "shared_cursor";
 
@@ -37,6 +41,9 @@ pub struct Attached {
     shared: Shared,
     host: String,
     spellings: Spellings,
+    /// Files answered at the start of this pull, with the master's content the answer was about: if the master lists that
+    /// same change again (the cursor was held back), it is not a new conflict.
+    answered: HashMap<String, Vec<u8>>,
 }
 
 /// What the master listed: the point to continue from next time, and the paths.
@@ -61,6 +68,20 @@ struct Plan {
     folded: HashSet<String>,
     /// A change that could not be applied is looked at again next time: the cursor may not pass.
     hold_cursor: bool,
+}
+
+/// What the master did to a file that was changed here too.
+enum Master<'a> {
+    Deleted,
+    Live(&'a pb::Change),
+}
+
+/// What a conflict came to on this computer.
+enum Settled {
+    /// This computer's version is out of the way: the master's may take its place.
+    Receive,
+    /// The file here stays as it is, and nothing is received for it now.
+    Leave,
 }
 
 /// What became of the deletions the master listed.
@@ -95,6 +116,21 @@ pub fn status_of(shared: &Shared, state: &State) -> SharedStatus {
         last_error,
         held: state.held_files(),
         failing: state.pending_failures().unwrap_or(0) as usize,
+        conflicts: state
+            .pendings()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| p.choice.is_none())
+            .take(50)
+            .map(|p| daemon::ConflictInfo {
+                path: p.path,
+                deleted: p.deleted,
+                master_size: p.size,
+                master_mtime: p.mtime,
+                local_size: p.local_size,
+                local_mtime: p.local_mtime_ns.div_euclid(1_000_000_000),
+            })
+            .collect(),
     }
 }
 
@@ -119,7 +155,13 @@ impl Attached {
         engine.exclude = Some(state_dir.to_path_buf());
         engine.group = guard::at_the_top;
         let host = gethostname::gethostname().to_string_lossy().into_owned();
-        Ok(Self { engine, shared: shared.clone(), host, spellings: Spellings::new(&shared.path) })
+        Ok(Self {
+            engine,
+            shared: shared.clone(),
+            host,
+            spellings: Spellings::new(&shared.path),
+            answered: HashMap::new(),
+        })
     }
 
     pub fn name(&self) -> &str {
@@ -154,6 +196,8 @@ impl Attached {
         self.engine.check_master().await?;
         let mut report = Report::default();
         self.pull(&mut report).await?;
+        // A file waiting for a person is neither sent nor taken for deleted.
+        self.engine.skip = self.engine.state.pending_paths()?;
         // The engine collects one folder with no name of its own: the files of a shared folder are at the top.
         let mut one = cfg.clone();
         one.folders = vec![Folder { path: self.shared.path.clone(), name: String::new() }];
@@ -167,6 +211,8 @@ impl Attached {
     async fn pull(&mut self, report: &mut Report) -> Result<(), SyncError> {
         // What was read of the folders is only good for one pull: the person changes them in between.
         self.spellings.clear();
+        self.answered.clear();
+        self.apply_answers(report).await?;
         let listing = self.list_changes().await?;
         let cursor = listing.cursor;
         let mut plan = self.plan(listing, report)?;
@@ -230,7 +276,9 @@ impl Attached {
                 continue;
             }
             let folded = fold_path(&path);
-            if let Some(why) = not_portable(&path) {
+            if path.split('/').next() == Some(CONFLICT_DIR) {
+                self.skipped(&path, "that folder is where this computer puts its own versions aside");
+            } else if let Some(why) = not_portable(&path) {
                 self.skipped(&path, &why);
             } else if let Some(first) = names.get(&folded).filter(|first| **first != path) {
                 self.skipped(&path, &format!("differs only by case from {first:?}"));
@@ -301,13 +349,16 @@ impl Attached {
         match local_stat(target)? {
             None => {
                 self.engine.state.remove_synced(path)?;
+                self.engine.state.remove_pending(path)?;
                 Ok(None)
             }
-            Some(st) if unchanged(&base, st) => Ok(Some(base)),
+            Some(st) if unchanged(&base, st) => {
+                self.engine.state.remove_pending(path)?;
+                Ok(Some(base))
+            }
             Some(_) => {
-                // Changed here, deleted there: our version is kept, under another name so that it can be sent again.
-                self.keep_as_conflict(path, target, report)?;
-                self.engine.state.remove_synced(path)?;
+                // Changed here, deleted there: the folder's policy says which is kept.
+                self.settle(path, target, Master::Deleted, report)?;
                 Ok(None)
             }
         }
@@ -323,7 +374,9 @@ impl Attached {
         report: &mut Report,
     ) -> Result<(), SyncError> {
         let base = self.engine.state.synced(path)?;
-        if base.as_ref().is_some_and(|b| b.root_hash == change.root_hash) {
+        if base.as_ref().is_some_and(|b| b.root_hash == change.root_hash)
+            || self.answered.get(path).is_some_and(|answered| *answered == change.root_hash)
+        {
             return Ok(());
         }
         // Another spelling of this name is here (a different case, or of a folder above it). Every kind of computer treats that as
@@ -344,11 +397,15 @@ impl Attached {
                 if local.root[..] == change.root_hash[..] {
                     // The same content on both sides already (a copy put there by hand, an upload that was interrupted).
                     self.record(path, target, &change.root_hash)?;
+                    self.engine.state.remove_pending(path)?;
                     return Ok(());
                 }
-                self.keep_as_conflict(path, target, report)?;
+                if let Settled::Leave = self.settle(path, target, Master::Live(change), report)? {
+                    return Ok(());
+                }
             }
         }
+        self.engine.state.remove_pending(path)?;
         // The content of a file that is deleted on the master is what a rename moved: move it here too.
         if let Some(i) = deletions.iter().position(|(b, _)| b.root_hash == change.root_hash) {
             let (old, old_target) = deletions.remove(i);
@@ -361,10 +418,22 @@ impl Attached {
             report.downloaded += 1;
             return Ok(());
         }
-        self.download(path, target, change, report).await?;
-        self.spellings.added(target);
-        self.record(path, target, &change.root_hash)?;
-        report.downloaded += 1;
+        self.receive_here(path, target, change, report).await
+    }
+
+    /// Receives the master's version of a file into its place and notes it as in step.
+    async fn receive_here(
+        &mut self,
+        path: &str,
+        target: &Path,
+        change: &pb::Change,
+        report: &mut Report,
+    ) -> Result<(), SyncError> {
+        if self.download(path, target, change, report).await? {
+            self.spellings.added(target);
+            self.record(path, target, &change.root_hash)?;
+            report.downloaded += 1;
+        }
         Ok(())
     }
 
@@ -470,10 +539,9 @@ impl Attached {
                 self.engine.state.remove_synced(&base.path)?;
                 continue;
             };
-            // Edited since it was listed (downloads can take minutes): kept, as for a file changed on both sides.
+            // Edited since it was listed (downloads can take minutes): settled, as for a file changed on both sides.
             if local_stat(&here)?.is_some_and(|st| !unchanged(&base, st)) {
-                self.keep_as_conflict(&base.path, &here, report)?;
-                self.engine.state.remove_synced(&base.path)?;
+                self.settle(&base.path, &here, Master::Deleted, report)?;
                 continue;
             }
             match std::fs::remove_file(&here) {
@@ -499,6 +567,141 @@ impl Attached {
         Ok(())
     }
 
+    /// The policy of this folder. `ask` needs the tray to show the question; a build without it cannot, and keeps the master's.
+    fn policy(&self) -> Conflict {
+        match self.shared.conflict {
+            Conflict::Ask if !Conflict::ask_possible() => Conflict::Theirs,
+            policy => policy,
+        }
+    }
+
+    /// A file changed here and on the master (or changed here and deleted there): does what the policy of the folder says.
+    /// `Settled::Receive`: this computer's version is out of the way, the master's may take its place. `Settled::Leave`: the
+    /// file here stays as it is and nothing is received for it now.
+    fn settle(&self, path: &str, target: &Path, master: Master<'_>, report: &mut Report) -> Result<Settled, SyncError> {
+        let state = &self.engine.state;
+        let settled = match self.policy() {
+            Conflict::Theirs => {
+                self.put_aside(path, target, report)?;
+                Settled::Receive
+            }
+            Conflict::Both => {
+                self.keep_as_conflict(path, target, report)?;
+                Settled::Receive
+            }
+            Conflict::Mine => {
+                // No longer in step, so the next send makes it the master's current version (the old one stays in its history).
+                report.conflicts += 1;
+                self.engine.report_error(format!(
+                    "{}/{path}: changed here and on the server. This computer's version is kept and sent",
+                    self.shared.name
+                ));
+                state.remove_synced(path)?;
+                Settled::Leave
+            }
+            Conflict::Ask => {
+                let (local_size, local_mtime_ns) = local_stat(target)?.unwrap_or_default();
+                let mut pending = Pending {
+                    path: path.to_string(),
+                    local_size,
+                    local_mtime_ns,
+                    found_at: unix_now(),
+                    ..Default::default()
+                };
+                match master {
+                    Master::Deleted => pending.deleted = true,
+                    Master::Live(c) => {
+                        (pending.root_hash, pending.size, pending.mtime, pending.mode, pending.from_web) =
+                            (c.root_hash.clone(), c.size, c.mtime, c.mode, c.from_web);
+                    }
+                }
+                state.add_pending(&pending)?;
+                self.engine.report_error(format!(
+                    "{}/{path}: changed here and on the server. Nothing is changed until you choose which one to keep",
+                    self.shared.name
+                ));
+                return Ok(Settled::Leave);
+            }
+        };
+        // This computer's version is gone from the path (or is no longer the one in step): if receiving the master's fails, the
+        // path must not look deleted here, or the send would delete it on the master.
+        state.remove_synced(path)?;
+        Ok(settled)
+    }
+
+    /// Moves this computer's version of a file into `CONFLICT_DIR` (never synced), so that the master's can take its place.
+    fn put_aside(&self, path: &str, target: &Path, report: &mut Report) -> Result<(), SyncError> {
+        let dir = self.shared.path.join(CONFLICT_DIR);
+        let kept = conflict_name(&local_path(&dir, path), &self.host, unix_now());
+        make_parent(&self.shared.path, &kept)?;
+        std::fs::rename(target, &kept)?;
+        report.conflicts += 1;
+        self.engine.report_error(format!(
+            "{}/{path}: changed here and on the server. The server's is kept; this computer's is in {CONFLICT_DIR}/{}",
+            self.shared.name,
+            kept.strip_prefix(&dir).unwrap_or(&kept).display()
+        ));
+        Ok(())
+    }
+
+    /// Applies the answers given for the files that waited, and settles those nobody answered in time as `both`.
+    async fn apply_answers(&mut self, report: &mut Report) -> Result<(), SyncError> {
+        let (now, hours) = (unix_now(), self.shared.ask_timeout_hours);
+        let wait = (hours * 3600) as i64;
+        for pending in self.engine.state.pendings()? {
+            let choice = match pending.choice.as_deref() {
+                Some(choice) => choice.to_string(),
+                None if wait > 0 && now - pending.found_at >= wait => {
+                    self.engine.report_error(format!(
+                        "{}/{}: nobody chose in {} hours; both versions are kept",
+                        self.shared.name, pending.path, hours
+                    ));
+                    "both".to_string()
+                }
+                None => continue,
+            };
+            match self.apply_choice(&pending, &choice, report).await {
+                Ok(()) => self.engine.state.remove_pending(&pending.path)?,
+                Err(e) => {
+                    self.file_failed(&pending.path, e, report)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn apply_choice(&mut self, p: &Pending, choice: &str, report: &mut Report) -> Result<(), SyncError> {
+        let target = local_path(&self.shared.path, &p.path);
+        let here = local_stat(&target)?.is_some();
+        let change = pb::Change {
+            path: p.path.clone(),
+            deleted: p.deleted,
+            root_hash: p.root_hash.clone(),
+            size: p.size,
+            mtime: p.mtime,
+            mode: p.mode,
+            from_web: p.from_web,
+        };
+        // This computer's version stays and is sent. (If it is gone, the person deleted it meanwhile: nothing is left to keep.)
+        if choice == "mine" && here {
+            self.engine.state.remove_synced(&p.path)?;
+            self.answered.insert(p.path.clone(), p.root_hash.clone());
+            return Ok(());
+        }
+        if here {
+            if choice == "both" {
+                self.keep_as_conflict(&p.path, &target, report)?;
+            } else {
+                self.put_aside(&p.path, &target, report)?;
+            }
+        }
+        self.engine.state.remove_synced(&p.path)?;
+        if !p.deleted {
+            self.receive_here(&p.path, &target, &change, report).await?;
+        }
+        Ok(())
+    }
+
     /// Moves this computer's version of a file to a name of its own, so that the master's can take its place.
     fn keep_as_conflict(&self, path: &str, target: &Path, report: &mut Report) -> Result<(), SyncError> {
         let kept = conflict_name(target, &self.host, unix_now());
@@ -514,14 +717,15 @@ impl Attached {
 
     /// Receives the current content of a file into place. It is written beside its place, checked against the hash the
     /// master gave, and only then renamed, so a half received file is never taken for the file.
-    /// A local file edited while this runs (it can take minutes) is kept as a conflict copy, not replaced.
+    /// A local file edited while this runs (it can take minutes) is settled as a conflict, not replaced. Returns whether the
+    /// master's version was put in place.
     async fn download(
         &mut self,
         path: &str,
         target: &Path,
         change: &pb::Change,
         report: &mut Report,
-    ) -> Result<(), SyncError> {
+    ) -> Result<bool, SyncError> {
         make_parent(&self.shared.path, target)?;
         let before = local_stat(target)?;
         let tmp = target.with_file_name(format!(
@@ -534,7 +738,10 @@ impl Attached {
         }
         if let Some(now) = local_stat(target)? {
             if Some(now) != before {
-                self.keep_as_conflict(path, target, report)?;
+                if let Settled::Leave = self.settle(path, target, Master::Live(change), report)? {
+                    let _ = std::fs::remove_file(&tmp);
+                    return Ok(false);
+                }
             }
         }
         #[cfg(unix)]
@@ -557,7 +764,8 @@ impl Attached {
                 String::new()
             };
             SyncError::File(format!("cannot replace the file: {e}{why}"))
-        })
+        })?;
+        Ok(true)
     }
 
     /// Writes the file to `tmp` and checks it is what the master listed.
@@ -775,7 +983,12 @@ mod tests {
             let held = Arc::new(Mutex::new(Calls::default()));
             let url = serve(held.clone()).await;
             let (folder, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-            let shared = Shared { name: "alice/family".into(), path: folder.path().to_path_buf() };
+            let shared = Shared {
+                name: "alice/family".into(),
+                path: folder.path().to_path_buf(),
+                conflict: Conflict::Both,
+                ask_timeout_hours: 24,
+            };
             let mut cfg = Config::new(url);
             cfg.shared.push(shared.clone());
             let attached =
@@ -850,6 +1063,166 @@ mod tests {
             rig.held.lock().unwrap().commits.iter().any(|(path, _)| *path == conflicts[0]),
             "and sent, like any new file"
         );
+    }
+
+    impl Rig {
+        fn with_policy(mut self, conflict: Conflict) -> Self {
+            self.attached.shared.conflict = conflict;
+            self
+        }
+
+        /// The versions of this computer that were put aside, by name.
+        fn aside(&self) -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(self.folder.path().join(CONFLICT_DIR))
+                .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+                .unwrap_or_default();
+            names.sort();
+            names
+        }
+
+        fn sent(&self, path: &str) -> bool {
+            self.held.lock().unwrap().commits.iter().any(|(p, _)| p == path)
+        }
+
+        /// The master lists nothing new (a cursor that went past the last change).
+        fn nothing_new(&self) {
+            self.held.lock().unwrap().changes.clear();
+        }
+    }
+
+    #[tokio::test]
+    async fn theirs_keeps_the_masters_version_and_puts_ours_aside_unsent() {
+        let mut rig = Rig::new().await.with_policy(Conflict::Theirs);
+        std::fs::write(rig.folder.path().join("b.txt"), "mine").unwrap();
+        rig.remote_has("b.txt", b"theirs");
+        let report = rig.cycle().await;
+        assert_eq!((report.downloaded, report.conflicts), (1, 1));
+        assert_eq!(rig.local("b.txt").as_deref(), Some("theirs"));
+        assert!(rig.conflicts().is_empty(), "no conflict copy among the files");
+        let aside = rig.aside();
+        assert_eq!(aside.len(), 1, "{aside:?}");
+        assert_eq!(
+            std::fs::read_to_string(rig.folder.path().join(CONFLICT_DIR).join(&aside[0])).unwrap(),
+            "mine",
+            "ours is not lost"
+        );
+        rig.nothing_new();
+        rig.cycle().await;
+        assert!(rig.held.lock().unwrap().commits.is_empty(), "what was put aside is never sent");
+    }
+
+    #[tokio::test]
+    async fn mine_keeps_ours_and_sends_it() {
+        let mut rig = Rig::new().await.with_policy(Conflict::Mine);
+        std::fs::write(rig.folder.path().join("b.txt"), "mine").unwrap();
+        rig.remote_has("b.txt", b"theirs");
+        let report = rig.cycle().await;
+        assert_eq!((report.downloaded, report.conflicts), (0, 1));
+        assert_eq!(rig.local("b.txt").as_deref(), Some("mine"));
+        assert!(rig.sent("b.txt"), "and it becomes the master's version");
+        assert!(rig.names() == ["b.txt"], "nothing is put aside: {:?}", rig.names());
+    }
+
+    #[tokio::test]
+    async fn a_file_edited_here_and_deleted_there_follows_the_policy() {
+        let mut rig = Rig::new().await.with_policy(Conflict::Theirs);
+        rig.remote_has("d.txt", b"one");
+        rig.cycle().await;
+        std::fs::write(rig.folder.path().join("d.txt"), "edited here").unwrap();
+        rig.remote_deleted("d.txt");
+        rig.cycle().await;
+        assert!(rig.local("d.txt").is_none(), "the deletion applies");
+        let aside = rig.aside();
+        assert_eq!(aside.len(), 1, "{aside:?}");
+        assert!(!rig.sent("d.txt") && rig.conflicts().is_empty());
+
+        let mut rig = Rig::new().await.with_policy(Conflict::Mine);
+        rig.remote_has("d.txt", b"one");
+        rig.cycle().await;
+        std::fs::write(rig.folder.path().join("d.txt"), "edited here").unwrap();
+        rig.remote_deleted("d.txt");
+        rig.cycle().await;
+        assert_eq!(rig.local("d.txt").as_deref(), Some("edited here"));
+        assert!(rig.sent("d.txt"), "and it is sent again");
+    }
+
+    #[cfg(any(windows, target_os = "macos", feature = "tray"))]
+    mod ask {
+        use super::*;
+
+        async fn waiting() -> Rig {
+            let mut rig = Rig::new().await.with_policy(Conflict::Ask);
+            std::fs::write(rig.folder.path().join("b.txt"), "mine").unwrap();
+            rig.remote_has("b.txt", b"theirs");
+            rig.cycle().await;
+            rig.nothing_new();
+            rig
+        }
+
+        #[tokio::test]
+        async fn ask_changes_nothing_on_either_side_until_answered() {
+            let mut rig = waiting().await;
+            assert_eq!(rig.local("b.txt").as_deref(), Some("mine"));
+            let pending = rig.attached.engine.state.pendings().unwrap();
+            assert_eq!(pending.len(), 1);
+            assert_eq!((pending[0].path.as_str(), pending[0].local_size), ("b.txt", 4));
+            assert_eq!(rig.attached.status().conflicts.len(), 1, "the tray is told");
+            rig.cycle().await;
+            assert!(rig.held.lock().unwrap().commits.is_empty(), "it is not sent while it waits");
+            assert_eq!(rig.local("b.txt").as_deref(), Some("mine"));
+        }
+
+        #[tokio::test]
+        async fn the_answer_is_applied_at_the_next_cycle() {
+            for (choice, name, ours_aside, sent) in
+                [("theirs", "theirs", true, false), ("mine", "mine", false, true), ("both", "theirs", false, false)]
+            {
+                let mut rig = waiting().await;
+                assert_eq!(rig.attached.engine.state.answer_pending(Some("b.txt"), choice).unwrap(), 1);
+                rig.cycle().await;
+                assert_eq!(rig.local("b.txt").as_deref(), Some(name), "{choice}");
+                assert_eq!(rig.aside().len(), usize::from(ours_aside), "{choice}");
+                assert_eq!(rig.conflicts().len(), usize::from(choice == "both"), "{choice}");
+                assert_eq!(rig.sent("b.txt"), sent, "{choice}");
+                assert!(rig.attached.engine.state.pendings().unwrap().is_empty(), "{choice}: done");
+            }
+        }
+
+        #[tokio::test]
+        async fn a_change_listed_again_after_the_answer_is_not_asked_about_again() {
+            let mut rig = waiting().await;
+            // The cursor was held back, so the master lists the same change once more.
+            rig.remote_has("b.txt", b"theirs");
+            rig.attached.engine.state.answer_pending(Some("b.txt"), "mine").unwrap();
+            rig.cycle().await;
+            assert!(rig.attached.engine.state.pendings().unwrap().is_empty(), "not asked again");
+            assert_eq!(rig.local("b.txt").as_deref(), Some("mine"));
+            assert!(rig.sent("b.txt"));
+        }
+
+        #[tokio::test]
+        async fn a_newer_version_of_the_master_needs_a_new_answer() {
+            let rig = waiting().await;
+            let state = &rig.attached.engine.state;
+            state.answer_pending(Some("b.txt"), "theirs").unwrap();
+            let mut newer = state.pendings().unwrap().remove(0);
+            newer.root_hash = vec![9; 32];
+            state.add_pending(&newer).unwrap();
+            assert_eq!(state.pendings().unwrap()[0].choice, None, "the answer was about another version");
+        }
+
+        #[tokio::test]
+        async fn nobody_answering_keeps_both_after_the_timeout() {
+            let mut rig = waiting().await;
+            rig.attached.shared.ask_timeout_hours = 1;
+            rig.cycle().await;
+            assert_eq!(rig.attached.engine.state.pendings().unwrap().len(), 1, "not yet");
+            rig.attached.engine.state.backdate_pending(unix_now() - 2 * 3600).unwrap();
+            rig.cycle().await;
+            assert_eq!(rig.local("b.txt").as_deref(), Some("theirs"));
+            assert_eq!(rig.conflicts().len(), 1, "ours is kept beside it");
+            assert!(rig.attached.engine.state.pendings().unwrap().is_empty());
+        }
     }
 
     #[tokio::test]
@@ -1110,7 +1483,12 @@ mod tests {
     async fn held_deletions_are_kept_in_the_state_so_they_show_with_the_client_stopped() {
         let (rig, _) = held_rig().await;
         assert_eq!(rig.attached.engine.state.pull_hold().unwrap().map(|(n, _)| n), Some(12));
-        let shared = Shared { name: "alice/family".into(), path: rig.folder.path().to_path_buf() };
+        let shared = Shared {
+            name: "alice/family".into(),
+            path: rig.folder.path().to_path_buf(),
+            conflict: Conflict::Both,
+            ask_timeout_hours: 24,
+        };
         // Another process (`fafnirx status`) opens the same database and sees the same.
         let reopened = State::open(&state_file(rig._state.path(), "alice/family")).unwrap();
         let seen = status_of(&shared, &reopened);

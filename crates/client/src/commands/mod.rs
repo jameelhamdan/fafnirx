@@ -3,7 +3,9 @@
 mod shared;
 mod status;
 
-pub use shared::{shared_attach, shared_create, shared_detach, shared_keep, shared_list};
+pub use shared::{
+    shared_attach, shared_conflict, shared_create, shared_detach, shared_keep, shared_list, shared_resolve,
+};
 pub use status::{release_deletes, status};
 
 use crate::config::credentials;
@@ -31,7 +33,7 @@ pub fn list_folders(config_path: &Path) -> Result<()> {
         println!("{}\t{}", f.name, f.path.display());
     }
     for s in &cfg.shared {
-        println!("{}\t{}\t(shared, both ways)", s.name, s.path.display());
+        println!("{}\t{}\t(shared, both ways, conflicts: {})", s.name, s.path.display(), s.conflict.name());
     }
     Ok(())
 }

@@ -1,24 +1,13 @@
 //! Mirrors: offsite copies of the whole tree, kept up to date by rclone on a schedule, and what each one holds.
 
 use crate::integrations::scope::Place;
-use crate::platform::pg::Pg;
+use fafnirx_db::client::GenericClient;
 use fafnirx_db::client::Params;
 use fafnirx_db::queries::mirrors as q;
-use postgres::{Error, GenericClient};
+use postgres::Error;
 
-pub type Listed = q::ListMirrors;
-/// A mirror that was due and has been marked running.
-pub type Claimed = q::ClaimMirror;
 /// A live file that belongs on every mirror.
 pub type Live = q::LiveFilesForMirror;
-
-pub fn list(c: &mut impl GenericClient) -> Result<Vec<Listed>, Error> {
-    q::list_mirrors().bind(&mut Pg(c)).all()
-}
-
-pub fn id_of(c: &mut impl GenericClient, name: &str) -> Result<Option<i64>, Error> {
-    q::mirror_id().bind(&mut Pg(c), &name).opt()
-}
 
 /// What a new mirror is made of.
 pub struct New<'a> {
@@ -51,37 +40,23 @@ pub fn insert(c: &mut impl GenericClient, m: &New, now: i64) -> Result<bool, Err
         keep_runs: m.keep_runs,
         now,
     };
-    Ok(q::insert_mirror().params(&mut Pg(c), &params)? > 0)
+    Ok(q::insert_mirror().params(c, &params)? > 0)
 }
 
 /// What restoring a backup mirror needs to know besides the storage's own credentials.
 pub type Key = q::MirrorKey;
 
-pub fn key_of(c: &mut impl GenericClient, name: &str) -> Result<Option<Key>, Error> {
-    q::mirror_key().bind(&mut Pg(c), &name).opt()
-}
-
-/// Forgets what was uploaded: the next run sends everything again.
-pub fn forget_items(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
-    q::delete_mirror_items().bind(&mut Pg(c), &id).map(drop)
-}
-
 pub fn delete(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
-    q::delete_mirror_items().bind(&mut Pg(&mut *c), &id)?;
-    q::delete_mirror().bind(&mut Pg(c), &id).map(drop)
+    q::delete_mirror_items().bind(&mut *c, &id)?;
+    q::delete_mirror().bind(c, &id).map(drop)
 }
 
 pub fn request_run(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
-    q::request_mirror_run().bind(&mut Pg(c), &id).map(drop)
+    q::request_mirror_run().bind(c, &id).map(drop)
 }
 
 pub fn toggle(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
-    q::toggle_mirror().bind(&mut Pg(c), &id).map(drop)
-}
-
-/// Picks one due mirror and marks it running. One statement, so a mirror can only be claimed once.
-pub fn claim(c: &mut impl GenericClient, now: i64) -> Result<Option<Claimed>, Error> {
-    q::claim_mirror().bind(&mut Pg(c), &now).opt()
+    q::toggle_mirror().bind(c, &id).map(drop)
 }
 
 /// Records how a run went; `ok_at` is when it worked, if it did.
@@ -92,27 +67,22 @@ pub fn finish(
     message: &str,
     ok_at: Option<i64>,
 ) -> Result<(), Error> {
-    q::finish_mirror().params(&mut Pg(c), &q::FinishMirrorParams { status, message, ok_at, id }).map(drop)
+    q::finish_mirror().params(c, &q::FinishMirrorParams { status, message, ok_at, id }).map(drop)
 }
 
 /// How many files and bytes the last run left on the mirror.
 pub fn set_totals(c: &mut impl GenericClient, id: i64, files: i64, bytes: i64) -> Result<(), Error> {
-    q::set_mirror_totals().bind(&mut Pg(c), &files, &bytes, &id).map(drop)
+    q::set_mirror_totals().bind(c, &files, &bytes, &id).map(drop)
 }
 
 /// Every live file at or below the folder `scope` (everything when it is empty), in the order they are uploaded.
 pub fn live_files(c: &mut impl GenericClient, scope: &str) -> Result<Vec<Live>, Error> {
-    q::live_files_for_mirror().bind(&mut Pg(c), &scope).all()
+    q::live_files_for_mirror().bind(c, &scope).all()
 }
 
 /// What a mirror holds, as (device id, path, root hash).
 pub fn items(c: &mut impl GenericClient, mirror_id: i64) -> Result<Vec<(i64, String, Vec<u8>)>, Error> {
-    Ok(q::mirror_items()
-        .bind(&mut Pg(c), &mirror_id)
-        .all()?
-        .into_iter()
-        .map(|i| (i.device_id, i.path, i.root_hash))
-        .collect())
+    Ok(q::mirror_items().bind(c, &mirror_id).all()?.into_iter().map(|i| (i.device_id, i.path, i.root_hash)).collect())
 }
 
 pub fn remember_item(
@@ -122,36 +92,24 @@ pub fn remember_item(
     path: &str,
     root_hash: &[u8],
 ) -> Result<(), Error> {
-    q::upsert_mirror_item()
-        .params(&mut Pg(c), &q::UpsertMirrorItemParams { mirror_id, device_id, path, root_hash })
-        .map(drop)
+    q::upsert_mirror_item().params(c, &q::UpsertMirrorItemParams { mirror_id, device_id, path, root_hash }).map(drop)
 }
 
 pub fn forget_item(c: &mut impl GenericClient, mirror_id: i64, device_id: i64, path: &str) -> Result<(), Error> {
-    q::delete_mirror_item().params(&mut Pg(c), &q::DeleteMirrorItemParams { mirror_id, device_id, path }).map(drop)
+    q::delete_mirror_item().params(c, &q::DeleteMirrorItemParams { mirror_id, device_id, path }).map(drop)
 }
 
 /// The folder of every device, by id.
 pub fn device_folders(c: &mut impl GenericClient) -> Result<Vec<(i64, String)>, Error> {
-    Ok(q::device_folders().bind(&mut Pg(c)).all()?.into_iter().map(|d| (d.id, d.folder)).collect())
+    Ok(q::device_folders().bind(c).all()?.into_iter().map(|d| (d.id, d.folder)).collect())
 }
 
 /// Every device, folder and source, with the kind, for choosing what a mirror holds.
 pub fn places(c: &mut impl GenericClient) -> Result<Vec<Place>, Error> {
     Ok(q::scope_places()
-        .bind(&mut Pg(c))
+        .bind(c)
         .all()?
         .into_iter()
         .map(|p| Place { id: p.id, folder: p.folder, kind: p.kind })
         .collect())
-}
-
-/// The folders directly inside `prefix` (`a/b/`, or empty) among the live files of a device.
-pub fn folders_below(c: &mut impl GenericClient, device_id: i64, prefix: &str) -> Result<Vec<String>, Error> {
-    q::folders_below().bind(&mut Pg(c), &prefix, &device_id).all()
-}
-
-/// Marks the mirrors that were running when the master stopped as failed.
-pub fn fail_interrupted(c: &mut impl GenericClient) -> Result<(), Error> {
-    q::fail_interrupted_mirrors().bind(&mut Pg(c)).map(drop)
 }

@@ -189,7 +189,8 @@ auto_update = true              # check GitHub releases every 6 hours
 update_public_key = "..."       # only for your own signed builds
 web_url = "http://nas.lan:8080" # tray link
 [[folders]]                     # written by add-folder
-[[shared]]                      # written by shared attach: name = "<owner>/<name>", path = "..."
+[[shared]]                      # written by shared attach: name = "<owner>/<name>", path = "...",
+                                # conflict = "theirs|mine|both|ask", ask_timeout_hours = 24 (both last two optional)
 ```
 
 The token is in the OS keychain (`FAFNIRX_TOKEN_STORE=file` uses a file beside the config).
@@ -238,6 +239,8 @@ fafnirx shared create family                 # made as <you>/family
 fafnirx shared attach ana/family ~/Family    # --create makes it first; the folder is made if it is not there
 fafnirx shared detach ana/family             # keeps the files, here and on the master
 fafnirx shared keep ana/family               # keep files whose deletion on the master is held back (see Deletes)
+fafnirx shared conflict ana/family [theirs|mine|both|ask]   # what happens to a file changed here and on the master
+fafnirx shared resolve ana/family theirs [path]             # answer the files waiting under "ask"
 
 A folder is named `<owner>/<name>` everywhere: tray, config (`[[shared]] name`), `status`, Files and the web page. The commands
 also take the short name when only one attached folder has it.
@@ -266,14 +269,27 @@ mirrors. The attached folder is not also backed up to the computer's device.
   The master refuses a new path breaking either rule and tells the sender. Same two rules for web upload/move into local
   folders and master files (SMB-visible); watcher and computer backups are taken as is. Case-only rename of a file or folder
   is a rename. Existing clashes: a computer keeps the first in sorted order, skips the rest with a message.
-- **Conflicts.** Changed on both sides: nothing overwritten. This computer's version becomes
-  `name (conflict <computer> <date>).ext` and is sent as a new file; the master's takes the name. Edited here but deleted on
-  the master, or edited while it is received or deleted: same. Replaced versions stay in history.
+- **Conflicts.** Two-way folders are for working together on files being changed, not for backup, and the master's
+  version has priority, as in Google Drive or OneDrive. A file changed here and on the master (or edited here and deleted
+  there, or edited while it is received) is settled by the folder's policy, set per folder and per computer (tray: the
+  folder's menu; CLI: `shared conflict`; `--conflict` on `shared attach`; config `[[shared]] conflict`):
+  - `theirs` (default): the master's version is kept, this computer's goes to `.fafnirx-conflicts/` in the folder (never
+    synced).
+  - `mine`: this computer's version is sent and becomes the current one for every computer; the master keeps the old one
+    in its history. Replaces others' work: use it on the one computer that owns the file.
+  - `both`: this computer's becomes `name (conflict <computer> <date>).ext` and is sent as a new file; the master's takes
+    the name. Copies reach every computer.
+  - `ask`: needs a screen (Windows, macOS, Linux desktop with the tray; refused on a computer without one). The file is
+    left alone on both sides and the tray shows a native dialog with both versions' size and time: keep the server's,
+    keep both, or (Other...) keep mine; closing it decides later (folder menu: **Choose for the files that wait**).
+    `fafnirx shared resolve` answers the same from the command line. Nobody choosing within `ask_timeout_hours` (config
+    `[[shared]]`, default 24, 0 = wait for ever) keeps both, as Syncthing does.
+  One-way folders (`add-folder`) are unchanged: the client's files have priority. Replaced versions stay in history.
 - **Deletes.** Web app deletes apply on every computer at once; Trash keeps a version (restore returns it everywhere).
   Deletes by other computers pass the [delete guard](#the-delete-guard) both ways. A large one is held on this computer,
   no timeout: `fafnirx release-deletes` deletes here, `fafnirx shared keep <name>` keeps the files and re-sends them. A held
   deletion raises **Deletions held back** (see Alerts). A computer offline longer than trash retention gets the full file
-  list: in-step paths not listed count as deleted (same guard); changed files become conflict copies.
+  list: in-step paths not listed count as deleted (same guard); changed files follow the conflict policy.
 - **Status.** `fafnirx status` "shared folders" section (works with the client stopped; `--json` key `shared`): per folder
   in step or not, files, last sync, held deletions, last problem. Tray: a line per folder. Web: computer page; the owner's
   folder page lists every attached computer.
@@ -292,6 +308,8 @@ mirrors. The attached folder is not also backed up to the computer's device.
 |---|---|---|
 | Versions kept per file | 5 | Older versions expire, then go after the retention period |
 | Retention (days) | 30 | How long deleted files and expired versions stay |
+| Thumbnails and previews | on | Off: none is made, even on demand |
+| Photo pages | on | Off: Timeline, Favorites, Albums and Archive are hidden and closed for everybody (users see it after a reload). Only the web app changes: files are still read, processed and shown in Files |
 
 A large file that changes often takes about *versions kept* times its size.
 

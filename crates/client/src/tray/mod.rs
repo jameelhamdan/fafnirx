@@ -9,11 +9,11 @@ mod text;
 
 pub use open::ensure_tray;
 
-use crate::config::{control_dir, Config, Folder, Shared};
+use crate::config::{control_dir, Config, Conflict, Folder, Shared};
 use crate::daemon::{self, requests::Request};
 use crate::service::disk_access;
 use anyhow::{Context, Result};
-use fafnirx_common::unix_now;
+use fafnirx_common::{unix_now, LockExt};
 use icon::{icon, Light};
 use open::{
     asked_to_restart, change_folders, check_for_updates, install_update, open_path, open_url, restart_if_updated,
@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use text::{describe, view, Info, View};
-use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{TrayIcon, TrayIconBuilder};
 
 const IDLE_REFRESH: Duration = Duration::from_secs(2);
@@ -53,6 +53,10 @@ enum Action {
     /// Make a shared folder from a local folder, to be chosen.
     NewShared,
     DetachShared(String),
+    /// What the shared folder does with a file changed here and on the master.
+    SetConflict(String, Conflict),
+    /// Ask again about the files of this shared folder that wait for a decision.
+    ResolveConflicts(String),
 }
 
 type Actions = Vec<(MenuId, Action)>;
@@ -312,9 +316,11 @@ fn fill_shared_menu(menu: &Submenu, attached: &[Shared], available: &[String]) -
         let stop = MenuItem::new("Stop syncing here", true, None);
         actions.push((open.id().clone(), Action::OpenFolder(s.path.clone())));
         actions.push((stop.id().clone(), Action::DetachShared(s.name.clone())));
+        let (conflicts, conflict_actions) = conflict_menu(s);
+        actions.extend(conflict_actions);
         let title = format!("{} \u{21c4}", s.name);
-        let items: [&dyn tray_icon::menu::IsMenuItem; 5] =
-            [&state.item, &path, &PredefinedMenuItem::separator(), &open, &stop];
+        let items: [&dyn tray_icon::menu::IsMenuItem; 6] =
+            [&state.item, &path, &PredefinedMenuItem::separator(), &open, &conflicts, &stop];
         if let Ok(sub) = Submenu::with_items(&title, true, &items) {
             let _ = menu.append(&sub);
         }
@@ -335,6 +341,124 @@ fn fill_shared_menu(menu: &Submenu, attached: &[Shared], available: &[String]) -
     actions.push((new.id().clone(), Action::NewShared));
     let _ = menu.append(&new);
     (actions, states)
+}
+
+/// "When a file changes in both places": the choice of this folder, one entry checked, and (with `ask`) the way to be asked again
+/// about what waits.
+fn conflict_menu(shared: &Shared) -> (Submenu, Actions) {
+    let mut actions = Actions::new();
+    let sub = Submenu::new("When a file changes here and on the server", true);
+    let choices = [
+        (Conflict::Theirs, "Keep the server's (mine is put aside)"),
+        (Conflict::Mine, "Keep mine (replaces the server's)"),
+        (Conflict::Both, "Keep both"),
+        (Conflict::Ask, "Ask me"),
+    ];
+    for (conflict, text) in choices {
+        if conflict == Conflict::Ask && !Conflict::ask_available() {
+            continue;
+        }
+        let item = CheckMenuItem::new(text, true, shared.conflict == conflict, None);
+        actions.push((item.id().clone(), Action::SetConflict(shared.name.clone(), conflict)));
+        let _ = sub.append(&item);
+    }
+    if shared.conflict == Conflict::Ask {
+        let _ = sub.append(&PredefinedMenuItem::separator());
+        let again = MenuItem::new("Choose for the files that wait...", true, None);
+        actions.push((again.id().clone(), Action::ResolveConflicts(shared.name.clone())));
+        let _ = sub.append(&again);
+    }
+    (sub, actions)
+}
+
+/// Files already asked about (folder, path), so that a question is shown once; forgotten when the file is no longer waiting.
+static ASKED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// Shows the question for every file that waits and was not asked about yet. It runs apart from the menu, which must go on working.
+fn ask_about_conflicts(config_path: &Path, status: Option<&daemon::Status>) {
+    let mut asked = ASKED.locked();
+    // No status (the client is restarting): not a reason to forget what was asked.
+    let Some(status) = status else { return };
+    let waiting: Vec<(String, daemon::ConflictInfo)> =
+        status.shared.iter().flat_map(|f| f.conflicts.iter().map(|c| (f.name.clone(), c.clone()))).collect();
+    asked.retain(|(folder, path)| waiting.iter().any(|(f, c)| f == folder && &c.path == path));
+    let new: Vec<_> = waiting.into_iter().filter(|(f, c)| !asked.contains(&(f.clone(), c.path.clone()))).collect();
+    if new.is_empty() {
+        return;
+    }
+    asked.extend(new.iter().map(|(f, c)| (f.clone(), c.path.clone())));
+    let config_path = config_path.to_path_buf();
+    std::thread::spawn(move || resolve_conflicts(&config_path, new));
+}
+
+/// Asks about each file, like the dialog of a file manager that finds a file in the place where one is copied. Closing it
+/// leaves the file waiting (the menu asks again).
+fn resolve_conflicts(config_path: &Path, files: Vec<(String, daemon::ConflictInfo)>) {
+    let total = files.len();
+    for (n, (folder, file)) in files.into_iter().enumerate() {
+        let Some(keep) = ask_which(&folder, &file) else { continue };
+        let request = Request::Resolve { name: folder.clone(), keep: keep.into(), path: Some(file.path.clone()) };
+        // The same for all that remain: asked once, and only when there is more than one left.
+        if let Err(e) = change_folders(config_path, &request) {
+            message(rfd::MessageLevel::Error, format!("Could not keep the file:\n\n{e}")).show();
+            continue;
+        }
+        let left = total - n - 1;
+        if left > 0
+            && ask_yes_no(
+                rfd::MessageLevel::Info,
+                format!("Do the same for the other {left} files that changed here and on the server?"),
+            )
+        {
+            let all = Request::Resolve { name: folder, keep: keep.into(), path: None };
+            if let Err(e) = change_folders(config_path, &all) {
+                message(rfd::MessageLevel::Error, format!("Could not keep the files:\n\n{e}")).show();
+            }
+            return;
+        }
+    }
+}
+
+/// What the person chose for one file: `theirs`, `mine` or `both`; `None` to decide later.
+fn ask_which(folder: &str, file: &daemon::ConflictInfo) -> Option<&'static str> {
+    use rfd::{MessageButtons, MessageDialogResult::Custom};
+    let when = |unix: i64| format!("{} ago", daemon::age(unix_now() - unix));
+    let there = if file.deleted {
+        "was deleted on the server".to_string()
+    } else {
+        format!("server: {}, changed {}", text::human_bytes(file.master_size), when(file.master_mtime))
+    };
+    let body = format!(
+        "\"{}\" in \"{folder}\" was changed on this computer and on the server.\n\nThis computer: {}, changed {}\nThe {there}",
+        file.path,
+        text::human_bytes(file.local_size),
+        when(file.local_mtime),
+    );
+    let first = message(rfd::MessageLevel::Warning, body)
+        .set_buttons(MessageButtons::YesNoCancelCustom(
+            "Keep the server's".into(),
+            "Keep both".into(),
+            "Other...".into(),
+        ))
+        .show();
+    match first {
+        Custom(c) if c == "Keep the server's" => Some("theirs"),
+        Custom(c) if c == "Keep both" => Some("both"),
+        rfd::MessageDialogResult::Yes => Some("theirs"),
+        rfd::MessageDialogResult::No => Some("both"),
+        // Closing the window decides later; only the button leads on.
+        Custom(c) if c == "Other..." => {
+            // Replacing what others did is not one click away.
+            let second = message(
+                rfd::MessageLevel::Warning,
+                format!("Keep this computer's \"{}\"? It replaces the server's version for every computer.", file.path),
+            )
+            .set_buttons(MessageButtons::OkCancelCustom("Keep mine".into(), "Decide later".into()))
+            .show();
+            matches!(second, Custom(c) if c == "Keep mine").then_some("mine")
+        }
+        _ => None,
+    }
 }
 
 /// A name the master accepts for a shared folder, made from the name of a directory.
@@ -407,7 +531,8 @@ fn attach_existing_shared(config_path: &Path, name: &str) {
     };
     let text = format!(
         "Sync {} with the shared folder \"{name}\"?\n\nFiles from both are merged: what is only on one side is copied to the \
-         other, and if a file differs on both sides both are kept.",
+         other, and if a file differs on both sides the server's is kept and yours is put aside \
+         (the menu of the folder changes that).",
         dir.display()
     );
     if ask_yes_no(rfd::MessageLevel::Info, text) {
@@ -539,10 +664,25 @@ impl Env {
             Action::RemoveFolder(name) => remove_folder_dialog(&self.config_path, &name),
             Action::AttachShared(name) => attach_existing_shared(&self.config_path, &name),
             Action::NewShared => {
-                let known = self.on_master.lock().map(|l| l.clone()).unwrap_or_default();
+                let known = self.on_master.locked().clone();
                 new_shared(&self.config_path, &known, owner_of(daemon::read_status(&self.state_dir).as_ref()));
             }
             Action::DetachShared(name) => detach_shared_dialog(&self.config_path, &name),
+            Action::SetConflict(name, conflict) => {
+                if let Err(e) = cli_change(&self.config_path, &Request::SetConflict { name, conflict }) {
+                    message(rfd::MessageLevel::Error, format!("{e:#}")).show();
+                }
+            }
+            Action::ResolveConflicts(name) => {
+                if let Ok(mut asked) = ASKED.lock() {
+                    asked.retain(|(folder, _)| *folder != name);
+                }
+                let waiting = daemon::read_status(&self.state_dir)
+                    .is_some_and(|s| s.shared.iter().any(|f| f.name == name && !f.conflicts.is_empty()));
+                if !waiting {
+                    message(rfd::MessageLevel::Info, format!("No file of \"{name}\" is waiting for a choice.")).show();
+                }
+            }
         }
         true
     }
@@ -647,12 +787,12 @@ pub fn run(config_path: PathBuf) -> Result<()> {
             menus.show_access(blocked.as_deref());
             if let Some(c) = &cfg_now {
                 menus.sync_folders(&c.folders);
-                let on_master: Vec<String> =
-                    env.on_master.lock().map(|l| l.iter().map(|(n, _)| n.clone()).collect()).unwrap_or_default();
+                let on_master: Vec<String> = env.on_master.locked().iter().map(|(n, _)| n.clone()).collect();
                 menus.sync_shared(&c.shared, &on_master);
             }
             menus.show_shared_state(status.as_ref(), unix);
-            let update_text = env.updates.text.lock().map(|u| u.clone()).unwrap_or_default();
+            ask_about_conflicts(&config_path, status.as_ref());
+            let update_text = env.updates.text.locked().clone();
             menus.show(&info, paused, current.stopped, &update_text, env.updates.available().as_deref());
             if let Some(t) = &tray {
                 let tip = if current.syncing { &info.now } else { &current.text };

@@ -143,8 +143,14 @@ name it `<owner>/<name>`. Clients reach it like this:
   `purge_shared_folder` needs all files deleted first, then removes trash, versions, log, stored copies.
 - **Client sync.** `client/src/shared.rs`: one `Attached` per `[[shared]]` entry, each with its own state DB. Receive, then
   send through the upload `Engine` (`Engine::group = at_the_top`: the folder is the path root). A local file matching its
-  recorded (size, mtime) is unchanged, so the master's change applies; otherwise hash: equal = in step, different = conflict
-  (local file renamed `name (conflict <computer> <date>).ext`). Receive writes `.fafnirx-part-*`, verifies the root hash,
+  recorded (size, mtime) is unchanged, so the master's change applies; otherwise hash: equal = in step, different = conflict,
+  settled by `Shared.conflict` in `Attached::settle` (the one place; `Master::{Deleted,Live}`, `Settled::{Receive,Leave}`):
+  `theirs` parks the local file in `.fafnirx-conflicts/` (excluded from scan and receive), `mine` drops the `synced` record
+  so the push sends it, `both` renames it `name (conflict <computer> <date>).ext`, `ask` stores the master's side in the
+  `pending` table of the state DB. Pending paths are skipped by pull and push (`Engine::skip`); answers (`shared resolve`,
+  or the tray through `Request::Resolve`) are applied at the start of the next pull (`apply_answers`), as `both` after
+  `ask_timeout_hours`. The tray shows `SharedStatus.conflicts` with `rfd` dialogs. There is no compare-and-swap on the master's
+  commit, so a push can still overwrite a version that another computer committed after this one's pull. Receive writes `.fafnirx-part-*`, verifies the root hash,
   renames. `Spellings` reads each directory once per pull for case-clash lookups.
 - **Client state.** The state DB is keyed to the folder name and the local path (`adopt_folder`); another path starts empty.
   `status` reads only `state::State` (synced paths, holds, last cycle and problem), so it works with the client stopped.

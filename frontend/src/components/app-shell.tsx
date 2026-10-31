@@ -7,7 +7,7 @@ import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { msg, useI18n } from '@/lib/i18n'
 import { useLive } from '@/lib/live-state'
-import { hasWorkspace, useRole, useSession } from '@/lib/session'
+import { hasWorkspace, usePhotos, useRole, useSession } from '@/lib/session'
 import type { Role } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { UploadPanel } from './files/upload-panel'
@@ -21,14 +21,14 @@ import { useModuleScripts } from '@/lib/module-loader'
 /** Who sees an entry: everybody, the roles with a workspace of their own (not read-only), or administrators. */
 type Audience = 'all' | 'workspace' | 'admin'
 
-const NAV: { title: string; items: { to: string; label: string; icon: typeof Images; end?: boolean; for: Audience }[] }[] = [
+const NAV: { title: string; items: { to: string; label: string; icon: typeof Images; end?: boolean; for: Audience; photo?: true }[] }[] = [
   {
     title: msg('Photos'),
     items: [
-      { to: '/timeline', label: msg('Timeline'), icon: Images, for: 'all' },
-      { to: '/favorites', label: msg('Favorites'), icon: Heart, for: 'workspace' },
-      { to: '/albums', label: msg('Albums'), icon: GalleryVerticalEnd, for: 'workspace' },
-      { to: '/archive', label: msg('Archive'), icon: Archive, for: 'workspace' },
+      { to: '/timeline', label: msg('Timeline'), icon: Images, for: 'all', photo: true },
+      { to: '/favorites', label: msg('Favorites'), icon: Heart, for: 'workspace', photo: true },
+      { to: '/albums', label: msg('Albums'), icon: GalleryVerticalEnd, for: 'workspace', photo: true },
+      { to: '/archive', label: msg('Archive'), icon: Archive, for: 'workspace', photo: true },
       { to: '/trash', label: msg('Trash'), icon: Trash2, for: 'workspace' },
     ],
   },
@@ -50,12 +50,21 @@ const NAV: { title: string; items: { to: string; label: string; icon: typeof Ima
 
 const allowed = (audience: Audience, role: Role) => audience === 'all' || (audience === 'workspace' ? hasWorkspace(role) : role === 'admin')
 
+/** The menu without the photo pages: what is left of their group (the trash) goes after Files in the storage group. */
+function withoutPhotos(nav: typeof NAV): typeof NAV {
+  const [photos, storage] = nav
+  const kept = photos.items.filter((i) => !i.photo)
+  const at = storage.items.findIndex((i) => i.to === '/files') + 1
+  return [{ ...storage, items: [...storage.items.slice(0, at), ...kept, ...storage.items.slice(at)] }]
+}
+
 function Nav({ onNavigate }: { onNavigate?: () => void }) {
   const { t } = useI18n()
   const role = useRole()
+  const groups = usePhotos() ? NAV : withoutPhotos(NAV)
   return (
     <nav className="flex flex-col gap-4 p-3" aria-label={t('Main')}>
-      {NAV.map(({ title, items: all }) => ({ title, items: all.filter((i) => allowed(i.for, role)) })).filter((g) => g.items.length > 0).map(({ title, items }) => (
+      {groups.map(({ title, items: all }) => ({ title, items: all.filter((i) => allowed(i.for, role)) })).filter((g) => g.items.length > 0).map(({ title, items }) => (
         <div key={title} className="flex flex-col gap-1">
           <p className="px-3 pb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">{t(title)}</p>
           {items.map(({ to, label, icon: Icon, end }) => (

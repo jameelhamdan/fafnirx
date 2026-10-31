@@ -8,6 +8,7 @@ use crate::platform::store::Store;
 use crate::repo::sources;
 use anyhow::Result;
 use fafnirx_common::HASH_LEN;
+use fafnirx_db::queries as sql;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
@@ -99,7 +100,7 @@ where
     let device_id = device.id;
     let (known, live, removed): (Known, HashSet<String>, HashSet<String>) = db::with(&db, move |c| {
         let known = sources::items(c, source_id)?.into_iter().map(|(_, path, version)| (path, version)).collect();
-        let live = sources::live_paths(c, device_id)?.into_iter().collect();
+        let live = sql::sources::live_paths().bind(c, &device_id).all()?.into_iter().collect();
         // Deleted in the web app: still in the trash, or already removed by the retention job (then only the
         // source's own record remembers it).
         let removed = sources::removed_in_web_app(c, device_id, source_id)?.into_iter().collect();
@@ -119,7 +120,7 @@ where
         let (store, device) = (store.clone(), device.clone());
         let deleted = db::with(&db, move |c| {
             let changed = ingest::mark_deleted(c, &store, &device, &path, false)?;
-            sources::forget_item(c, source_id, &path)?;
+            sql::sources::delete_source_item().bind(c, &source_id, &path).map(drop)?;
             Ok(changed)
         })
         .await;

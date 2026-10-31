@@ -132,6 +132,22 @@ where
     Ok(crate::platform::db::with(&state.db, f).await?)
 }
 
+/// Like [`run`], in one transaction that tells the live pages of `channel` before it commits (a change that fails tells nobody).
+pub async fn change<T, F>(state: &Shared, channel: &'static str, f: F) -> Result<T, ApiError>
+where
+    T: Send + 'static,
+    F: FnOnce(&mut postgres::Transaction) -> anyhow::Result<T> + Send + 'static,
+{
+    run(state, move |c| {
+        let mut tx = c.transaction()?;
+        let out = f(&mut tx)?;
+        crate::platform::db::notify(&mut tx, channel, "")?;
+        tx.commit()?;
+        Ok(out)
+    })
+    .await
+}
+
 #[derive(Serialize)]
 pub struct Done {
     pub ok: bool,

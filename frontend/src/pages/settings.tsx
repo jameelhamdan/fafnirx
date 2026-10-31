@@ -16,18 +16,28 @@ import { useRole, useSession } from '@/lib/session'
 import type { PluginState, Settings as SettingsData } from '@/lib/types'
 import { msg, useT } from '@/lib/i18n'
 
-function SettingsForm({ data }: { data: SettingsData }) {
+/** Saves some of the settings: the server takes all of them at once, so the rest are sent as they are. */
+function useSaveSettings(data: SettingsData) {
   const t = useT()
   const client = useQueryClient()
-  const [versions, setVersions] = useState(String(data.version_count))
-  const [days, setDays] = useState(String(data.retention_days))
-  const [thumbnails, setThumbnails] = useState(data.thumbnails)
-  const save = useMutation({
-    mutationFn: () => api.put<SettingsData>('/api/settings', { version_count: Number(versions), retention_days: Number(days), thumbnails }),
-    onSuccess: (saved) => { client.setQueryData(['settings'], saved); toast.success(t('Settings saved')) },
+  return useMutation({
+    mutationFn: (changes: Partial<SettingsData>) => api.put<SettingsData>('/api/settings', { ...data, ...changes }),
+    onSuccess: (saved) => {
+      client.setQueryData(['settings'], saved)
+      // The menu follows the session.
+      void client.invalidateQueries({ queryKey: ['session'] })
+      toast.success(t('Settings saved'))
+    },
     onError: (e) => toast.error(e.message),
   })
-  const submit = (e: FormEvent) => { e.preventDefault(); save.mutate() }
+}
+
+function VersionsForm({ data }: { data: SettingsData }) {
+  const t = useT()
+  const [versions, setVersions] = useState(String(data.version_count))
+  const [days, setDays] = useState(String(data.retention_days))
+  const save = useSaveSettings(data)
+  const submit = (e: FormEvent) => { e.preventDefault(); save.mutate({ version_count: Number(versions), retention_days: Number(days) }) }
   return (
     <Card>
       <CardHeader>
@@ -46,6 +56,27 @@ function SettingsForm({ data }: { data: SettingsData }) {
             <Label htmlFor="days">{t('Retention (days)')}</Label>
             <Input id="days" type="number" min="1" max="3650" value={days} onChange={(e) => setDays(e.target.value)} />
           </div>
+          <Button type="submit" disabled={save.isPending}>{t('Save')}</Button>
+        </form>
+      </CardContent>
+    </Card>
+  )
+}
+
+function LibraryForm({ data }: { data: SettingsData }) {
+  const t = useT()
+  const [thumbnails, setThumbnails] = useState(data.thumbnails)
+  const [photos, setPhotos] = useState(data.photos)
+  const save = useSaveSettings(data)
+  const submit = (e: FormEvent) => { e.preventDefault(); save.mutate({ thumbnails, photos }) }
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t('Photos and videos')}</CardTitle>
+        <CardDescription>{t('What the web app makes and shows of the pictures and videos in the library.')}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={submit} className="space-y-4">
           <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
             <div className="space-y-1">
               <Label htmlFor="thumbnails">{t('Thumbnails and previews')}</Label>
@@ -54,6 +85,15 @@ function SettingsForm({ data }: { data: SettingsData }) {
               </p>
             </div>
             <Switch id="thumbnails" checked={thumbnails} onCheckedChange={setThumbnails} />
+          </div>
+          <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
+            <div className="space-y-1">
+              <Label htmlFor="photos">{t('Photo pages')}</Label>
+              <p className="text-sm text-muted-foreground">
+                {t('Timeline, Favorites, Albums and Archive, for everybody. Off: they are hidden and their pages are closed. Photos are still read and shown in Files.')}
+              </p>
+            </div>
+            <Switch id="photos" checked={photos} onCheckedChange={setPhotos} />
           </div>
           <Button type="submit" disabled={save.isPending}>{t('Save')}</Button>
         </form>
@@ -141,7 +181,12 @@ function Administration() {
   const { data, error } = useQuery({ queryKey: ['settings'], queryFn: () => api.get<SettingsData>('/api/settings') })
   return (
     <>
-      {error ? <ErrorNote error={error} /> : !data ? <Skeleton className="h-56" /> : <SettingsForm data={data} />}
+      {error ? <ErrorNote error={error} /> : !data ? <Skeleton className="h-56" /> : (
+        <>
+          <VersionsForm data={data} />
+          <LibraryForm data={data} />
+        </>
+      )}
       <Card>
         <CardHeader>
           <CardTitle>{t('File store')}</CardTitle>

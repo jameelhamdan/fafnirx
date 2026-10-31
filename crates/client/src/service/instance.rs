@@ -2,6 +2,7 @@
 //! for as long as it lives. The operating system releases the lock when the process ends, however it ends.
 
 use anyhow::Result;
+use fafnirx_common::LockExt;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -21,7 +22,7 @@ pub fn claim(state_dir: &Path, name: &str, attempts: u32) -> Result<bool> {
     for _ in 0..attempts {
         match file.try_lock() {
             Ok(()) => {
-                HELD.lock().unwrap_or_else(|e| e.into_inner()).push((name.to_string(), file));
+                HELD.locked().push((name.to_string(), file));
                 return Ok(true);
             }
             Err(std::fs::TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(500)),
@@ -94,7 +95,7 @@ pub fn is_held(state_dir: &Path, name: &str) -> bool {
 
 /// Lets go of a lock early, so that a process this one starts can take it.
 pub fn release(name: &str) {
-    HELD.lock().unwrap_or_else(|e| e.into_inner()).retain(|(n, file)| {
+    HELD.locked().retain(|(n, file)| {
         let keep = *n != name;
         if !keep {
             let _ = file.unlock(); // see `is_held`: closing the file may not be enough at once

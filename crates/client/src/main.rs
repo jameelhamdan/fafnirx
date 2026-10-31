@@ -140,6 +140,26 @@ enum SharedCmd {
         /// Make the shared folder first when there is none of that name
         #[arg(long)]
         create: bool,
+        /// What to do with a file changed here and on the master: theirs (default), mine, both or ask
+        #[arg(long, default_value = "theirs")]
+        conflict: config::Conflict,
+    },
+    /// Show or set what happens to a file changed here and on the master: theirs (the master's is kept and this computer's put
+    /// aside), mine (this computer's is sent), both (both are kept) or ask (a question on screen)
+    Conflict {
+        name: String,
+        policy: Option<config::Conflict>,
+        /// With ask: hours a file waits for an answer before both versions are kept (0: for ever; default 24)
+        #[arg(long)]
+        ask_timeout_hours: Option<u64>,
+    },
+    /// Say which version of the files waiting for a decision (policy `ask`) is kept
+    Resolve {
+        name: String,
+        #[arg(value_parser = ["theirs", "mine", "both"])]
+        keep: String,
+        /// Only this file (a path in the shared folder); all that wait when not given
+        path: Option<String>,
     },
     /// Stop syncing a shared folder on this computer (nothing is deleted)
     Detach { name: String },
@@ -230,8 +250,14 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Folders => commands::list_folders(&config_path),
         Cmd::Shared(SharedCmd::List) => tokio_main(commands::shared_list(config_path)),
         Cmd::Shared(SharedCmd::Create { name }) => tokio_main(commands::shared_create(config_path, name)),
-        Cmd::Shared(SharedCmd::Attach { name, path, create }) => {
-            tokio_main(commands::shared_attach(config_path, name, path, create))
+        Cmd::Shared(SharedCmd::Attach { name, path, create, conflict }) => {
+            tokio_main(commands::shared_attach(config_path, name, path, create, conflict))
+        }
+        Cmd::Shared(SharedCmd::Conflict { name, policy, ask_timeout_hours }) => {
+            commands::shared_conflict(&config_path, &name, policy, ask_timeout_hours)
+        }
+        Cmd::Shared(SharedCmd::Resolve { name, keep, path }) => {
+            commands::shared_resolve(&config_path, &name, &keep, path.as_deref())
         }
         Cmd::Shared(SharedCmd::Detach { name }) => commands::shared_detach(&config_path, &name),
         Cmd::Shared(SharedCmd::Keep { name }) => commands::shared_keep(&config_path, &name),

@@ -3,7 +3,7 @@
 use crate::config::control_dir;
 use crate::sync::Report;
 use crate::update;
-use fafnirx_common::unix_now;
+use fafnirx_common::{unix_now, LockExt};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -50,6 +50,21 @@ pub struct SharedStatus {
     pub held: usize,
     /// Files waiting for a retry.
     pub failing: usize,
+    /// Files changed here and on the master that wait for a person to choose (the `ask` policy).
+    pub conflicts: Vec<ConflictInfo>,
+}
+
+/// A file that waits for a decision: what each side has.
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct ConflictInfo {
+    pub path: String,
+    /// The master deleted it.
+    pub deleted: bool,
+    pub master_size: u64,
+    pub master_mtime: i64,
+    pub local_size: u64,
+    pub local_mtime: i64,
 }
 
 impl SharedStatus {
@@ -69,6 +84,9 @@ impl SharedStatus {
         }
         if self.failing > 0 {
             parts.push(format!("{} files waiting for a retry", self.failing));
+        }
+        if !self.conflicts.is_empty() {
+            parts.push(format!("{} files need a decision", self.conflicts.len()));
         }
         if !self.last_error.is_empty() {
             parts.push(format!("last problem: {}", self.last_error.chars().take(120).collect::<String>()));
@@ -150,18 +168,15 @@ impl StatusFile {
     }
 
     pub fn snapshot(&self) -> Status {
-        self.inner.lock().map(|s| s.clone()).unwrap_or_default()
+        self.inner.locked().clone()
     }
 
     pub fn edit(&self, f: impl FnOnce(&mut Status)) {
-        let Ok(mut s) = self.inner.lock() else { return };
+        let mut s = self.inner.locked();
         f(&mut s);
         s.updated = unix_now();
         if let Ok(json) = serde_json::to_vec_pretty(&*s) {
-            let tmp = self.path.with_extension("tmp");
-            if std::fs::write(&tmp, json).is_ok() {
-                let _ = std::fs::rename(&tmp, &self.path);
-            }
+            let _ = fafnirx_common::write_atomic(&self.path, json);
         }
     }
 }

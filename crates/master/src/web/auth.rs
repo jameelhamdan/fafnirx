@@ -4,7 +4,7 @@
 //! the moment the row goes: when the user logs out, is disabled, or gets a new password.
 
 use super::access::{Access, Role};
-use crate::repo::{devices, sessions, users};
+use crate::repo::{devices, sessions, settings, users};
 use crate::web::{done, run, ApiError, Done, Res, Shared};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
@@ -12,8 +12,9 @@ use axum::extract::{ConnectInfo, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{AppendHeaders, IntoResponse};
 use axum::{Extension, Json};
-use fafnirx_common::unix_now;
-use postgres::GenericClient;
+use fafnirx_common::{unix_now, LockExt};
+use fafnirx_db::client::GenericClient;
+use fafnirx_db::queries as sql;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::OnceLock;
@@ -68,7 +69,7 @@ pub fn set_password(
     keep: Option<&str>,
 ) -> anyhow::Result<()> {
     let hash = hash_password(password)?;
-    users::set_password_hash(conn, user_id, &hash)?;
+    sql::users::set_password_hash().bind(conn, &hash, &user_id).map(drop)?;
     sessions::end_others(conn, user_id, keep.unwrap_or(""))?;
     Ok(())
 }
@@ -149,7 +150,7 @@ pub async fn login(
     let forwarded = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
     let keys = [state.trusted.client_ip(peer.ip(), forwarded).to_string(), format!("user:{username}")];
     {
-        let mut failures = state.login_failures.lock().unwrap_or_else(|e| e.into_inner());
+        let mut failures = state.login_failures.locked();
         // Forget keys that have been quiet, so the table cannot grow without bound.
         failures.retain(|_, times| {
             times.retain(|t| t.elapsed() <= LOGIN_WINDOW);
@@ -171,14 +172,14 @@ pub async fn login(
         .await
         .map_err(|e| ApiError::from(anyhow::Error::from(e)))?;
     let Some(id) = id.filter(|_| matched) else {
-        let mut failures = state.login_failures.lock().unwrap_or_else(|e| e.into_inner());
+        let mut failures = state.login_failures.locked();
         for key in keys {
             failures.entry(key).or_default().push(Instant::now());
         }
         return Err(wrong());
     };
     {
-        let mut failures = state.login_failures.lock().unwrap_or_else(|e| e.into_inner());
+        let mut failures = state.login_failures.locked();
         for key in &keys {
             failures.remove(key);
         }
@@ -197,7 +198,7 @@ pub async fn login(
 pub async fn logout(State(state): State<Shared>, headers: HeaderMap) -> Result<impl IntoResponse, ApiError> {
     if let Some(token) = cookie_token(&headers) {
         let stored = token_hash(&token);
-        run(&state, move |c| Ok(sessions::end(c, &stored)?)).await?;
+        run(&state, move |c| Ok(sql::sessions::delete_session().bind(c, &stored).map(drop)?)).await?;
     }
     Ok((AppendHeaders([cookie_header("", 0, is_secure(&headers))]), Json(Done { ok: true })))
 }
@@ -217,12 +218,17 @@ pub struct Session {
     version: Option<&'static str>,
     /// The modules that are up, by id; only told to a logged-in user.
     modules: std::collections::BTreeMap<String, fafnirx_module_api::Manifest>,
+    /// Whether the web app offers the photo pages (administrator setting); only told to a logged-in user.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    photos: Option<bool>,
 }
 
 pub async fn session(State(state): State<Shared>, access: Option<Extension<Access>>) -> Res<Session> {
     let access = access.map(|Extension(a)| a);
     let logged_in = access.is_some();
+    let photos = if logged_in { Some(run(&state, |c| Ok(settings::photos_on(c))).await?) } else { None };
     Ok(Json(Session {
+        photos,
         user: access.map(|a| Who { name: a.name, role: a.role.as_str() }),
         version: logged_in.then_some(env!("CARGO_PKG_VERSION")),
         modules: if logged_in { state.modules.active() } else { Default::default() },
@@ -247,7 +253,7 @@ pub async fn change_password(
     }
     let keep = cookie_token(&headers).map(|t| token_hash(&t));
     let id = access.user_id;
-    let hash: String = run(&state, move |c| Ok(users::password_hash_of(c, id)?)).await?;
+    let hash: String = run(&state, move |c| Ok(sql::users::password_hash_of().bind(c, &id).one()?)).await?;
     let current = body.current;
     let matched = tokio::task::spawn_blocking(move || verify_password(&hash, &current))
         .await

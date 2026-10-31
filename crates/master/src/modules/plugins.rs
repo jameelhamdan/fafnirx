@@ -11,6 +11,7 @@
 
 use super::{Module, Registry};
 use anyhow::{anyhow, bail, Context, Result};
+use fafnirx_common::LockExt;
 use fafnirx_module_api::{valid_id, PluginFile, PLUGIN_FILE};
 use serde::Serialize;
 use serde_json::Value;
@@ -211,7 +212,7 @@ impl Plugins {
                 }
             }
         }
-        *self.problems.lock().unwrap_or_else(|e| e.into_inner()) = problems;
+        *self.problems.locked() = problems;
         found
     }
 
@@ -219,8 +220,8 @@ impl Plugins {
     /// Called every few seconds.
     pub fn sync(&self) {
         let installed = self.scan();
-        let busy = self.busy.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let mut started = self.started.lock().unwrap_or_else(|e| e.into_inner());
+        let busy = self.busy.locked().clone();
+        let mut started = self.started.locked();
         let gone: Vec<String> = started
             .keys()
             .filter(|id| !busy.contains(*id) && !installed.iter().any(|i| &i.file.id == *id))
@@ -237,7 +238,7 @@ impl Plugins {
                 continue;
             }
             if self.registry.is_external(&id) {
-                self.problems.lock().unwrap_or_else(|e| e.into_inner()).insert(
+                self.problems.locked().insert(
                     id.clone(),
                     format!("FAFNIRX_MODULE_{}_URL is set, so that module is used instead", id.to_ascii_uppercase()),
                 );
@@ -315,13 +316,13 @@ impl Plugins {
     }
 
     fn mark_busy(&self, id: &str) -> Busy<'_> {
-        self.busy.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string());
+        self.busy.locked().insert(id.to_string());
         Busy { plugins: self, id: id.to_string() }
     }
 
     /// Stops a plugin, if it runs, and waits until it has (its files cannot be replaced while it runs).
     async fn stop(&self, id: &str) {
-        let run = self.started.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
+        let run = self.started.locked().remove(id);
         if let Some(mut child) = run.and_then(|r| r.child) {
             let _ = child.kill().await;
         }
@@ -331,8 +332,8 @@ impl Plugins {
     /// What the administrator sees: the plugins in the folder, and the modules set up by address.
     pub fn statuses(&self) -> Vec<Status> {
         let installed = self.scan_names();
-        let mut problems = self.problems.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        for (id, run) in self.started.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+        let mut problems = self.problems.locked().clone();
+        for (id, run) in self.started.locked().iter() {
             if let Some(problem) = &run.problem {
                 problems.insert(id.clone(), problem.clone());
             }
@@ -514,7 +515,7 @@ struct Busy<'a> {
 
 impl Drop for Busy<'_> {
     fn drop(&mut self) {
-        self.plugins.busy.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.id);
+        self.plugins.busy.locked().remove(&self.id);
     }
 }
 

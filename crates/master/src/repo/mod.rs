@@ -1,9 +1,10 @@
-//! The repositories: the one place that knows how the master's data is stored. Every function here is a query (typed,
-//! generated from `queries/*.sql`, see `docs/development.md`) or a small group of them, and speaks in the master's
-//! own terms (a device, an alert, a setting) rather than in rows and columns. Handlers, the gRPC service and the
-//! background jobs call these and contain no SQL; the rules (who may do what, what a rename means) stay with them.
+//! The repositories: where the master's data is stored and what is more than one plain query. A function here is a small
+//! group of typed queries (generated from `queries/*.sql`, see `docs/development.md`) or one with a mapping around it, and
+//! speaks in the master's own terms (a device, an alert, a setting) rather than in rows and columns. A single plain query
+//! is called where it is needed (`sql::mirrors::toggle_mirror().bind(c, &id)`); the rules (who may do what, what a rename
+//! means) stay with the handlers, the gRPC service and the background jobs.
 //!
-//! Functions take `&mut impl postgres::GenericClient`, so they run the same on a pooled connection and inside a
+//! Functions take `&mut impl fafnirx_db::client::GenericClient`, so they run the same on a pooled connection and inside a
 //! transaction. Anything that must be atomic is a transaction opened by the caller (the application layer).
 
 pub mod albums;
