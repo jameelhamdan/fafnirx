@@ -3,7 +3,7 @@
 //   cd tests && npm install && node e2e-shared.mjs
 import fs from 'node:fs'
 import path from 'node:path'
-import { CLIENT, MASTER, check, enrollDevice, harness, namesIn as names, passedChecks, readIn as read, sleep, startDaemon, stopDaemon, until, writeIn as write } from './lib.mjs'
+import { CLIENT, MASTER, run, check, enrollDevice, harness, namesIn as names, passedChecks, readIn as read, sleep, startDaemon, stopDaemon, until, writeIn as write } from './lib.mjs'
 
 const h = await harness('fafnirx-shared-', { binaries: [MASTER, CLIENT] })
 const { tmp, data, schema, master } = h
@@ -40,7 +40,7 @@ try {
   const attached = laptop.c('shared', 'attach', 'family', dirL, '--create').stdout
   check(attached.includes('"alice/family"'), `a shared folder is made and attached from the command line (${attached.trim()})`)
   check(laptop.c('shared', 'list').stdout.trim() === 'alice/family\town', 'the list names it as <owner>/<name> and marks the user\'s own')
-  check(laptop.c('folders').stdout.includes('(shared, both ways)'), 'and `folders` shows it')
+  check(laptop.c('folders').stdout.includes('(shared, both ways'), 'and `folders` shows it')
   const first = laptop.c('sync').stdout
   check(first.includes('2 uploaded'), `the first sync uploads its files (${first.trim()})`)
   check(stored('alice/family', 'docs/b.txt') === 'second', 'they are in the folder of the shared folder on the master, at its root')
@@ -58,16 +58,57 @@ try {
   const pulled = laptop.c('sync').stdout
   check(pulled.includes('1 downloaded') && read(dirL, 'a.txt') === 'hello from the desktop', `and received by the other computer (${pulled.trim()})`)
 
-  // --- both change the same file: nothing is lost -------------------------------------------------------------------------------------------
+  // --- both change the same file: the policy of the folder says what happens (per computer, per folder) ---------------------------------------
+  const aside = path.join(dirL, '.fafnirx-conflicts')
+  check(laptop.c('shared', 'conflict', 'family').stdout.includes('theirs'), 'the default is the master\'s version')
   write(dirL, 'a.txt', 'L')
   write(dirD, 'a.txt', 'D')
   desktop.c('sync')
   const conflict = laptop.c('sync').stdout
+  check(read(dirL, 'a.txt') === 'D' && names(aside).length === 1 && read(aside, names(aside)[0]) === 'L', `theirs: the master's version is kept and ours is put aside (${names(dirL)})`)
+  check(conflict.includes('1 conflicts') && (await live('alice/family')).every((p) => !p.includes('conflict')), 'and what was put aside is not sent')
+  check(!names(dirL).some((n) => n.includes('(conflict ')), 'no conflict copy among the files')
+
+  check(laptop.c('shared', 'conflict', 'family', 'mine').stdout.includes('"mine"'), 'a folder can be set to keep this computer\'s version')
+  write(dirL, 'a.txt', 'L')
+  write(dirD, 'a.txt', 'D')
+  desktop.c('sync')
+  laptop.c('sync')
+  check(read(dirL, 'a.txt') === 'L' && stored('alice/family', 'a.txt') === 'L', 'mine: ours is kept and sent as the current version')
+  desktop.c('sync')
+  check(read(dirD, 'a.txt') === 'L', 'and reaches the other computer')
+
+  check(desktop.c('shared', 'conflict', 'family').stdout.includes('theirs'), 'the other computer keeps its own setting')
+  laptop.c('shared', 'conflict', 'family', 'both')
+  write(dirL, 'a.txt', 'L')
+  write(dirD, 'a.txt', 'D')
+  desktop.c('sync')
+  const both = laptop.c('sync').stdout
   const kept = names(dirL).filter((n) => n.includes('(conflict '))
-  check(read(dirL, 'a.txt') === 'D' && kept.length === 1 && read(dirL, kept[0]) === 'L', `a file changed on both sides keeps both (${kept})`)
-  check(conflict.includes('1 conflicts') && stored('alice/family', kept[0]) === 'L', 'the copy of this computer is sent like a new file')
+  check(read(dirL, 'a.txt') === 'D' && kept.length === 1 && read(dirL, kept[0]) === 'L', `both: a file changed on both sides keeps both (${kept})`)
+  check(both.includes('1 conflicts') && stored('alice/family', kept[0]) === 'L', 'the copy of this computer is sent like a new file')
   desktop.c('sync')
   check(read(dirD, kept[0]) === 'L', 'and reaches the other computer')
+
+  // ask needs a screen: where there is none it is refused, where there is one the file waits for the answer
+  const askSet = run(CLIENT, ['--config', laptop.cfg, 'shared', 'conflict', 'family', 'ask'], { ok: false })
+  if (askSet.code === 0) {
+    write(dirL, 'ask.txt', 'start')
+    laptop.c('sync')
+    desktop.c('sync')
+    write(dirL, 'ask.txt', 'L')
+    write(dirD, 'ask.txt', 'D')
+    desktop.c('sync')
+    laptop.c('sync')
+    check(read(dirL, 'ask.txt') === 'L' && stored('alice/family', 'ask.txt') === 'D', 'ask: nothing changes on either side while the file waits')
+    check(laptop.c('status').stdout.includes('need a decision'), 'and status says it waits')
+    laptop.c('shared', 'resolve', 'family', 'theirs', 'ask.txt')
+    laptop.c('sync')
+    check(read(dirL, 'ask.txt') === 'D' && names(aside).length === 2, 'the answer is applied at the next sync, ours is put aside')
+  } else {
+    check(askSet.stderr.includes('needs a screen'), 'ask is refused on a computer without a screen')
+  }
+  laptop.c('shared', 'conflict', 'family', 'both')
 
   // --- delete and rename ---------------------------------------------------------------------------------------------------------------------
   fs.rmSync(path.join(dirD, 'docs', 'b.txt'))

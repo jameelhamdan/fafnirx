@@ -3,7 +3,8 @@
 //! The one place where SQL is assembled at run time, because the sort order is the user's choice. Nothing the user
 //! typed is ever put into the text: the order comes from the closed [`Sort`], everything else is a parameter.
 
-use postgres::{Error, GenericClient};
+use fafnirx_db::client::GenericClient;
+use postgres::Error;
 
 #[derive(Clone, Copy)]
 pub enum Sort {

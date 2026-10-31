@@ -49,11 +49,16 @@ pub fn scan_folder(folder: &Folder, exclude: Option<&Path>) -> Result<Scan> {
     let mut complete = true;
 
     let skip = exclude.map(Path::to_path_buf);
+    let shared = top.is_empty();
     let walker = ignore::WalkBuilder::new(root)
         .standard_filters(false)
         .follow_links(false)
         .add_custom_ignore_filename(IGNORE_FILE)
-        .filter_entry(move |e| skip.as_deref().is_none_or(|s| !e.path().starts_with(s)))
+        .filter_entry(move |e| {
+            // What a shared folder put aside (see `shared::CONFLICT_DIR`) is this computer's own.
+            let aside = shared && e.depth() == 1 && e.file_name() == crate::shared::CONFLICT_DIR;
+            !aside && skip.as_deref().is_none_or(|s| !e.path().starts_with(s))
+        })
         .build();
     for item in walker {
         let dirent = match item {

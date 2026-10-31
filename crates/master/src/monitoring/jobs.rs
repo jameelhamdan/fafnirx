@@ -3,10 +3,12 @@
 
 use crate::platform::db::Db;
 use crate::platform::store::Store;
-use crate::repo::{alerts, devices, events, retention, settings};
+use crate::repo::{alerts, devices, retention, settings};
 use anyhow::Result;
 use fafnirx_common::unix_now;
-use postgres::{Client, GenericClient};
+use fafnirx_db::client::GenericClient;
+use fafnirx_db::queries as sql;
+use postgres::Client;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -111,7 +113,8 @@ pub fn hourly(db: &Db, store: &Store, cache_root: &Path) -> Result<()> {
     if abandoned > 0 {
         tracing::info!("removed {abandoned} abandoned uploads");
     }
-    let known: std::collections::HashSet<i64> = retention::all_version_ids(&mut *db.get()?)?.into_iter().collect();
+    let known: std::collections::HashSet<i64> =
+        sql::retention::all_version_ids().bind(&mut *db.get()?).all()?.into_iter().collect();
     let orphans = store.sweep_versions(&known, STALE_UPLOAD);
     if orphans > 0 {
         tracing::info!("removed {orphans} stored versions that no record points to");
@@ -135,10 +138,10 @@ fn retention(conn: &mut Client) -> Result<Vec<i64>> {
     // list of files instead of the changes (`devices::grpc::list_changes`). It only moves forward.
     let known_from = settings::get_i64(&mut tx, settings::DELETIONS_KNOWN_FROM, 0).max(cutoff);
     settings::set(&mut tx, settings::DELETIONS_KNOWN_FROM, &known_from.to_string())?;
-    devices::mark_totals_stale(&mut tx, &device_ids)?;
-    let pruned = retention::delete_pruned_versions(&mut tx, cutoff)?;
-    events::purge(&mut tx, unix_now() - EVENT_KEEP_DAYS * 86400)?;
-    alerts::purge_resolved(&mut tx, unix_now() - EVENT_KEEP_DAYS * 86400)?;
+    sql::devices::mark_totals_stale().bind(&mut tx, &device_ids).map(drop)?;
+    let pruned = sql::retention::delete_pruned_versions().bind(&mut tx, &cutoff).all()?;
+    sql::events::purge_events().bind(&mut tx, &(unix_now() - EVENT_KEEP_DAYS * 86400)).map(drop)?;
+    sql::alerts::purge_resolved_alerts().bind(&mut tx, &(unix_now() - EVENT_KEEP_DAYS * 86400)).map(drop)?;
     tx.commit()?;
     if files > 0 || !pruned.is_empty() {
         tracing::info!("retention removed {files} files and {} old versions", pruned.len());

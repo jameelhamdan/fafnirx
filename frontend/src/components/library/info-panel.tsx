@@ -10,7 +10,7 @@ import { Textarea } from '../ui/textarea'
 import { api, query } from '@/lib/api'
 import { bytes, clock, fromInputValue, toInputValue, whenText } from '@/lib/format'
 import { useLibraryActions, useTags } from '@/lib/library'
-import { hasWorkspace, useRole } from '@/lib/session'
+import { hasWorkspace, usePhotos, useRole } from '@/lib/session'
 import type { AssetDetail } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { WorkNote } from '../work-note'
@@ -204,6 +204,7 @@ export default function InfoPanel({ id, onClose, embedded }: { id: string; onClo
   const { edit } = useLibraryActions()
   // A read-only user sees everything about a file and changes nothing.
   const mine = hasWorkspace(useRole())
+  const photos = usePhotos()
   const [dialog, setDialog] = useState<'date' | 'place' | null>(null)
   const { data: d, error } = useQuery({ queryKey: ['asset', id], queryFn: () => api.get<AssetDetail>(`/api/library/${id}`) })
   const exif = d?.exif ? Object.entries(d.exif) : []
@@ -253,7 +254,7 @@ export default function InfoPanel({ id, onClose, embedded }: { id: string; onClo
             </section>
           )}
 
-          {d.albums.length > 0 && (
+          {photos && d.albums.length > 0 && (
             <section>
               <h3 className="mb-1.5 text-xs text-muted-foreground">{t('In albums')}</h3>
               <ul className="flex flex-wrap gap-1.5">

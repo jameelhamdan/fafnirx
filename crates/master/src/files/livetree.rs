@@ -16,9 +16,10 @@ use crate::platform::store::{hash_file, Store, MASTER_FOLDER};
 use crate::repo::{alerts, devices, files, users};
 use anyhow::Result;
 use fafnirx_common::{clean_remote_path, mode_of, mtime_ns, unix_now, valid_device_name};
+use fafnirx_db::client::GenericClient;
+use fafnirx_db::queries as sql;
 use notify::{RecursiveMode, Watcher};
 use postgres::Client;
-use postgres::GenericClient;
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -200,7 +201,7 @@ fn device_for_folder(conn: &mut Client, store: &Store, folder: &str) -> Result<O
         return Ok(None);
     }
     let Some(owner) = users::who_can_have_devices(conn, user)? else { return Ok(None) };
-    let id = devices::ensure_local(conn, owner, name, unix_now())?;
+    let id = sql::devices::ensure_local_device().bind(conn, &name, &unix_now(), &owner).one()?;
     tracing::info!("new folder files/{folder}: added as a device");
     db::notify(conn, "devices", folder)?;
     Ok(Some(Device { id, name: folder.to_string() }))
@@ -290,7 +291,7 @@ fn check_layout(conn: &mut Client, store: &Store) -> Result<()> {
         );
         alerts::upsert(conn, "misplaced_files", USERS_DIR, &message)?;
     }
-    let reserved = files::reserved_master_paths(conn)?;
+    let reserved = sql::files::reserved_master_paths().bind(conn).all()?;
     if reserved.is_empty() {
         alerts::resolve(conn, "reserved_master_files", USERS_DIR)?;
     } else {

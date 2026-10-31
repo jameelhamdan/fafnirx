@@ -4,6 +4,7 @@ use super::text::clip;
 use crate::config::Config;
 use crate::daemon::requests::{self, Request};
 use crate::{service, update};
+use fafnirx_common::LockExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -189,7 +190,7 @@ impl Updates {
     }
 
     pub fn available(&self) -> Option<String> {
-        self.available.lock().ok().and_then(|a| a.clone())
+        self.available.locked().clone()
     }
 
     fn set_available(&self, version: Option<String>) {

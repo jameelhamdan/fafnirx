@@ -1,11 +1,11 @@
 //! The queue of background work (`library::meta`): reading metadata, making thumbnails. Look at it and
 //! steer it with `monitoring::queue`.
 
-use crate::platform::pg::Pg;
 use fafnirx_common::unix_now;
+use fafnirx_db::client::GenericClient;
 use fafnirx_db::client::Params;
 use fafnirx_db::queries::jobs as q;
-use postgres::{Error, GenericClient};
+use postgres::Error;
 use uuid::Uuid;
 
 /// How long a job that worked stays in the list.
@@ -13,7 +13,7 @@ pub const DONE_KEEP_SECS: i64 = 24 * 3600;
 
 /// Queues background work of a kind, with its payload as JSON; the same work that is already waiting is not queued again.
 pub fn enqueue(c: &mut impl GenericClient, kind: &str, payload: &serde_json::Value) -> Result<(), Error> {
-    q::enqueue_job().bind(&mut Pg(c), &kind, &payload.to_string(), &unix_now()).map(drop)
+    q::enqueue_job().bind(c, &kind, &payload.to_string(), &unix_now()).map(drop)
 }
 
 /// A job taken from the queue.
@@ -34,20 +34,16 @@ pub fn status_of(
     payload: &serde_json::Value,
     since: i64,
 ) -> Result<Option<String>, Error> {
-    q::job_status_of().bind(&mut Pg(c), &since, &kind, &payload.to_string()).opt()
-}
-
-pub fn requeue_running(c: &mut impl GenericClient) -> Result<(), Error> {
-    q::requeue_running_jobs().bind(&mut Pg(c)).map(drop)
+    q::job_status_of().bind(c, &since, &kind, &payload.to_string()).opt()
 }
 
 /// Takes one due job from the queue and marks it running. One statement, so a job is only taken once.
 /// A picture somebody is waiting for goes first.
 pub fn claim(c: &mut impl GenericClient, now: i64) -> Result<Option<Claimed>, Error> {
-    if let Some(j) = q::claim_thumb_job().bind(&mut Pg(c), &now).opt()? {
+    if let Some(j) = q::claim_thumb_job().bind(c, &now).opt()? {
         return Ok(Some(Claimed { id: j.id, kind: j.kind, payload: j.payload, attempts: j.attempts }));
     }
-    Ok(q::claim_job().bind(&mut Pg(c), &now).opt()?.map(|j| Claimed {
+    Ok(q::claim_job().bind(c, &now).opt()?.map(|j| Claimed {
         id: j.id,
         kind: j.kind,
         payload: j.payload,
@@ -57,18 +53,18 @@ pub fn claim(c: &mut impl GenericClient, now: i64) -> Result<Option<Claimed>, Er
 
 /// A job that worked is done; it stays in the list for a day.
 pub fn complete(c: &mut impl GenericClient, id: Uuid, note: Option<&str>) -> Result<(), Error> {
-    q::complete_job().bind(&mut Pg(c), &unix_now(), &note, &id).map(drop)
+    q::complete_job().bind(c, &unix_now(), &note, &id).map(drop)
 }
 
 /// A job that failed: queued again after `run_after`, or failed for good, with what went wrong.
 pub fn fail(c: &mut impl GenericClient, id: Uuid, give_up: bool, run_after: i64, error: &str) -> Result<(), Error> {
     let status = if give_up { "failed" } else { "queued" };
-    q::retry_job().params(&mut Pg(c), &q::RetryJobParams { id, status, run_after, error, now: unix_now() }).map(drop)
+    q::retry_job().params(c, &q::RetryJobParams { id, status, run_after, error, now: unix_now() }).map(drop)
 }
 
 /// Forgets the jobs that worked more than a day ago.
 pub fn purge_done(c: &mut impl GenericClient) -> Result<u64, Error> {
-    q::purge_done_jobs().bind(&mut Pg(c), &(unix_now() - DONE_KEEP_SECS))
+    q::purge_done_jobs().bind(c, &(unix_now() - DONE_KEEP_SECS))
 }
 
 /// Jobs of one kind in one state.
@@ -97,7 +93,7 @@ pub struct Item {
 pub fn counts(c: &mut impl GenericClient, all: bool, user: i64) -> Result<Vec<Count>, Error> {
     let params = q::QueueCountsParams { since: unix_now() - DONE_KEEP_SECS, all, scope_user: user };
     Ok(q::queue_counts()
-        .params(&mut Pg(c), &params)
+        .params(c, &params)
         .all()?
         .into_iter()
         .map(|r| Count { kind: r.kind, status: r.status, n: r.n })
@@ -108,7 +104,7 @@ pub fn counts(c: &mut impl GenericClient, all: bool, user: i64) -> Result<Vec<Co
 pub fn items(c: &mut impl GenericClient, all: bool, user: i64, limit: i64) -> Result<Vec<Item>, Error> {
     let params = q::QueueItemsParams { since: unix_now() - DONE_KEEP_SECS, all, scope_user: user, limit };
     Ok(q::queue_items()
-        .params(&mut Pg(c), &params)
+        .params(c, &params)
         .all()?
         .into_iter()
         .map(|j| Item {
@@ -129,12 +125,12 @@ pub fn items(c: &mut impl GenericClient, all: bool, user: i64, limit: i64) -> Re
 
 /// Failed jobs run again: this one, or all of them. Returns how many.
 pub fn retry_failed(c: &mut impl GenericClient, id: Option<Uuid>) -> Result<u64, Error> {
-    q::retry_failed_jobs().bind(&mut Pg(c), &id)
+    q::retry_failed_jobs().bind(c, &id)
 }
 
 /// Forgets jobs that have the state `status` (`failed` or `queued`): this one, or all of them. Returns how many.
 pub fn drop_where(c: &mut impl GenericClient, status: &str, id: Option<Uuid>) -> Result<u64, Error> {
-    q::drop_jobs().bind(&mut Pg(c), &status, &id)
+    q::drop_jobs().bind(c, &status, &id)
 }
 
 /// A photo or video to read: (file id, device folder, path, content hash).
@@ -149,7 +145,7 @@ pub fn media_to_read(
 ) -> Result<Vec<ToRead>, Error> {
     let params = q::MediaToReadParams { everything, after, limit };
     Ok(q::media_to_read()
-        .params(&mut Pg(c), &params)
+        .params(c, &params)
         .all()?
         .into_iter()
         .map(|r| (r.id, r.folder, r.path, r.root_hash))
@@ -158,10 +154,5 @@ pub fn media_to_read(
 
 /// The unfinished work of a file as (kind, status): queued, running or failed.
 pub fn pending_of(c: &mut impl GenericClient, device: &str, path: &str) -> Result<Vec<(String, String)>, Error> {
-    Ok(q::pending_jobs_of_file()
-        .bind(&mut Pg(c), &device, &path)
-        .all()?
-        .into_iter()
-        .map(|j| (j.kind, j.status))
-        .collect())
+    Ok(q::pending_jobs_of_file().bind(c, &device, &path).all()?.into_iter().map(|j| (j.kind, j.status)).collect())
 }

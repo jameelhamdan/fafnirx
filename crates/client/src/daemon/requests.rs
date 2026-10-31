@@ -28,10 +28,30 @@ const ANSWER_WAIT: Duration = Duration::from_secs(60);
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case")]
 pub enum Request {
-    AddFolder { paths: Vec<PathBuf> },
-    RemoveFolder { name: String },
-    AttachShared { name: String, path: PathBuf, create: bool },
-    DetachShared { name: String },
+    AddFolder {
+        paths: Vec<PathBuf>,
+    },
+    RemoveFolder {
+        name: String,
+    },
+    AttachShared {
+        name: String,
+        path: PathBuf,
+        create: bool,
+    },
+    DetachShared {
+        name: String,
+    },
+    SetConflict {
+        name: String,
+        conflict: crate::config::Conflict,
+    },
+    /// `keep`: theirs, mine or both; `path` None: every file that waits.
+    Resolve {
+        name: String,
+        keep: String,
+        path: Option<String>,
+    },
 }
 
 impl Request {
@@ -50,6 +70,17 @@ impl Request {
                 args
             }
             Self::DetachShared { name } => vec!["shared".into(), "detach".into(), name.into()],
+            Self::SetConflict { name, conflict } => {
+                vec!["shared".into(), "conflict".into(), name.into(), conflict.name().into()]
+            }
+            Self::Resolve { name, keep, path } => {
+                let mut args: Vec<OsString> = vec!["shared".into(), "resolve".into(), name.into(), keep.into()];
+                // After `--`: a file name that begins with a dash is not an option.
+                if let Some(path) = path {
+                    args.extend(["--".into(), path.into()]);
+                }
+                args
+            }
         }
     }
 }
@@ -80,9 +111,8 @@ pub fn submit(state_dir: &Path, request: &Request) -> Result<String> {
     let id =
         format!("{}-{}", std::process::id(), SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_millis());
     // The file appears whole: the service never reads a half-written request.
-    let pending = control.join(format!(".request.{id}"));
-    std::fs::write(&pending, serde_json::to_vec(request)?).context("leave the request for the client")?;
-    std::fs::rename(&pending, request_file(&control, &id)).context("leave the request for the client")?;
+    fafnirx_common::write_atomic(&request_file(&control, &id), serde_json::to_vec(request)?)
+        .context("leave the request for the client")?;
     let answer = answer_file(&control, &id);
     let started = std::time::Instant::now();
     loop {
@@ -156,7 +186,24 @@ async fn apply(config_path: &Path, request: Request, mine: &(dyn Fn(&Path) -> bo
         }
         Request::AttachShared { name, path, create } => {
             let path = own_directory(&path, mine)?;
-            commands::shared_attach(config_path.to_path_buf(), name, path, create).await?;
+            commands::shared_attach(config_path.to_path_buf(), name, path, create, Default::default()).await?;
+            Ok(String::new())
+        }
+        Request::SetConflict { name, conflict } => {
+            let cfg = Config::load(config_path)?;
+            if !mine(&cfg.shared_named(&name)?.path) {
+                bail!("\"{name}\" is not yours; ask an administrator to change it with `sudo fafnirx shared conflict`");
+            }
+            // The question is shown by the tray, which is on a screen: no need to look for one here.
+            config::set_shared_conflict_in_file(config_path, &name, conflict, None)?;
+            Ok(String::new())
+        }
+        Request::Resolve { name, keep, path } => {
+            let cfg = Config::load(config_path)?;
+            if !mine(&cfg.shared_named(&name)?.path) {
+                bail!("\"{name}\" is not yours; ask an administrator to answer with `sudo fafnirx shared resolve`");
+            }
+            commands::shared_resolve(config_path, &name, &keep, path.as_deref())?;
             Ok(String::new())
         }
         Request::DetachShared { name } => {
@@ -286,6 +333,12 @@ mod tests {
         let attach = Request::AttachShared { name: "ana/family".into(), path: "/f".into(), create: true };
         assert_eq!(words(attach), ["shared", "attach", "ana/family", "/f", "--create"]);
         assert_eq!(words(Request::DetachShared { name: "family".into() }), ["shared", "detach", "family"]);
+        let set = Request::SetConflict { name: "family".into(), conflict: crate::config::Conflict::Mine };
+        assert_eq!(words(set), ["shared", "conflict", "family", "mine"]);
+        let one = Request::Resolve { name: "family".into(), keep: "both".into(), path: Some("a b.txt".into()) };
+        assert_eq!(words(one), ["shared", "resolve", "family", "both", "--", "a b.txt"]);
+        let all = Request::Resolve { name: "family".into(), keep: "theirs".into(), path: None };
+        assert_eq!(words(all), ["shared", "resolve", "family", "theirs"]);
     }
 
     #[test]

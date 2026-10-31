@@ -19,6 +19,25 @@ pub struct Synced {
     pub root_hash: Vec<u8>,
 }
 
+/// A file changed here and on the master, waiting for a person to say which one is kept.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Pending {
+    pub path: String,
+    /// What the master did: deleted the file, or has the content below.
+    pub deleted: bool,
+    pub root_hash: Vec<u8>,
+    pub size: u64,
+    pub mtime: i64,
+    pub mode: u32,
+    pub from_web: bool,
+    /// The file here when it was found.
+    pub local_size: u64,
+    pub local_mtime_ns: i64,
+    pub found_at: i64,
+    /// `theirs`, `mine` or `both` once answered, until the next cycle applies it.
+    pub choice: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Retry {
     pub fail_count: i64,
@@ -45,9 +64,92 @@ impl State {
                  path TEXT PRIMARY KEY, fail_count INTEGER NOT NULL, next_retry INTEGER NOT NULL,
                  size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL, last_error TEXT);
              CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS held (folder TEXT PRIMARY KEY, files INTEGER NOT NULL, since INTEGER NOT NULL);",
+             CREATE TABLE IF NOT EXISTS held (folder TEXT PRIMARY KEY, files INTEGER NOT NULL, since INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS pending (
+                 path TEXT PRIMARY KEY, deleted INTEGER NOT NULL, root_hash BLOB NOT NULL, size INTEGER NOT NULL,
+                 mtime INTEGER NOT NULL, mode INTEGER NOT NULL, from_web INTEGER NOT NULL,
+                 local_size INTEGER NOT NULL, local_mtime_ns INTEGER NOT NULL, found_at INTEGER NOT NULL, choice TEXT);",
         )?;
         Ok(Self { conn })
+    }
+
+    /// A file changed here and on the master that waits for a person (the `ask` policy). The master's side is kept as the
+    /// master listed it, so that the answer can be applied later; asked again for the same path, it is refreshed and the time
+    /// it was found stays.
+    pub fn add_pending(&self, p: &Pending) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO pending (path, deleted, root_hash, size, mtime, mode, from_web, local_size, local_mtime_ns, found_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT (path) DO UPDATE SET
+                 choice = CASE WHEN root_hash = ?3 AND deleted = ?2 THEN choice ELSE NULL END,
+                 deleted = ?2, root_hash = ?3, size = ?4, mtime = ?5, mode = ?6, from_web = ?7,
+                 local_size = ?8, local_mtime_ns = ?9",
+            params![
+                p.path,
+                p.deleted,
+                p.root_hash,
+                p.size as i64,
+                p.mtime,
+                p.mode as i64,
+                p.from_web,
+                p.local_size as i64,
+                p.local_mtime_ns,
+                p.found_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn pendings(&self) -> Result<Vec<Pending>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT path, deleted, root_hash, size, mtime, mode, from_web, local_size, local_mtime_ns, found_at, choice
+             FROM pending ORDER BY found_at, path",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(Pending {
+                path: r.get(0)?,
+                deleted: r.get(1)?,
+                root_hash: r.get(2)?,
+                size: r.get::<_, i64>(3)? as u64,
+                mtime: r.get(4)?,
+                mode: r.get::<_, i64>(5)? as u32,
+                from_web: r.get(6)?,
+                local_size: r.get::<_, i64>(7)? as u64,
+                local_mtime_ns: r.get(8)?,
+                found_at: r.get(9)?,
+                choice: r.get(10)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// The paths waiting for a decision or for it to be applied. The upload leaves them alone.
+    pub fn pending_paths(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare("SELECT path FROM pending")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Records the answer for one path (`None`: every path waiting). It is applied at the next cycle: the client may be
+    /// another process (the tray and the CLI never touch the files). Returns how many were answered.
+    pub fn answer_pending(&self, path: Option<&str>, choice: &str) -> Result<usize> {
+        Ok(match path {
+            Some(path) => self
+                .conn
+                .execute("UPDATE pending SET choice = ?2 WHERE path = ?1 AND choice IS NULL", params![path, choice])?,
+            None => self.conn.execute("UPDATE pending SET choice = ?1 WHERE choice IS NULL", [choice])?,
+        })
+    }
+
+    #[cfg(test)]
+    pub fn backdate_pending(&self, found_at: i64) -> Result<()> {
+        self.conn.execute("UPDATE pending SET found_at = ?1", [found_at])?;
+        Ok(())
+    }
+
+    pub fn remove_pending(&self, path: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM pending WHERE path = ?1", [path])?;
+        Ok(())
     }
 
     /// The folders whose deletes are held back (see `guard`): folder -> (files held, when the hold began).
@@ -178,6 +280,7 @@ impl State {
         let cleared = tx.execute("DELETE FROM synced", [])?;
         tx.execute("DELETE FROM retry", [])?;
         tx.execute("DELETE FROM held", [])?;
+        tx.execute("DELETE FROM pending", [])?;
         tx.execute(
             "DELETE FROM meta WHERE key IN ('initial_sync_done', 'release_deletes', 'shared_cursor', 'pull_held', 'keep_deletes')",
             [],

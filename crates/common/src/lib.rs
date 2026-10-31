@@ -230,9 +230,70 @@ pub fn clean_remote_path(path: &str) -> Result<String> {
     Ok(path)
 }
 
+/// Writes a file whole or not at all: the bytes go to a temporary file beside it, which is renamed over it, so a reader
+/// (another process, or the same one a moment later) never sees half of it. The temporary file starts with a dot and is
+/// removed again when the write fails.
+pub fn write_atomic(path: &std::path::Path, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_file_name(format!(".{name}.{}-{n}.tmp", std::process::id()));
+    let written = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
+}
+
+/// Locking that goes on after a thread panicked while holding the lock: what it left is still good for the status lines,
+/// queues and caches this is used for, and skipping the update (or panicking too) would be worse.
+pub trait LockExt<T> {
+    fn locked(&self) -> std::sync::MutexGuard<'_, T>;
+}
+
+impl<T> LockExt<T> for std::sync::Mutex<T> {
+    fn locked(&self) -> std::sync::MutexGuard<'_, T> {
+        self.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_is_written_whole_over_the_old_one_and_leaves_nothing_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("status.json");
+        write_atomic(&file, b"one").unwrap();
+        write_atomic(&file, "two").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "two");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1, "no temporary file is left");
+        // A folder in the way cannot be replaced: the error is reported and the temporary file is removed.
+        let blocked = dir.path().join("blocked");
+        std::fs::create_dir(&blocked).unwrap();
+        assert!(write_atomic(&blocked, b"x").is_err());
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            2,
+            "{:?}",
+            std::fs::read_dir(dir.path()).unwrap().flatten().map(|e| e.file_name()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_lock_whose_holder_panicked_is_still_taken() {
+        let lock = std::sync::Arc::new(std::sync::Mutex::new(1));
+        let l = lock.clone();
+        let _ = std::thread::spawn(move || {
+            let _held = l.lock().unwrap();
+            panic!("while holding the lock");
+        })
+        .join();
+        assert!(lock.lock().is_err(), "the lock is poisoned");
+        *lock.locked() += 1;
+        assert_eq!(*lock.locked(), 2);
+    }
 
     /// A device can send data and say what it deleted. What it can read is the client update and the shared folders of its
     /// user; there is no call that reads or lists the files of a device or the master files. A new call in the contract has

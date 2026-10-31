@@ -15,7 +15,7 @@ use crate::sync::hash::{hash_file, stat, Hashed};
 use crate::sync::scan::{scan_folder, Entry};
 use crate::sync::state::{may_attempt, State, Synced, BACKOFF_SECS};
 use crate::sync::throttle::Limiter;
-use fafnirx_common::{chunk_hash, pb, unix_now, CHUNK_SIZE};
+use fafnirx_common::{chunk_hash, pb, unix_now, LockExt, CHUNK_SIZE};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::SeekFrom;
@@ -132,6 +132,8 @@ pub struct Engine {
     pub exclude: Option<PathBuf>,
     /// Which folder a synced path belongs to, for the delete guard.
     pub group: Grouping,
+    /// Remote paths that are neither sent nor taken for deleted this cycle (a shared folder's files waiting for a decision).
+    pub skip: HashSet<String>,
     /// The last problem reported (errors are drained by the heartbeat), for the status of a shared folder.
     last_issue: Mutex<String>,
     logged_skips: HashSet<String>,
@@ -164,6 +166,7 @@ impl Engine {
             sent: Arc::new(AtomicU64::new(0)),
             exclude: None,
             group: folder_of,
+            skip: HashSet::new(),
             last_issue: Mutex::new(String::new()),
             logged_skips: HashSet::new(),
         }
@@ -171,7 +174,7 @@ impl Engine {
 
     /// The last problem reported since this was last asked; empty if there was none.
     pub fn take_last_issue(&self) -> String {
-        self.last_issue.lock().map(|mut i| std::mem::take(&mut *i)).unwrap_or_default()
+        std::mem::take(&mut *self.last_issue.locked())
     }
 
     pub fn set_activity(&self, phase: &str, current: &str, done: usize, total: usize, bytes: u64) {
@@ -293,7 +296,7 @@ impl Engine {
     ) -> Result<(Vec<Changed>, Vec<Synced>), SyncError> {
         let t = unix_now();
         let mut changed = Vec::new();
-        for e in entries {
+        for e in entries.iter().filter(|e| !self.skip.contains(&e.remote)) {
             let synced = self.state.synced(&e.remote)?;
             if synced.as_ref().is_some_and(|s| s.size == e.size as i64 && s.mtime_ns == e.mtime_ns) {
                 continue;
@@ -312,6 +315,7 @@ impl Engine {
                 scanned.contains((self.group)(&s.path))
                     && !seen.contains(s.path.as_str())
                     && !unreadable.contains(&s.path)
+                    && !self.skip.contains(&s.path)
             })
             .collect();
         Ok((changed, vanished))

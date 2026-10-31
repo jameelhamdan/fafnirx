@@ -4,6 +4,5 @@
 pub mod db;
 pub mod id;
 pub mod migrations;
-pub mod pg;
 pub mod proxy;
 pub mod store;

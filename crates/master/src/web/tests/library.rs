@@ -1,6 +1,7 @@
 //! The photo library, albums and the modules.
 
 use super::*;
+use fafnirx_common::LockExt;
 
 /// A stand-in for a module: answers only with the right token, says what it was asked for, and has a report that only
 /// the master may read. `contract` is what its manifest says.
@@ -179,7 +180,7 @@ fn a_module_that_refuses_the_token_or_speaks_another_contract_is_not_used() {
 
 #[test]
 fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
-    let _on = crate::library::meta::THUMBNAILS_TEST.lock().unwrap_or_else(|e| e.into_inner());
+    let _on = crate::library::meta::THUMBNAILS_TEST.locked();
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
@@ -512,8 +513,39 @@ fn the_folder_of_a_viewer_takes_wildcards_in_names_literally() {
 }
 
 #[test]
+fn the_photos_switch_is_told_to_everybody_and_changes_nothing_else() {
+    // Saving the settings also sets the thumbnails flag, which another test changes.
+    let _on = crate::library::meta::THUMBNAILS_TEST.locked();
+    let mut api = Api::new();
+    block(async {
+        api.cookie = login(&api).await;
+        assert_eq!(api.get("/api/session").await.1["photos"], true, "on until it is turned off");
+        assert_eq!(api.get("/api/settings").await.1["photos"], true);
+
+        let body =
+            |photos: bool| json!({"version_count": 5, "retention_days": 30, "thumbnails": true, "photos": photos});
+        assert_eq!(api.json(Method::PUT, "/api/settings", body(false)).await.0, StatusCode::OK);
+        assert_eq!(api.get("/api/settings").await.1["photos"], false);
+        assert_eq!(api.get("/api/session").await.1["photos"], false);
+        // Only the web app hides the pages: the library is still served.
+        assert_eq!(api.get("/api/timeline/buckets").await.0, StatusCode::OK);
+
+        // A body without the field leaves it as it is: a caller that does not know the switch cannot turn it on.
+        let old = json!({"version_count": 5, "retention_days": 30, "thumbnails": true});
+        assert_eq!(api.json(Method::PUT, "/api/settings", old).await.0, StatusCode::OK);
+        assert_eq!(api.get("/api/session").await.1["photos"], false);
+        assert_eq!(api.json(Method::PUT, "/api/settings", body(true)).await.0, StatusCode::OK);
+        assert_eq!(api.get("/api/session").await.1["photos"], true);
+
+        // Logged out: nothing is told.
+        api.cookie = String::new();
+        assert!(api.get("/api/session").await.1.get("photos").is_none());
+    });
+}
+
+#[test]
 fn nothing_is_made_when_thumbnails_are_off() {
-    let _on = crate::library::meta::THUMBNAILS_TEST.lock().unwrap_or_else(|e| e.into_inner());
+    let _on = crate::library::meta::THUMBNAILS_TEST.locked();
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;

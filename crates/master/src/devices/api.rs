@@ -8,6 +8,7 @@ use crate::web::{act, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use fafnirx_common::{unix_now, valid_device_name};
+use fafnirx_db::queries as sql;
 use postgres::Client;
 use serde::{Deserialize, Serialize};
 
@@ -61,7 +62,7 @@ pub fn device_summaries(
     let offline_after = settings::get_i64(c, "offline_after_secs", 60);
     let now = unix_now();
     let (all, user) = who.scope_args();
-    let rows = devices::summaries(c, folder, all, user)?;
+    let rows = sql::devices::device_summaries().bind(c, &folder, &user, &all).all()?;
     Ok(rows
         .into_iter()
         .map(|r| {
@@ -254,17 +255,23 @@ pub async fn revoke(
     .await
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 pub struct Settings {
     version_count: i64,
     retention_days: i64,
     /// Whether pictures (thumbnails and previews) are made, when somebody looks at a photo or video. Off: none is made.
-    #[serde(default = "on")]
     thumbnails: bool,
+    /// Whether the web app offers the photo pages. Off: their menu items are hidden and the pages closed; nothing else changes.
+    photos: bool,
 }
 
-fn on() -> bool {
-    true
+/// What a save says. A switch that is left out keeps its value, so a caller that does not know it cannot turn it back on.
+#[derive(Deserialize)]
+pub struct SettingsChange {
+    version_count: i64,
+    retention_days: i64,
+    thumbnails: Option<bool>,
+    photos: Option<bool>,
 }
 
 pub async fn settings(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Settings> {
@@ -274,6 +281,7 @@ pub async fn settings(State(state): State<Shared>, Extension(who): Extension<Acc
             version_count: settings::get_i64(c, "version_count", 5),
             retention_days: settings::get_i64(c, "retention_days", 30),
             thumbnails: settings::get_i64(c, crate::library::meta::THUMBNAILS, 1) != 0,
+            photos: settings::photos_on(c),
         })
     })
     .await?;
@@ -283,22 +291,25 @@ pub async fn settings(State(state): State<Shared>, Extension(who): Extension<Acc
 pub async fn save_settings(
     State(state): State<Shared>,
     Extension(who): Extension<Access>,
-    Json(s): Json<Settings>,
+    Json(s): Json<SettingsChange>,
 ) -> Res<Settings> {
     who.require_admin()?;
     if !(1..=1000).contains(&s.version_count) || !(1..=3650).contains(&s.retention_days) {
         return Err(ApiError::bad("Versions kept: 1-1000. Retention: 1-3650 days."));
     }
     let saved = run(&state, move |c| {
+        let thumbnails = s.thumbnails.unwrap_or_else(|| settings::get_i64(c, crate::library::meta::THUMBNAILS, 1) != 0);
+        let photos = s.photos.unwrap_or_else(|| settings::photos_on(c));
         for (key, value) in [
             ("version_count", s.version_count),
             ("retention_days", s.retention_days),
-            (crate::library::meta::THUMBNAILS, i64::from(s.thumbnails)),
+            (crate::library::meta::THUMBNAILS, i64::from(thumbnails)),
+            (settings::PHOTOS, i64::from(photos)),
         ] {
             settings::set(c, key, &value.to_string())?;
         }
-        crate::library::meta::set_thumbnails(s.thumbnails);
-        Ok(s)
+        crate::library::meta::set_thumbnails(thumbnails);
+        Ok(Settings { version_count: s.version_count, retention_days: s.retention_days, thumbnails, photos })
     })
     .await?;
     Ok(Json(saved))

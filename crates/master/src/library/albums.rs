@@ -9,11 +9,12 @@ use crate::platform::db;
 use crate::platform::id::{uuids, Id};
 use crate::repo::{albums, library};
 use crate::web::access::Access;
-use crate::web::{act, run, ApiError, Done, Res, Shared};
+use crate::web::{act, change, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use fafnirx_common::unix_now;
-use postgres::GenericClient;
+use fafnirx_db::client::GenericClient;
+use fafnirx_db::queries as sql;
 use serde::{Deserialize, Serialize};
 
 const MAX_FILES: usize = 10_000;
@@ -69,7 +70,7 @@ fn first_of(media: Vec<(uuid::Uuid, String)>) -> Option<uuid::Uuid> {
 
 fn with_cover(c: &mut impl GenericClient, mut album: albums::Album) -> anyhow::Result<AlbumInfo> {
     if album.cover.is_none() {
-        album.cover = match albums::poster(c, album.id)? {
+        album.cover = match sql::albums::album_poster().bind(c, &album.id).opt()? {
             Some(poster) => Some(poster),
             None if album.folder.is_some() => first_of(albums::media(c, album.id)?),
             None => album.newest,
@@ -287,27 +288,24 @@ pub async fn edit(
     Json(body): Json<AlbumEdit>,
 ) -> Res<AlbumInfo> {
     let name = body.name.as_deref().map(clean_name).transpose()?.map(str::to_string);
-    let out = run(&state, move |c| {
-        let mut tx = c.transaction()?;
-        load_album(&mut tx, &who, id)?;
+    let out = change(&state, "library", move |tx| {
+        load_album(tx, &who, id)?;
         if let Some(name) = &name {
-            albums::rename(&mut tx, id, name)?;
+            albums::rename(tx, id, name)?;
         }
         if let Some(d) = &body.description {
-            albums::set_description(&mut tx, id, d.trim())?;
+            albums::set_description(tx, id, d.trim())?;
         }
         if let Some(cover) = body.cover {
             if let Some(file) = cover {
-                if !albums::contains(&mut tx, id, file.0)? {
+                if !albums::contains(tx, id, file.0)? {
                     return Err(ApiError::bad("The cover must be a file of the album").into());
                 }
             }
-            albums::set_cover(&mut tx, id, cover.map(|c| c.0))?;
+            albums::set_cover(tx, id, cover.map(|c| c.0))?;
         }
-        albums::touch(&mut tx, id, unix_now())?;
-        db::notify(&mut tx, "library", "")?;
-        let album = load_album(&mut tx, &who, id)?;
-        tx.commit()?;
+        albums::touch(tx, id, unix_now())?;
+        let album = load_album(tx, &who, id)?;
         Ok(album)
     })
     .await?;
@@ -351,13 +349,10 @@ pub async fn add(
     Json(body): Json<Ids>,
 ) -> Res<Count> {
     clean_ids(body.ids.len() + body.items.len())?;
-    let count = run(&state, move |c| {
-        let mut tx = c.transaction()?;
-        load_album(&mut tx, &who, id)?;
-        let count = add_files(&mut tx, &who, id, &uuids(&body.ids))? + add_items(&mut tx, &who, id, &body.items)?;
-        albums::touch(&mut tx, id, unix_now())?;
-        db::notify(&mut tx, "library", "")?;
-        tx.commit()?;
+    let count = change(&state, "library", move |tx| {
+        load_album(tx, &who, id)?;
+        let count = add_files(tx, &who, id, &uuids(&body.ids))? + add_items(tx, &who, id, &body.items)?;
+        albums::touch(tx, id, unix_now())?;
         Ok(count)
     })
     .await?;
@@ -371,13 +366,10 @@ pub async fn remove(
     Json(body): Json<Ids>,
 ) -> Res<Count> {
     clean_ids(body.ids.len())?;
-    let count = run(&state, move |c| {
-        let mut tx = c.transaction()?;
-        load_album(&mut tx, &who, id)?;
-        let count = albums::remove_files(&mut tx, id, &uuids(&body.ids))?;
-        albums::touch(&mut tx, id, unix_now())?;
-        db::notify(&mut tx, "library", "")?;
-        tx.commit()?;
+    let count = change(&state, "library", move |tx| {
+        load_album(tx, &who, id)?;
+        let count = albums::remove_files(tx, id, &uuids(&body.ids))?;
+        albums::touch(tx, id, unix_now())?;
         Ok(count)
     })
     .await?;

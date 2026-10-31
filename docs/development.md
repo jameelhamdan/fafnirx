@@ -58,8 +58,8 @@ Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targ
 
 | App | Owns | Files |
 |---|---|---|
-| `platform` | What apps build on | `db.rs` (pool, locks, `NOTIFY`), `migrations.rs`, `pg.rs`, `store.rs`, `id.rs` (UUID ↔ short id), `proxy.rs` |
-| `repo` | Storage; the only code that knows tables | One module per aggregate, and `listing.rs` (the one query built at run time) |
+| `platform` | What apps build on | `db.rs` (pool, locks, `NOTIFY`), `migrations.rs`, `store.rs`, `id.rs` (UUID ↔ short id), `proxy.rs` |
+| `repo` | Storage; what is more than one plain query | One module per aggregate, and `listing.rs` (the one query built at run time) |
 | `devices` | Clients, tokens, shared folders | `grpc.rs` (device API), `api.rs`, `shared.rs`, `totals.rs` |
 | `web` | HTTP shell, logins, roles | `mod.rs` (state, errors, routes), `auth.rs`, `access.rs`, `users.rs`, `events.rs`, `assets.rs`, `tests/` |
 | `files` | Content in and out | `ingest.rs` (commit, delete, rename, move), `livetree.rs`, `browse.rs`, `transfer.rs`, `zip.rs` |
@@ -69,7 +69,7 @@ Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targ
 | `monitoring` | Dashboard, schedules, queue | `api.rs`, `jobs.rs`, `queue.rs` |
 
 New endpoints go in the app's `api.rs` and are registered in `web/mod.rs`. Apps use `platform` and each other's public
-functions; `platform` knows no app. SQL lives only in `queries/*.sql` and `repo/`. No ORM.
+functions; `platform` knows no app. SQL lives only in `queries/*.sql` (typed, generated); no ORM.
 
 **Core vs add-ons.** Core: client, `common`, and in the master `devices`, `files`, `monitoring`, `platform`, `repo` (minus
 library), `web`, mirrors. Add-ons: the library, and the [modules](modules.md) (separate services; the master asks them for capabilities and works without them). Add-ons use the core, not the reverse; known
@@ -81,7 +81,8 @@ exceptions: `ingest.rs` queues metadata jobs and calls `repo::albums::follow_fol
 SQL is in `queries/*.sql` as [Cornucopia](https://github.com/cornucopia-rs/cornucopia) queries (`--! name`, `:parameter`).
 `crates/db/build.rs` generates typed functions into `target/` (not in the repository) against a PostgreSQL taken from
 `FAFNIRX_CODEGEN_DATABASE_URL`, else `FAFNIRX_TEST_DATABASE_URL`, else a throwaway Docker/Podman container. Add a query: edit
-the `.sql`, build, call it from a `repo/` function (`q::resolve_alert().bind(&mut Pg(conn), &now, &kind, &key)`). Only the
+the `.sql`, build, call it where it is needed: a plain single query straight from the caller (`sql::alerts::resolve_alert().bind(conn, &now, &kind, &key)`, with
+`use fafnirx_db::queries as sql`), a query with a rule around it (several queries, a mapping, a count turned into a flag) from a `repo/` function. Only the
 file listing, whose sort order the user chooses, is assembled at run time (`repo/listing.rs`; user input is never put in the text).
 
 ## Database access

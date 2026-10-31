@@ -6,7 +6,7 @@ use crate::files::ingest::{self, NewVersion};
 use crate::library::{artwork, meta};
 use crate::platform::db;
 use crate::platform::id::Id;
-use crate::repo::{devices, files, jobs};
+use crate::repo::{files, jobs};
 use crate::web::access::Access;
 use crate::web::{run, ApiError, Res, Shared};
 use axum::body::Body;
@@ -14,7 +14,8 @@ use axum::extract::{Form, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
-use fafnirx_common::{base_name, clean_remote_path, secs_of_ns, unix_now};
+use fafnirx_common::{base_name, clean_remote_path, secs_of_ns, unix_now, LockExt};
+use fafnirx_db::queries as sql;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -293,7 +294,7 @@ fn stored_by_id(
 ) -> impl FnOnce(&mut postgres::Client) -> anyhow::Result<Stored> {
     let store = state.store.clone();
     move |c| {
-        let row = files::by_id(c, id)?.ok_or_else(|| ApiError::not_found("No such file"))?;
+        let row = sql::files::file_by_id().bind(c, &id).opt()?.ok_or_else(|| ApiError::not_found("No such file"))?;
         let (device, path, version, deleted_at) = (row.folder, row.path, row.current_version_id, row.deleted_at);
         // A file of someone else's device does not exist for this user.
         who.check_see(&device).map_err(|_| ApiError::not_found("No such file"))?;
@@ -399,7 +400,7 @@ pub async fn zip(
             // Names inside the zip start at the selected folder (or file), not at the device root.
             let parent = selected.rfind('/').map_or(0, |i| i + 1);
             for path in expand(c, &dev, selected, false)? {
-                let mtime = secs_of_ns(files::current_mtime(c, dev.id, &path)?);
+                let mtime = secs_of_ns(sql::files::current_mtime().bind(c, &dev.id, &path).one()?);
                 let inner = &path[parent.min(path.len())..];
                 let name =
                     if several || selected.is_empty() { format!("{}/{inner}", dev.name) } else { inner.to_string() };
@@ -477,7 +478,10 @@ pub async fn start_upload(
     let user = who.clone();
     let kind: String = run(&state, move |c| {
         user.check_write(&device)?;
-        Ok(devices::kind_of_folder(c, &device)?.ok_or_else(|| ApiError::not_found("No such device"))?)
+        Ok(sql::devices::device_kind_by_folder()
+            .bind(c, &device)
+            .opt()?
+            .ok_or_else(|| ApiError::not_found("No such device"))?)
     })
     .await?;
     // Only folders that live on the master take uploads: a device's files are what the device sends.
@@ -488,7 +492,7 @@ pub async fn start_upload(
     let id = hex::encode(db::random_bytes::<16>());
     let file = state.store.temp_path();
     tokio::fs::File::create(&file).await.map_err(anyhow::Error::from)?;
-    let mut uploads = state.uploads.lock().unwrap_or_else(|e| e.into_inner());
+    let mut uploads = state.uploads.locked();
     uploads.retain(|_, u| {
         let keep = u.touched.elapsed() < STALE_UPLOAD;
         if !keep {
@@ -519,7 +523,7 @@ pub async fn start_upload(
 }
 
 fn session<T>(state: &Shared, user_id: i64, id: &str, f: impl FnOnce(&mut Upload) -> T) -> Result<T, ApiError> {
-    let mut uploads = state.uploads.lock().unwrap_or_else(|e| e.into_inner());
+    let mut uploads = state.uploads.locked();
     let upload = uploads
         .get_mut(id)
         .filter(|u| u.user_id == user_id)
@@ -595,7 +599,7 @@ pub async fn finish_upload(
     Path(id): Path<String>,
 ) -> Res<Finished> {
     let upload = {
-        let mut uploads = state.uploads.lock().unwrap_or_else(|e| e.into_inner());
+        let mut uploads = state.uploads.locked();
         let u = uploads
             .get(&id)
             .filter(|u| u.user_id == who.user_id)
@@ -640,7 +644,7 @@ pub async fn finish_upload(
     match kept {
         // Not finished: the upload stays. It expires like any other upload that nobody touches.
         Some(kept) if result.is_err() => {
-            state.uploads.lock().unwrap_or_else(|e| e.into_inner()).insert(id, kept);
+            state.uploads.locked().insert(id, kept);
         }
         Some(_) => {
             let _ = std::fs::remove_file(&spare);
@@ -656,7 +660,7 @@ pub async fn abort_upload(
     Path(id): Path<String>,
 ) -> Res<crate::web::Done> {
     {
-        let mut uploads = state.uploads.lock().unwrap_or_else(|e| e.into_inner());
+        let mut uploads = state.uploads.locked();
         if uploads.get(&id).is_some_and(|u| u.user_id == who.user_id) {
             if let Some(u) = uploads.remove(&id) {
                 let _ = std::fs::remove_file(u.file);

@@ -8,6 +8,7 @@ use crate::web::{act, run, Done, Res, Shared};
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use fafnirx_common::unix_now;
+use fafnirx_db::queries as sql;
 use postgres::Client;
 use serde::Serialize;
 
@@ -164,7 +165,7 @@ pub async fn dismiss(
 ) -> Res<Done> {
     act(&state, move |c| {
         // Only the alerts of a device the user can see.
-        let key = alerts::key_of(c, id)?;
+        let key = sql::alerts::alert_key().bind(c, &id).opt()?;
         if key.is_some_and(|k| !who.is_admin() && !who.can_see(&k)) {
             return Err(crate::web::ApiError::not_found("No such alert").into());
         }

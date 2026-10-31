@@ -18,6 +18,7 @@ use crate::web::{act, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use fafnirx_common::{unix_now, valid_device_name};
+use fafnirx_db::queries as sql;
 use postgres::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -73,7 +74,7 @@ fn state_of(s: Schedule, detail: Value) -> JobState {
 /// The sources `who` may see: their own, or all of them for an administrator.
 fn source_states(c: &mut Client, who: &Access) -> Result<Vec<JobState>, postgres::Error> {
     let (all, user) = who.scope_args();
-    let rows = sources::list(c, all, user)?;
+    let rows = sql::sources::list_sources().bind(c, &all, &user).all()?;
     Ok(rows
         .into_iter()
         .map(|r| {
@@ -104,7 +105,9 @@ fn source_states(c: &mut Client, who: &Access) -> Result<Vec<JobState>, postgres
 }
 
 fn mirror_states(c: &mut Client) -> Result<Vec<JobState>, postgres::Error> {
-    Ok(mirrors::list(c)?
+    Ok(sql::mirrors::list_mirrors()
+        .bind(c)
+        .all()?
         .into_iter()
         .map(|r| {
             let options: Value = serde_json::from_str(&r.options).unwrap_or(Value::Null);
@@ -153,7 +156,7 @@ fn find_source(c: &mut Client, who: &Access, user: &str, name: &str) -> anyhow::
 }
 
 fn mirror_id(c: &mut Client, name: &str) -> anyhow::Result<i64> {
-    Ok(mirrors::id_of(c, name)?.ok_or_else(|| ApiError::not_found("No such mirror"))?)
+    Ok(sql::mirrors::mirror_id().bind(c, &name).opt()?.ok_or_else(|| ApiError::not_found("No such mirror"))?)
 }
 
 pub async fn sources(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Vec<JobState>> {
@@ -329,8 +332,8 @@ enum Touch {
 /// a source, `mirrors` for a mirror.
 fn touch(c: &mut Client, table: Table, id: i64, key: &str, what: Touch) -> anyhow::Result<()> {
     match (table, what) {
-        (Table::Sources, Touch::RunNow) => sources::request_run(c, id)?,
-        (Table::Sources, Touch::ToggleEnabled) => sources::toggle(c, id)?,
+        (Table::Sources, Touch::RunNow) => sql::sources::request_source_run().bind(c, &id).map(drop)?,
+        (Table::Sources, Touch::ToggleEnabled) => sql::sources::toggle_source().bind(c, &id).map(drop)?,
         (Table::Mirrors, Touch::RunNow) => mirrors::request_run(c, id)?,
         (Table::Mirrors, Touch::ToggleEnabled) => mirrors::toggle(c, id)?,
     }
@@ -498,7 +501,7 @@ pub async fn mirror_scope(
         let places = mirrors::places(c)?;
         let mut failed = None;
         let found = scope::choices(&places, &path, |device, prefix| {
-            mirrors::folders_below(c, device, prefix).unwrap_or_else(|e| {
+            sql::mirrors::folders_below().bind(c, &prefix, &device).all().unwrap_or_else(|e| {
                 failed = Some(e);
                 Vec::new()
             })
@@ -518,7 +521,7 @@ pub async fn resync_mirror(
     who.require_admin()?;
     act(&state, move |c| {
         let id = mirror_id(c, &name)?;
-        mirrors::forget_items(c, id)?;
+        sql::mirrors::delete_mirror_items().bind(c, &id).map(drop)?;
         touch(c, Table::Mirrors, id, "mirrors", Touch::RunNow)
     })
     .await
@@ -533,7 +536,8 @@ pub async fn mirror_restore_kit(
 ) -> Res<Value> {
     who.require_admin()?;
     let key = run(&state, move |c| {
-        let key = mirrors::key_of(c, &name)?.ok_or_else(|| ApiError::not_found("No such mirror"))?;
+        let key =
+            sql::mirrors::mirror_key().bind(c, &name).opt()?.ok_or_else(|| ApiError::not_found("No such mirror"))?;
         Ok(key)
     })
     .await?;

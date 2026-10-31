@@ -5,11 +5,12 @@ use super::auth::{self, MIN_PASSWORD};
 use super::{act, run, ApiError, Done, Res, Shared};
 use crate::devices::api::NAME_RULE;
 use crate::platform::db;
-use crate::repo::{sessions, users};
+use crate::repo::users;
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use fafnirx_common::{unix_now, valid_device_name};
-use postgres::GenericClient;
+use fafnirx_db::client::GenericClient;
+use fafnirx_db::queries as sql;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
@@ -62,7 +63,7 @@ pub fn add_user(
     if exists {
         return Err(ApiError::conflict(format!("There is already a user named {name}")).into());
     }
-    users::insert(c, name, role.as_str(), password_hash, unix_now())?;
+    sql::users::insert_user().bind(c, &name, &role.as_str(), &password_hash, &unix_now()).map(drop)?;
     let _ = std::fs::create_dir_all(live_root.join(crate::platform::store::USERS_DIR).join(name));
     Ok(())
 }
@@ -136,16 +137,16 @@ pub async fn update(
         let stays_admin = role.map_or(current == "admin", |r| r == Role::Admin);
         let stays_enabled = !body.disabled.unwrap_or(disabled);
         if current == "admin" && !disabled && !(stays_admin && stays_enabled) {
-            let others = users::other_active_admins(&mut tx, id)?;
+            let others = sql::users::other_active_admins().bind(&mut tx, &id).one()?;
             if others == 0 {
                 return Err(ApiError::conflict("This is the last administrator: make another one first").into());
             }
         }
         if let Some(role) = role {
-            users::set_role(&mut tx, id, role.as_str())?;
+            sql::users::set_user_role().bind(&mut tx, &role.as_str(), &id).map(drop)?;
         }
         match body.disabled {
-            Some(true) => users::disable(&mut tx, id, unix_now())?,
+            Some(true) => sql::users::disable_user().bind(&mut tx, &unix_now(), &id).map(drop)?,
             Some(false) => users::enable(&mut tx, id)?,
             None => {}
         }
@@ -154,7 +155,7 @@ pub async fn update(
         }
         // A role or a lock changes what the sessions of the user may do: they log in again.
         if role.is_some() || body.disabled == Some(true) {
-            sessions::end_all(&mut tx, id)?;
+            sql::sessions::delete_user_sessions().bind(&mut tx, &id).map(drop)?;
         }
         db::notify(&mut tx, "users", &name)?;
         tx.commit()?;

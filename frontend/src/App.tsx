@@ -33,6 +33,11 @@ function Only({ allow, role, children }: { allow: 'admin' | 'workspace'; role: R
   return ok ? children : <Navigate to="/" replace />
 }
 
+/** A photo page: closed (sent to the first page) when the administrator turned the photo pages off. */
+function Photos({ on, children }: { on: boolean; children: ReactNode }) {
+  return on ? children : <Navigate to="/" replace />
+}
+
 /** The login page, or the app behind it. */
 export default function App() {
   const client = useQueryClient()
@@ -50,6 +55,7 @@ export default function App() {
   const user = session.data?.user
   if (!user) return <Login />
   const role = user.role
+  const photos = session.data?.photos !== false
   // A viewer opened from a page is shown over it (see `viewer-source`): the page is the one it was opened from.
   const background = backgroundOf(location)
 
@@ -61,11 +67,11 @@ export default function App() {
           <Routes location={background ?? location}>
             <Route path="/" element={<Dashboard />} />
             {/* A key per view, so that a selection or an open photo does not carry over from one to another. */}
-            <Route path="/timeline" element={<Timeline key="timeline" scope="timeline" />} />
-            <Route path="/favorites" element={<Only allow="workspace" role={role}><Timeline key="favorites" scope="favorites" /></Only>} />
-            <Route path="/archive" element={<Only allow="workspace" role={role}><Timeline key="archive" scope="archive" /></Only>} />
-            <Route path="/albums" element={<Only allow="workspace" role={role}><Albums /></Only>} />
-            <Route path="/albums/:id" element={<Only allow="workspace" role={role}><Album /></Only>} />
+            <Route path="/timeline" element={<Photos on={photos}><Timeline key="timeline" scope="timeline" /></Photos>} />
+            <Route path="/favorites" element={<Only allow="workspace" role={role}><Photos on={photos}><Timeline key="favorites" scope="favorites" /></Photos></Only>} />
+            <Route path="/archive" element={<Only allow="workspace" role={role}><Photos on={photos}><Timeline key="archive" scope="archive" /></Photos></Only>} />
+            <Route path="/albums" element={<Only allow="workspace" role={role}><Photos on={photos}><Albums /></Photos></Only>} />
+            <Route path="/albums/:id" element={<Only allow="workspace" role={role}><Photos on={photos}><Album /></Photos></Only>} />
             <Route path="/watch/:id" element={<Watch />} />
             <Route path="/trash" element={<Only allow="workspace" role={role}><Trash /></Only>} />
             <Route path="/files" element={<Files />} />

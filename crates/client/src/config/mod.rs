@@ -26,6 +26,80 @@ pub struct Shared {
     /// The shared folder on the master.
     pub name: String,
     pub path: PathBuf,
+    /// What happens to a file changed here and on the master (or changed here and deleted there).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub conflict: Conflict,
+    /// With `ask`: how long a file waits for an answer; after that both versions are kept. 0: for ever.
+    #[serde(default = "default_ask_timeout", skip_serializing_if = "is_default_ask_timeout")]
+    pub ask_timeout_hours: u64,
+}
+
+fn is_default_ask_timeout(hours: &u64) -> bool {
+    *hours == default_ask_timeout()
+}
+
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+
+/// How a computer settles a file changed here and on the master. The master's version is the one that is kept in the
+/// folder, as in Google Drive and OneDrive; the choices are about what becomes of this computer's version.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Conflict {
+    /// The master's version is received. This computer's is put aside in `.fafnirx-conflicts` and never sent.
+    #[default]
+    Theirs,
+    /// This computer's version is sent and becomes the current one (the master keeps the old one in its history).
+    Mine,
+    /// Both are kept, this computer's under `name (conflict <computer> <date>).ext`, and both are sent.
+    Both,
+    /// A person is asked (native dialog from the tray); until then nothing changes on either side.
+    Ask,
+}
+
+impl Conflict {
+    pub const ALL: [Conflict; 4] = [Conflict::Theirs, Conflict::Mine, Conflict::Both, Conflict::Ask];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Conflict::Theirs => "theirs",
+            Conflict::Mine => "mine",
+            Conflict::Both => "both",
+            Conflict::Ask => "ask",
+        }
+    }
+
+    /// Whether this build can show the question at all (it has the tray). The service uses this: it runs without a display.
+    pub fn ask_possible() -> bool {
+        cfg!(any(target_os = "windows", target_os = "macos", feature = "tray"))
+    }
+
+    /// `ask` needs a dialog: a computer with no screen cannot offer it. On Linux that is a session with a display.
+    pub fn ask_available() -> bool {
+        Self::ask_possible()
+            && (cfg!(any(target_os = "windows", target_os = "macos"))
+                || std::env::var_os("DISPLAY").is_some()
+                || std::env::var_os("WAYLAND_DISPLAY").is_some())
+    }
+
+    /// Refuses `ask` where it cannot be answered.
+    pub fn check_available(self) -> Result<()> {
+        if self == Conflict::Ask && !Self::ask_available() {
+            bail!("\"ask\" needs a screen to show the question on: it is not available on a computer without one");
+        }
+        Ok(())
+    }
+}
+
+impl std::str::FromStr for Conflict {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self> {
+        Conflict::ALL
+            .into_iter()
+            .find(|c| c.name() == s.to_ascii_lowercase())
+            .with_context(|| format!("\"{s}\" is not one of theirs, mine, both, ask"))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +148,9 @@ fn default_scan() -> u64 {
 }
 fn default_hold() -> u64 {
     crate::sync::guard::DEFAULT_HOLD_HOURS
+}
+fn default_ask_timeout() -> u64 {
+    24
 }
 
 impl Config {
@@ -191,9 +268,34 @@ fn is_private_host(host: &str) -> bool {
 
 /// Writes through a temporary file so a reader (the daemon) never sees half a config.
 fn write_atomic(path: &Path, text: &str) -> Result<()> {
-    let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, text).with_context(|| format!("write {}", tmp.display()))?;
-    std::fs::rename(&tmp, path).with_context(|| format!("replace {}", path.display()))
+    fafnirx_common::write_atomic(path, text).with_context(|| format!("write {}", path.display()))
+}
+
+/// Changes the config file as a TOML document, so that its comments and layout stay: `change` edits the document, which is
+/// then written whole (nothing is written when it fails).
+fn edit_file<T>(path: &Path, change: impl FnOnce(&mut toml_edit::DocumentMut) -> Result<T>) -> Result<T> {
+    let text = std::fs::read_to_string(path)?;
+    let mut doc: toml_edit::DocumentMut = text.parse().with_context(|| format!("parse {}", path.display()))?;
+    let out = change(&mut doc)?;
+    write_atomic(path, &doc.to_string())?;
+    Ok(out)
+}
+
+/// The `[[key]]` tables of the document, made when there are none.
+fn tables<'a>(doc: &'a mut toml_edit::DocumentMut, key: &str) -> Result<&'a mut toml_edit::ArrayOfTables> {
+    // `enroll` writes an empty `folders = []`; that has to become a list of tables first.
+    if doc.get(key).and_then(|f| f.as_array()).is_some_and(|a| a.is_empty()) {
+        doc.remove(key);
+    }
+    doc.entry(key)
+        .or_insert(toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()))
+        .as_array_of_tables_mut()
+        .with_context(|| format!("`{key}` in the config must be a list of [[{key}]] tables"))
+}
+
+/// Whether a `[[folders]]` or `[[shared]]` table is the one called `name`.
+fn is_named(table: &toml_edit::Table, name: &str) -> bool {
+    table.get("name").and_then(|n| n.as_str()) == Some(name)
 }
 
 pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
@@ -233,22 +335,13 @@ pub fn add_folder_to_file(config_path: &Path, dir: &Path, name: Option<&str>) ->
     check.folders.push(folder.clone());
     check.validate()?;
 
-    let text = std::fs::read_to_string(config_path)?;
-    let mut doc: toml_edit::DocumentMut = text.parse().with_context(|| format!("parse {}", config_path.display()))?;
-    // `enroll` writes an empty `folders = []`; that has to become a list of tables first.
-    if doc.get("folders").and_then(|f| f.as_array()).is_some_and(|a| a.is_empty()) {
-        doc.remove("folders");
-    }
-    let folders = doc
-        .entry("folders")
-        .or_insert(toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()))
-        .as_array_of_tables_mut()
-        .context("`folders` in the config must be a list of [[folders]] tables")?;
-    let mut table = toml_edit::Table::new();
-    table["path"] = toml_edit::value(folder.path.to_string_lossy().into_owned());
-    table["name"] = toml_edit::value(folder.name.clone());
-    folders.push(table);
-    write_atomic(config_path, &doc.to_string())?;
+    edit_file(config_path, |doc| {
+        let mut table = toml_edit::Table::new();
+        table["path"] = toml_edit::value(folder.path.to_string_lossy().into_owned());
+        table["name"] = toml_edit::value(folder.name.clone());
+        tables(doc, "folders")?.push(table);
+        Ok(())
+    })?;
     Ok(folder)
 }
 
@@ -274,27 +367,59 @@ fn free_directory(cfg: &Config, dir: &Path) -> Result<PathBuf> {
 
 /// Attaches a local folder to the shared folder `name`, keeping everything else in the file as it is. The folder is made if
 /// it is not there yet: the usual way to set up another computer is to attach a new, empty folder and let it fill.
-pub fn attach_shared_to_file(config_path: &Path, name: &str, dir: &Path) -> Result<Shared> {
+pub fn attach_shared_to_file(config_path: &Path, name: &str, dir: &Path, conflict: Conflict) -> Result<Shared> {
     let cfg = Config::load(config_path).context("run `fafnirx enroll` first")?;
     std::fs::create_dir_all(dir).with_context(|| format!("cannot make {}", dir.display()))?;
-    let shared = Shared { name: name.to_string(), path: free_directory(&cfg, dir)? };
+    let shared = Shared {
+        name: name.to_string(),
+        path: free_directory(&cfg, dir)?,
+        conflict,
+        ask_timeout_hours: default_ask_timeout(),
+    };
     let mut check = cfg;
     check.shared.push(shared.clone());
     check.validate()?;
 
-    let text = std::fs::read_to_string(config_path)?;
-    let mut doc: toml_edit::DocumentMut = text.parse().with_context(|| format!("parse {}", config_path.display()))?;
-    let list = doc
-        .entry("shared")
-        .or_insert(toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()))
-        .as_array_of_tables_mut()
-        .context("`shared` in the config must be a list of [[shared]] tables")?;
-    let mut table = toml_edit::Table::new();
-    table["name"] = toml_edit::value(shared.name.clone());
-    table["path"] = toml_edit::value(shared.path.to_string_lossy().into_owned());
-    list.push(table);
-    write_atomic(config_path, &doc.to_string())?;
+    edit_file(config_path, |doc| {
+        let mut table = toml_edit::Table::new();
+        table["name"] = toml_edit::value(shared.name.clone());
+        table["path"] = toml_edit::value(shared.path.to_string_lossy().into_owned());
+        if conflict != Conflict::default() {
+            table["conflict"] = toml_edit::value(conflict.name());
+        }
+        tables(doc, "shared")?.push(table);
+        Ok(())
+    })?;
     Ok(shared)
+}
+
+/// Sets what a shared folder does with a file changed here and on the master. Returns the name of the folder in full.
+pub fn set_shared_conflict_in_file(
+    config_path: &Path,
+    name: &str,
+    conflict: Conflict,
+    ask_timeout_hours: Option<u64>,
+) -> Result<String> {
+    let full = Config::load(config_path)?.shared_named(name)?.name.clone();
+    edit_file(config_path, |doc| {
+        let Some(list) = doc.get_mut("shared").and_then(|s| s.as_array_of_tables_mut()) else { return Ok(()) };
+        for table in list.iter_mut().filter(|t| is_named(t, &full)) {
+            if conflict == Conflict::default() {
+                table.remove("conflict");
+            } else {
+                table["conflict"] = toml_edit::value(conflict.name());
+            }
+            match ask_timeout_hours {
+                Some(h) if h != default_ask_timeout() => table["ask_timeout_hours"] = toml_edit::value(h as i64),
+                Some(_) => {
+                    table.remove("ask_timeout_hours");
+                }
+                None => {}
+            }
+        }
+        Ok(())
+    })?;
+    Ok(full)
 }
 
 /// Whether `name`, as a person types it, means the shared folder `full` (`<owner>/<name>`): in full, or by its name alone.
@@ -321,39 +446,33 @@ impl Config {
 /// (`<owner>/<name>`) or, when that is not ambiguous, by its name alone. Returns the name in full.
 pub fn detach_shared_from_file(config_path: &Path, name: &str) -> Result<String> {
     let full = Config::load(config_path)?.shared_named(name)?.name.clone();
-    let mut doc: toml_edit::DocumentMut = std::fs::read_to_string(config_path)?.parse()?;
-    if let Some(list) = doc.get_mut("shared").and_then(|s| s.as_array_of_tables_mut()) {
-        list.retain(|t| t.get("name").and_then(|n| n.as_str()) != Some(full.as_str()));
-        if list.is_empty() {
-            doc.remove("shared");
+    edit_file(config_path, |doc| {
+        if let Some(list) = doc.get_mut("shared").and_then(|s| s.as_array_of_tables_mut()) {
+            list.retain(|t| !is_named(t, &full));
+            if list.is_empty() {
+                doc.remove("shared");
+            }
         }
-    }
-    write_atomic(config_path, &doc.to_string())?;
+        Ok(())
+    })?;
     Ok(full)
 }
 
 /// Removes a folder from the config file. Data already uploaded stays on the master.
 pub fn remove_folder_from_file(config_path: &Path, name: &str) -> Result<()> {
     Config::load(config_path)?;
-    let text = std::fs::read_to_string(config_path)?;
-    let mut doc: toml_edit::DocumentMut = text.parse()?;
-    let folders = doc
-        .get_mut("folders")
-        .and_then(|f| f.as_array_of_tables_mut())
-        .with_context(|| format!("no folder named \"{name}\""))?;
-    let at: Vec<usize> = folders
-        .iter()
-        .enumerate()
-        .filter(|(_, t)| t.get("name").and_then(|n| n.as_str()) == Some(name))
-        .map(|(i, _)| i)
-        .collect();
-    if at.is_empty() {
-        bail!("no folder named \"{name}\"");
-    }
-    for i in at.into_iter().rev() {
-        folders.remove(i);
-    }
-    write_atomic(config_path, &doc.to_string())
+    edit_file(config_path, |doc| {
+        let folders = doc
+            .get_mut("folders")
+            .and_then(|f| f.as_array_of_tables_mut())
+            .with_context(|| format!("no folder named \"{name}\""))?;
+        let before = folders.len();
+        folders.retain(|t| !is_named(t, name));
+        if folders.len() == before {
+            bail!("no folder named \"{name}\"");
+        }
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -496,6 +615,39 @@ watch = false
     }
 
     #[test]
+    fn each_shared_folder_has_its_own_conflict_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.toml");
+        std::fs::write(
+            &cfg,
+            "server = \"http://x:7443\"
+",
+        )
+        .unwrap();
+        attach_shared_to_file(&cfg, "plain", &dir.path().join("a"), Conflict::default()).unwrap();
+        attach_shared_to_file(&cfg, "mine", &dir.path().join("b"), Conflict::Mine).unwrap();
+        let text = std::fs::read_to_string(&cfg).unwrap();
+        assert_eq!(text.matches("conflict").count(), 1, "only a choice that is not the default is written: {text}");
+        let policy = |name: &str| Config::load(&cfg).unwrap().shared_named(name).unwrap().conflict;
+        assert_eq!((policy("plain"), policy("mine")), (Conflict::Theirs, Conflict::Mine));
+
+        set_shared_conflict_in_file(&cfg, "plain", Conflict::Both, Some(0)).unwrap();
+        set_shared_conflict_in_file(&cfg, "mine", Conflict::Theirs, None).unwrap();
+        let loaded = Config::load(&cfg).unwrap();
+        let (plain, mine) = (loaded.shared_named("plain").unwrap(), loaded.shared_named("mine").unwrap());
+        assert_eq!((plain.conflict, plain.ask_timeout_hours), (Conflict::Both, 0));
+        assert_eq!((mine.conflict, mine.ask_timeout_hours), (Conflict::Theirs, 24), "back to the defaults");
+        assert!(
+            !std::fs::read_to_string(&cfg).unwrap().contains(
+                "mine\"
+conflict"
+            ),
+            "and not written"
+        );
+        assert!("ASK".parse::<Conflict>().is_ok() && "keep".parse::<Conflict>().is_err());
+    }
+
+    #[test]
     fn shared_folders_are_attached_and_detached_in_place() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path().join("config.toml");
@@ -504,30 +656,35 @@ watch = false
             std::fs::create_dir_all(dir.path().join(d)).unwrap();
         }
         assert!(Config::load(&cfg).unwrap().shared.is_empty(), "a config without the table has none attached");
-        let new = attach_shared_to_file(&cfg, "fresh", &dir.path().join("not/there/yet")).unwrap();
+        let new = attach_shared_to_file(&cfg, "fresh", &dir.path().join("not/there/yet"), Conflict::default()).unwrap();
         assert!(new.path.is_dir(), "a folder that does not exist is made");
         assert_eq!(detach_shared_from_file(&cfg, "fresh").unwrap(), "fresh", "it says which folder it detached");
         add_folder_to_file(&cfg, &dir.path().join("c"), None).unwrap();
-        attach_shared_to_file(&cfg, "family", &dir.path().join("a")).unwrap();
-        attach_shared_to_file(&cfg, "work", &dir.path().join("b")).unwrap();
+        attach_shared_to_file(&cfg, "family", &dir.path().join("a"), Conflict::default()).unwrap();
+        attach_shared_to_file(&cfg, "work", &dir.path().join("b"), Conflict::default()).unwrap();
         let loaded = Config::load(&cfg).unwrap();
         assert_eq!(loaded.shared.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["family", "work"]);
         assert_eq!(loaded.folders.len(), 1, "the backup folders are not touched");
         assert!(std::fs::read_to_string(&cfg).unwrap().contains("# notes"), "comments survive");
 
         let err = |r: Result<Shared>| format!("{:#}", r.unwrap_err());
-        assert!(err(attach_shared_to_file(&cfg, "family", &dir.path().join("a"))).contains("already collected"));
-        assert!(err(attach_shared_to_file(&cfg, "other", &dir.path().join("a/inner"))).contains("overlaps"));
+        assert!(err(attach_shared_to_file(&cfg, "family", &dir.path().join("a"), Conflict::default()))
+            .contains("already collected"));
+        assert!(err(attach_shared_to_file(&cfg, "other", &dir.path().join("a/inner"), Conflict::default()))
+            .contains("overlaps"));
         assert!(
-            err(attach_shared_to_file(&cfg, "other", &dir.path().join("c"))).contains("already collected"),
+            err(attach_shared_to_file(&cfg, "other", &dir.path().join("c"), Conflict::default()))
+                .contains("already collected"),
             "not a folder that is backed up either"
         );
         std::fs::create_dir_all(dir.path().join("d")).unwrap();
-        assert!(err(attach_shared_to_file(&cfg, "family", &dir.path().join("d"))).contains("attached twice"));
-        assert!(err(attach_shared_to_file(&cfg, "Bad Name", &dir.path().join("d"))).contains("lowercase"));
+        assert!(err(attach_shared_to_file(&cfg, "family", &dir.path().join("d"), Conflict::default()))
+            .contains("attached twice"));
+        assert!(err(attach_shared_to_file(&cfg, "Bad Name", &dir.path().join("d"), Conflict::default()))
+            .contains("lowercase"));
 
         // Folders of two owners with one name: the short name is ambiguous, the full one is not.
-        attach_shared_to_file(&cfg, "bob/work", &dir.path().join("d")).unwrap();
+        attach_shared_to_file(&cfg, "bob/work", &dir.path().join("d"), Conflict::default()).unwrap();
         let ambiguous = format!("{:#}", detach_shared_from_file(&cfg, "work").unwrap_err());
         assert!(ambiguous.contains("work, bob/work"), "{ambiguous}");
         detach_shared_from_file(&cfg, "bob/work").unwrap();

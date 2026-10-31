@@ -8,6 +8,7 @@ use crate::web::{act, done, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use fafnirx_common::{unix_now, valid_device_name};
+use fafnirx_db::queries as sql;
 use postgres::Client;
 use serde::{Deserialize, Serialize};
 
@@ -149,7 +150,9 @@ pub struct Person {
 pub async fn people(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Vec<Person>> {
     who.require_workspace()?;
     let people = run(&state, move |c| {
-        Ok(crate::repo::users::enabled(c)?
+        Ok(sql::users::enabled_users()
+            .bind(c)
+            .all()?
             .into_iter()
             .filter(|u| u.name != who.name)
             .map(|u| Person { can_write: Role::parse(&u.role) != Some(Role::Readonly), name: u.name })

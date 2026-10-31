@@ -1,23 +1,23 @@
 //! Alerts: what is wrong and needs somebody's attention, one open alert per kind and key.
 
 use crate::platform::db::notify;
-use crate::platform::pg::Pg;
 use fafnirx_common::unix_now;
+use fafnirx_db::client::GenericClient;
 use fafnirx_db::client::Params;
 use fafnirx_db::queries::alerts as q;
-use postgres::{Error, GenericClient};
+use postgres::Error;
 use uuid::Uuid;
 
 /// Opens an alert, or refreshes the message of the already open one.
 pub fn upsert(c: &mut impl GenericClient, kind: &str, key: &str, message: &str) -> Result<(), Error> {
-    q::upsert_alert().bind(&mut Pg(&mut *c), &kind, &key, &message, &unix_now())?;
+    q::upsert_alert().bind(&mut *c, &kind, &key, &message, &unix_now())?;
     notify(c, "alerts", key)
 }
 
 /// Like `upsert` for something reported again and again (with every heartbeat): nobody is told unless the alert is new or
 /// its message changed.
 pub fn raise(c: &mut impl GenericClient, kind: &str, key: &str, message: &str) -> Result<(), Error> {
-    if q::touch_alert().bind(&mut Pg(&mut *c), &unix_now(), &kind, &key, &message)? > 0 {
+    if q::touch_alert().bind(&mut *c, &unix_now(), &kind, &key, &message)? > 0 {
         return Ok(());
     }
     upsert(c, kind, key, message)
@@ -25,7 +25,7 @@ pub fn raise(c: &mut impl GenericClient, kind: &str, key: &str, message: &str) -
 
 /// Closes the open alert of this kind and key, if there is one.
 pub fn resolve(c: &mut impl GenericClient, kind: &str, key: &str) -> Result<(), Error> {
-    if q::resolve_alert().bind(&mut Pg(&mut *c), &unix_now(), &kind, &key)? > 0 {
+    if q::resolve_alert().bind(&mut *c, &unix_now(), &kind, &key)? > 0 {
         notify(c, "alerts", key)?;
     }
     Ok(())
@@ -34,7 +34,7 @@ pub fn resolve(c: &mut impl GenericClient, kind: &str, key: &str) -> Result<(), 
 /// Closes the open alert of this kind and key when it was last raised before `before`. Returns whether it did.
 pub fn resolve_if_quiet(c: &mut impl GenericClient, kind: &str, key: &str, before: i64) -> Result<bool, Error> {
     let params = q::ResolveStaleAlertsParams { now: unix_now(), kind, key, before };
-    Ok(q::resolve_stale_alerts().params(&mut Pg(c), &params)? > 0)
+    Ok(q::resolve_stale_alerts().params(c, &params)? > 0)
 }
 
 /// An alert as the dashboard shows it.
@@ -42,27 +42,17 @@ pub type Open = q::OpenAlerts;
 
 /// Every open alert, newest first. Who may see which one is decided by the caller.
 pub fn open(c: &mut impl GenericClient) -> Result<Vec<Open>, Error> {
-    q::open_alerts().bind(&mut Pg(c)).all()
-}
-
-/// The key (a device folder, a source or a mirror) an alert is about.
-pub fn key_of(c: &mut impl GenericClient, id: Uuid) -> Result<Option<String>, Error> {
-    q::alert_key().bind(&mut Pg(c), &id).opt()
+    q::open_alerts().bind(c).all()
 }
 
 /// Closes an alert by hand.
 pub fn dismiss(c: &mut impl GenericClient, id: Uuid) -> Result<(), Error> {
-    q::dismiss_alert().bind(&mut Pg(&mut *c), &unix_now(), &id)?;
+    q::dismiss_alert().bind(&mut *c, &unix_now(), &id)?;
     notify(c, "alerts", "")
 }
 
 /// Closes the open alerts of a kind that were last raised before `quiet_since`. Whoever raises such an alert does it again
 /// every time it still holds (a client with every heartbeat), so one that went quiet has been fixed or is no longer reported.
 pub fn expire_quiet(c: &mut impl GenericClient, kind: &str, quiet_since: i64) -> Result<(), Error> {
-    q::expire_quiet_alerts().bind(&mut Pg(c), &unix_now(), &kind, &quiet_since).map(drop)
-}
-
-/// Forgets alerts that were closed before `before`.
-pub fn purge_resolved(c: &mut impl GenericClient, before: i64) -> Result<(), Error> {
-    q::purge_resolved_alerts().bind(&mut Pg(c), &before).map(drop)
+    q::expire_quiet_alerts().bind(c, &unix_now(), &kind, &quiet_since).map(drop)
 }

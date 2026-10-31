@@ -10,6 +10,7 @@ use crate::repo::{file_meta, files, jobs, settings};
 use anyhow::{Context, Result};
 pub use fafnirx_common::meta::{parse_time, valid_position};
 use fafnirx_common::unix_now;
+use fafnirx_db::queries as sql;
 use image::ImageDecoder;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -45,7 +46,7 @@ pub fn set_thumbnails(on: bool) {
     THUMBNAILS_ON.store(on, Ordering::Relaxed);
 }
 
-pub fn load_thumbnails(c: &mut impl postgres::GenericClient) {
+pub fn load_thumbnails(c: &mut impl fafnirx_db::client::GenericClient) {
     set_thumbnails(settings::get_i64(c, THUMBNAILS, 1) != 0);
 }
 
@@ -294,7 +295,7 @@ pub fn run_queue(db: Db, store: std::sync::Arc<Store>, cache_root: PathBuf) {
     std::thread::spawn(move || {
         // A restart interrupts whatever was running.
         if let Ok(mut c) = db.get() {
-            let _ = jobs::requeue_running(&mut *c);
+            let _ = sql::jobs::requeue_running_jobs().bind(&mut *c).map(drop);
         }
         for _ in 0..workers() {
             let (db, store, cache_root) = (db.clone(), store.clone(), cache_root.clone());
@@ -501,7 +502,7 @@ fn thumb_job(db: &Db, store: &Store, cache_root: &Path, payload: &str) -> Result
         .with_context(|| format!("the {}px picture of {}", p.size, p.path))?;
     // Where the frame of a video was found is kept, so that it is always taken from the same place.
     if let (None, Some(ms)) = (poster_ms, learned) {
-        file_meta::set_poster_ms(&mut *c, &root, ms)?;
+        sql::files::set_poster_ms().bind(&mut *c, &ms, &root).map(drop)?;
     }
     Ok(None)
 }
@@ -528,10 +529,11 @@ pub(crate) fn make_queued_pictures(db: &Db, store: &Store, cache_root: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fafnirx_common::LockExt;
 
     #[test]
     fn photos_and_videos_are_recognised_by_extension() {
-        let _on = THUMBNAILS_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let _on = THUMBNAILS_TEST.locked();
         assert!(
             wants("photos/IMG_1.JPG") && wants("a.heic") && wants("clip.MOV") && !wants("notes.txt") && !wants("jpg")
         );
@@ -600,7 +602,7 @@ mod tests {
 
     #[test]
     fn the_worker_reads_a_photo_and_makes_a_picture_only_when_asked() {
-        let _on = THUMBNAILS_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let _on = THUMBNAILS_TEST.locked();
         use crate::files::ingest::{commit_version, NewVersion};
         use crate::platform::db::testing;
         use fafnirx_common::{chunk_hash, root_hash};

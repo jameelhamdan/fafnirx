@@ -14,6 +14,7 @@ use crate::web::{act, run, ApiError, Done, Res, Shared};
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
 use fafnirx_common::{base_name, clean_remote_path, secs_of_ns, DAY_SECS};
+use fafnirx_db::queries as sql;
 use postgres::Client;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -386,7 +387,10 @@ pub async fn info(
         let dev = find_device(c, &who, &r.device)?;
         let path = clean_remote_path(&r.path).map_err(|e| ApiError::bad(e.to_string()))?;
         let retention = settings::get_i64(c, "retention_days", 30);
-        let row = files::info(c, dev.id, &path)?.ok_or_else(|| ApiError::not_found("No such file"))?;
+        let row = sql::files::file_info()
+            .bind(c, &dev.id, &path)
+            .opt()?
+            .ok_or_else(|| ApiError::not_found("No such file"))?;
         let (file_id, current, deleted_at) = (row.id, row.current_version_id, row.deleted_at);
         let versions = files::versions(c, file_id)?
             .into_iter()
@@ -506,7 +510,9 @@ pub async fn restore(
     act(&state, move |c| {
         let dev = find_device_to_change(c, &who, &r.device)?;
         let path = clean_remote_path(&r.path).map_err(|e| ApiError::bad(e.to_string()))?;
-        let row = files::version_to_restore(c, dev.id, &path, r.version)?
+        let row = sql::files::version_to_restore()
+            .bind(c, &dev.id, &path, &r.version)
+            .opt()?
             .ok_or_else(|| ApiError::not_found("No such version"))?;
         let (current, deleted_at) = (row.current_version_id, row.deleted_at);
         if current == Some(r.version) && deleted_at.is_none() {

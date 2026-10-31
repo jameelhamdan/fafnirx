@@ -1,10 +1,10 @@
 //! Files and their versions: one row per path of a device, and one version per distinct content it has had.
 
-use crate::platform::pg::Pg;
 use fafnirx_common::HASH_LEN;
+use fafnirx_db::client::GenericClient;
 use fafnirx_db::client::Params;
 use fafnirx_db::queries::files as q;
-use postgres::{Error, GenericClient};
+use postgres::Error;
 use uuid::Uuid;
 
 /// The row of a path.
@@ -23,7 +23,7 @@ impl Row {
 
 /// The row of a path, locked until the transaction ends.
 pub fn lock_row(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<Option<Row>, Error> {
-    Ok(q::lock_file_row().bind(&mut Pg(c), &device_id, &path).opt()?.map(|r| Row {
+    Ok(q::lock_file_row().bind(c, &device_id, &path).opt()?.map(|r| Row {
         id: r.id,
         current: r.current_version_id,
         deleted_at: r.deleted_at,
@@ -32,12 +32,12 @@ pub fn lock_row(c: &mut impl GenericClient, device_id: i64, path: &str) -> Resul
 
 /// Whether a version has exactly this content.
 pub fn has_content(c: &mut impl GenericClient, version_id: i64, root: &[u8]) -> Result<bool, Error> {
-    q::version_has_content().params(&mut Pg(c), &q::VersionHasContentParams { root, version_id }).one()
+    q::version_has_content().params(c, &q::VersionHasContentParams { root, version_id }).one()
 }
 
 /// The id of the row of a path, made if the path is new.
 pub fn ensure(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<Uuid, Error> {
-    q::ensure_file().bind(&mut Pg(c), &device_id, &path).one()
+    q::ensure_file().bind(c, &device_id, &path).one()
 }
 
 /// A version to record.
@@ -54,7 +54,7 @@ pub struct NewVersion<'a> {
 pub fn insert_version(c: &mut impl GenericClient, v: &NewVersion) -> Result<i64, Error> {
     q::insert_version()
         .params(
-            &mut Pg(c),
+            c,
             &q::InsertVersionParams {
                 file_id: v.file_id,
                 root: v.root,
@@ -69,22 +69,12 @@ pub fn insert_version(c: &mut impl GenericClient, v: &NewVersion) -> Result<i64,
 
 /// Makes a version the current one of its file, undeleting it.
 pub fn make_current(c: &mut impl GenericClient, file_id: Uuid, version_id: i64) -> Result<(), Error> {
-    q::make_current().bind(&mut Pg(c), &version_id, &file_id).map(drop)
-}
-
-/// Keeps the newest `keep` versions of a file; older ones are marked pruned and removed by retention.
-pub fn prune_versions(c: &mut impl GenericClient, file_id: Uuid, keep: i64, ts: i64) -> Result<(), Error> {
-    q::prune_versions().bind(&mut Pg(c), &ts, &file_id, &keep).map(drop)
-}
-
-/// Remembers the modification time of a version whose content did not change.
-pub fn set_version_mtime(c: &mut impl GenericClient, version_id: i64, mtime: i64) -> Result<(), Error> {
-    q::set_version_mtime().bind(&mut Pg(c), &mtime, &version_id).map(drop)
+    q::make_current().bind(c, &version_id, &file_id).map(drop)
 }
 
 /// Whether the kind, size and EXIF data of this content were read already.
 pub fn content_known(c: &mut impl GenericClient, root: &[u8]) -> Result<bool, Error> {
-    q::content_known().bind(&mut Pg(c), &root).one()
+    q::content_known().bind(c, &root).one()
 }
 
 /// Path of a live file of the device with this content, preferring `prefer`.
@@ -94,7 +84,7 @@ pub fn live_path_with_root(
     root: &[u8],
     prefer: Option<&str>,
 ) -> Result<Option<String>, Error> {
-    q::live_path_with_root().bind(&mut Pg(c), &device_id, &root, &prefer.unwrap_or("")).opt()
+    q::live_path_with_root().bind(c, &device_id, &root, &prefer.unwrap_or("")).opt()
 }
 
 /// A live path of the device that is the same name as `path` but spelled differently (another case), unless `path` is itself
@@ -105,17 +95,12 @@ pub fn case_clash(
     path: &str,
     renamed_from: Option<&str>,
 ) -> Result<Option<String>, Error> {
-    q::case_clash().bind(&mut Pg(c), &device_id, &path, &renamed_from.unwrap_or("")).opt()
-}
-
-/// The spellings of the folder `prefix` (no trailing slash) that live paths have, other than `prefix` itself.
-pub fn folder_spellings(c: &mut impl GenericClient, device_id: i64, prefix: &str) -> Result<Vec<String>, Error> {
-    q::folder_spellings().bind(&mut Pg(c), &prefix, &device_id).all()
+    q::case_clash().bind(c, &device_id, &path, &renamed_from.unwrap_or("")).opt()
 }
 
 /// Whether the path was deleted in the web app.
 pub fn deleted_in_web_app(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<bool, Error> {
-    Ok(q::deleted_in_web_app().bind(&mut Pg(c), &device_id, &path).opt()?.is_some())
+    Ok(q::deleted_in_web_app().bind(c, &device_id, &path).opt()?.is_some())
 }
 
 /// (root hash, size) of the live (not deleted) version of a path, if any.
@@ -124,7 +109,7 @@ pub fn live_content(
     device_id: i64,
     path: &str,
 ) -> Result<Option<([u8; HASH_LEN], u64)>, Error> {
-    let found = q::live_content().bind(&mut Pg(c), &device_id, &path).opt()?;
+    let found = q::live_content().bind(c, &device_id, &path).opt()?;
     Ok(found.and_then(|v| Some((v.root_hash.try_into().ok()?, v.size as u64))))
 }
 
@@ -143,7 +128,7 @@ pub struct Change {
 /// The paths of a device written or deleted at or after `since` (unix seconds; 0 for everything). Needs no history:
 /// it reads the state of the files, so it works however long the client was away, as long as the trash keeps the deletion.
 pub fn changes_since(c: &mut impl GenericClient, device_id: i64, since: i64) -> Result<Vec<Change>, Error> {
-    let rows = q::changes_since().bind(&mut Pg(c), &device_id, &since).all()?;
+    let rows = q::changes_since().bind(c, &device_id, &since).all()?;
     Ok(rows
         .into_iter()
         .map(|r| {
@@ -172,36 +157,24 @@ pub fn delete_path(
 ) -> Result<Option<i64>, Error> {
     let by = in_web_app.then_some("web");
     let params = q::DeletePathParams { ts, deleted_by: by, device_id, path };
-    Ok(q::delete_path().params(&mut Pg(c), &params).opt()?.map(|v| v.unwrap_or(0)))
+    Ok(q::delete_path().params(c, &params).opt()?.map(|v| v.unwrap_or(0)))
 }
 
 /// Takes the old path of a rename out of the live tree. Unlike [`delete_path`] it is neither logged nor shown in the trash.
 /// Returns the version that was current (0 when there was none), or `None` when the path was not live.
 pub fn vacate_renamed(c: &mut impl GenericClient, device_id: i64, path: &str, ts: i64) -> Result<Option<i64>, Error> {
-    Ok(q::vacate_renamed().bind(&mut Pg(c), &ts, &device_id, &path).opt()?.map(|v| v.unwrap_or(0)))
+    Ok(q::vacate_renamed().bind(c, &ts, &device_id, &path).opt()?.map(|v| v.unwrap_or(0)))
 }
 
-/// A file a source collected stays deleted until it changes at the source, whatever the retention period does.
-pub fn keep_source_item_deleted(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<(), Error> {
-    q::keep_source_item_deleted().bind(&mut Pg(c), &path, &device_id).map(drop)
-}
-
-/// A file as the detail view shows it: its current version and what is known about the content.
-pub type Info = q::FileInfo;
 /// One version of a file.
 pub type VersionRow = q::FileVersions;
-/// A version that can be brought back, with the state of its file.
-pub type Restorable = q::VersionToRestore;
+
 /// A folder below a path, with what it holds.
 pub type Folder = q::FoldersBelow;
 
-pub fn info(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<Option<Info>, Error> {
-    q::file_info().bind(&mut Pg(c), &device_id, &path).opt()
-}
-
 /// The versions of a file, newest first.
 pub fn versions(c: &mut impl GenericClient, file_id: Uuid) -> Result<Vec<VersionRow>, Error> {
-    q::file_versions().bind(&mut Pg(c), &file_id).all()
+    q::file_versions().bind(c, &file_id).all()
 }
 
 /// The paths a selection stands for: a file, or every file under a folder.
@@ -212,16 +185,7 @@ pub fn expand(
     include_deleted: bool,
 ) -> Result<Vec<String>, Error> {
     let below = crate::platform::db::like_prefix(&format!("{path}/"));
-    q::expand_paths().params(&mut Pg(c), &q::ExpandPathsParams { device_id, path, below, include_deleted }).all()
-}
-
-pub fn version_to_restore(
-    c: &mut impl GenericClient,
-    device_id: i64,
-    path: &str,
-    version_id: i64,
-) -> Result<Option<Restorable>, Error> {
-    q::version_to_restore().bind(&mut Pg(c), &device_id, &path, &version_id).opt()
+    q::expand_paths().params(c, &q::ExpandPathsParams { device_id, path, below, include_deleted }).all()
 }
 
 /// The folders directly below a path (`below` is the `LIKE` pattern of the path, `from` the 1-based character
@@ -233,7 +197,7 @@ pub fn folders_below(
     include_deleted: bool,
     from: i32,
 ) -> Result<Vec<Folder>, Error> {
-    q::folders_below().bind(&mut Pg(c), &from, &device_id, &below, &include_deleted).all()
+    q::folders_below().bind(c, &from, &device_id, &below, &include_deleted).all()
 }
 
 /// A path as the transfer code needs it: its row, which may be deleted.
@@ -244,7 +208,7 @@ pub struct Located {
 }
 
 pub fn locate(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<Option<Located>, Error> {
-    Ok(q::file_row().bind(&mut Pg(c), &device_id, &path).opt()?.map(|r| Located {
+    Ok(q::file_row().bind(c, &device_id, &path).opt()?.map(|r| Located {
         id: r.id,
         current: r.current_version_id,
         deleted_at: r.deleted_at,
@@ -257,31 +221,14 @@ pub fn version_content(
     file_id: Uuid,
     version_id: i64,
 ) -> Result<Option<(Vec<u8>, i64)>, Error> {
-    Ok(q::version_of_file().bind(&mut Pg(c), &version_id, &file_id).opt()?.map(|v| (v.root_hash, v.size)))
-}
-
-/// The file with this id, with its device and current content.
-pub type ById = q::FileById;
-
-pub fn by_id(c: &mut impl GenericClient, id: Uuid) -> Result<Option<ById>, Error> {
-    q::file_by_id().bind(&mut Pg(c), &id).opt()
-}
-
-/// The modification time (unix nanoseconds) of the current version of a path.
-pub fn current_mtime(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<i64, Error> {
-    q::current_mtime().bind(&mut Pg(c), &device_id, &path).one()
-}
-
-/// Some master files (at most 10) whose path starts with `users/`, which is reserved for the folders of the users.
-pub fn reserved_master_paths(c: &mut impl GenericClient) -> Result<Vec<String>, Error> {
-    q::reserved_master_paths().bind(&mut Pg(c)).all()
+    Ok(q::version_of_file().bind(c, &version_id, &file_id).opt()?.map(|v| (v.root_hash, v.size)))
 }
 
 /// The live files at or below a path as (path, size, mtime), for comparing with what is on disk.
 pub fn live_below(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<Vec<(String, i64, i64)>, Error> {
     let below = crate::platform::db::like_prefix(&format!("{path}/"));
     Ok(q::live_files_below()
-        .bind(&mut Pg(c), &device_id, &path, &below)
+        .bind(c, &device_id, &path, &below)
         .all()?
         .into_iter()
         .map(|f| (f.path, f.size, f.mtime))
@@ -290,23 +237,18 @@ pub fn live_below(c: &mut impl GenericClient, device_id: i64, path: &str) -> Res
 
 /// Where a live file is and which content it holds: (device folder, path, root hash).
 pub fn location(c: &mut impl GenericClient, id: Uuid) -> Result<Option<(String, String, Vec<u8>)>, Error> {
-    Ok(q::file_location().bind(&mut Pg(c), &id).opt()?.map(|f| (f.folder, f.path, f.root_hash)))
+    Ok(q::file_location().bind(c, &id).opt()?.map(|f| (f.folder, f.path, f.root_hash)))
 }
 
 /// The live files directly in the folder that holds `path`, as (path, root hash): the neighbours of a file.
 pub fn neighbours(c: &mut impl GenericClient, device: &str, path: &str) -> Result<Vec<(String, Vec<u8>)>, Error> {
     let prefix = path.rfind('/').map_or(String::new(), |i| path[..=i].to_string());
-    Ok(q::files_in_folder()
-        .bind(&mut Pg(c), &device, &prefix)
-        .all()?
-        .into_iter()
-        .map(|f| (f.path, f.root_hash))
-        .collect())
+    Ok(q::files_in_folder().bind(c, &device, &prefix).all()?.into_iter().map(|f| (f.path, f.root_hash)).collect())
 }
 
 /// A version's content and attributes: root hash, size, mtime in nanoseconds, mode.
 pub type Record = q::VersionRecord;
 
 pub fn version_record(c: &mut impl GenericClient, version_id: i64) -> Result<Option<Record>, Error> {
-    q::version_record().bind(&mut Pg(c), &version_id).opt()
+    q::version_record().bind(c, &version_id).opt()
 }

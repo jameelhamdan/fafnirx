@@ -11,7 +11,9 @@ use crate::platform::store::Store;
 use crate::repo::{albums, devices, events, files, jobs, settings};
 use anyhow::Result;
 use fafnirx_common::{unix_now, HASH_LEN};
-use postgres::{Client, GenericClient};
+use fafnirx_db::client::GenericClient;
+use fafnirx_db::queries as sql;
+use postgres::Client;
 use std::path::Path;
 
 /// The id of the device that holds the master files (see migration 0006).
@@ -41,7 +43,7 @@ pub struct Seen {
 /// Keeps the newest `version_count` versions of a file; older ones are marked pruned and removed by retention.
 fn prune_versions(conn: &mut impl GenericClient, file_id: uuid::Uuid, ts: i64) -> Result<(), postgres::Error> {
     let keep = settings::get_i64(conn, "version_count", 5).max(1);
-    files::prune_versions(conn, file_id, keep, ts)
+    sql::files::prune_versions().bind(conn, &ts, &file_id, &keep).map(drop)
 }
 
 /// Makes a version the current one of its file (undeleting it) and prunes the ones that are too old.
@@ -140,7 +142,7 @@ pub fn check_names(
         let folder = parts[..depth].join("/");
         // The spelling of this folder that the file is being renamed from is on its way out.
         let leaving = renamed_from.map(|from| from.split('/').take(depth).collect::<Vec<_>>().join("/"));
-        for spelling in files::folder_spellings(conn, device.id, &folder)? {
+        for spelling in sql::files::folder_spellings().bind(conn, &folder, &device.id).all()? {
             if Some(&spelling) != leaving.as_ref() {
                 return conflict(format!(
                     "the folder {spelling} is in {in_} already, and {folder} differs from it only by case"
@@ -362,7 +364,7 @@ fn delete_locked(
     let deleted = delete_path(tx, device, path, ts, in_web_app)?;
     if in_web_app && deleted.is_some() {
         // A file a source collected stays deleted until it changes at the source, whatever the retention period does.
-        files::keep_source_item_deleted(tx, device.id, path)?;
+        sql::files::keep_source_item_deleted().bind(tx, &path, &device.id).map(drop)?;
     }
     devices::touch(tx, device.id, ts)?;
     db::notify(tx, "devices", &device.name)?;
@@ -403,7 +405,7 @@ pub fn adopt_live(
     if let Some(cur) = live {
         if files::has_content(&mut tx, cur, root)? {
             // Same content, only the modification time differs: remember it so the file is not hashed again.
-            files::set_version_mtime(&mut tx, cur, seen.mtime)?;
+            sql::files::set_version_mtime().bind(&mut tx, &seen.mtime, &cur).map(drop)?;
             tx.commit()?;
             return Ok(false);
         }

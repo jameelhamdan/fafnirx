@@ -16,7 +16,8 @@ use crate::platform::store::Store;
 use crate::repo::{alerts, mirrors, sources};
 use anyhow::{anyhow, Result};
 use fafnirx_common::unix_now;
-use postgres::GenericClient;
+use fafnirx_db::client::GenericClient;
+use fafnirx_db::queries as sql;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -116,7 +117,7 @@ pub async fn spawn(db: Db, store: Arc<Store>, data_dir: PathBuf) {
     let _ = std::fs::remove_dir_all(data_dir.join("mirror-stage"));
     let _ = db::with(&db, |c| {
         sources::fail_interrupted(c)?;
-        mirrors::fail_interrupted(c)?;
+        sql::mirrors::fail_interrupted_mirrors().bind(c).map(drop)?;
         Ok(())
     })
     .await;
@@ -158,14 +159,22 @@ async fn blocking_claim<T: Send + 'static>(db: &Db, claim: fn(&Db) -> Option<T>)
 
 fn claim_source(db: &Db) -> Option<SourceRow> {
     let mut conn = db.get().ok()?;
-    let s = sources::claim(&mut *conn, unix_now()).map_err(|e| tracing::error!("claim from sources: {e}")).ok()??;
+    let s = sql::sources::claim_source()
+        .bind(&mut *conn, &unix_now())
+        .opt()
+        .map_err(|e| tracing::error!("claim from sources: {e}"))
+        .ok()??;
     let _ = db::notify(&mut *conn, "jobs", &s.folder);
     Some(SourceRow { id: s.id, kind: s.kind, config: s.config, device: Device { id: s.device_id, name: s.folder } })
 }
 
 fn claim_mirror(db: &Db) -> Option<MirrorRow> {
     let mut conn = db.get().ok()?;
-    let m = mirrors::claim(&mut *conn, unix_now()).map_err(|e| tracing::error!("claim from mirrors: {e}")).ok()??;
+    let m = sql::mirrors::claim_mirror()
+        .bind(&mut *conn, &unix_now())
+        .opt()
+        .map_err(|e| tracing::error!("claim from mirrors: {e}"))
+        .ok()??;
     let _ = db::notify(&mut *conn, "jobs", "mirrors");
     Some(MirrorRow {
         id: m.id,

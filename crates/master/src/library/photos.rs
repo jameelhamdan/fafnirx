@@ -14,11 +14,13 @@ use crate::platform::id::{uuids, Id};
 use crate::repo::library::{self, Media, Scope};
 use crate::repo::{albums, file_state, files, settings, snapshot, tags};
 use crate::web::access::Access;
-use crate::web::{act, run, ApiError, Done, Res, Shared};
+use crate::web::{act, change, done, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
 use fafnirx_common::{base_name, unix_now, DAY_SECS};
-use postgres::{Client, GenericClient};
+use fafnirx_db::client::GenericClient;
+use fafnirx_db::queries as sql;
+use postgres::Client;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// More than a library of one household holds in one month, and few enough to answer in one go.
@@ -492,7 +494,7 @@ fn apply(tx: &mut impl GenericClient, who: &Access, id: uuid::Uuid, e: &Edit) ->
     if let Some(names) = new_tags {
         let ids = tag_ids(tx, uid, &names)?;
         tags::replace_on_file(tx, uid, id, &ids)?;
-        tags::drop_unused(tx)?;
+        sql::library::drop_unused_tags().bind(tx).map(drop)?;
     }
     Ok(())
 }
@@ -503,14 +505,8 @@ pub async fn edit(
     Path(Id(id)): Path<Id>,
     Json(e): Json<Edit>,
 ) -> Res<Done> {
-    act(&state, move |c| {
-        let mut tx = c.transaction()?;
-        apply(&mut tx, &who, id, &e)?;
-        db::notify(&mut tx, "library", "")?;
-        tx.commit()?;
-        Ok(())
-    })
-    .await
+    change(&state, "library", move |tx| apply(tx, &who, id, &e)).await?;
+    done()
 }
 
 #[derive(Deserialize)]
@@ -537,23 +533,20 @@ pub async fn bulk(State(state): State<Shared>, Extension(who): Extension<Access>
     }
     let new_tags = b.add_tags.as_deref().map(clean_tags).transpose()?;
     let ids = uuids(&b.ids);
-    let changed = run(&state, move |c| {
-        let mut tx = c.transaction()?;
+    let changed = change(&state, "library", move |tx| {
         let (viewer, now) = (who.viewer(), unix_now());
         // The files touched by any of the changes asked for are those the user can see.
         let mut changed = 0;
         if let Some(v) = b.favorite {
-            changed = changed.max(file_state::bulk_set_favorite(&mut tx, viewer, &ids, v, now)?);
+            changed = changed.max(file_state::bulk_set_favorite(tx, viewer, &ids, v, now)?);
         }
         if let Some(v) = b.archived {
-            changed = changed.max(file_state::bulk_set_archived(&mut tx, viewer, &ids, v, now)?);
+            changed = changed.max(file_state::bulk_set_archived(tx, viewer, &ids, v, now)?);
         }
         if let Some(names) = new_tags.filter(|t| !t.is_empty()) {
-            let tag_ids = tag_ids(&mut tx, viewer.uid, &names)?;
-            changed = changed.max(tags::add_to_files(&mut tx, viewer, &ids, &tag_ids)?);
+            let tag_ids = tag_ids(tx, viewer.uid, &names)?;
+            changed = changed.max(tags::add_to_files(tx, viewer, &ids, &tag_ids)?);
         }
-        db::notify(&mut tx, "library", "")?;
-        tx.commit()?;
         Ok(changed)
     })
     .await?;
@@ -670,9 +663,11 @@ pub fn snapshot(c: &mut Client) -> anyhow::Result<serde_json::Value> {
         map
     }
 
-    let album_files = snapshot::album_files(c)?;
+    let album_files = sql::library::snapshot_album_files().bind(c).all()?;
     let mut files_of_album = files_by(album_files.iter().map(|f| (f.album_id, f.folder.as_str(), f.path.as_str())));
-    let albums: Vec<_> = snapshot::albums(c)?
+    let albums: Vec<_> = sql::library::snapshot_albums()
+        .bind(c)
+        .all()?
         .into_iter()
         .map(|a| {
             json!({ "user": a.owner, "name": a.name, "description": a.description, "created_at": a.created_at,
@@ -680,14 +675,14 @@ pub fn snapshot(c: &mut Client) -> anyhow::Result<serde_json::Value> {
         })
         .collect();
 
-    let tag_files = snapshot::tag_files(c)?;
+    let tag_files = sql::library::snapshot_tag_files().bind(c).all()?;
     let mut files_of_tag = files_by(tag_files.iter().map(|f| (f.tag_id, f.folder.as_str(), f.path.as_str())));
     let tags: Vec<_> = snapshot::tags(c)?
         .into_iter()
         .map(|t| json!({ "user": t.owner, "name": t.name, "files": files_of_tag.remove(&t.id).unwrap_or_default() }))
         .collect();
 
-    let states: Vec<_> = snapshot::states(c)?
+    let states: Vec<_> = sql::library::snapshot_states().bind(c).all()?
         .into_iter()
         .map(|s| {
             json!({ "user": s.owner, "device": s.folder, "path": s.path, "favorite": s.favorite, "archived": s.archived,

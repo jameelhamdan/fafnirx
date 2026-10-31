@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
-use postgres::{Client, Config, GenericClient, NoTls};
+use fafnirx_db::client::GenericClient;
+use postgres::{Client, Config, NoTls};
 use r2d2_postgres::PostgresConnectionManager;
 use std::time::Duration;
 

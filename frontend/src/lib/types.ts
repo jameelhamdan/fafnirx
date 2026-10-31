@@ -179,6 +179,7 @@ export interface Settings {
   version_count: number
   retention_days: number
   thumbnails: boolean
+  photos: boolean
 }
 
 export type Role = 'admin' | 'normal' | 'readonly'
@@ -242,6 +243,8 @@ export interface Session {
   version?: string
   /** The modules that are up on the master, by id (see `sdk`); only sent to a logged-in user. */
   modules?: Record<string, ModuleInfo>
+  /** Whether the photo pages are offered (administrator setting); only sent to a logged-in user. Missing: on. */
+  photos?: boolean
 }
 
 /** A photo or video of the library. */

@@ -18,6 +18,9 @@ tokio = { workspace = true, optional = true, features = ["signal", "macros"] }
 tonic.workspace = true
 unicode-normalization.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [build-dependencies]
 tonic-build = "0.12"
 protoc-bin-vendored = "3"
