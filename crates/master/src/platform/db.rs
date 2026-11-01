@@ -67,7 +67,7 @@ fn open_with(config: Config) -> Result<Db> {
     let pool = loop {
         let manager = PostgresConnectionManager::new(config.clone(), NoTls);
         let built = r2d2::Pool::builder()
-            .max_size(POOL_SIZE)
+            .max_size(super::tuning::get("FAFNIRX_DB_POOL").map_or(POOL_SIZE, |n| n as u32))
             .min_idle(Some(1))
             .connection_timeout(Duration::from_secs(5))
             .build(manager);

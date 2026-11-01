@@ -1,0 +1,35 @@
+# Master and PostgreSQL pinned to cores and memory, for bench_docker.py. Set by it: MASTER_CPUSET, PG_CPUSET, MASTER_MEM, PG_MEM,
+# DATA_VOL, PG_VOL (named volume or ./folder) and the FAFNIRX_* sizes (docs/deployment.md#sizing-and-tuning).
+name: fxbench
+services:
+  db:
+    image: postgres:17
+    cpuset: "${PG_CPUSET:-3}"
+    mem_limit: "${PG_MEM:-2g}"
+    memswap_limit: "${PG_MEM:-2g}"
+    environment: { POSTGRES_USER: fafnirx, POSTGRES_PASSWORD: bench, POSTGRES_DB: fafnirx }
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fafnirx -d fafnirx"]
+      interval: 2s
+      retries: 30
+    volumes: ["${PG_VOL:-pgdata}:/var/lib/postgresql/data"]
+  master:
+    image: "${FAFNIRX_IMAGE:-fafnirx:bench}"
+    cpuset: "${MASTER_CPUSET:-0}"
+    mem_limit: "${MASTER_MEM:-4g}"
+    memswap_limit: "${MASTER_MEM:-4g}"
+    depends_on: { db: { condition: service_healthy } }
+    environment:
+      FAFNIRX_DATABASE_URL: postgresql://fafnirx:bench@db/fafnirx
+      FAFNIRX_ADMIN_PASSWORD: pw
+      HOME: /tmp
+      FAFNIRX_WORKER_THREADS: "${FAFNIRX_WORKER_THREADS:-}"
+      FAFNIRX_BLOCKING_THREADS: "${FAFNIRX_BLOCKING_THREADS:-}"
+      FAFNIRX_DB_POOL: "${FAFNIRX_DB_POOL:-}"
+      FAFNIRX_JOB_WORKERS: "${FAFNIRX_JOB_WORKERS:-}"
+      FAFNIRX_STREAMS: "${FAFNIRX_STREAMS:-}"
+    ports: ["18080:8080"]
+    volumes: ["${DATA_VOL:-data}:/data"]
+volumes:
+  pgdata:
+  data:

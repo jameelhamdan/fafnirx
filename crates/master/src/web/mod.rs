@@ -67,7 +67,7 @@ impl AppState {
             login_failures: Mutex::default(),
             trusted: crate::platform::proxy::Trusted::from_env()?,
             uploads: Mutex::default(),
-            streams: Arc::new(Semaphore::new(32)),
+            streams: Arc::new(Semaphore::new(crate::platform::tuning::get("FAFNIRX_STREAMS").unwrap_or(32))),
             modules,
         })
     }

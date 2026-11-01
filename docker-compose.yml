@@ -36,6 +36,12 @@ services:
       # FAFNIRX_MODULE_<ID>_URL and _TOKEN (docs/modules.md).
       FAFNIRX_MODULE_VIDEO_URL: "${FAFNIRX_MODULE_VIDEO_URL:-}"
       FAFNIRX_MODULE_VIDEO_TOKEN: "${FAFNIRX_MODULE_VIDEO_TOKEN:-}"
+      # Sizes for the machine (empty = the default); see docs/deployment.md#sizing-and-tuning
+      FAFNIRX_WORKER_THREADS: "${FAFNIRX_WORKER_THREADS:-}"
+      FAFNIRX_BLOCKING_THREADS: "${FAFNIRX_BLOCKING_THREADS:-}"
+      FAFNIRX_DB_POOL: "${FAFNIRX_DB_POOL:-}"
+      FAFNIRX_JOB_WORKERS: "${FAFNIRX_JOB_WORKERS:-}"
+      FAFNIRX_STREAMS: "${FAFNIRX_STREAMS:-}"
     ports:
       - "7443:7443" # devices (gRPC)
       - "8080:8080" # web app and web API

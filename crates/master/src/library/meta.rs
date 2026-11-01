@@ -25,9 +25,10 @@ const VIDEO_EXTENSIONS: [&str; 11] = ["mp4", "mov", "mkv", "avi", "webm", "m4v",
 const PREVIEW_EXTENSIONS: [&str; 8] = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff"];
 const MAX_ATTEMPTS: i64 = 3;
 
-/// Jobs worked on at the same time: one for each core, but at least two and at most six (each holds a decoded picture).
+/// Jobs worked on at the same time: one for each core, but at least two and at most six (each holds a decoded picture),
+/// unless `FAFNIRX_JOB_WORKERS` says how many.
 fn workers() -> usize {
-    std::thread::available_parallelism().map_or(2, |n| n.get().clamp(2, 6))
+    crate::platform::tuning::get("FAFNIRX_JOB_WORKERS").unwrap_or_else(|| std::thread::available_parallelism().map_or(2, |n| n.get().clamp(2, 6)))
 }
 
 /// The setting that turns thumbnails and previews on or off (on when it is not set).

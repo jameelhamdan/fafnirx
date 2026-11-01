@@ -48,16 +48,23 @@ fafnirx add-folder ~/Documents
 
 ## Performance
 
-Measured with thumbnails off, on one desktop (12 threads, PostgreSQL 17 in Docker, loopback) with 5,200 photos. Script:
-`tests/bench-local.mjs`.
+Measured in Docker on an Apple M2, with the master and PostgreSQL on the same cores, 5,150 photos and 16 clients at once.
+Scripts: `tests/bench_docker.py`, `tests/bench-disk.sh`.
 
-| | |
-| --- | --- |
-| Memory | master 13 MiB idle, 34 MiB peak; PostgreSQL about 100 MiB |
-| CPU | 0.2 core importing; same speed on 1 core as on 12 |
-| Import | 58 small or 15 large (3 MB) photos per second |
-| Upload / download | about 500 / 700 MiB/s |
-| Page load (p50) | 10-17 ms for the timeline, folders and dashboard |
+| | 1 core | 2 cores | 4 cores |
+| --- | --- | --- | --- |
+| Timeline months | 94 req/s | 185 req/s | 316 req/s |
+| Dashboard | 366 req/s | 671 req/s | 857 req/s |
+| File list | 186 req/s | 371 req/s | 541 req/s |
+| Thumbnails | 14/s | 28/s | 61/s |
+| Import of small photos | 242 files/s | 265 files/s | 355 files/s |
+| Upload, one 256 MiB file | 109 MiB/s | 100 MiB/s | 112 MiB/s |
+| Upload, small files (4 at once) | 216 files/s | 329 files/s | 405 files/s |
+| Download, one 256 MiB file | 267 MiB/s | 226 MiB/s | 252 MiB/s |
+
+Memory stays small: the master peaked at 120-200 MiB and PostgreSQL at 60-80 MiB, and a 1-core machine with 512 MB for the whole
+stack ran without being killed. Not measured: a real Raspberry Pi, more than 4 cores, many users at once.
+Details and tuning: [Sizing and tuning](docs/deployment.md#sizing-and-tuning).
 
 Minimum and recommended hardware: [Installation](docs/installation.md#1-the-master-docker).
 

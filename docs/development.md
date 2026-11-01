@@ -37,6 +37,8 @@ cargo run -p fafnirx -- enroll --no-service --server http://127.0.0.1:7443   # t
 | E2E: shared folders (several clients, two users) | `node e2e-shared.mjs` | Built binaries, test DB |
 | Benchmark of a running master (GET only) | `node bench-readonly.mjs http://host` | Optional `FAFNIRX_USER`, `FAFNIRX_PASSWORD` |
 | Benchmark of a release build with a synthetic library | `node bench-local.mjs [tiny] [large]` | `FAFNIRX_BIN_DIR` (release), test DB, Python with Pillow |
+| Scaling in Docker (cores, RAM, settings) | `python bench_docker.py <library> out.jsonl b1=0:0 b2=0-1:0-1` | Image `fafnirx:bench`, library from `bench-library.py` |
+| Disk and PostgreSQL I/O in Docker | `bash bench-disk.sh` | Docker |
 
 Database tests use a schema of their own, so they run in parallel. `crates/master/src/web/tests/` drives the real router in
 memory; `routes.rs` pins the access rule of every route. Video parts need ffmpeg, which tests do not: they check parsing and

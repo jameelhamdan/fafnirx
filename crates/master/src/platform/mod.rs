@@ -6,3 +6,4 @@ pub mod id;
 pub mod migrations;
 pub mod proxy;
 pub mod store;
+pub mod tuning;
