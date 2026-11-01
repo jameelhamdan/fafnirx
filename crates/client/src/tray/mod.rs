@@ -413,40 +413,44 @@ fn resolve_conflicts(config_path: &Path, files: Vec<(String, daemon::ConflictInf
     }
 }
 
-/// What the person chose for one file: `theirs`, `mine` or `both`; `None` to decide later.
+/// What the person chose for one file: `theirs`, `mine` or `both`; `None` to decide later (closing the window).
 fn ask_which(folder: &str, file: &daemon::ConflictInfo) -> Option<&'static str> {
     use rfd::{MessageButtons, MessageDialogResult::Custom};
-    let when = |unix: i64| format!("{} ago", daemon::age(unix_now() - unix));
-    let there = if file.deleted {
-        "was deleted on the server".to_string()
+    const THEIRS: &str = "Keep the server's";
+    const MINE: &str = "Keep mine";
+    const BOTH: &str = "Keep both";
+    let ago = |unix: i64| format!("changed {} ago", daemon::age(unix_now() - unix));
+    let server = if file.deleted {
+        "deleted".to_string()
     } else {
-        format!("server: {}, changed {}", text::human_bytes(file.master_size), when(file.master_mtime))
+        format!("{}, {}", text::human_bytes(file.master_size), ago(file.master_mtime))
     };
     let body = format!(
-        "\"{}\" in \"{folder}\" was changed on this computer and on the server.\n\nThis computer: {}, changed {}\nThe {there}",
+        "\"{}\" in \"{folder}\" was changed on this computer and on the server.\n\nThis computer: {}, {}\nServer: {server}\n\nClosing this window decides later.",
         file.path,
         text::human_bytes(file.local_size),
-        when(file.local_mtime),
+        ago(file.local_mtime),
     );
     let first = message(rfd::MessageLevel::Warning, body)
-        .set_buttons(MessageButtons::YesNoCancelCustom("Keep the server's".into(), "Keep both".into(), "Other...".into()))
+        .set_buttons(MessageButtons::YesNoCancelCustom(THEIRS.into(), BOTH.into(), MINE.into()))
         .show();
     match first {
-        Custom(c) if c == "Keep the server's" => Some("theirs"),
-        Custom(c) if c == "Keep both" => Some("both"),
-        rfd::MessageDialogResult::Yes => Some("theirs"),
-        rfd::MessageDialogResult::No => Some("both"),
-        // Closing the window decides later; only the button leads on.
-        Custom(c) if c == "Other..." => {
+        Custom(c) if c == THEIRS => Some("theirs"),
+        Custom(c) if c == BOTH => Some("both"),
+        Custom(c) if c == MINE => {
             // Replacing what others did is not one click away.
-            let second = message(
+            let sure = message(
                 rfd::MessageLevel::Warning,
                 format!("Keep this computer's \"{}\"? It replaces the server's version for every computer.", file.path),
             )
             .set_buttons(MessageButtons::OkCancelCustom("Keep mine".into(), "Decide later".into()))
             .show();
-            matches!(second, Custom(c) if c == "Keep mine").then_some("mine")
+            matches!(sure, Custom(c) if c == MINE).then_some("mine")
         }
+        // Where the system cannot show the button texts it shows Yes / No / Cancel, in the order of the buttons above: the
+        // first two are the safe ones, and Cancel (the one that replaces the server's) is not taken for a choice.
+        rfd::MessageDialogResult::Yes => Some("theirs"),
+        rfd::MessageDialogResult::No => Some("both"),
         _ => None,
     }
 }

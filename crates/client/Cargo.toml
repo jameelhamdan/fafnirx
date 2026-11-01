@@ -47,7 +47,8 @@ tracing-subscriber.workspace = true
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 unicode-normalization.workspace = true
 tao = { version = "0.30", optional = true }
-rfd = { version = "0.15", optional = true }
+# common-controls-v6: on Windows, dialogs with their own button texts (needs the manifest made by build.rs)
+rfd = { version = "0.15", features = ["common-controls-v6"], optional = true }
 tray-icon = { version = "0.19", optional = true }
 resvg = { version = "0.48.1", default-features = false, optional = true }
 
