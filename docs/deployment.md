@@ -113,6 +113,42 @@ major upgrade needs dump and restore. Clients update themselves from GitHub with
 - Keep the update signing key off the master.
 - The master's disk is not encrypted by fafnirx: use an encrypted dataset. A **backup** mirror is encrypted with its own key ([Mirrors](mirrors.md)); a replica is not.
 
+## Sizing and tuning
+
+Measured with `tests/bench_docker.py` and `tests/bench-disk.sh` in Docker on an Apple M2, with the master and PostgreSQL on the
+same cores, 5,150 photos and 16 clients. Each figure is one run; ignore differences under 15%.
+
+| Machine | Settings | Timeline | Dashboard | Thumbnails |
+|---|---|---|---|---|
+| 1 core, 512 MB in all | `FAFNIRX_DB_POOL=4`, `FAFNIRX_JOB_WORKERS=1` | 95 req/s | 391 req/s | 15/s |
+| 2 cores, 1 GB in all | `FAFNIRX_DB_POOL=4`, `FAFNIRX_JOB_WORKERS=2` | 179 req/s | 686 req/s | 33/s |
+| 4 cores | defaults | 316 req/s | 857 req/s | 61/s |
+
+Neither small machine ran out of memory. The master peaked at 120-200 MiB and PostgreSQL at 60-80 MiB. Transfers of one large
+file did not depend on cores (upload about 100 MiB/s, download about 250 MiB/s). Uploading many small files did: 216, 329 and 405
+files/s on 1, 2 and 4 cores.
+
+What limits it, first to last:
+
+1. **PostgreSQL CPU.** It uses about 8 times the master's CPU on the timeline, dashboard and file list. Give it cores and local SSD.
+2. **Job workers.** Thumbnails per second follow `FAFNIRX_JOB_WORKERS` (one worker: 18/s on 4 cores). Each worker holds a decoded
+   photo, so size it by RAM too.
+3. **DB pool.** 2 connections cut timeline reads from 316 to 197 req/s; 32 was no faster than 8 and doubled PostgreSQL's memory.
+   About twice the cores is right.
+4. **Importing small files** levels off at about 350 files/s from 2 cores up. The cause is not found yet.
+
+`FAFNIRX_WORKER_THREADS` rarely needs changing: one thread served reads as fast as four. Requests queue for the database without
+a limit, so with 256 clients at once the slowest 1% waited 2-4 s, though none failed.
+
+**Disk.** Keep PostgreSQL on the machine's own disk. On Docker Desktop, a Mac folder mounted into the container managed 270 small
+fsynced writes/s against 821 on the VM's disk, and PostgreSQL reads were 18% slower. Leave `fsync` on: turning it off gained 23%
+write throughput, at the cost of safety. SD cards, which are slower at fsync, were not tested.
+
+**Bigger servers.** Not measured; the tests stop at 4 cores. Reads grew about linearly, roughly 80 timeline req/s per core, so
+24 cores might reach on the order of 1,500 req/s if PostgreSQL keeps up. Give PostgreSQL most of the cores, set
+`FAFNIRX_DB_POOL` to about twice the cores, and raise `FAFNIRX_JOB_WORKERS` (default cap 6) and `FAFNIRX_STREAMS` (default 32) as
+RAM and downloads need. Measure with your own library.
+
 ## Operations
 
 The image runs as uid 1000 and checks `GET /healthz` every 30 s. `docker compose ps | logs -f master | restart master`;

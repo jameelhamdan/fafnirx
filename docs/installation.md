@@ -17,16 +17,23 @@ printf 'FAFNIRX_ADMIN_PASSWORD=choose-one\nFAFNIRX_DB_PASSWORD=another-one\n' > 
 docker compose up -d
 ```
 
-**Hardware**, from `tests/bench-local.mjs` (thumbnails off; one fast desktop core; Windows 11, release build, PostgreSQL 17):
+**Hardware.** Measured in Docker on an Apple M2 (master and PostgreSQL on the same cores, 5,150 photos, 16 clients; see
+[Sizing and tuning](deployment.md#sizing-and-tuning)):
+
+| Cores | Timeline | Dashboard | File list | Thumbnails | Import, small photos | Upload, 256 MiB file | Upload, small files | Download, 256 MiB file |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 94 req/s | 366 req/s | 186 req/s | 14/s | 242 files/s | 109 MiB/s | 216 files/s | 267 MiB/s |
+| 2 | 185 req/s | 671 req/s | 371 req/s | 28/s | 265 files/s | 100 MiB/s | 329 files/s | 226 MiB/s |
+| 4 | 316 req/s | 857 req/s | 541 req/s | 61/s | 355 files/s | 112 MiB/s | 405 files/s | 252 MiB/s |
 
 | | Minimum | Recommended |
 |---|---|---|
-| CPU | 1 core. The master used 0.2-0.25 core while importing, uploading and downloading; pinned to 1 core, throughput was the same as on 12 | 2 cores. Thumbnails on: picture jobs use about 0.2 CPU-s per 3000 × 2000 photo, on 2-6 workers |
-| RAM | 256 MB for the whole stack: master 13 MiB idle and 17-34 MiB at peak, PostgreSQL (default settings) 40-70 MiB idle and about 100 MiB at peak | 1 GB, for PostgreSQL and file caching. 2 GB with thumbnails on and photos of 12 MP or more: each picture worker holds the decoded photo (about 24 MiB per 6 MP, 6 workers at most) |
-| Disk | Files, plus PostgreSQL (1-3 GB for a large library) | SSD for PostgreSQL. `cache/thumbs/` adds 10-20% of the library when thumbnails are on (not measured here) |
+| CPU | 1 core, enough for one person | 2 cores |
+| RAM | 512 MB for the whole stack (master peak 121 MiB, PostgreSQL 66 MiB) | 1 GB. More with thumbnails on and photos of 12 MP or more: each picture worker holds the decoded photo (about 24 MiB per 6 MP) |
+| Disk | Files, plus PostgreSQL (1-3 GB for a large library) | Local SSD for PostgreSQL. `cache/thumbs/` adds 10-20% of the library when thumbnails are on |
 
-Not measured: slower CPUs (a Raspberry Pi class core), the video module (ffmpeg), several users at once, libraries above
-5,200 files. Disable thumbnails under **Settings** to avoid the picture jobs' CPU and cache.
+Not measured: a real Raspberry Pi (slower cores, SD card), more than 4 cores, many users at once, the video module, libraries
+above 5,200 files. Turn thumbnails off under **Settings** to save the picture jobs' CPU and cache.
 
 Log in at `http://<server>:8080` as `admin`. The admin password is read once, at the first start. Check: `docker compose ps`.
 
@@ -56,6 +63,11 @@ FAFNIRX_IMAGE=jameelh99/fafnirx:3.0.1   # pin to upgrade on purpose
 | `FAFNIRX_TICK_SECS` | `15` | How often due sources and mirrors are looked for |
 | `FAFNIRX_TRUSTED_PROXY` | none | Proxies whose `X-Forwarded-For` is believed ([proxy](deployment.md#reverse-proxy-with-caddy)) |
 | `FAFNIRX_INSTANCE_LEASE_SECS` | `90` | Silence before another computer may take over a device |
+| `FAFNIRX_WORKER_THREADS` | the cores the process may use | Threads that serve requests. One is enough up to about 4 cores |
+| `FAFNIRX_BLOCKING_THREADS` | `512` | Most threads for blocking work (database calls, hashing, zips) at once |
+| `FAFNIRX_DB_POOL` | `8` | Connections to PostgreSQL. About twice the cores; see [sizing](deployment.md#sizing-and-tuning) |
+| `FAFNIRX_JOB_WORKERS` | cores, from 2 to 6 | Photo details and thumbnails worked on at once; each holds a decoded photo in memory |
+| `FAFNIRX_STREAMS` | `32` | Downloads, uploads and zips served at once; the rest wait |
 | `RUST_LOG` | `info` | Log level |
 | Compose: `FAFNIRX_DB_PASSWORD`, `*_DIR`, `FAFNIRX_UID/GID`, `FAFNIRX_IMAGE`; with proxy `FAFNIRX_WEB_ADDRESS`, `FAFNIRX_DEVICE_ADDRESS`, `FAFNIRX_HTTP_PORT`, `FAFNIRX_HTTPS_PORT`, `FAFNIRX_DEVICE_PORT`, `FAFNIRX_SUBNET` | | Compose only |
 

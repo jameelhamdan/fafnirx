@@ -1,4 +1,4 @@
-"""Makes a synthetic photo library for bench-local.mjs: many tiny JPEGs (the scale of a library) or a few large ones (the cost of
+"""Makes a synthetic photo library for bench-local.mjs and bench_docker.py: many tiny JPEGs (the scale of a library) or a few large ones (the cost of
 reading a photo and drawing its pictures), each with EXIF dates spread over years.
 
     python bench-library.py <folder> tiny 5000

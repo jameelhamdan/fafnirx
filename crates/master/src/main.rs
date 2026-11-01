@@ -19,6 +19,11 @@
 //!   FAFNIRX_MODULE_<ID>_URL   where the optional module <ID> is, for example FAFNIRX_MODULE_VIDEO_URL=http://video:8090 (the
 //!                           module is off without it); FAFNIRX_MODULE_<ID>_TOKEN is the secret shared with it
 //!                           (at least 16 characters)
+//!   FAFNIRX_WORKER_THREADS  threads of the async runtime, which serve requests (default: the cores the process may use)
+//!   FAFNIRX_BLOCKING_THREADS  most threads for blocking work (database calls, hashing, zip) at once (default 512)
+//!   FAFNIRX_DB_POOL         connections to PostgreSQL (default 8)
+//!   FAFNIRX_STREAMS         file transfers (downloads, uploads, zips) served at once; the rest wait (default 32)
+//!   FAFNIRX_JOB_WORKERS     jobs (details and pictures of photos) worked on at once (default: the cores, 2 to 6)
 //!   FAFNIRX_TRUSTED_PROXY   addresses or ranges (comma separated) of reverse proxies in front of the master, whose
 //!                           X-Forwarded-For is believed about the client's address (default: none)
 //!
@@ -51,8 +56,19 @@ fn address(var: &str, default: &str) -> Result<SocketAddr> {
         .with_context(|| format!("invalid {var}"))
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let mut runtime = tokio::runtime::Builder::new_multi_thread();
+    runtime.enable_all();
+    if let Some(n) = platform::tuning::get("FAFNIRX_WORKER_THREADS") {
+        runtime.worker_threads(n);
+    }
+    if let Some(n) = platform::tuning::get("FAFNIRX_BLOCKING_THREADS") {
+        runtime.max_blocking_threads(n);
+    }
+    runtime.build().context("start the async runtime")?.block_on(run())
+}
+
+async fn run() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
