@@ -35,8 +35,8 @@ flowchart LR
   client for hours ([delete guard](usage.md#the-delete-guard)).
 - **The master changes only its own files**, never a file on a device. Files a device or source sent cannot be edited or
   renamed on the master; only local folders, shared folders and master files can.
-- **Deleting in the web app hides, never erases.** The file goes to the Trash; the device is not asked for it again. In a
-  shared folder, computers delete it too.
+- **Deleting in the web app hides first.** The file goes to the Trash; the device is not asked for it again. In a
+  shared folder, computers delete it too. It is erased when retention ends, or when you choose **Delete forever** in the Trash.
 - **Roles.** Administrator: everything. Normal: master files and own folders, read and write. Read only: reads master files.
 
 ## Not in scope

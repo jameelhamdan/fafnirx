@@ -81,6 +81,53 @@ function ActivityChart({ days }: { days: DashboardData['activity'] }) {
   )
 }
 
+/** One colour for each of the largest devices; what is left is grey. */
+const SLICE = [150, 250, 60, 310, 200, 20].map((hue) => `oklch(0.7 0.15 ${hue})`)
+
+/** Where the stored bytes are: a pie of the devices (the largest ones, the rest together) and what each holds. */
+function StorageByDevice({ devices }: { devices: DashboardData['devices'] }) {
+  const t = useT()
+  const sorted = devices.filter((d) => d.bytes > 0).sort((a, b) => b.bytes - a.bytes)
+  const total = sorted.reduce((n, d) => n + d.bytes, 0)
+  if (total === 0) return <p className="text-sm text-muted-foreground">{t('Nothing stored yet.')}</p>
+  const rest = sorted.slice(SLICE.length).reduce((n, d) => n + d.bytes, 0)
+  const slices = [
+    ...sorted.slice(0, SLICE.length).map((d, i) => ({ label: d.folder, bytes: d.bytes, color: SLICE[i] })),
+    ...(rest > 0 ? [{ label: t('Other'), bytes: rest, color: 'var(--muted-foreground)' }] : []),
+  ]
+  let angle = -Math.PI / 2
+  const wedges = slices.map((slice) => {
+    const share = (100 * slice.bytes) / total
+    const from = angle
+    angle += (2 * Math.PI * slice.bytes) / total
+    const large = angle - from > Math.PI ? 1 : 0
+    const d = `M0 0 L${Math.cos(from)} ${Math.sin(from)} A1 1 0 ${large} 1 ${Math.cos(angle)} ${Math.sin(angle)} Z`
+    return { ...slice, share, d, text: `${slice.label}: ${bytes(slice.bytes)} (${share < 1 ? '<1' : Math.round(share)}%)` }
+  })
+  return (
+    <div className="flex items-center gap-4">
+      <svg viewBox="-1.02 -1.02 2.04 2.04" className="size-32 shrink-0" role="img" aria-label={t('Share of the stored bytes by device')}>
+        {wedges.length === 1 ? (
+          <circle r="1" fill={wedges[0].color}><title>{wedges[0].text}</title></circle>
+        ) : (
+          wedges.map((w) => (
+            <path key={w.label} d={w.d} fill={w.color} className="stroke-card" strokeWidth="0.02" strokeLinejoin="round"><title>{w.text}</title></path>
+          ))
+        )}
+      </svg>
+      <ul className="min-w-0 flex-1 space-y-1.5 text-sm">
+        {wedges.map((w) => (
+          <li key={w.label} className="flex items-center gap-2" title={w.text}>
+            <i className="size-2.5 shrink-0 rounded-sm" style={{ background: w.color }} />
+            <span className="min-w-0 flex-1 truncate">{w.label}</span>
+            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{bytes(w.bytes)} · {w.share < 1 ? '<1' : Math.round(w.share)}%</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 export default function Dashboard() {
   const t = useT()
   const client = useQueryClient()
@@ -176,6 +223,14 @@ export default function Dashboard() {
         </Card>
 
         <div className="space-y-6 lg:col-span-2">
+          <Card>
+            <CardHeader>
+              <CardTitle>{t('Storage by device')}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <StorageByDevice devices={data.devices} />
+            </CardContent>
+          </Card>
           <Card>
             <CardHeader>
               <CardTitle>{t('Changes, last 14 days')}</CardTitle>

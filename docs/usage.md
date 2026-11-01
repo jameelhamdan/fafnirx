@@ -5,14 +5,16 @@ icon in the top bar. Pages update live.
 
 | Page | Purpose |
 |---|---|
-| Dashboard | Alerts, totals (as of each device's last finished sync), disk, online devices, 2-week activity, recent changes |
+| Dashboard | Alerts, totals (as of each device's last finished sync), disk, storage by device, online devices, 2-week activity, recent changes |
 | Timeline, Favorites, Archive | Photos and videos by month and day |
-| Albums, Trash | Group media; deleted files until retention ends |
+| Albums, Trash | Group media; deleted files until retention ends, or until you delete them forever |
 | Files | Browse, search, preview, download, upload, move, delete; open media in the viewer |
 | Processing | Background work ([details](#processing)) |
 | Devices, Sources, Mirrors | Computers that send; Google Drive and other storage; offsite backups and replicas |
 | Shared folders | Make, share with users, delete (not for read-only users) |
-| Users, Settings | Administrators only |
+| Users, Settings | Administrators only (Settings are for the whole application) |
+
+Your name, top right, opens a menu with **Change password** (it ends your other logins) and **Log out**.
 
 ## Users and roles
 
@@ -60,7 +62,7 @@ local folders, if your role may write) or **Read-only** (computers and sources: 
   details say waiting, running or failed, linking to Processing.
 - **Upload** into a local folder or the master files by drag and drop (8 MiB pieces, parallel, resumable). **New local folder** is on the top level.
 
-Delete in the web app moves a file to the Trash; data stays until retention ends. Computer or source files: theirs stay
+Delete in the web app moves a file to the Trash; data stays until retention ends or you choose **Delete forever** there, which also frees the disk space. Computer or source files: theirs stay
 untouched and are not re-fetched. Shared folders: deleted on every computer ([Deletes](#shared-folders-sync-both-ways)).
 
 ## Photos and videos
@@ -75,7 +77,7 @@ A view of the same files; originals are never changed.
   EXIF GPS position, then XMP; for a video, its tags. A damaged EXIF block keeps what could be read. After an update that
   reads more, **Processing → Read everything again** reads the files already in the library again.
 - **Select** (circle on a picture, box by a day): Favorite, Add to album, Add tags, Archive, Download, Delete.
-- **Archive** hides from the Timeline. **Delete** goes to the Trash, restorable with albums, tags and favorite.
+- **Archive** hides from the Timeline. **Delete** goes to the Trash, restorable with albums, tags and favorite. **Delete forever** in the Trash erases the file, its versions, albums and tags at once; it cannot be undone.
 
 ### Albums
 
@@ -280,8 +282,8 @@ mirrors. The attached folder is not also backed up to the computer's device.
   - `both`: this computer's becomes `name (conflict <computer> <date>).ext` and is sent as a new file; the master's takes
     the name. Copies reach every computer.
   - `ask`: needs a screen (Windows, macOS, Linux desktop with the tray; refused on a computer without one). The file is
-    left alone on both sides and the tray shows a native dialog with both versions' size and time: keep the server's,
-    keep both, or (Other...) keep mine; closing it decides later (folder menu: **Choose for the files that wait**).
+    left alone on both sides and the tray shows a native dialog with both versions' size and time: **Keep the server's**,
+    **Keep both** or **Keep mine** (asks once more, as it replaces the server's version); closing it decides later (folder menu: **Choose for the files that wait**).
     `fafnirx shared resolve` answers the same from the command line. Nobody choosing within `ask_timeout_hours` (config
     `[[shared]]`, default 24, 0 = wait for ever) keeps both, as Syncthing does.
   One-way folders (`add-folder`) are unchanged: the client's files have priority. Replaced versions stay in history.
@@ -321,6 +323,7 @@ stateDiagram-v2
     Live --> Renamed: renamed (hidden)
     Deleted --> Live: file returns, or version restored
     Deleted --> Removed: retention over
+    Deleted --> Removed: Delete forever
     Renamed --> Removed: retention over
     Removed --> [*]: record, versions, stored files deleted
 ```

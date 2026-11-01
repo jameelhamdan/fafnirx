@@ -114,6 +114,18 @@ JOIN versions v ON v.id = f.current_version_id
 WHERE f.deleted_at IS NOT NULL AND f.deleted_by IS DISTINCT FROM 'rename' AND visible(d, :scope_user::bigint, :all::boolean)
 ORDER BY f.deleted_at DESC, f.id DESC LIMIT :limit OFFSET :offset;
 
+--! purgeable_files
+-- The deleted files among :ids that the trash lists for this user, locked: what may be removed for good.
+SELECT f.id, f.device_id, d.folder, f.deleted_at AS deleted_at
+FROM files f
+JOIN devices d ON d.id = f.device_id
+WHERE f.id = ANY(:ids) AND f.deleted_at IS NOT NULL AND f.deleted_by IS DISTINCT FROM 'rename'
+  AND visible(d, :scope_user::bigint, :all::boolean)
+FOR UPDATE OF f;
+
+--! versions_size
+SELECT COALESCE(SUM(size), 0)::bigint AS bytes FROM versions WHERE file_id = ANY(:file_ids);
+
 --! visible_file_exists
 SELECT EXISTS (SELECT 1 FROM files f JOIN devices d ON d.id = f.device_id
                WHERE f.id = :id AND f.deleted_at IS NULL

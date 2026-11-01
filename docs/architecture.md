@@ -127,7 +127,7 @@ name it `<owner>/<name>`. Clients reach it like this:
   `ListChanges(shared, since)` keeps no log: paths written or deleted at or after `since`, as they are now
   (`files::changes_since`), plus a cursor (server time - 2 s). A deletion stays listed while the trash holds the row, and
   carries `from_web` (`deleted_by = 'web'`): the client applies those without the delete guard.
-  `settings.deletions_known_from` (retention, forward only) is how far back all deletions are known; a caller with an older
+  `settings.deletions_known_from` (retention and Delete forever, forward only) is how far back all deletions are known; a caller with an older
   cursor, or none, gets every live path with `complete` set, and the client treats in-step paths not listed as deleted.
 - **Wake-up.** `WatchShared(names)`: one message per folder per change burst (`WATCH_SETTLE`), fed by the `NOTIFY` broadcast
   of SSE (`state.events`). The client keeps one open; 60 s poll is the fallback.
@@ -244,7 +244,7 @@ JSON under `/api` behind the login cookie (random token, hash stored, `SameSite=
 | Shared folders | `GET/POST /api/shared`, `DELETE /api/shared/:name` (409 while it has files; then removes the rest), `POST /api/shared/:name/members` (`{user, can_write}`), `DELETE .../members/:user`; only the owner manages a folder. Members use it through `/api/files` like any folder |
 | Files | `GET /api/files` (entries carry `id`, `processing`), `GET /api/files/info` (carries `work`), `POST /api/files/delete`, `/restore`, `/move` (`{device, from, to}`; local folders, shared folders and master files, 409 otherwise), `/rescan` (admin) |
 | Transfers | `GET /api/files/download` (ranges, versions), `/thumb`, `POST /api/files/zip`, `POST /api/uploads`, `PUT/GET/DELETE /api/uploads/:id`, `POST /api/uploads/:id/finish` |
-| Library | `GET /api/timeline/buckets`, `/timeline?month=`, `/library?ids=`, `GET/PATCH /api/library/:id` (carries `work`), `GET /api/library/:id/folder`, `POST /api/library/bulk`, `GET /api/tags`, `DELETE /api/tags/:id`, `GET /api/trash`. Assets carry `processing` |
+| Library | `GET /api/timeline/buckets`, `/timeline?month=`, `/library?ids=`, `GET/PATCH /api/library/:id` (carries `work`), `GET /api/library/:id/folder`, `POST /api/library/bulk`, `GET /api/tags`, `DELETE /api/tags/:id`, `GET /api/trash`, `POST /api/trash/purge` (`{ids}`: removes files from the Trash for good). Assets carry `processing` |
 | Pictures | `GET /api/media/:id/{thumb,preview,original,download}` (`?v=<hash>` caches for good) |
 | Albums | `GET/POST /api/albums` (a `folder` body makes or returns the folder's album), `GET/PATCH/DELETE /api/albums/:id`, `POST .../files` and `.../files/remove` (by `ids` or `items` of `{device, path}`) |
 | Modules | `GET /api/m/:module/:id/*rest` asks the module for `/files/<rest>` about the file (login and right to the file first); video: `hls/{master.m3u8,<quality>/index.m3u8,<quality>/seg<n>.ts,subtitles.json,subtitles/<n>.vtt}`. `GET /api/m/:module/ui/:file` their web part. `GET /api/session` lists the modules that are up, `GET /api/queue` carries their reports |
