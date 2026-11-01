@@ -327,6 +327,20 @@ fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
             true,
             "what was said comes back with the file"
         );
+
+        // Removing from the trash for good takes the file, its versions and its state; what is not in the trash is refused.
+        let delete = json!({"items": [{"device": "admin/photos", "path": "trip/a.png"}]});
+        api.json(Method::POST, "/api/files/delete", delete).await;
+        let (_, trash) = api.get("/api/trash").await;
+        let purge = json!({"ids": [trash["entries"][0]["id"].clone()]});
+        let (status, purged) = api.json(Method::POST, "/api/trash/purge", purge.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(purged["files"], 1);
+        assert!(purged["bytes"].as_i64().unwrap() > 0);
+        assert_eq!(api.get("/api/trash").await.1["total"], 0);
+        assert_eq!(api.get("/api/timeline/buckets").await.1["total"], 1);
+        assert_eq!(api.json(Method::POST, "/api/trash/purge", purge).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(api.json(Method::POST, "/api/trash/purge", json!({"ids": []})).await.0, StatusCode::BAD_REQUEST);
     });
 }
 

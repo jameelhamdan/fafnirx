@@ -81,7 +81,7 @@ export default function App() {
             <Route path="/shared" element={<Only allow="workspace" role={role}><Shared /></Only>} />
             <Route path="/sources" element={<Only allow="workspace" role={role}><Sources /></Only>} />
             <Route path="/mirrors" element={<Only allow="admin" role={role}><Mirrors /></Only>} />
-            <Route path="/settings" element={<Settings />} />
+            <Route path="/settings" element={<Only allow="admin" role={role}><Settings /></Only>} />
             <Route path="/users" element={<Only allow="admin" role={role}><Users /></Only>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

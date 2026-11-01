@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Archive, Cog, FolderOpen, FolderSync, GalleryVerticalEnd, HardDrive, Heart, Images, LayoutDashboard, LogOut, Menu, Monitor, Moon, Settings, Sun, Trash2, UploadCloud, Users } from 'lucide-react'
+import { Archive, ChevronDown, Cog, FolderOpen, FolderSync, GalleryVerticalEnd, HardDrive, Heart, Images, KeyRound, LayoutDashboard, LogOut, Menu, Monitor, Moon, Settings, Sun, Trash2, UploadCloud, UserRound, Users } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
@@ -10,9 +10,11 @@ import { useLive } from '@/lib/live-state'
 import { hasWorkspace, usePhotos, useRole, useSession } from '@/lib/session'
 import type { Role } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { ChangePassword } from './change-password'
 import { UploadPanel } from './files/upload-panel'
 import { LanguageMenu } from './language-menu'
 import { Button } from './ui/button'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 import { REPO } from '@/lib/links'
@@ -43,7 +45,7 @@ const NAV: { title: string; items: { to: string; label: string; icon: typeof Ima
       { to: '/queue', label: msg('Processing'), icon: Cog, for: 'all' },
       { to: '/mirrors', label: msg('Mirrors'), icon: HardDrive, for: 'admin' },
       { to: '/users', label: msg('Users'), icon: Users, for: 'admin' },
-      { to: '/settings', label: msg('Settings'), icon: Settings, for: 'all' },
+      { to: '/settings', label: msg('Settings'), icon: Settings, for: 'admin' },
     ],
   },
 ]
@@ -131,6 +133,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const client = useQueryClient()
   const live = useLive()
   const [open, setOpen] = useState(false)
+  const [passwordOpen, setPasswordOpen] = useState(false)
   const session = useSession()
   useModuleScripts()
   const version = session?.version
@@ -176,9 +179,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           </Tooltip>
           <LanguageMenu />
           <ThemeButton />
-          <span className="hidden px-1 text-xs text-muted-foreground sm:inline" title={t('Logged in as {name}', { name: session?.user?.name ?? '' })}>
-            {session?.user?.name}
-          </span>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size="icon" asChild>
@@ -187,9 +187,27 @@ export function AppShell({ children }: { children: ReactNode }) {
             </TooltipTrigger>
             <TooltipContent>{t('fafnirx on GitHub')}</TooltipContent>
           </Tooltip>
-          <Button variant="ghost" size="icon" onClick={logout} aria-label={t('Log out')}>
-            <LogOut className="size-4" />
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" className="gap-1.5 px-2" aria-label={t('Logged in as {name}', { name: session?.user?.name ?? '' })}>
+                <UserRound className="size-4" />
+                <span className="hidden max-w-32 truncate text-xs sm:inline">{session?.user?.name}</span>
+                <ChevronDown className="size-3.5 text-muted-foreground" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-48">
+              <p className="px-2 py-1.5 text-xs text-muted-foreground">{t('Logged in as {name}', { name: session?.user?.name ?? '' })}</p>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => setPasswordOpen(true)}>
+                <KeyRound />
+                {t('Change password')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void logout()}>
+                <LogOut />
+                {t('Log out')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </header>
         <main className="min-w-0 flex-1 p-3 md:p-6">{children}</main>
       </div>
@@ -202,6 +220,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Nav onNavigate={() => setOpen(false)} />
         </SheetContent>
       </Sheet>
+      <ChangePassword open={passwordOpen} onClose={() => setPasswordOpen(false)} />
       <UploadPanel />
     </div>
   )

@@ -58,6 +58,7 @@ const ROUTES: &[(&str, &str, Rule)] = &[
     ("POST", "/api/files/delete", Rule::Workspace),
     ("POST", "/api/files/move", Rule::Workspace),
     ("POST", "/api/files/restore", Rule::Workspace),
+    ("POST", "/api/trash/purge", Rule::Workspace),
     ("POST", "/api/uploads", Rule::Workspace),
     ("GET", "/api/dashboard", Rule::Reader),
     ("GET", "/api/events", Rule::Reader),

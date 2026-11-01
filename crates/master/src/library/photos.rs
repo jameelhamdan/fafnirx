@@ -604,6 +604,62 @@ pub async fn trash(State(state): State<Shared>, Extension(who): Extension<Access
     Ok(Json(out))
 }
 
+#[derive(Deserialize)]
+pub struct PurgeBody {
+    /// The ids the trash lists.
+    ids: Vec<Id>,
+}
+
+#[derive(Serialize)]
+pub struct Purged {
+    files: usize,
+    /// What the versions of those files took on the disk.
+    bytes: i64,
+}
+
+/// Removes files from the trash for good, with their versions, albums, tags and state, before the retention period ends.
+/// Only what the trash lists, and only where the user may change files.
+pub async fn purge(State(state): State<Shared>, Extension(who): Extension<Access>, Json(b): Json<PurgeBody>) -> Res<Purged> {
+    if b.ids.is_empty() || b.ids.len() > TRASH_PAGE as usize {
+        return Err(ApiError::bad("Name between 1 and 500 files"));
+    }
+    let store = state.store.clone();
+    let (out, versions) = run(&state, move |c| {
+        let mut tx = c.transaction()?;
+        let files = library::purgeable(&mut tx, who.viewer(), &uuids(&b.ids))?;
+        // Asking for something that is not in the trash (or was restored meanwhile) is an error, not a partial success.
+        if files.len() != b.ids.len() {
+            return Err(ApiError::not_found("Some of those files are no longer in the trash").into());
+        }
+        let folders: std::collections::BTreeSet<_> = files.iter().map(|f| f.folder.clone()).collect();
+        for folder in &folders {
+            who.check_write(folder)?;
+        }
+        let ids: Vec<_> = files.iter().map(|f| f.id).collect();
+        let devices: Vec<_> = files.iter().map(|f| f.device_id).collect();
+        let bytes = library::versions_size(&mut tx, &ids)?;
+        let versions = crate::repo::retention::delete_versions_of(&mut tx, &ids)?;
+        crate::repo::retention::delete_files(&mut tx, &ids)?;
+        // A computer that has not heard of these deletions must not send the files again: the deletions removed here are no
+        // longer all known, so it is given the whole list (the same rule as when retention removes them).
+        let newest = files.iter().map(|f| f.deleted_at).max().unwrap_or(0) + 1;
+        let known_from = settings::get_i64(&mut tx, settings::DELETIONS_KNOWN_FROM, 0).max(newest);
+        settings::set(&mut tx, settings::DELETIONS_KNOWN_FROM, &known_from.to_string())?;
+        sql::devices::mark_totals_stale().bind(&mut tx, &devices).map(drop)?;
+        for folder in &folders {
+            db::notify(&mut tx, "files", folder)?;
+        }
+        db::notify(&mut tx, "devices", "")?;
+        tx.commit()?;
+        Ok((Purged { files: ids.len(), bytes }, versions))
+    })
+    .await?;
+    for id in versions {
+        store.remove_version(id);
+    }
+    Ok(Json(out))
+}
+
 /// The tables a mirror keeps a copy of, so that albums, tags and favorites survive losing the database. Everything is
 /// named by user, device folder and path rather than by id, because ids do not survive a restore.
 pub fn snapshot(c: &mut Client) -> anyhow::Result<serde_json::Value> {

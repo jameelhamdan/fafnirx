@@ -1,8 +1,9 @@
 import { useInfiniteQuery, useMutation } from '@tanstack/react-query'
-import { File, RotateCcw } from 'lucide-react'
+import { File, RotateCcw, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Empty, ErrorNote, PageHeader } from '@/components/common'
+import { Confirm } from '@/components/confirm'
 import { Thumb } from '@/components/library/thumb'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -15,12 +16,17 @@ import type { Trash, TrashEntry } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useT } from '@/lib/i18n'
 
-/** Deleted files of every device. They are removed for good when the retention period ends; until then they come back with one click. */
+/** The most files the server removes in one call. */
+const PURGE_AT_ONCE = 500
+
+/** Deleted files of every device. They are removed for good when the retention period ends, or at once on request (to get the space back); until then they come back with one click. */
 export default function TrashPage() {
   const t = useT()
   const now = useNow()
   const refresh = useRefreshLibrary()
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  /** The files the person is asked to remove for good. */
+  const [purging, setPurging] = useState<TrashEntry[] | null>(null)
   const trash = useInfiniteQuery({
     queryKey: ['trash'],
     initialPageParam: 0,
@@ -54,6 +60,29 @@ export default function TrashPage() {
       void refresh()
     },
   })
+  const purge = useMutation({
+    mutationFn: async (list: TrashEntry[]) => {
+      let files = 0
+      let freed = 0
+      for (let i = 0; i < list.length; i += PURGE_AT_ONCE) {
+        const done = await api.post<{ files: number; bytes: number }>('/api/trash/purge', { ids: list.slice(i, i + PURGE_AT_ONCE).map((e) => e.id) })
+        files += done.files
+        freed += done.bytes
+      }
+      return { files, freed }
+    },
+    onSuccess: ({ files, freed }) => {
+      toast.success(t('Deleted {files} for good, {size} freed', { files: plural(files, 'file'), size: bytes(freed) }))
+      setSelected(new Set())
+      setPurging(null)
+      void refresh()
+    },
+    onError: (e) => {
+      toast.error(e.message)
+      setPurging(null)
+      void refresh()
+    },
+  })
   const toggle = (id: string) => setSelected((s) => { const n = new Set(s); if (!n.delete(id)) n.add(id); return n })
 
   return (
@@ -62,7 +91,8 @@ export default function TrashPage() {
       {chosen.length > 0 && (
         <div className="mb-3 flex items-center gap-2 rounded-lg border bg-popover p-2 shadow-sm">
           <span className="px-1 text-sm font-medium">{t('{count} selected', { count: chosen.length })}</span>
-          <Button size="sm" className="ml-auto" disabled={restore.isPending} onClick={() => restore.mutate(chosen)}><RotateCcw className="size-4" />{t('Restore')}</Button>
+          <Button size="sm" className="ml-auto" disabled={restore.isPending || purge.isPending} onClick={() => restore.mutate(chosen)}><RotateCcw className="size-4" />{t('Restore')}</Button>
+          <Button size="sm" variant="destructive" disabled={restore.isPending || purge.isPending} onClick={() => setPurging(chosen)}><Trash2 className="size-4" />{t('Delete forever')}</Button>
           <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>{t('Clear')}</Button>
         </div>
       )}
@@ -85,7 +115,10 @@ export default function TrashPage() {
                     <p className="truncate text-sm font-medium" title={`${e.device}/${e.path}`}>{e.name}</p>
                     <p className="truncate text-xs text-muted-foreground">{e.device} · {bytes(e.size)}</p>
                     <p className="text-xs text-muted-foreground" title={t('Removed for good on {date}', { date: date(e.purge_at) })}>{t('Deleted {when} · gone {date}', { when: ago(e.deleted_at, now), date: date(e.purge_at) })}</p>
-                    <Button size="sm" variant="outline" className="mt-1 w-full" disabled={restore.isPending} onClick={() => restore.mutate([e])}><RotateCcw className="size-3.5" />{t('Restore')}</Button>
+                    <div className="mt-1 flex gap-1.5">
+                      <Button size="sm" variant="outline" className="flex-1" disabled={restore.isPending || purge.isPending} onClick={() => restore.mutate([e])}><RotateCcw className="size-3.5" />{t('Restore')}</Button>
+                      <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" disabled={restore.isPending || purge.isPending} onClick={() => setPurging([e])} aria-label={t('Delete forever')} title={t('Delete forever')}><Trash2 className="size-3.5" /></Button>
+                    </div>
                   </div>
                 </li>
               )
@@ -97,6 +130,15 @@ export default function TrashPage() {
           </div>
         </>
       )}
+      <Confirm
+        open={purging !== null}
+        destructive
+        title={t('Delete forever?')}
+        description={t('{files} will be removed for good, with their versions, albums and tags. This cannot be undone.', { files: plural(purging?.length ?? 0, 'file') })}
+        action={t('Delete forever')}
+        onConfirm={() => purging && purge.mutate(purging)}
+        onCancel={() => setPurging(null)}
+      />
     </div>
   )
 }

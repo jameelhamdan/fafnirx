@@ -121,6 +121,17 @@ pub fn trash(c: &mut impl GenericClient, who: Viewer, limit: i64, offset: i64) -
     q::trash_page().params(c, &params).all()
 }
 
+/// The deleted files among `ids` that the viewer can see in the trash, locked until the transaction ends.
+pub fn purgeable(c: &mut impl GenericClient, who: Viewer, ids: &[Uuid]) -> Result<Vec<q::PurgeableFiles>, Error> {
+    let params = q::PurgeableFilesParams { all: who.all, scope_user: who.scope_user, ids };
+    q::purgeable_files().params(c, &params).all()
+}
+
+/// What the stored versions of these files add up to, in bytes.
+pub fn versions_size(c: &mut impl GenericClient, file_ids: &[Uuid]) -> Result<i64, Error> {
+    q::versions_size().bind(c, &file_ids).one()
+}
+
 /// The photos and videos directly in the folder of a file.
 pub fn folder_of(c: &mut impl GenericClient, who: Viewer, id: Uuid, limit: i64) -> Result<Vec<Asset>, Error> {
     let params = q::FolderAssetsParams { uid: who.uid, all: who.all, scope_user: who.scope_user, id, limit };

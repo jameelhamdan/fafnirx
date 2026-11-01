@@ -205,6 +205,7 @@ fn light() -> Router<Shared> {
         .route("/api/tags", get(library::photos::tags))
         .route("/api/tags/:id", delete(library::photos::delete_tag))
         .route("/api/trash", get(library::photos::trash))
+        .route("/api/trash/purge", post(library::photos::purge))
         .route("/api/albums", get(library::albums::list).post(library::albums::create))
         .route(
             "/api/albums/:id",

@@ -10,9 +10,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
-import { ChangePassword } from '@/components/change-password'
 import { api } from '@/lib/api'
-import { useRole, useSession } from '@/lib/session'
+import { useSession } from '@/lib/session'
 import type { PluginState, Settings as SettingsData } from '@/lib/types'
 import { msg, useT } from '@/lib/i18n'
 
@@ -102,24 +101,6 @@ function LibraryForm({ data }: { data: SettingsData }) {
   )
 }
 
-/** Everybody changes their own password; the rest of the page is for administrators. */
-function Account() {
-  const t = useT()
-  const [open, setOpen] = useState(false)
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('Password')}</CardTitle>
-        <CardDescription>{t('Changing it ends your other logins.')}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <Button variant="outline" onClick={() => setOpen(true)}>{t('Change password')}</Button>
-        <ChangePassword open={open} onClose={() => setOpen(false)} />
-      </CardContent>
-    </Card>
-  )
-}
-
 const PLUGIN_STATE: Record<PluginState['state'], { label: string; variant: 'default' | 'secondary' | 'outline' | 'destructive' }> = {
   up: { label: msg('Running'), variant: 'default' },
   setup: { label: msg('Running, not set up'), variant: 'destructive' },
@@ -176,41 +157,42 @@ function Plugins() {
   )
 }
 
-function Administration() {
+function FileStore() {
   const t = useT()
-  const { data, error } = useQuery({ queryKey: ['settings'], queryFn: () => api.get<SettingsData>('/api/settings') })
   return (
-    <>
-      {error ? <ErrorNote error={error} /> : !data ? <Skeleton className="h-56" /> : (
-        <>
-          <VersionsForm data={data} />
-          <LibraryForm data={data} />
-        </>
-      )}
-      <Card>
-        <CardHeader>
-          <CardTitle>{t('File store')}</CardTitle>
-          <CardDescription>
-            {t('Files put on the disk by hand, or over a network share, are noticed on their own within a few minutes. Scan now to look right away.')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent><RescanButton /></CardContent>
-      </Card>
-      <Plugins />
-    </>
+    <Card>
+      <CardHeader>
+        <CardTitle>{t('File store')}</CardTitle>
+        <CardDescription>
+          {t('Files put on the disk by hand, or over a network share, are noticed on their own within a few minutes. Scan now to look right away.')}
+        </CardDescription>
+      </CardHeader>
+      <CardContent><RescanButton /></CardContent>
+    </Card>
   )
 }
 
+/** The settings of the whole application, for administrators. What belongs to one person (their password, logging out) is in the menu of their name. */
 export default function Settings() {
   const t = useT()
-  const admin = useRole() === 'admin'
+  const { data, error } = useQuery({ queryKey: ['settings'], queryFn: () => api.get<SettingsData>('/api/settings') })
+  // Two columns of cards that each take the height they need, so there are no gaps between them; on a narrow screen one column.
+  const column = 'flex min-w-0 flex-1 flex-col gap-6'
   return (
     <div className="space-y-6">
-      <PageHeader title={t('Settings')} />
-      <div className="grid items-start gap-6 lg:grid-cols-2">
-        <Account />
-        {admin && <Administration />}
-      </div>
+      <PageHeader title={t('Settings')} description={t('For the whole application. Your password and logging out are in the menu of your name, top right.')} />
+      {error ? <ErrorNote error={error} /> : !data ? <Skeleton className="h-56" /> : (
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+          <div className={column}>
+            <VersionsForm data={data} />
+            <FileStore />
+          </div>
+          <div className={column}>
+            <LibraryForm data={data} />
+            <Plugins />
+          </div>
+        </div>
+      )}
     </div>
   )
 }
