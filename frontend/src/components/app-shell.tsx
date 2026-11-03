@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils'
 import { ChangePassword } from './change-password'
 import { UploadPanel } from './files/upload-panel'
 import { LanguageMenu } from './language-menu'
+import { PluginAlert } from './plugin-alert'
 import { Button } from './ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet'
@@ -209,7 +210,10 @@ export function AppShell({ children }: { children: ReactNode }) {
             </DropdownMenuContent>
           </DropdownMenu>
         </header>
-        <main className="min-w-0 flex-1 p-3 md:p-6">{children}</main>
+        <main className="min-w-0 flex-1 p-3 md:p-6">
+          <PluginAlert />
+          {children}
+        </main>
       </div>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="left" className="w-64 p-0">

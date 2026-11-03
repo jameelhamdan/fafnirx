@@ -33,6 +33,9 @@ services:
       HOME: /tmp # rclone wants a writable home for its cache
       # The secret the add-on containers join with (16+ characters, `openssl rand -hex 24`). Without it no add-on may connect.
       FAFNIRX_PLUGIN_SECRET: "${FAFNIRX_PLUGIN_SECRET:-}"
+      # The add-ons that MUST be running (comma separated ids). By default the ones COMPOSE_PROFILES starts: one that is not connected
+      # or not working shows a warning to administrators.
+      FAFNIRX_PLUGINS: "${FAFNIRX_PLUGINS:-${COMPOSE_PROFILES:-}}"
       # Sizes for the machine, empty = the default (docs/deployment.md#sizing-and-tuning)
       FAFNIRX_WORKER_THREADS: "${FAFNIRX_WORKER_THREADS:-}"
       FAFNIRX_BLOCKING_THREADS: "${FAFNIRX_BLOCKING_THREADS:-}"

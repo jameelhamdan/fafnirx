@@ -59,6 +59,7 @@ FAFNIRX_IMAGE=jameelh99/fafnirx:3.0.1   # pin to upgrade on purpose
 | `FAFNIRX_LISTEN`, `FAFNIRX_HTTP` | `0.0.0.0:7443`, `0.0.0.0:8080` | Device (gRPC) and web addresses |
 | `FAFNIRX_RCLONE`, `FAFNIRX_RCLONE_CONFIG` | `rclone`, `<data>/rclone.conf` (`/config/rclone.conf`) | rclone binary and config for mirrors |
 | `FAFNIRX_PLUGIN_SECRET` | unset | The secret that the optional [modules](modules.md) (add-on containers: [video](video.md), [fetch](fetch.md)) join the master with and are called with, 16+ characters. Without it no add-on may connect |
+| `FAFNIRX_PLUGINS` | none | Comma separated ids of the add-ons that must be running (`video,fetch`; the compose file defaults it to `COMPOSE_PROFILES`); one that is not connected or not working shows administrators a warning ([modules](modules.md)) |
 | `FAFNIRX_TICK_SECS` | `15` | How often due sources and mirrors are looked for |
 | `FAFNIRX_TRUSTED_PROXY` | none | Proxies whose `X-Forwarded-For` is believed ([proxy](deployment.md#reverse-proxy-with-caddy)) |
 | `FAFNIRX_INSTANCE_LEASE_SECS` | `90` | Silence before another computer may take over a device |

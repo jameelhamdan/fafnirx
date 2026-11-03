@@ -156,9 +156,12 @@ impl Module {
 pub struct Status {
     pub id: String,
     pub version: Option<String>,
-    /// `up`, `setup` (running, but `problem` says what it is missing) or `down` (`problem` says why it is not reached).
+    /// `up`, `setup` (running, but `problem` says what it is missing), `down` (`problem` says why it is not reached) or
+    /// `missing` (listed in `FAFNIRX_PLUGINS`, but it has never announced itself or has stopped).
     pub state: &'static str,
     pub problem: Option<String>,
+    /// Whether `FAFNIRX_PLUGINS` lists it.
+    pub expected: bool,
 }
 
 /// Why a plugin's announcement was not taken.
@@ -177,12 +180,28 @@ pub struct Registry {
     /// `FAFNIRX_PLUGIN_SECRET`: what a plugin proves it may join with, and the bearer token the master calls it with. None: no
     /// plugin may join.
     secret: Option<String>,
+    /// `FAFNIRX_PLUGINS`: the ids the administrator says must be running. A plugin that is not connected, or not working, is
+    /// reported as a problem instead of being silently absent. Empty: nothing is required.
+    expected: Vec<String>,
     modules: RwLock<Vec<Arc<Module>>>,
 }
 
 impl Registry {
     pub fn from_env() -> Self {
-        Self::with_secret(std::env::var("FAFNIRX_PLUGIN_SECRET").ok().filter(|s| !s.is_empty()))
+        let registry = Self::with_secret(std::env::var("FAFNIRX_PLUGIN_SECRET").ok().filter(|s| !s.is_empty()));
+        registry.expecting(&std::env::var("FAFNIRX_PLUGINS").unwrap_or_default())
+    }
+
+    /// Sets the plugins that must be running from a comma separated list (`video,fetch`). Ids that cannot be one are ignored, with a warning.
+    pub fn expecting(mut self, list: &str) -> Self {
+        for id in list.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()) {
+            if !valid_id(&id) {
+                tracing::warn!("FAFNIRX_PLUGINS: {id:?} cannot be a plugin id and is ignored");
+            } else if !self.expected.contains(&id) {
+                self.expected.push(id);
+            }
+        }
+        self
     }
 
     pub fn with_secret(secret: Option<String>) -> Self {
@@ -191,7 +210,7 @@ impl Registry {
                 tracing::warn!("FAFNIRX_PLUGIN_SECRET is too short: use at least 16 characters (`openssl rand -hex 24`); plugins stay off");
                 Self::default()
             }
-            secret => Self { secret, modules: RwLock::default() },
+            secret => Self { secret, ..Self::default() },
         }
     }
 
@@ -252,9 +271,25 @@ impl Registry {
                     (Some(_), Some(missing)) => ("setup", Some(missing)),
                     (Some(_), None) => ("up", None),
                 };
-                Status { id: m.id.clone(), version: manifest.map(|x| x.version), state, problem }
+                Status {
+                    id: m.id.clone(),
+                    version: manifest.map(|x| x.version),
+                    state,
+                    problem,
+                    expected: self.expected.contains(&m.id),
+                }
             })
             .collect();
+        for id in &self.expected {
+            if !out.iter().any(|s| &s.id == id) {
+                let problem = if self.secret.is_none() {
+                    "FAFNIRX_PLUGIN_SECRET is not set (or too short) on the master, so no plugin can connect".to_string()
+                } else {
+                    "listed in FAFNIRX_PLUGINS but not connected: its container is not running, or cannot reach the master with this secret".to_string()
+                };
+                out.push(Status { id: id.clone(), version: None, state: "missing", problem: Some(problem), expected: true });
+            }
+        }
         out.sort_by(|a, b| a.id.cmp(&b.id));
         out
     }
@@ -472,6 +507,21 @@ mod tests {
         assert!(r.up("video").is_none() && r.active().is_empty(), "a module is not up before it has answered");
         let listed = r.plugins();
         assert_eq!((listed[0].id.as_str(), listed[0].state), ("video", "down"));
+    }
+
+    #[test]
+    fn a_plugin_that_must_run_is_reported_when_it_is_not_connected() {
+        let r = Registry::with_secret(Some(SECRET.into())).expecting(" Video, fetch,video,BAD ID,");
+        assert_eq!(r.expected, ["video", "fetch"]);
+        r.register(Some(BEARER), "video", "http://video:8090").unwrap();
+        r.register(Some(BEARER), "docs", "http://docs:1").unwrap();
+        let listed: Vec<_> = r.plugins().iter().map(|s| (s.id.clone(), s.state, s.expected)).collect();
+        assert_eq!(
+            listed,
+            [("docs".into(), "down", false), ("fetch".into(), "missing", true), ("video".into(), "down", true)]
+        );
+        let none = Registry::with_secret(None).expecting("video");
+        assert!(none.plugins()[0].problem.as_deref().unwrap().contains("FAFNIRX_PLUGIN_SECRET"));
     }
 
     #[test]

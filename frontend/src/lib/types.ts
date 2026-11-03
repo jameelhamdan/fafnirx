@@ -222,9 +222,11 @@ export interface SharedFolder {
 export interface PluginState {
   id: string
   version: string | null
-  /** `up`, `setup` (running, but `problem` says what it is missing) or `down` (not reached, `problem` says why). */
-  state: 'up' | 'setup' | 'down'
+  /** `up`, `setup` (running, but `problem` says what it is missing), `down` (not reached, `problem` says why) or `missing` (required by `FAFNIRX_PLUGINS`, never connected). */
+  state: 'up' | 'setup' | 'down' | 'missing'
   problem: string | null
+  /** Listed in the master's `FAFNIRX_PLUGINS`: it must be running. */
+  expected: boolean
 }
 
 /** What the master says a module is (its manifest). `ui` is there when the module has a part of the web app to load. */

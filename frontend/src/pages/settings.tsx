@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
+import { usePlugins } from '@/lib/plugins'
 import { useSession } from '@/lib/session'
 import type { PluginState, Settings as SettingsData } from '@/lib/types'
 import { msg, useT } from '@/lib/i18n'
@@ -105,6 +106,7 @@ const PLUGIN_STATE: Record<PluginState['state'], { label: string; variant: 'defa
   up: { label: msg('Running'), variant: 'default' },
   setup: { label: msg('Running, not set up'), variant: 'destructive' },
   down: { label: msg('Not reachable'), variant: 'destructive' },
+  missing: { label: msg('Not running'), variant: 'destructive' },
 }
 
 /** The modules that have announced themselves to the master (docs/modules.md). Read only. */
@@ -112,11 +114,7 @@ function Plugins() {
   const t = useT()
   const client = useQueryClient()
   const session = useSession()
-  const { data, error } = useQuery({
-    queryKey: ['plugins'],
-    queryFn: () => api.get<{ plugins: PluginState[] }>('/api/plugins'),
-    refetchInterval: (q) => (q.state.data?.plugins.some((p) => p.state === 'down') ? 5000 : 15000),
-  })
+  const { data, error } = usePlugins()
   // The web app learns of a module that came up or went away from the session, so ask for it again when the two differ.
   const known = Object.keys(session?.modules ?? {}).sort().join()
   const running = (data?.plugins ?? []).filter((p) => p.state === 'up' || p.state === 'setup').map((p) => p.id).sort().join()
@@ -142,7 +140,10 @@ function Plugins() {
             {data.plugins.map((p) => (
               <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
                 <div className="min-w-0 flex-1">
-                  <p className="font-medium">{p.id} <span className="text-sm font-normal text-muted-foreground">{p.version}</span></p>
+                  <p className="font-medium">
+                    {p.id} <span className="text-sm font-normal text-muted-foreground">{p.version}</span>
+                    {p.expected && <Badge variant="outline" className="ml-2">{t('Required')}</Badge>}
+                  </p>
                   {p.problem && <p className="text-xs text-destructive">{p.problem}</p>}
                 </div>
                 <Badge variant={PLUGIN_STATE[p.state].variant}>{t(PLUGIN_STATE[p.state].label)}</Badge>

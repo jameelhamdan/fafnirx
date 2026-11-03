@@ -18,6 +18,8 @@
 //!   FAFNIRX_INSTANCE_LEASE_SECS  seconds a device must be silent before another computer may use its token (default 90)
 //!   FAFNIRX_PLUGIN_SECRET   the secret that the optional modules (containers) join with and are called with (at least 16
 //!                           characters, e.g. `openssl rand -hex 24`); without it no module may join
+//!   FAFNIRX_PLUGINS         comma separated ids of the modules that must be running (`video,fetch`); one that is not connected
+//!                           or not working is reported to administrators (default: none required)
 //!   FAFNIRX_WORKER_THREADS  threads of the async runtime, which serve requests (default: the cores the process may use)
 //!   FAFNIRX_BLOCKING_THREADS  most threads for blocking work (database calls, hashing, zip) at once (default 512)
 //!   FAFNIRX_DB_POOL         connections to PostgreSQL (default 8)
