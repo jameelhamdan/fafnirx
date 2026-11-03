@@ -76,8 +76,29 @@ fn commit(conn: &mut postgres::Client, store: &Store, source_id: i64, device: &D
     Ok(())
 }
 
+/// What a source offers: the files it found, and how many entries it left out (unusable names, unknown sizes, not available yet).
+pub struct Listing {
+    pub items: Vec<Item>,
+    pub skipped: usize,
+}
+
+/// What a run may do besides fetching what is new.
+#[derive(Clone, Copy)]
+pub struct Rules {
+    /// At most this many files are fetched (each is committed as soon as it is there); the rest are counted in
+    /// `Outcome::deferred` for the caller to schedule.
+    pub limit: usize,
+    /// Whether files missing from the listing are deleted. Off when the listing may be incomplete.
+    pub removals: bool,
+}
+
+impl Rules {
+    /// Everything: a listing that is the whole truth, and all of it fetched.
+    pub const ALL: Rules = Rules { limit: usize::MAX, removals: true };
+}
+
 /// Applies a listing: `fetch` downloads one file of it to a temporary place.
-pub async fn apply<F, Fut>(db: Db, store: Arc<Store>, source_id: i64, device: Device, items: Vec<Item>, skipped: usize, fetch: F) -> Result<Outcome>
+pub async fn apply<F, Fut>(db: Db, store: Arc<Store>, source_id: i64, device: Device, listing: Listing, rules: Rules, fetch: F) -> Result<Outcome>
 where
     F: Fn(Item) -> Fut,
     Fut: Future<Output = Result<Download>>,
@@ -92,7 +113,11 @@ where
         Ok((known, live, removed))
     })
     .await?;
-    let plan = plan(&items, &known, &live, &removed);
+    let Listing { items, skipped } = listing;
+    let mut plan = plan(&items, &known, &live, &removed);
+    if !rules.removals {
+        plan.removals.clear();
+    }
     let mut out = Outcome { skipped, unchanged: plan.unchanged, ..Default::default() };
     let mut failed = |what: &str, e: anyhow::Error| {
         tracing::warn!("source {}: {what}: {e:#}", device.name);
@@ -116,7 +141,12 @@ where
         }
     }
 
-    for (item, is_update) in plan.fetch {
+    let wanted = plan.fetch.len();
+    for (n, (item, is_update)) in plan.fetch.into_iter().enumerate() {
+        if n >= rules.limit {
+            out.deferred = wanted - n;
+            break;
+        }
         let fetched = async {
             let content = fetch(item.clone()).await?;
             let (stored, store, device) = (item.clone(), store.clone(), device.clone());

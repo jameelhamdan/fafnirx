@@ -2,6 +2,11 @@
 /data/
 /pgdata/
 /docker-data/
+/docker/data/
+/docker/pgdata/
+/docker/config/rclone.conf
+/docker/video-cache/
+/docker/.env
 .env
 /dist
 /frontend/dist-modules/
@@ -10,3 +15,4 @@ frontend/dist
 .venv/
 /config/rclone.conf
 /video-cache/
+/fetch-cache/

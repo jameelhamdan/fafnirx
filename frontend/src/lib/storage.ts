@@ -10,6 +10,8 @@ export interface Storage {
 }
 
 export const NO_STORAGE: Storage = { preset: 'b2', values: {}, path: '', advanced: '' }
+/** The first service, for a source that starts under Services. */
+export const NO_SERVICE: Storage = { ...NO_STORAGE, preset: PRESETS.find((p) => p.service)?.id ?? NO_STORAGE.preset }
 
 export const presetOf = (s: Storage) => PRESETS.find((p) => p.id === s.preset) ?? PRESETS[0]
 

@@ -7,9 +7,9 @@
 use crate::devices::api::NAME_RULE;
 use crate::files::browse::expand;
 use crate::files::ingest;
-use crate::integrations::scope;
 use crate::integrations::spec::{normalize_storage, MirrorSpec};
 use crate::integrations::Table;
+use crate::integrations::{fetch_source, scope};
 use crate::platform::db;
 use crate::platform::store::Store;
 use crate::repo::{alerts, mirrors, sources};
@@ -83,7 +83,7 @@ fn source_states(c: &mut Client, who: &Access) -> Result<Vec<JobState>, postgres
                 "bytes": r.bytes,
                 "files": r.files,
                 "kind": r.kind,
-                "remote": storage_label(&config),
+                "remote": storage_label(&r.kind, &config),
                 "device": r.folder,
             });
             let key = format!("{}/{}", r.owner, r.name);
@@ -203,8 +203,11 @@ async fn backend_options(text: &str, secrets: &std::collections::BTreeMap<String
     Ok(options)
 }
 
-/// What a source of rclone shows of its storage: `type:path`, or the remote of the config file.
-fn storage_label(config: &Value) -> Value {
+/// What a source shows of where it reads: `type:path` or the remote of the config file for rclone, the link for a module's kind.
+fn storage_label(kind: &str, config: &Value) -> Value {
+    if fetch_source::is_kind(kind) {
+        return Value::String(fetch_source::label(config));
+    }
     match config["remote"].as_str().filter(|r| !r.is_empty()) {
         Some(remote) => Value::String(remote.to_string()),
         None => Value::String(format!(
@@ -234,9 +237,20 @@ fn day() -> f64 {
     24.0
 }
 
+fn rclone() -> String {
+    "rclone".into()
+}
+
 #[derive(Deserialize)]
 pub struct NewSource {
     name: String,
+    /// How the source fetches: `rclone` (any storage, and Google Drive) or a kind a module reads (the module lists `fetch.<kind>`).
+    /// A request without it is a storage read through rclone.
+    #[serde(default = "rclone")]
+    kind: String,
+    /// The settings of a kind a module reads (see `fetch_source::validate`); rclone sources use the fields below instead.
+    #[serde(default)]
+    config: Value,
     /// A remote of the rclone config file (`name:path`); when set, the backend, options and path are not used.
     #[serde(default)]
     remote: String,
@@ -261,24 +275,30 @@ pub async fn create_source(State(state): State<Shared>, Extension(who): Extensio
     if !valid_device_name(&device) {
         return Err(ApiError::bad("Name: too long for a source"));
     }
-    let options = backend_options(&b.options, &b.secrets).await?;
-    let (mut remote, mut remote_type, mut remote_path) = (b.remote, b.remote_type, b.remote_path);
-    let mut options: std::collections::BTreeMap<String, Value> = options.into_iter().collect();
-    normalize_storage(&mut remote, &mut remote_type, &mut remote_path, &mut options).map_err(|e| ApiError::bad(format!("{e:#}")))?;
     let secs = hours_to_secs(b.interval_hours)?;
-    let config = json!({
-        "remote": remote,
-        "remote_type": remote_type,
-        "remote_path": remote_path,
-        "options": Value::Object(options.into_iter().collect()).to_string(),
-    });
-    let store = state.store.clone();
+    let config = if b.kind == "rclone" {
+        let options = backend_options(&b.options, &b.secrets).await?;
+        let (mut remote, mut remote_type, mut remote_path) = (b.remote, b.remote_type, b.remote_path);
+        let mut options: std::collections::BTreeMap<String, Value> = options.into_iter().collect();
+        normalize_storage(&mut remote, &mut remote_type, &mut remote_path, &mut options).map_err(|e| ApiError::bad(format!("{e:#}")))?;
+        json!({
+            "remote": remote,
+            "remote_type": remote_type,
+            "remote_path": remote_path,
+            "options": Value::Object(options.into_iter().collect()).to_string(),
+        })
+    } else if fetch_source::is_kind(&b.kind) {
+        fetch_source::validate(&b.kind, &b.config).await.map_err(|e| ApiError::bad(format!("{e:#}")))?
+    } else {
+        unreachable!("every kind but rclone is read by a module")
+    };
+    let (store, kind) = (state.store.clone(), b.kind);
     act(&state, move |c| {
         let mut tx = c.transaction()?;
         // The source owns a device row (in the workspace of the user who added it), so its files use the
         // same tables as a device's. '!' can never equal a SHA-256 hex digest, so nothing can authenticate as a source.
         let (device_id, folder) = sources::insert_device(&mut tx, who.user_id, &device, unix_now())?.ok_or_else(|| ApiError::conflict(format!("You already have a source named {name}")))?;
-        sources::insert(&mut tx, device_id, &name, "rclone", &config.to_string(), secs, unix_now())?;
+        sources::insert(&mut tx, device_id, &name, &kind, &config.to_string(), secs, unix_now())?;
         db::notify(&mut tx, "jobs", &folder)?;
         tx.commit()?;
         let _ = std::fs::create_dir_all(store.live_dir(&folder));

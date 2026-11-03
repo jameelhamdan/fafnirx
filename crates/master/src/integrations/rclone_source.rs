@@ -4,7 +4,7 @@
 //! file is known by its path: a rename downloads the file again. A file counts as changed when its size or its
 //! modification time differs from the last run.
 
-use crate::integrations::syncsource::{self, Download, Item};
+use crate::integrations::syncsource::{self, Download, Item, Listing, Rules};
 use crate::integrations::{mirror, Outcome, SourceRow};
 use crate::platform::db::Db;
 use crate::platform::store::Store;
@@ -84,7 +84,7 @@ pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
     let (items, skipped) = items_of(&listing)?;
     let (rc, base) = (&rc, &base);
     let fetch_store = store.clone();
-    syncsource::apply(db, store, src.id, src.device, items, skipped, |item| {
+    syncsource::apply(db, store, src.id, src.device, Listing { items, skipped }, Rules::ALL, |item| {
         let store = fetch_store.clone();
         async move {
             let path = store.temp_path();

@@ -1,10 +1,11 @@
 //! Scheduler for third-party sources (inbound) and mirrors (outbound).
 //!
 //! Both are configured in the web UI and kept in the database, which is what the scheduler reads. A run starts when the
-//! interval has passed, when it has never run, or when someone pressed "run now" (`run_requested`). Sources and
-//! mirrors each run one job at a time.
+//! interval has passed, when it has never run, or when someone pressed "run now" (`run_requested`). Mirrors run one job at
+//! a time; sources read through rclone one at a time, and those a module reads two at a time, apart from the rclone ones.
 
 pub mod api;
+pub mod fetch_source;
 pub mod mirror;
 pub mod rclone_source;
 pub mod scope;
@@ -21,6 +22,10 @@ use fafnirx_db::queries as sql;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Semaphore;
+
+/// Sources a module reads (see `fetch_source`) that run at the same time.
+const MODULE_RUNS: usize = 2;
 
 /// The tables the scheduler runs jobs on. Their names are spliced into SQL, so they come from this
 /// enum and never from a string.
@@ -77,14 +82,17 @@ pub struct Outcome {
     pub deleted: usize,
     pub unchanged: usize,
     pub skipped: usize,
+    /// Files left for the next run because this one reached its limit.
+    pub deferred: usize,
     pub failed: Vec<String>,
 }
 
 impl Outcome {
     pub fn report(&self) -> JobReport {
+        let later = if self.deferred > 0 { format!(", {} left for the next run", self.deferred) } else { String::new() };
         JobReport {
             summary: format!(
-                "{} added, {} updated, {} deleted, {} unchanged, {} skipped",
+                "{} added, {} updated, {} deleted, {} unchanged, {} skipped{later}",
                 self.added, self.updated, self.deleted, self.unchanged, self.skipped
             ),
             problems: self.failed.clone(),
@@ -122,16 +130,29 @@ pub async fn spawn(db: Db, store: Arc<Store>, data_dir: PathBuf) {
     })
     .await;
     let (d, s) = (db.clone(), store.clone());
+    // Storage reads one at a time, as they always did; what a module fetches may take hours, so it has slots of its own and
+    // never holds up the rest.
+    let rclone_slots = Arc::new(Semaphore::new(1));
+    let module_slots = Arc::new(Semaphore::new(MODULE_RUNS));
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tick()).await;
             while let Some(src) = blocking_claim(&d, claim_source).await {
                 let (id, name) = (src.id, src.device.name.clone());
                 let (d2, s2) = (d.clone(), s.clone());
-                // On its own task, so that a panic fails this run instead of ending the scheduler.
-                if let Err(e) = tokio::spawn(async move { run_source(&d2, &s2, src).await }).await {
-                    finish_job(&d, Table::Sources, "source_failed", id, name, Err(anyhow!("the run panicked: {e}"))).await;
-                }
+                let slots = if src.kind == "rclone" { rclone_slots.clone() } else { module_slots.clone() };
+                tokio::spawn(async move {
+                    let _slot = slots.acquire_owned().await;
+                    // On its own task, so that a panic fails this run instead of ending the scheduler.
+                    if let Err(e) = tokio::spawn({
+                        let (d3, s3) = (d2.clone(), s2.clone());
+                        async move { run_source(&d3, &s3, src).await }
+                    })
+                    .await
+                    {
+                        finish_job(&d2, Table::Sources, "source_failed", id, name, Err(anyhow!("the run panicked: {e}"))).await;
+                    }
+                });
             }
         }
     });
@@ -223,6 +244,7 @@ async fn run_source(db: &Db, store: &Arc<Store>, src: SourceRow) {
     tracing::info!("source {name}: starting");
     let result = match src.kind.as_str() {
         "rclone" => crate::integrations::rclone_source::run(db.clone(), store.clone(), src).await.map(|o| o.report()),
+        kind if fetch_source::is_kind(kind) => fetch_source::run(db.clone(), store.clone(), src).await.map(|o| o.report()),
         other => Err(anyhow!("unknown source kind {other:?}")),
     };
     finish_job(db, Table::Sources, "source_failed", id, name, result).await;

@@ -21,12 +21,12 @@ pub(crate) async fn manifest(State(app): State<Arc<App>>) -> Json<Manifest> {
             .into_iter()
             .map(String::from)
             .collect(),
-        ui: crate::ui::describe(app.cfg.ui.as_deref()),
+        ui: fafnirx_module_kit::ui::describe(app.cfg.ui.as_deref()),
         setup: missing(&app).await,
     })
 }
 
-/// How long a look at what is missing is trusted: the master asks for the manifest every 2 s while a plugin starts.
+/// How long a look at what is missing is trusted: the master asks for the manifest every 2 s while the module does not answer.
 const SETUP_TTL: Duration = Duration::from_secs(20);
 /// What a program gets to answer `-version`.
 const PROGRAM_TIMEOUT: Duration = Duration::from_secs(3);

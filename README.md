@@ -26,14 +26,14 @@ flowchart LR
 - **Photo and video library** over the same files: timeline, favorites, archive, trash, albums (a folder can be an album),
   tags, ratings, corrected dates and places. Originals are never changed.
 - **Video player** with subtitles and adaptive quality, as the optional [video module](docs/video.md), installed from the web app, so a server without videos carries no ffmpeg.
-- **Sources and mirrors**: Google Drive and any other [rclone](https://rclone.org) storage in; any rclone remote out.
+- **Sources and mirrors**: Google Drive and any other [rclone](https://rclone.org) storage in, web files and feeds with the optional [fetch module](docs/fetch.md) and more kinds of source with [plugins](docs/plugins.md); any rclone remote out.
 - **Users and roles**: administrator, normal, read-only. Six languages (English, Spanish, Chinese, Arabic, Russian, Japanese).
 
 ## Quick start
 
 ```sh
 mkdir fafnirx && cd fafnirx
-curl -fsSLO https://raw.githubusercontent.com/jameelhamdan/fafnirx/master/docker-compose.yml
+curl -fsSLO https://raw.githubusercontent.com/jameelhamdan/fafnirx/master/docker/docker-compose.yml
 printf 'FAFNIRX_ADMIN_PASSWORD=choose-one\nFAFNIRX_DB_PASSWORD=another-one\n' > .env
 docker compose up -d
 ```
@@ -85,8 +85,10 @@ Stated requirements of similar projects (they do more, so this is for scale only
 | [Usage](docs/usage.md) | Web app, library, processing, change log, client |
 | [Sources](docs/sources.md) | Pull files in from Google Drive and other storage |
 | [Mirrors](docs/mirrors.md) | Offsite backups (compressed, encrypted) and replicas |
-| [Modules](docs/modules.md) | Optional features, installed as plugins or run as services of their own |
+| [Modules](docs/modules.md) | Optional add-on containers: what they are for, how to turn one on |
 | [Video module](docs/video.md) | Video playback, subtitles, details and poster frames |
+| [Fetch module](docs/fetch.md) | Web sources (addresses and feeds): settings, running it, legal notes |
+| [Plugins](docs/plugins.md) | Writing a plugin for a new kind of source |
 | [Deployment](docs/deployment.md) | Storage, proxy, tunnel, backups, security checklist |
 | [Architecture](docs/architecture.md) | Components, data model, IDs, locking, API |
 | [Development](docs/development.md) | Build, test, extend, release |
@@ -100,7 +102,9 @@ Stated requirements of similar projects (they do more, so this is for scale only
 | `crates/db` | Typed queries, generated at build time from `queries/*.sql` |
 | `crates/common` | Hashing, chunking, path rules, gRPC types |
 | `crates/module-api` | The contract between the master and its modules |
-| `modules` | Optional features as services: `video/service` is `fafnirx-video` (HLS, details, poster frames) |
+| `crates/fetch-api` | The part of it for modules that read sources |
+| `crates/module-kit` | What modules that read sources share: environment, service, tasks, scratch folder |
+| `modules` | Optional features as services: `video/service` is `fafnirx-video` (HLS, details, poster frames), `fetch/service` is `fafnirx-fetch` (web sources) |
 | `crates/sign` | `fafnirx-sign`: signed client builds (optional) |
 | `frontend` | Web app (React, shadcn/ui), built into the master |
 | `proto`, `installer`, `tests`, `docs` | Device contract, installers, end-to-end tests, documentation |

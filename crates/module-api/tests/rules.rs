@@ -38,7 +38,7 @@ fn module_services() -> Vec<PathBuf> {
 
 #[test]
 fn a_module_depends_on_the_contract_and_the_shared_helpers_only() {
-    const ALLOWED: [&str; 2] = ["fafnirx-module-api", "fafnirx-common"];
+    const ALLOWED: [&str; 4] = ["fafnirx-module-api", "fafnirx-fetch-api", "fafnirx-common", "fafnirx-module-kit"];
     for manifest in module_services() {
         for name in dependencies(&manifest).into_iter().filter(|n| n.starts_with("fafnirx-")) {
             assert!(
@@ -52,7 +52,7 @@ fn a_module_depends_on_the_contract_and_the_shared_helpers_only() {
 
 #[test]
 fn the_master_reaches_modules_over_http_not_through_a_crate() {
-    const ALLOWED: [&str; 3] = ["fafnirx-module-api", "fafnirx-common", "fafnirx-db"];
+    const ALLOWED: [&str; 4] = ["fafnirx-module-api", "fafnirx-fetch-api", "fafnirx-common", "fafnirx-db"];
     let master = workspace().join("crates/master/Cargo.toml");
     for name in dependencies(&master).into_iter().filter(|n| n.starts_with("fafnirx-")) {
         assert!(ALLOWED.contains(&name.as_str()), "the master depends on {name}");
@@ -68,4 +68,22 @@ fn the_web_app_and_the_contract_name_the_same_sdk_version() {
         .expect("runtime.ts says which SDK it is");
     let version: u32 = line.trim_start_matches("export const SDK = ").trim().parse().expect("a number");
     assert_eq!(version, fafnirx_module_api::WEB_SDK, "frontend/src/sdk/runtime.ts and module-api's WEB_SDK differ");
+}
+
+#[test]
+fn only_a_module_that_reads_sources_knows_the_fetch_contract() {
+    for manifest in module_services() {
+        let module = manifest.parent().unwrap().parent().unwrap().file_name().unwrap().to_string_lossy().into_owned();
+        let reads_sources = ["fetch"].contains(&module.as_str());
+        let uses_it = dependencies(&manifest).iter().any(|n| n == "fafnirx-fetch-api");
+        assert_eq!(uses_it, reads_sources, "{}: fafnirx-fetch-api is for modules that read sources", manifest.display());
+    }
+}
+
+#[test]
+fn the_contracts_are_types_only() {
+    for crate_dir in ["crates/module-api", "crates/fetch-api"] {
+        let names = dependencies(&workspace().join(crate_dir).join("Cargo.toml"));
+        assert!(names.iter().all(|n| n.starts_with("serde")), "{crate_dir} depends on {names:?}");
+    }
 }

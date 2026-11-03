@@ -76,5 +76,19 @@ export function useT(): T {
   return useContext(Context).t
 }
 
+/**
+ * Adds the strings a module brings (`FrontendModule.strings`: language -> English text -> translation). The app's own strings
+ * stay as they are: a module can add texts but not change the ones the app uses. Languages the app does not have are ignored.
+ */
+export function addStrings(strings: Record<string, Record<string, string>>) {
+  for (const [lang, entries] of Object.entries(strings)) {
+    if (!isLang(lang)) continue
+    const own = LANGUAGES[lang].strings
+    for (const [text, translated] of Object.entries(entries)) {
+      if (typeof translated === 'string' && !(text in own)) own[text] = translated
+    }
+  }
+}
+
 /** Marks a string in data (outside a component) for translation; show it with `t(text)`. */
 export const msg = (text: string) => text

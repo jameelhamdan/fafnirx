@@ -9,6 +9,4 @@ repository.workspace = true
 # any web framework, so a module is free to be built with whatever it likes.
 [dependencies]
 serde.workspace = true
-
-[dev-dependencies]
 serde_json.workspace = true

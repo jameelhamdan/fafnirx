@@ -72,5 +72,5 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: cd frontend && npm ci && npx tsc -b && npx oxlint && npm run i18n -- --check
-      # Each module's part of the web app builds on its own (it is what a plugin carries).
+      # Each module's part of the web app builds on its own (the module's container serves it).
       - run: cd frontend && npm run build:module

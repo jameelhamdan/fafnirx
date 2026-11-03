@@ -1,0 +1,83 @@
+# fafnirx: the master and its database. Everything else is an add-on container you turn on when you need it (docs/modules.md): start it
+# with its profile (COMPOSE_PROFILES=video in .env, or docker compose --profile video up -d). It finds the master by itself.
+# Settings go in .env next to this file (.env.example lists them).
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fafnirx
+      POSTGRES_PASSWORD: "${FAFNIRX_DB_PASSWORD:?set FAFNIRX_DB_PASSWORD}"
+      POSTGRES_DB: fafnirx
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fafnirx -d fafnirx"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    volumes:
+      # Local storage (for example the ZFS pool), not a network share.
+      - "${FAFNIRX_DB_DIR:-./pgdata}:/var/lib/postgresql/data"
+
+  master:
+    # The release on Docker Hub. Pin a version in .env (FAFNIRX_IMAGE=jameelh99/fafnirx:3.0.1) to upgrade on purpose.
+    image: "${FAFNIRX_IMAGE:-jameelh99/fafnirx:latest}"
+    restart: unless-stopped
+    user: "${FAFNIRX_UID:-1000}:${FAFNIRX_GID:-1000}"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      FAFNIRX_DATABASE_URL: "postgresql://fafnirx:${FAFNIRX_DB_PASSWORD}@db/fafnirx"
+      # The password of the user "admin", set at the first start. Change it in the web app afterwards.
+      FAFNIRX_ADMIN_PASSWORD: "${FAFNIRX_ADMIN_PASSWORD:?set FAFNIRX_ADMIN_PASSWORD}"
+      HOME: /tmp # rclone wants a writable home for its cache
+      # The secret the add-on containers join with (16+ characters, `openssl rand -hex 24`). Without it no add-on may connect.
+      FAFNIRX_PLUGIN_SECRET: "${FAFNIRX_PLUGIN_SECRET:-}"
+      # Sizes for the machine, empty = the default (docs/deployment.md#sizing-and-tuning)
+      FAFNIRX_WORKER_THREADS: "${FAFNIRX_WORKER_THREADS:-}"
+      FAFNIRX_BLOCKING_THREADS: "${FAFNIRX_BLOCKING_THREADS:-}"
+      FAFNIRX_DB_POOL: "${FAFNIRX_DB_POOL:-}"
+      FAFNIRX_JOB_WORKERS: "${FAFNIRX_JOB_WORKERS:-}"
+      FAFNIRX_STREAMS: "${FAFNIRX_STREAMS:-}"
+    ports:
+      - "7443:7443" # devices (gRPC)
+      - "8080:8080" # web app and web API
+    volumes:
+      # files/ is the live tree and can be shared over SMB or NFS as a network drive.
+      - "${FAFNIRX_DATA_DIR:-./data}:/data"
+      # rclone.conf for mirrors; writable by FAFNIRX_UID, the master updates it when rclone refreshes a token.
+      - "${FAFNIRX_CONFIG_DIR:-./config}:/config"
+
+  # Video playback (HLS), subtitles, details and poster frames: docs/video.md.
+  # No login and no published port: only the master talks to it.
+  video:
+    image: "${FAFNIRX_VIDEO_IMAGE:-jameelh99/fafnirx-video:latest}"
+    profiles: ["video"]
+    restart: unless-stopped
+    user: "${FAFNIRX_UID:-1000}:${FAFNIRX_GID:-1000}"
+    environment:
+      FAFNIRX_PLUGIN_SECRET: "${FAFNIRX_PLUGIN_SECRET:-}"
+      FAFNIRX_MASTER_URL: http://master:8080
+      FAFNIRX_PLUGIN_URL: http://video:8090
+      FAFNIRX_VIDEO_JOBS: "${FAFNIRX_VIDEO_JOBS:-2}"
+      FAFNIRX_VIDEO_VCODEC: "${FAFNIRX_VIDEO_VCODEC:-libx264}"
+    volumes:
+      - "${FAFNIRX_DATA_DIR:-./data}:/data:ro" # the videos are read and never changed
+      # Segments, removed after a week unwatched. It runs as FAFNIRX_UID: a host folder it cannot write to means no playback.
+      - "${FAFNIRX_VIDEO_CACHE_DIR:-./video-cache}:/cache"
+
+  # Sources made of addresses of files and feeds: docs/fetch.md.
+  # No login and no published port. It writes only below data/tmp, so that is all of the data folder it gets.
+  fetch:
+    image: "${FAFNIRX_FETCH_IMAGE:-jameelh99/fafnirx-fetch:latest}"
+    profiles: ["fetch"]
+    restart: unless-stopped
+    user: "${FAFNIRX_UID:-1000}:${FAFNIRX_GID:-1000}"
+    environment:
+      FAFNIRX_PLUGIN_SECRET: "${FAFNIRX_PLUGIN_SECRET:-}"
+      FAFNIRX_MASTER_URL: http://master:8080
+      FAFNIRX_PLUGIN_URL: http://fetch:8091
+      FAFNIRX_FETCH_JOBS: "${FAFNIRX_FETCH_JOBS:-2}"
+    volumes:
+      # The path inside must be the master's: it names the files by it.
+      - "${FAFNIRX_DATA_DIR:-./data}/tmp:/data/tmp"

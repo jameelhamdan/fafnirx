@@ -1,4 +1,4 @@
-# The Dockerfile only needs Cargo.toml, Cargo.lock, crates/, modules/, queries/, proto/ and frontend/ (see COPY lines); keep the rest out of
+# The Dockerfiles (docker/) only need Cargo.toml, Cargo.lock, crates/, modules/, queries/, proto/ and frontend/ (see COPY lines); keep the rest out of
 # the build context so it is small, and so secrets and local data never reach the image or the layer cache.
 
 # Build output and dependencies (rebuilt inside the image)
@@ -35,5 +35,4 @@ scripts
 tests
 *.md
 LICENSE
-docker-compose.yml
-Dockerfile
+docker

@@ -31,6 +31,11 @@ fn users_have_roles_and_the_last_administrator_stays() {
         let source = |name: &str| json!({"name": name, "remote_type": "local", "remote_path": "/tmp"});
         assert_eq!(api.json(Method::POST, "/api/sources", source("bobs")).await.0, StatusCode::OK);
         assert_eq!(api.get("/api/sources").await.1.as_array().unwrap().len(), 1);
+        // A source without a kind is read through rclone; a kind nobody implements is refused.
+        assert_eq!(api.get("/api/sources").await.1[0]["detail"]["kind"], "rclone");
+        let mut odd = source("odd");
+        odd["kind"] = json!("nope");
+        assert_eq!(api.json(Method::POST, "/api/sources", odd).await.0, StatusCode::BAD_REQUEST);
         api.cookie = admin.clone();
         assert_eq!(api.json(Method::POST, "/api/sources", source("roots")).await.0, StatusCode::OK);
         assert_eq!(api.get("/api/sources").await.1.as_array().unwrap().len(), 2, "an administrator sees all");

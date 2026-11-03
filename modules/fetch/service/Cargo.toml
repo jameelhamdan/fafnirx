@@ -1,0 +1,28 @@
+[package]
+name = "fafnirx-fetch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The fetch module: reads what a source offers (addresses of files, and feeds) over HTTP(S) and writes one file at a time for the master.
+# It may depend on the contract crates, fafnirx-common and fafnirx-module-kit only, never on the master (checked by crates/module-api/tests).
+[dependencies]
+anyhow.workspace = true
+fafnirx-fetch-api = { path = "../../../crates/fetch-api" }
+fafnirx-module-kit = { path = "../../../crates/module-kit" }
+futures-util = "0.3"
+hex.workspace = true
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde_json.workspace = true
+sha2.workspace = true
+time.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+axum = "0.7"
+fafnirx-module-api = { path = "../../../crates/module-api" }
+fafnirx-module-kit = { path = "../../../crates/module-kit", features = ["testing"] }
+tempfile.workspace = true

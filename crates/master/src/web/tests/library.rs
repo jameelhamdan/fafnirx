@@ -8,7 +8,7 @@ use fafnirx_common::LockExt;
 fn stand_in_module(contract: u32) -> String {
     use axum::extract::{Path, Query};
     use axum::http::HeaderMap;
-    let allowed = |h: &HeaderMap| h.get("authorization").and_then(|v| v.to_str().ok()) == Some("Bearer module-token");
+    let allowed = |h: &HeaderMap| h.get("authorization").and_then(|v| v.to_str().ok()) == Some("Bearer module-token-0123456789");
     let service = Router::new()
         .route(
             "/manifest",
@@ -62,8 +62,9 @@ fn stand_in_module(contract: u32) -> String {
 }
 
 fn registry_of(url: &str, token: &str) -> Arc<crate::modules::Registry> {
-    let vars = [("FAFNIRX_MODULE_VIDEO_URL", url), ("FAFNIRX_MODULE_VIDEO_TOKEN", token)];
-    Arc::new(crate::modules::Registry::from_vars(vars.into_iter().map(|(k, v)| (k.to_string(), v.to_string()))))
+    let registry = crate::modules::Registry::with_secret(Some(token.into()));
+    registry.register(Some(&format!("Bearer {token}")), "video", url).unwrap();
+    Arc::new(registry)
 }
 
 #[test]
@@ -81,7 +82,7 @@ fn a_module_is_for_whoever_can_see_the_file_and_only_when_it_is_set_up() {
         assert_eq!(api.get("/api/m/video/AAAAAAAAAAAAAAAAAAAAAA/hls/master.m3u8").await.0, StatusCode::NOT_FOUND);
     });
 
-    let registry = registry_of(&stand_in_module(fafnirx_module_api::CONTRACT), "module-token");
+    let registry = registry_of(&stand_in_module(fafnirx_module_api::CONTRACT), "module-token-0123456789");
     let mut api = Api::with_modules(registry.clone());
     block(async {
         api.cookie = login(&api).await;
@@ -108,7 +109,7 @@ fn a_module_is_for_whoever_can_see_the_file_and_only_when_it_is_set_up() {
             text.contains("hls/720p/index.m3u8 p=users/admin/videos/trip/clip.mkv h="),
             "the module is told which file and content: {text}"
         );
-        assert!(!text.contains("module-token"));
+        assert!(!text.contains("module-token-0123456789"));
 
         let (status, error) = api.get(&format!("/api/m/video/{id}/hls/720p/seg9.ts")).await;
         assert_eq!(
@@ -161,8 +162,8 @@ fn a_module_is_for_whoever_can_see_the_file_and_only_when_it_is_set_up() {
 
 #[test]
 fn a_module_that_refuses_the_token_or_speaks_another_contract_is_not_used() {
-    let other_contract = registry_of(&stand_in_module(fafnirx_module_api::CONTRACT + 1), "module-token");
-    let wrong_token = registry_of(&stand_in_module(fafnirx_module_api::CONTRACT), "not-the-token");
+    let other_contract = registry_of(&stand_in_module(fafnirx_module_api::CONTRACT + 1), "module-token-0123456789");
+    let wrong_token = registry_of(&stand_in_module(fafnirx_module_api::CONTRACT), "not-the-token-0123456789");
     block(async {
         other_contract.refresh_all().await;
         assert!(other_contract.active().is_empty(), "another contract version");
@@ -170,7 +171,7 @@ fn a_module_that_refuses_the_token_or_speaks_another_contract_is_not_used() {
         wrong_token.refresh_all().await;
         assert!(wrong_token.active().is_empty(), "the token is refused");
 
-        let nobody_home = registry_of("http://127.0.0.1:1", "module-token");
+        let nobody_home = registry_of("http://127.0.0.1:1", "module-token-0123456789");
         nobody_home.refresh_all().await;
         assert!(nobody_home.active().is_empty(), "nothing answers");
     });

@@ -8,7 +8,6 @@
 
 use crate::ffmpeg;
 use crate::hls::{self, Source, Variant};
-use crate::tasks::Tasks;
 use axum::extract::{Path as UrlPath, Query, Request, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
@@ -16,6 +15,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use fafnirx_module_api::{bearer_matches, FILES_PREFIX, HEALTH_PATH, MANIFEST_PATH, UI_PREFIX};
+use fafnirx_module_kit::Tasks;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -36,7 +36,7 @@ pub struct Config {
     pub vcodec: String,
     /// Segments made at the same time.
     pub jobs: usize,
-    /// The built script and style of the module's part of the web app (`FAFNIRX_MODULE_UI`), if it has been built.
+    /// The built script and style of the module's part of the web app (`FAFNIRX_PLUGIN_UI`), if it has been built.
     pub ui: Option<PathBuf>,
 }
 
@@ -122,6 +122,13 @@ pub(crate) fn internal(context: &str, e: anyhow::Error) -> Failure {
     fail(StatusCode::INTERNAL_SERVER_ERROR, format!("{context}: {e:#}"))
 }
 
+/// The module's part of the web app (`GET /ui/<file>`): what the web build left in `FAFNIRX_PLUGIN_UI`.
+async fn ui_file(State(app): State<Arc<App>>, UrlPath(name): UrlPath<String>) -> Result<Response, Failure> {
+    fafnirx_module_kit::ui::file(app.cfg.ui.as_deref(), &name)
+        .await
+        .map_err(|(status, message)| fail(status, message))
+}
+
 pub fn router(app: Arc<App>) -> Router {
     // What the web app may ask for, through the master (which has checked the login and the file first).
     let files = Router::new()
@@ -133,7 +140,7 @@ pub fn router(app: Arc<App>) -> Router {
     // What only the master asks for.
     let for_master = Router::new()
         .nest(FILES_PREFIX, files)
-        .route(&format!("{UI_PREFIX}/:file"), get(crate::ui::file))
+        .route(&format!("{UI_PREFIX}/:file"), get(ui_file))
         .route(MANIFEST_PATH, get(crate::derive::manifest))
         .route("/probe", get(crate::derive::probe))
         .route("/poster", get(crate::derive::poster))

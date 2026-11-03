@@ -1,5 +1,5 @@
-//! What the service is making right now (segments, subtitle tracks) and what failed lately, so that whoever runs it can see
-//! why a video is slow to start. Kept in memory: a restart starts the list again.
+//! What the service is doing right now (listing a source, fetching a file) and what failed lately, so that whoever runs it can
+//! see why a source is slow (the module's `GET /status`). Kept in memory: a restart starts the list again.
 
 use serde::Serialize;
 use std::collections::VecDeque;
@@ -17,9 +17,9 @@ fn now() -> u64 {
 #[derive(Serialize, Clone)]
 pub struct Active {
     id: u64,
-    /// `segment` or `subtitles`
+    /// `list` or `fetch`
     kind: &'static str,
-    /// The video, by its place in the file tree.
+    /// What it is about: the file's name for a fetch, the link for a listing.
     path: String,
     /// False while it waits for a free slot.
     running: bool,
@@ -36,11 +36,11 @@ pub struct Failed {
 
 #[derive(Serialize)]
 pub struct Report {
-    /// How many can run at once.
+    /// How many fetches can run at once.
     slots: usize,
     active: Vec<Active>,
     failed: Vec<Failed>,
-    /// Made since the service started.
+    /// Finished since the service started.
     made: u64,
 }
 
@@ -103,7 +103,6 @@ impl Task<'_> {
                 if failed.len() == KEEP_FAILED {
                     failed.pop_front();
                 }
-                // The last line is what ffmpeg complained about; the rest is its banner.
                 let error = error.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("failed").chars().take(300).collect();
                 failed.push_back(Failed { kind: self.kind, path: self.path.clone(), error, at: now() });
             }
@@ -112,7 +111,7 @@ impl Task<'_> {
 }
 
 impl Drop for Task<'_> {
-    /// A request that went away while the work waited or ran leaves no entry behind.
+    /// A request that went away while the work waited or ran (the master stopped waiting) leaves no entry behind.
     fn drop(&mut self) {
         if !self.done {
             self.tasks.active.lock().unwrap_or_else(|e| e.into_inner()).retain(|a| a.id != self.id);
@@ -127,7 +126,7 @@ mod tests {
     #[test]
     fn work_is_listed_while_it_waits_and_runs_and_gone_after() {
         let tasks = Tasks::default();
-        let a = tasks.begin("segment", "u/d/film.mkv");
+        let a = tasks.begin("fetch", "list/a.mp3");
         assert!(!tasks.report(2).active[0].running, "waiting for a slot");
         a.started();
         assert!(tasks.report(2).active[0].running);
@@ -140,12 +139,10 @@ mod tests {
     #[test]
     fn a_failure_is_remembered_with_its_last_line_and_a_dropped_request_is_not() {
         let tasks = Tasks::default();
-        tasks.begin("subtitles", "u/d/a.mkv").finish(Some("banner\nreal reason\n".into()));
-        drop(tasks.begin("segment", "u/d/b.mkv"));
+        tasks.begin("fetch", "a.mp3").finish(Some("banner\nreal reason\n".into()));
+        drop(tasks.begin("list", "https://x"));
         let r = tasks.report(1);
         assert!(r.active.is_empty());
-        assert_eq!(r.failed.len(), 1);
-        assert_eq!(r.failed[0].error, "real reason");
-        assert_eq!(r.made, 0);
+        assert_eq!((r.failed.len(), r.failed[0].error.as_str(), r.made), (1, "real reason", 0));
     }
 }

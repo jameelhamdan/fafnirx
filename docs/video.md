@@ -11,7 +11,7 @@ The [module](modules.md) that plays videos. Without it the master has no ffmpeg:
   is used first. Nothing is made when thumbnails are off.
 - **Subtitles**, listed and converted for the player.
 
-`fafnirx-video` (`modules/video/service`) runs next to the master (as a plugin the master starts, or as a container) and reads
+`fafnirx-video` (`modules/video/service`) runs next to the master as a container and reads
 `files/` read-only; the web part is `frontend/src/modules/video`, loaded by the browser from the service.
 
 ```mermaid
@@ -43,37 +43,32 @@ flowchart LR
 
 ## Turn it on
 
-**Plugin:** `FAFNIRX_PLUGINS=video` in the master env (compose: `.env`). At start the master pulls the bundle of its own version
-(service, web part, static ffmpeg, ~60 MB) and runs it. Undo: see [modules](modules.md#plugins). Settings = `FAFNIRX_VIDEO_*` in the master env (compose: add to master `environment:`). Cache:
-`<data>/cache/video-module`.
-
-**Container:**
-
 ```sh
 # .env
-FAFNIRX_MODULE_VIDEO_URL=http://video:8090
-FAFNIRX_MODULE_VIDEO_TOKEN=<openssl rand -hex 24>
+COMPOSE_PROFILES=video
+FAFNIRX_PLUGIN_SECRET=<openssl rand -hex 24>     # the master's, shared with every add-on
 
 mkdir video-cache && chown 1000:1000 video-cache       # FAFNIRX_VIDEO_CACHE_DIR, writable by FAFNIRX_UID
-docker compose --profile video up -d                    # or COMPOSE_PROFILES=video
+docker compose up -d
 ```
+
+Settings of the module (`FAFNIRX_VIDEO_*`, below) go in the `video` service's `environment:`.
 
 **Watch out:** the cache dir must be writable by uid 1000 (`FAFNIRX_UID`). Otherwise the service starts, then logs `cache: Permission denied`
 and nothing plays. Fix: `chown -R 1000:1000` the dir (ZFS/NFS ACLs: check `acltype`), or use a named volume (`video-cache:/cache`; Docker sets the owner).
 
-Image `jameelh99/fafnirx-video` (`FAFNIRX_VIDEO_IMAGE` pins). No published port, no login: reachable from the master only. Use for
-other host, limits, GPU.
+Image `jameelh99/fafnirx-video` (`FAFNIRX_VIDEO_IMAGE` pins). No published port, no login: reachable from the master only. It can run
+on another host, with resource limits or a GPU.
 
 Files that arrived before the module: **Processing → Process missing** reads them again.
 
 | Variable | Default | Where | Meaning |
 |---|---|---|---|
-| `FAFNIRX_MODULE_VIDEO_URL` | none | master | Container only: service address; the module is off without it |
-| `FAFNIRX_MODULE_VIDEO_TOKEN` | none | master | Container only: shared secret, 16+ characters |
-| `FAFNIRX_MODULE_TOKEN` | none | service | The same secret (compose passes it; a plugin gets its own) |
-| `FAFNIRX_MODULE_UI` | none (`/usr/share/fafnirx-video/ui`) | service | The built web part the service serves |
+| `FAFNIRX_PLUGIN_SECRET` | none | master, service | The shared secret, 16+ characters: the module joins the master with it (compose passes it to both) |
+| `FAFNIRX_MASTER_URL`, `FAFNIRX_PLUGIN_URL` | none | service | Where the master's web API is, and where the master reaches the module (compose sets them) |
+| `FAFNIRX_PLUGIN_UI` | none (`/usr/share/fafnirx-video/ui`) | service | The built web part the service serves |
 | `FAFNIRX_DATA` | `data` (`/data`) | service | The master's data directory |
-| `FAFNIRX_MODULE_LISTEN` | `0.0.0.0:8090` | service | Listen address |
+| `FAFNIRX_PLUGIN_LISTEN` | `0.0.0.0:8090` | service | Listen address |
 | `FAFNIRX_VIDEO_CACHE` | `<data>/cache/video-module` (`/cache`) | service | Probes and segments |
 | `FAFNIRX_VIDEO_KEEP_DAYS` | `7` | service | Days segments stay |
 | `FAFNIRX_VIDEO_JOBS` | `2` | service | Files worked on at once |

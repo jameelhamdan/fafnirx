@@ -3,9 +3,8 @@
 //! the capabilities the manifest lists. Without a module the master simply does not have the feature. The rules are
 //! written down in docs/modules.md.
 //!
-//! A module gets there in one of two ways, and the contract is the same: as a service somebody runs and names with
-//! `FAFNIRX_MODULE_<ID>_URL` and `FAFNIRX_MODULE_<ID>_TOKEN` (a container), or as a *plugin*, a bundle (`plugin.json` and
-//! what it runs) in `<data>/plugins/<id>/` that the master starts itself, on a loopback port, with a token of its own.
+//! A module is a container the administrator runs next to the master. It announces itself (`POST /api/plugins/register` with the shared
+//! secret `FAFNIRX_PLUGIN_SECRET`); the master never starts or installs one.
 //!
 //! Every request a module gets carries the shared token as `Authorization: Bearer`, except `GET /health`. The master has
 //! already checked the login and the user's right to the file; a module has no users of its own.
@@ -30,9 +29,7 @@ pub const FILES_PREFIX: &str = "/files";
 pub const UI_PREFIX: &str = "/ui";
 /// The version of the web app's side of the contract (what a module's script may use of the app, see `frontend/src/sdk`).
 /// A script built for another number is not loaded. The web app's `sdk/runtime.ts` says the same number (a test checks it).
-pub const WEB_SDK: u32 = 1;
-/// The file that makes a folder of `<data>/plugins/` a plugin.
-pub const PLUGIN_FILE: &str = "plugin.json";
+pub const WEB_SDK: u32 = 2;
 
 /// What a module can do for the master. The manifest lists the ones it provides; a request for anything else is a bug.
 pub mod capability {
@@ -50,7 +47,7 @@ pub mod capability {
 /// `GET /manifest`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
-    /// The same id the master has the module under (`video` for `FAFNIRX_MODULE_VIDEO_URL`). It is also the id the web
+    /// The same id the master has the module under (`video`). It is also the id the web
     /// app's module of the same name is registered with.
     pub id: String,
     pub version: String,
@@ -85,48 +82,9 @@ impl Manifest {
     }
 }
 
-/// `plugin.json`: what makes a folder a plugin, and how the master starts it. The bundle is made by the module's own build and
-/// unpacked into `<data>/plugins/<id>/`; nothing else of it is the master's business.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PluginFile {
-    /// The id of the module, and the name of the folder.
-    pub id: String,
-    pub version: String,
-    /// [`CONTRACT`] as the module was built against it.
-    pub contract: u32,
-    /// What it was built for (`linux-x86_64`, `linux-aarch64`).
-    pub platform: String,
-    /// The program, relative to the plugin's folder. It is given the settings below and these variables:
-    /// `FAFNIRX_MODULE_TOKEN`, `FAFNIRX_MODULE_LISTEN` (a loopback address) and `FAFNIRX_DATA`.
-    pub exec: String,
-    /// More settings for it. `{dir}` in a value is the plugin's folder.
-    #[serde(default)]
-    pub env: std::collections::BTreeMap<String, String>,
-}
-
 /// Whether `id` can name a module: short, lower-case letters and digits (it is also part of an environment variable).
 pub fn valid_id(id: &str) -> bool {
     (1..=24).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
-}
-
-impl PluginFile {
-    /// Why this cannot run as the plugin in folder `id` on `platform`, if it cannot.
-    pub fn problem(&self, id: &str, platform: &str) -> Option<String> {
-        let relative = |p: &str| !p.is_empty() && !p.starts_with('/') && !p.contains('\\') && p.split('/').all(|part| !part.is_empty() && part != "." && part != "..");
-        if !valid_id(&self.id) || self.id != id {
-            return Some(format!("it is called {:?}, not {id:?}", self.id));
-        }
-        if self.contract != CONTRACT {
-            return Some(format!("it speaks contract {}, this master speaks {CONTRACT}", self.contract));
-        }
-        if self.platform != platform {
-            return Some(format!("it is built for {}, this is {platform}", self.platform));
-        }
-        if !relative(&self.exec) {
-            return Some("its program is not a path inside its folder".into());
-        }
-        None
-    }
 }
 
 /// What a video file says about itself (`probe.video`). Everything is optional: files differ in what they say.
@@ -174,32 +132,9 @@ mod tests {
         let m: Manifest = serde_json::from_str(r#"{"id":"video","version":"1.0.0","contract":1,"capabilities":["poster","status"]}"#).unwrap();
         assert!(m.has(capability::POSTER) && m.has(capability::STATUS) && !m.has(capability::PROBE_VIDEO));
         assert!(m.ui.is_none(), "a module without screens says nothing of them");
-        let with: Manifest = serde_json::from_str(r#"{"id":"video","version":"1","contract":1,"capabilities":[],"ui":{"entry":"index.js","sdk":1}}"#).unwrap();
+        let json = format!(r#"{{"id":"video","version":"1","contract":1,"capabilities":[],"ui":{{"entry":"index.js","sdk":{WEB_SDK}}}}}"#);
+        let with: Manifest = serde_json::from_str(&json).unwrap();
         assert_eq!(with.ui, Some(Ui { entry: "index.js".into(), css: None, sdk: WEB_SDK }));
-    }
-
-    fn plugin(exec: &str) -> PluginFile {
-        PluginFile {
-            id: "video".into(),
-            version: "3.12.0".into(),
-            contract: CONTRACT,
-            platform: "linux-x86_64".into(),
-            exec: exec.into(),
-            env: Default::default(),
-        }
-    }
-
-    #[test]
-    fn a_plugin_must_fit_its_folder_this_master_and_this_machine() {
-        assert_eq!(plugin("bin/fafnirx-video").problem("video", "linux-x86_64"), None);
-        assert!(plugin("bin/x").problem("docs", "linux-x86_64").is_some(), "the folder is called docs");
-        assert!(plugin("bin/x").problem("video", "linux-aarch64").is_some(), "another machine");
-        let mut other = plugin("bin/x");
-        other.contract += 1;
-        assert!(other.problem("video", "linux-x86_64").is_some(), "another contract");
-        for bad in ["", "/bin/x", "../x", "bin/../../x", "bin//x", "./x", "bin\\x"] {
-            assert!(plugin(bad).problem("video", "linux-x86_64").is_some(), "{bad:?}");
-        }
     }
 
     #[test]

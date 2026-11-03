@@ -51,7 +51,8 @@ flowchart LR
 |---|---|
 | `fafnirx` | Client: watcher, resumable upload, offline queue, tray, self-update. Android: [fafnirx-android](https://github.com/jameelhamdan/fafnirx-android) (separate repository) |
 | `fafnirx-master` | Device API, web API and app, users, file store, background work |
-| `fafnirx-video` | Optional [module](modules.md): video playback in the web app, video details and poster frames ([video](video.md)). Installed as a plugin (`FAFNIRX_PLUGINS=video`), or run as its own container, so the master stays free of ffmpeg |
+| `fafnirx-fetch` | Optional [module](modules.md): reads web sources (addresses and feeds) and writes the files for the master to commit ([fetch](fetch.md)). An add-on container. Other kinds of source: [plugins](plugins.md) |
+| `fafnirx-video` | Optional [module](modules.md): video playback in the web app, video details and poster frames ([video](video.md)). An add-on container, so the master stays free of ffmpeg |
 | `fafnirx-sign` | Optional: sign your own client builds |
 | PostgreSQL | All metadata |
 | rclone | Mirror uploads and storage sources (in the Docker image) |

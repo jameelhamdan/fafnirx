@@ -30,7 +30,7 @@ SOFTWARE.
 ## ffmpeg
 
 The video module's Docker image installs the
-Debian `ffmpeg` package (LGPL/GPL, https://ffmpeg.org), which the module runs as a separate program; it is not linked in. The video plugin bundle carries a static build of `ffmpeg` and `ffprobe` (GPLv3, https://johnvansickle.com/ffmpeg/, with its license file inside the bundle), likewise run as separate programs. The master's image does not contain either.
+Debian `ffmpeg` package (LGPL/GPL, https://ffmpeg.org), which the module runs as a separate program; it is not linked in. The master's image does not contain either.
 
 ## Other dependencies
 

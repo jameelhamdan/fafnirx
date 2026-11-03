@@ -17,6 +17,7 @@ use tower::ServiceExt;
 
 mod auth;
 mod devices;
+mod fetch;
 mod files;
 mod library;
 mod routes;

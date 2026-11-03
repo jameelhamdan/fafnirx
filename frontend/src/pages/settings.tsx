@@ -104,24 +104,22 @@ function LibraryForm({ data }: { data: SettingsData }) {
 const PLUGIN_STATE: Record<PluginState['state'], { label: string; variant: 'default' | 'secondary' | 'outline' | 'destructive' }> = {
   up: { label: msg('Running'), variant: 'default' },
   setup: { label: msg('Running, not set up'), variant: 'destructive' },
-  starting: { label: msg('Starting'), variant: 'secondary' },
-  broken: { label: msg('Not running'), variant: 'destructive' },
-  external: { label: msg('Set up by address'), variant: 'outline' },
+  down: { label: msg('Not reachable'), variant: 'destructive' },
 }
 
-/** What runs as a module. Read only: the server administrator installs and removes plugins (FAFNIRX_PLUGINS, docs/modules.md). */
+/** The modules that have announced themselves to the master (docs/modules.md). Read only. */
 function Plugins() {
   const t = useT()
   const client = useQueryClient()
   const session = useSession()
   const { data, error } = useQuery({
     queryKey: ['plugins'],
-    queryFn: () => api.get<{ installed: PluginState[] }>('/api/plugins'),
-    refetchInterval: (q) => (q.state.data?.installed.some((p) => p.state === 'starting') ? 2000 : 15000),
+    queryFn: () => api.get<{ plugins: PluginState[] }>('/api/plugins'),
+    refetchInterval: (q) => (q.state.data?.plugins.some((p) => p.state === 'down') ? 5000 : 15000),
   })
   // The web app learns of a module that came up or went away from the session, so ask for it again when the two differ.
   const known = Object.keys(session?.modules ?? {}).sort().join()
-  const running = (data?.installed ?? []).filter((p) => p.state === 'up' || p.state === 'setup').map((p) => p.id).sort().join()
+  const running = (data?.plugins ?? []).filter((p) => p.state === 'up' || p.state === 'setup').map((p) => p.id).sort().join()
   useEffect(() => {
     if (data && known !== running) void client.invalidateQueries({ queryKey: ['session'] })
   }, [client, data, known, running])
@@ -130,18 +128,18 @@ function Plugins() {
     <Card>
       <CardHeader>
         <CardTitle>{t('Plugins')}</CardTitle>
-        <CardDescription>{t('Optional parts that run next to the server. The server administrator installs and removes them: set FAFNIRX_PLUGINS on the server.')}</CardDescription>
+        <CardDescription>{t('Optional parts that run as containers next to the server. They connect on their own once the server administrator starts them.')}</CardDescription>
       </CardHeader>
       <CardContent>
         {error ? (
           <ErrorNote error={error} />
         ) : !data ? (
           <Skeleton className="h-12" />
-        ) : data.installed.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t('None installed.')}</p>
+        ) : data.plugins.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{t('None connected.')}</p>
         ) : (
           <ul className="divide-y">
-            {data.installed.map((p) => (
+            {data.plugins.map((p) => (
               <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
                 <div className="min-w-0 flex-1">
                   <p className="font-medium">{p.id} <span className="text-sm font-normal text-muted-foreground">{p.version}</span></p>

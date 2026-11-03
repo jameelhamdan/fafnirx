@@ -12,8 +12,8 @@ put [TLS in front](deployment.md).
 
 ```sh
 mkdir fafnirx && cd fafnirx
-curl -fsSLO https://raw.githubusercontent.com/jameelhamdan/fafnirx/master/docker-compose.yml
-printf 'FAFNIRX_ADMIN_PASSWORD=choose-one\nFAFNIRX_DB_PASSWORD=another-one\n' > .env
+curl -fsSLO https://raw.githubusercontent.com/jameelhamdan/fafnirx/master/docker/docker-compose.yml
+printf 'FAFNIRX_ADMIN_PASSWORD=choose-one\nFAFNIRX_DB_PASSWORD=another-one\nFAFNIRX_PLUGIN_SECRET=%s\n' "$(openssl rand -hex 24)" > .env
 docker compose up -d
 ```
 
@@ -58,8 +58,7 @@ FAFNIRX_IMAGE=jameelh99/fafnirx:3.0.1   # pin to upgrade on purpose
 | `FAFNIRX_DATA` | `data` (`/data`) | Data directory |
 | `FAFNIRX_LISTEN`, `FAFNIRX_HTTP` | `0.0.0.0:7443`, `0.0.0.0:8080` | Device (gRPC) and web addresses |
 | `FAFNIRX_RCLONE`, `FAFNIRX_RCLONE_CONFIG` | `rclone`, `<data>/rclone.conf` (`/config/rclone.conf`) | rclone binary and config for mirrors |
-| `FAFNIRX_MODULE_<ID>_URL`, `FAFNIRX_MODULE_<ID>_TOKEN` | unset | An optional [module](modules.md) run as a container of its own, and its secret, e.g. `FAFNIRX_MODULE_VIDEO_URL` ([video](video.md)). |
-| `FAFNIRX_PLUGINS` | unset | Comma separated plugin ids (e.g. `video`) the master installs from the GitHub release of its own version at start, and runs itself ([modules](modules.md#plugins)). Replaces a container, no second service |
+| `FAFNIRX_PLUGIN_SECRET` | unset | The secret that the optional [modules](modules.md) (add-on containers: [video](video.md), [fetch](fetch.md)) join the master with and are called with, 16+ characters. Without it no add-on may connect |
 | `FAFNIRX_TICK_SECS` | `15` | How often due sources and mirrors are looked for |
 | `FAFNIRX_TRUSTED_PROXY` | none | Proxies whose `X-Forwarded-For` is believed ([proxy](deployment.md#reverse-proxy-with-caddy)) |
 | `FAFNIRX_INSTANCE_LEASE_SECS` | `90` | Silence before another computer may take over a device |

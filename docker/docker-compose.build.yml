@@ -1,0 +1,12 @@
+# For development: builds the images from this checkout instead of pulling the release. From the repository root:
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.build.yml up -d --build
+services:
+  master:
+    image: fafnirx:local
+    build: { context: .., dockerfile: docker/Dockerfile.master }
+  video:
+    image: fafnirx-video:local
+    build: { context: .., dockerfile: docker/Dockerfile.video }
+  fetch:
+    image: fafnirx-fetch:local
+    build: { context: .., dockerfile: docker/Dockerfile.fetch }

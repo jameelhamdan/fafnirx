@@ -12,42 +12,64 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
-import { NO_STORAGE, storageBody, storageProblem } from '@/lib/storage'
+import { NO_SERVICE, NO_STORAGE, storageBody, storageProblem } from '@/lib/storage'
 import { docs } from '@/lib/links'
 import { SCHEDULES } from '@/lib/mirror-presets'
 import { SELECT } from '@/components/common'
 import { bytes, count } from '@/lib/format'
 import type { JobState } from '@/lib/types'
 import { useT } from '@/lib/i18n'
+import { useSourceKinds } from '@/sdk/registry'
+import { cn } from '@/lib/utils'
+
+const CARD = 'rounded-md border px-3 py-2 text-left text-sm transition-colors hover:bg-accent/50'
+const CARD_ON = 'border-primary bg-primary/5 ring-1 ring-primary'
+
+/** The service that is part of the app: Google Drive, read with rclone. The others come from modules (`sdk`, `SourceKind`). */
+const DRIVE = 'drive'
 
 function AddSource() {
   const t = useT()
   const client = useQueryClient()
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
+  const [services, setServices] = useState(false)
+  const [choice, setChoice] = useState(DRIVE)
   const [storage, setStorage] = useState(NO_STORAGE)
+  const [values, setValues] = useState<Record<string, unknown>>({})
   const [hours, setHours] = useState('24')
-  const blocked = /^[a-z0-9][a-z0-9_-]*$/i.test(name) ? storageProblem(storage, t) : t('Give it a name of letters, digits, - or _.')
+  const kinds = useSourceKinds()
+  const current = services ? kinds.find((k) => k.kind.id === choice)?.kind : undefined
+  const value = current ? (values[current.id] ?? current.initial) : undefined
+  const pick = (next: boolean) => { setServices(next); setChoice(DRIVE); setStorage(next ? NO_SERVICE : NO_STORAGE) }
+  const problem = current ? current.problem(value, t) : storageProblem(storage, t)
+  const blocked = /^[a-z0-9][a-z0-9_-]*$/i.test(name) ? problem : t('Give it a name of letters, digits, - or _.')
+  const body = () => {
+    const interval_hours = Number(hours)
+    if (current) return { name, kind: current.id, config: current.body(value), interval_hours }
+    return { name, kind: 'rclone', ...storageBody(storage), interval_hours }
+  }
   const create = useMutation({
-    mutationFn: () => api.post('/api/sources', { name, ...storageBody(storage), interval_hours: Number(hours) }),
+    mutationFn: () => api.post('/api/sources', body()),
     onSuccess: () => {
       toast.success(t('Source {name} added. The first run starts within a few seconds.', { name }))
       setOpen(false)
       setName('')
-      setStorage(NO_STORAGE)
+      pick(false)
+      setValues({})
       void client.invalidateQueries({ queryKey: ['sources'] })
     },
   })
   const submit = (e: FormEvent) => { e.preventDefault(); if (!blocked) create.mutate() }
   return (
     <Dialog open={open} onOpenChange={(o) => { setOpen(o); create.reset() }}>
-      <DialogTrigger asChild><Button><Plus className="size-4" />{t('Add storage source')}</Button></DialogTrigger>
+      <DialogTrigger asChild><Button><Plus className="size-4" />{t('Add source')}</Button></DialogTrigger>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
         <form onSubmit={submit} className="space-y-5">
           <DialogHeader>
-            <DialogTitle>{t('Copy files in from other storage')}</DialogTitle>
+            <DialogTitle>{t('Add a source')}</DialogTitle>
             <DialogDescription>
-              {t('The master reads a folder of this storage on a schedule and keeps its own copy. Nothing is ever written back.')}{' '}
+              {current ? t(current.intro) : t('The master reads a folder of this storage on a schedule and keeps its own copy. Nothing is ever written back.')}{' '}
               <a className="text-primary hover:underline" href={docs('sources')} target="_blank" rel="noreferrer">{t('Read the guide')} →</a>
             </DialogDescription>
           </DialogHeader>
@@ -55,7 +77,38 @@ function AddSource() {
             <Label htmlFor="ss-name">{t('Name')}</Label>
             <Input id="ss-name" placeholder="nextcloud" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
-          <StorageForm source value={storage} onChange={setStorage} />
+          <div role="tablist" className="flex gap-1 border-b">
+            {[[false, t('Storage')], [true, t('Services')]].map(([s, label]) => (
+              <button
+                key={String(s)}
+                type="button"
+                role="tab"
+                aria-selected={services === s}
+                onClick={() => pick(s as boolean)}
+                className={`-mb-px border-b-2 px-3 py-1.5 text-sm ${services === s ? 'border-primary font-medium' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+              >
+                {label as string}
+              </button>
+            ))}
+          </div>
+          {services && (
+            <div role="radiogroup" aria-label={t('Services')} className="grid gap-2 sm:grid-cols-3">
+              <button type="button" role="radio" aria-checked={choice === DRIVE} onClick={() => setChoice(DRIVE)} className={cn(CARD, choice === DRIVE && CARD_ON)}>
+                {t('Google Drive')}
+              </button>
+              {kinds.map(({ kind, ready }) => (
+                <button key={kind.id} type="button" role="radio" aria-checked={choice === kind.id} disabled={!ready} onClick={() => setChoice(kind.id)} className={cn(CARD, choice === kind.id && CARD_ON, 'disabled:cursor-not-allowed disabled:opacity-50')}>
+                  {t(kind.label)}
+                  {!ready && <span className="block text-xs text-muted-foreground">{t('Needs setting up')}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+          {current ? (
+            <current.form value={value} onChange={(next) => setValues((all) => ({ ...all, [current.id]: next }))} />
+          ) : (
+            <StorageForm services={services} value={storage} onChange={setStorage} />
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="ss-hours">{t('How often')}</Label>
             <select id="ss-hours" className={`${SELECT} w-full`} value={hours} onChange={(e) => setHours(e.target.value)}>
@@ -88,7 +141,7 @@ export default function Sources() {
           kind="sources"
           jobs={data}
           emptyTitle={t('No sources yet')}
-          emptyText={t('Add a Google Drive account or other storage to copy its folders here regularly.')}
+          emptyText={t('Add a storage, a Google Drive account or another service to copy their files here regularly.')}
           summary={(j) => (
             <>
               {String(j.detail.remote)} ·{' '}

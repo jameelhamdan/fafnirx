@@ -6,19 +6,19 @@ license.workspace = true
 repository.workspace = true
 
 # The video module: adaptive streaming, subtitles, and what the master needs to know about a video (details, poster frame).
-# It may depend on fafnirx-module-api and fafnirx-common only, never on the master (checked by crates/module-api/tests).
+# It may depend on fafnirx-module-api, fafnirx-module-kit and fafnirx-common only, never on the master (checked by crates/module-api/tests).
 [dependencies]
 anyhow.workspace = true
 axum = "0.7"
 fafnirx-common = { path = "../../../crates/common", features = ["server"] }
 fafnirx-module-api = { path = "../../../crates/module-api" }
+fafnirx-module-kit = { path = "../../../crates/module-kit" }
 hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
 
 [dev-dependencies]
 http-body-util = "0.1"

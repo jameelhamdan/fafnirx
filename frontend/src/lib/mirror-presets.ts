@@ -23,8 +23,8 @@ export interface Preset {
   pathPlaceholder: string
   /** The folder may be left empty (the bucket or the whole storage). */
   pathOptional?: boolean
-  /** Only offered for a source: a mirror cannot write there. */
-  sourceOnly?: boolean
+  /** A provider rather than a protocol: listed under Services, and only for a source (a mirror cannot write there). */
+  service?: boolean
   fields: PresetField[]
 }
 
@@ -97,7 +97,7 @@ export const PRESETS: Preset[] = [
     pathLabel: msg('Folder'),
     pathPlaceholder: 'Photos',
     pathOptional: true,
-    sourceOnly: true,
+    service: true,
     fields: [
       { key: 'service_account_credentials', label: msg('Service account key (JSON)'), secret: true },
       { key: 'root_folder_id', label: msg('Folder id') },

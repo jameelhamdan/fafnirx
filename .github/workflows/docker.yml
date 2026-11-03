@@ -1,4 +1,4 @@
-# The images (see Dockerfile: the master, and one per module) for linux/amd64 and linux/arm64. Called twice by the Release
+# The images (docker/Dockerfile.master, and docker/Dockerfile.<module> for each module) for linux/amd64 and linux/arm64. Called twice by the Release
 # workflow:
 #   push: false  builds each image on each platform on a runner of its own kind (no emulation), starts it and checks that
 #                it works (.github/scripts/smoke-image.sh). Nothing leaves the runner.
@@ -7,12 +7,11 @@
 # So every image is proven on both platforms before anything is pushed anywhere. A new module is one more entry in the two
 # matrices.
 #
-# The check also makes the plugin bundles (the modules as zip files for the master to install, see docs/modules.md), starts the
-# master image with each, and keeps them as artifacts (plugin-<module>-<arch>) for the Release workflow to attach to the release.
+# The check also starts the master image with each module image connected to it (it announces itself, see docs/modules.md).
 #
 # Needs: secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (an access token with write rights), and optionally the
 # repository variables DOCKERHUB_IMAGE (default <username>/fafnirx) and DOCKERHUB_VIDEO_IMAGE (default
-# <username>/fafnirx-video).
+# <username>/fafnirx-video) and DOCKERHUB_FETCH_IMAGE (default <username>/fafnirx-fetch).
 name: Docker
 
 on:
@@ -45,6 +44,8 @@ jobs:
           - { image: master, arch: arm64, os: ubuntu-24.04-arm }
           - { image: video, arch: amd64, os: ubuntu-latest }
           - { image: video, arch: arm64, os: ubuntu-24.04-arm }
+          - { image: fetch, arch: amd64, os: ubuntu-latest }
+          - { image: fetch, arch: arm64, os: ubuntu-24.04-arm }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -57,7 +58,7 @@ jobs:
           DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
           context: .
-          target: ${{ matrix.image }}
+          file: docker/Dockerfile.${{ matrix.image }}
           platforms: linux/${{ matrix.arch }}
           load: true
           tags: fafnirx-${{ matrix.image }}:check
@@ -67,40 +68,50 @@ jobs:
       - name: Start it and check that it works
         run: bash .github/scripts/smoke-image.sh fafnirx-${{ matrix.image }}:check ${{ matrix.image }}
 
-      # The bundle is built on the same stages as the images (the layers are in the cache by now), and has to run on the master
-      # image of this platform: the program is built on its system.
-      - name: Build the video plugin
+      # The module images are in the cache by now. Each one has to announce itself to the master and be reached by it.
+      - name: Build the video image
         if: ${{ matrix.image == 'master' }}
         uses: docker/build-push-action@v6
         env:
           DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
           context: .
-          target: plugin-video
+          file: docker/Dockerfile.video
           platforms: linux/${{ matrix.arch }}
-          build-args: VERSION=${{ inputs.version }}
-          outputs: type=local,dest=plugin-out
+          load: true
+          tags: fafnirx-video:check
           provenance: false
           cache-from: type=gha,scope=image-video-${{ matrix.arch }}
-      - name: Start the master with the plugin and check that it works
+      - name: Connect the video module to the master and check that it works
         if: ${{ matrix.image == 'master' }}
-        run: bash .github/scripts/smoke-image.sh fafnirx-master:check plugin plugin-out/fafnirx-plugin-video-*.zip
-      - uses: actions/upload-artifact@v4
+        run: bash .github/scripts/smoke-image.sh fafnirx-master:check connect fafnirx-video:check video
+
+      - name: Build the fetch image
         if: ${{ matrix.image == 'master' }}
+        uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
-          name: plugin-video-${{ matrix.arch }}
-          path: plugin-out/*
-          if-no-files-found: error
+          context: .
+          file: docker/Dockerfile.fetch
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: fafnirx-fetch:check
+          provenance: false
+          cache-from: type=gha,scope=image-fetch-${{ matrix.arch }}
+      - name: Connect the fetch module to the master and check that it works
+        if: ${{ matrix.image == 'master' }}
+        run: bash .github/scripts/smoke-image.sh fafnirx-master:check connect fafnirx-fetch:check fetch
 
   push:
     if: ${{ inputs.push }}
     strategy:
       fail-fast: true
       matrix:
-        image: [master, video]
+        image: [master, video, fetch]
     runs-on: ubuntu-latest
     env:
-      IMAGE: ${{ matrix.image == 'video' && (vars.DOCKERHUB_VIDEO_IMAGE || format('{0}/fafnirx-video', secrets.DOCKERHUB_USERNAME)) || (vars.DOCKERHUB_IMAGE || format('{0}/fafnirx', secrets.DOCKERHUB_USERNAME)) }}
+      IMAGE: ${{ matrix.image == 'video' && (vars.DOCKERHUB_VIDEO_IMAGE || format('{0}/fafnirx-video', secrets.DOCKERHUB_USERNAME)) || matrix.image == 'fetch' && (vars.DOCKERHUB_FETCH_IMAGE || format('{0}/fafnirx-fetch', secrets.DOCKERHUB_USERNAME)) || (vars.DOCKERHUB_IMAGE || format('{0}/fafnirx', secrets.DOCKERHUB_USERNAME)) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -132,7 +143,7 @@ jobs:
           DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
           context: .
-          target: ${{ matrix.image }}
+          file: docker/Dockerfile.${{ matrix.image }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}

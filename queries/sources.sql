@@ -28,6 +28,9 @@ DELETE FROM sources WHERE id = :id;
 --! request_source_run
 UPDATE sources SET run_requested = 1 WHERE id = :id;
 
+--! continue_source_run
+UPDATE sources SET run_requested = 1 WHERE id = :id AND enabled = 1;
+
 --! toggle_source
 UPDATE sources SET enabled = 1 - enabled WHERE id = :id;
 

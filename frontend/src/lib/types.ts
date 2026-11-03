@@ -222,8 +222,8 @@ export interface SharedFolder {
 export interface PluginState {
   id: string
   version: string | null
-  /** `up`, `setup` (running, but `problem` says what it is missing), `starting` (not answering yet), `broken` (not running, see `problem`) or `external` (set up with an address, not run here). */
-  state: 'up' | 'setup' | 'starting' | 'broken' | 'external'
+  /** `up`, `setup` (running, but `problem` says what it is missing) or `down` (not reached, `problem` says why). */
+  state: 'up' | 'setup' | 'down'
   problem: string | null
 }
 

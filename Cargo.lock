@@ -1344,6 +1344,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "fafnirx-fetch"
+version = "3.18.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "fafnirx-fetch-api",
+ "fafnirx-module-api",
+ "fafnirx-module-kit",
+ "futures-util",
+ "hex",
+ "regex",
+ "reqwest",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "time",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "fafnirx-fetch-api"
+version = "3.18.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fafnirx-master"
 version = "3.18.0"
 dependencies = [
@@ -1353,6 +1382,7 @@ dependencies = [
  "base64 0.22.1",
  "fafnirx-common",
  "fafnirx-db",
+ "fafnirx-fetch-api",
  "fafnirx-module-api",
  "futures-util",
  "getrandom 0.2.17",
@@ -1392,6 +1422,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "fafnirx-module-kit"
+version = "3.18.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "fafnirx-common",
+ "fafnirx-fetch-api",
+ "fafnirx-module-api",
+ "futures-util",
+ "http-body-util",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower 0.5.3",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "fafnirx-sign"
 version = "3.18.0"
 dependencies = [
@@ -1413,6 +1465,7 @@ dependencies = [
  "axum",
  "fafnirx-common",
  "fafnirx-module-api",
+ "fafnirx-module-kit",
  "hex",
  "http-body-util",
  "serde",
@@ -1422,7 +1475,6 @@ dependencies = [
  "tokio",
  "tower 0.5.3",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

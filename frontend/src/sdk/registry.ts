@@ -10,6 +10,7 @@
  * module shares React, the language and the look of the app instead of bringing its own.
  */
 import { useMemo, useSyncExternalStore, type ComponentType } from 'react'
+import { addStrings, type T } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
 
 /** A file as the app shows it to a module: the same for a photo of the library and a file of the file browser. */
@@ -36,11 +37,37 @@ export interface ViewerProps {
   className?: string
 }
 
+/**
+ * A kind of source the module reads (the `fetch.<id>` capability of its service): what the Sources page needs to offer it. The
+ * form holds a value of type `S`; `body` turns it into the `config` sent to the master (which has the module check it).
+ */
+export interface SourceKind<S = unknown> {
+  /** The `kind` the master stores and the module reads; the module's capability is `fetch.<id>`. */
+  id: string
+  /** The name in the list of services (an English text, translated with the module's `strings`). */
+  label: string
+  /** One sentence for the top of the dialog. */
+  intro: string
+  /** What the form starts with. */
+  initial: S
+  form: ComponentType<{ value: S; onChange: (next: S) => void }>
+  body: (value: S) => unknown
+  /** Why the value cannot be used yet, or null. */
+  problem: (value: S, t: T) => string | null
+}
+
+/** Types a source kind by its value; the Sources page holds them all as `SourceKind`. */
+export const defineSourceKind = <S,>(kind: SourceKind<S>): SourceKind => kind as unknown as SourceKind
+
 export interface FrontendModule {
   /** Shows files in the viewer and in the details of a file. The first module whose `match` says yes is used. */
   viewer?: { match: (file: ModuleFile) => boolean; component: ComponentType<ViewerProps> }
   /** A part of the queue page, given what the module reports (its `GET /status`). */
   queue?: ComponentType<{ report: unknown }>
+  /** The kinds of source the module reads; the Sources page offers them while the module is up. */
+  sources?: SourceKind[]
+  /** Translations of the texts the module shows: language -> English text -> translation. */
+  strings?: Record<string, Record<string, string>>
 }
 
 /** A module the app has loaded; its id is the one the master has it under. */
@@ -54,6 +81,7 @@ const listeners = new Set<() => void>()
 
 /** Called by the loader when a module's script has arrived. */
 export function registerModule(module: LoadedModule) {
+  if (module.strings) addStrings(module.strings)
   registered.set(module.id, module)
   snapshot = [...registered.values()]
   listeners.forEach((listen) => listen())
@@ -89,4 +117,10 @@ export function useQueueSections(reports: Record<string, unknown>) {
     const Section = m.queue
     return Section && reports[m.id] !== undefined ? [{ id: m.id, Section, report: reports[m.id] }] : []
   })
+}
+
+/** The kinds of source the loaded modules offer, with whether the module can read them now (it lists `fetch.<id>`). */
+export function useSourceKinds() {
+  const info = useSession()?.modules
+  return useActive().flatMap((m) => (m.sources ?? []).map((kind) => ({ module: m.id, kind, ready: info?.[m.id]?.capabilities.includes(`fetch.${kind.id}`) ?? false })))
 }

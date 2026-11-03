@@ -20,8 +20,10 @@ flowchart TB
 | Client `fafnirx` (`crates/client`) | Watch, hash in chunks, upload, offline queue, shared-folder sync, tray, self-update from GitHub releases |
 | Master `fafnirx-master` (`crates/master`) | Device API, web API, file store, ingest, retention, alerts, sources, mirrors, metadata |
 | Web app (`frontend`) | React, built into the master. A module's part is `src/modules/<id>`, built apart and loaded by the browser from the module while it is up (`src/sdk`, `src/lib/module-loader.ts`) |
-| Modules (`modules/<id>/service`) | Optional services, run by the master as plugins (`<data>/plugins/<id>`) or as containers; only the master talks to them ([modules](modules.md)). Today: `fafnirx-video`, HLS streaming and video details ([video](video.md)) |
+| Modules (`modules/<id>/service`) | Optional add-on containers that announce themselves to the master; only the master talks to them ([modules](modules.md)). Today: `fafnirx-video`, HLS streaming and video details ([video](video.md)), `fafnirx-fetch`, which reads web sources and writes the files for the master to commit ([fetch](fetch.md)); further kinds of source are plugins of the same shape ([plugins](plugins.md)) |
 | `crates/module-api` | The contract between the master and a module: manifest, capabilities, version |
+| `crates/fetch-api` | What the master and a module that reads sources say to each other (`/fetch/list`, `/fetch/get`) |
+| `crates/module-kit` | What every module that reads sources shares: its environment, the service for the contract (`Fetcher`), the list of tasks, a scratch folder, and small tools (run a program, read settings, feeds, names, HTTP) |
 | `fafnirx-sign` (`crates/sign`) | Optional: signed client builds |
 | `crates/common` | gRPC types, chunking, hashing, path rules, reading dates and places from metadata text |
 
@@ -165,10 +167,11 @@ name it `<owner>/<name>`. Clients reach it like this:
 |---|---|---|
 | Offline and disk alerts, upload-error and held-deletion expiry | `monitoring/jobs.rs`, every minute | |
 | Retention, version pruning, stale uploads, cache cleaning | `monitoring/jobs.rs`, hourly | Removes files with their records |
-| Sources, mirrors | `integrations/` | `FOR UPDATE SKIP LOCKED` |
+| Sources, mirrors | `integrations/` | `FOR UPDATE SKIP LOCKED`. Mirrors and rclone sources one at a time; sources a module reads (`fetch_source.rs`, any kind a module lists as `fetch.<kind>`) two at a time, each on its own task. A run fetches at most `max_per_run` files and asks for another (`run_requested`) while more wait |
 | `meta` (videos then `artwork`) | `library/meta.rs`, table `jobs` | 3 attempts; videos are probed by a module (`modules/`, capability `probe.video`); a job returns a note shown in Processing |
 | `thumb` (on request) | `library/meta.rs`, `files/transfer.rs` | Queued by the first request for a picture, answered `202`; done → `thumbs` event (key: file id). Workers: cores, 2–6; newest request first. Result in `cache/thumbs/`, kept |
 | Segments, subtitles | `modules/video/service` | On request; in memory, `GET /status` |
+| Listing and fetching a source | `modules/fetch/service` | When the master asks (`/fetch/list`, `/fetch/get`); in memory, `GET /status` |
 
 `done` jobs stay a day; queueing the same `(kind, payload)` while one is queued or running is a no-op; setting `jobs_paused`
 makes workers wait. A file counts as unread while it has no `file_meta` row: that is the API's `processing` flag; `work`
@@ -248,9 +251,9 @@ JSON under `/api` behind the login cookie (random token, hash stored, `SameSite=
 | Pictures | `GET /api/media/:id/{thumb,preview,original,download}` (`?v=<hash>` caches for good) |
 | Albums | `GET/POST /api/albums` (a `folder` body makes or returns the folder's album), `GET/PATCH/DELETE /api/albums/:id`, `POST .../files` and `.../files/remove` (by `ids` or `items` of `{device, path}`) |
 | Modules | `GET /api/m/:module/:id/*rest` asks the module for `/files/<rest>` about the file (login and right to the file first); video: `hls/{master.m3u8,<quality>/index.m3u8,<quality>/seg<n>.ts,subtitles.json,subtitles/<n>.vtt}`. `GET /api/m/:module/ui/:file` their web part. `GET /api/session` lists the modules that are up, `GET /api/queue` carries their reports |
-| Plugins (admin) | `GET /api/plugins` (installed, with state; read only, plugins are set up with `FAFNIRX_PLUGINS`) |
+| Plugins (admin) | `GET /api/plugins` (connected modules, with state; read only) and `POST /api/plugins/register` (a module announces itself: no login, the shared `FAFNIRX_PLUGIN_SECRET` as bearer token) |
 | Processing | `GET /api/queue`; admin: `POST /api/queue/pause`, `/retry`, `/cancel`, `/rebuild` |
-| Integrations | `GET/POST /api/sources` (any rclone storage), `/:user/:name`, `/run`, `/toggle`; admin: `GET/POST /api/mirrors` (`kind` replica or backup) + `/:name`, `/run`, `/toggle`, `/resync`, `GET /api/mirrors/:name/restore-kit` (backups), `GET /api/mirrors/scope?path=` (folders to pick from) |
+| Integrations | `GET/POST /api/sources` (`kind` `rclone`, the default: any rclone storage; or the kind of a module that lists `fetch.<kind>`, with `config`, checked by that module), `/:user/:name`, `/run`, `/toggle`; admin: `GET/POST /api/mirrors` (`kind` replica or backup) + `/:name`, `/run`, `/toggle`, `/resync`, `GET /api/mirrors/:name/restore-kit` (backups), `GET /api/mirrors/scope?path=` (folders to pick from) |
 | Settings | `GET/PUT /api/settings` |
 
 Browser uploads are chunked: pieces are `PUT` at an offset (409 with the expected offset if misaligned); `finish` verifies the

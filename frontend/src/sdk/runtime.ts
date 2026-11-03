@@ -9,7 +9,7 @@ import * as sdk from './index'
 
 /** The version of this contract. It is the number `fafnirx_module_api::WEB_SDK` has (a test checks it): a module's script that
  * was built for another one is not loaded. Change both when what a module may import changes in a way that breaks it. */
-export const SDK = 1
+export const SDK = 2
 
 declare global {
   interface Window {

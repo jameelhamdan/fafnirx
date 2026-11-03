@@ -16,9 +16,8 @@
 //!   FAFNIRX_RCLONE_CONFIG   rclone config file for mirrors that name a remote (default <FAFNIRX_DATA>/rclone.conf)
 //!   FAFNIRX_TICK_SECS       how often sources and mirrors are checked for being due (default 15)
 //!   FAFNIRX_INSTANCE_LEASE_SECS  seconds a device must be silent before another computer may use its token (default 90)
-//!   FAFNIRX_MODULE_<ID>_URL   where the optional module <ID> is, for example FAFNIRX_MODULE_VIDEO_URL=http://video:8090 (the
-//!                           module is off without it); FAFNIRX_MODULE_<ID>_TOKEN is the secret shared with it
-//!                           (at least 16 characters)
+//!   FAFNIRX_PLUGIN_SECRET   the secret that the optional modules (containers) join with and are called with (at least 16
+//!                           characters, e.g. `openssl rand -hex 24`); without it no module may join
 //!   FAFNIRX_WORKER_THREADS  threads of the async runtime, which serve requests (default: the cores the process may use)
 //!   FAFNIRX_BLOCKING_THREADS  most threads for blocking work (database calls, hashing, zip) at once (default 512)
 //!   FAFNIRX_DB_POOL         connections to PostgreSQL (default 8)
@@ -97,7 +96,7 @@ async fn run() -> Result<()> {
     }
 
     let state = Arc::new(web::AppState::new(db.clone(), store.clone(), data_dir.clone())?);
-    modules::start(state.modules.clone(), state.plugins.clone(), store.live_root().to_path_buf());
+    modules::start(state.modules.clone(), store.live_root().to_path_buf());
     platform::db::with(&db, |c| {
         library::meta::load_thumbnails(c);
         Ok(())

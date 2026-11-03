@@ -62,17 +62,19 @@ try {
     stdio: ['ignore', log, log],
     env: {
       ...ENV,
-      FAFNIRX_MODULE_TOKEN: TOKEN,
+      FAFNIRX_PLUGIN_SECRET: TOKEN,
+      FAFNIRX_MASTER_URL: master.base,
+      FAFNIRX_PLUGIN_URL: videoUrl,
       FAFNIRX_DATA: data,
       FAFNIRX_VIDEO_CACHE: path.join(tmp, 'video-cache'),
-      FAFNIRX_MODULE_LISTEN: `127.0.0.1:${videoPort}`,
+      FAFNIRX_PLUGIN_LISTEN: `127.0.0.1:${videoPort}`,
       FAFNIRX_FFMPEG: program('ffmpeg'),
       FAFNIRX_FFPROBE: program('ffprobe'),
     },
   })
   check(await until(async () => { try { return (await fetch(`${videoUrl}/health`)).ok } catch { return false } }, 20, 100), 'the video module starts')
 
-  master.env = { FAFNIRX_MODULE_VIDEO_URL: videoUrl, FAFNIRX_MODULE_VIDEO_TOKEN: TOKEN }
+  master.env = { FAFNIRX_PLUGIN_SECRET: TOKEN }
   await master.start()
   const admin = await master.admin()
   const up = await until(async () => (await admin.get('/api/session')).json.modules?.video, 30, 300)

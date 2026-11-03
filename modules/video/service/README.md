@@ -7,7 +7,7 @@ front, as fafnirx's master does. Pair it with the web app's video module (`front
 API; the player inside it (`player/`) imports nothing from the app.
 
 ```sh
-FAFNIRX_MODULE_TOKEN=<16+ characters> FAFNIRX_DATA=/data fafnirx-video
+FAFNIRX_PLUGIN_SECRET=<16+ characters> FAFNIRX_DATA=/data fafnirx-video
 ```
 
 Videos are read from `<FAFNIRX_DATA>/files/<path>`; the cache is `FAFNIRX_VIDEO_CACHE`. Needs `ffmpeg` and `ffprobe`.
@@ -28,7 +28,7 @@ What the master asks for:
 | `GET /probe` | `{ duration_ms, width, height, codec, taken_at, position }`; `415` when it is not a video |
 | `GET /poster?max=320` | A JPEG frame no larger than `max` px (16 to 4096); `422` when no frame could be taken |
 | `GET /status` | What is being made (`segment`, `subtitles`; waiting or running), the last failures, how many run at once. In memory: a restart clears it |
-| `GET /ui/<file>` | A file of the web part (`index.js`, its chunks, `style.css`) from `FAFNIRX_MODULE_UI`; the master passes it on to the browser |
+| `GET /ui/<file>` | A file of the web part (`index.js`, its chunks, `style.css`) from `FAFNIRX_PLUGIN_UI`; the master passes it on to the browser |
 | `GET /health` | `200` without the token |
 
 What the web app asks for, through the master (`GET /api/m/video/<file id>/<rest>` is `GET /files/<rest>`):
@@ -60,6 +60,4 @@ they fit any quality.
 | `derive.rs` | The manifest, and what the master asks for: details (`/probe`) and a frame (`/poster`) |
 | `service.rs` | HTTP: routes, auth, locating a file, playlists, segments, cache sweep |
 | `subtitles.rs` | The subtitle list and tracks |
-| `tasks.rs` | The list behind `GET /status` |
-| `ui.rs` | The web part's files and what the manifest says of them |
-| `main.rs` | Settings from the environment |
+| `main.rs` | Settings from the environment (the common ones are `crates/module-kit`'s) |

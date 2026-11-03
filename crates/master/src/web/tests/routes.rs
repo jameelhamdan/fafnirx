@@ -8,6 +8,8 @@ use super::*;
 enum Rule {
     /// Anyone, even without a login.
     Open,
+    /// A plugin that has the shared secret, with no login.
+    Secret,
     /// Every logged-in user, the read-only ones too (what they see is limited by the folders they may read).
     Reader,
     /// Users with a workspace of their own: not the read-only role.
@@ -37,6 +39,7 @@ const ROUTES: &[(&str, &str, Rule)] = &[
     ("GET", "/api/mirrors/:name/restore-kit", Rule::Admin),
     ("POST", "/api/files/rescan", Rule::Admin),
     ("GET", "/api/plugins", Rule::Admin),
+    ("POST", "/api/plugins/register", Rule::Secret),
     ("GET", "/api/queue", Rule::Reader),
     ("POST", "/api/queue/pause", Rule::Admin),
     ("POST", "/api/queue/retry", Rule::Admin),
@@ -132,7 +135,7 @@ fn every_route_has_a_rule_and_the_rule_is_kept() {
         let admin = login(&api).await;
         let api = &api;
         for (method, uri, rule) in ROUTES {
-            if *rule == Rule::Open {
+            if matches!(rule, Rule::Open | Rule::Secret) {
                 continue;
             }
             let uri = uri
@@ -166,5 +169,52 @@ fn every_route_has_a_rule_and_the_rule_is_kept() {
             let allowed = if *rule == Rule::Admin { &admin } else { &bob };
             assert_ne!(status(allowed.clone()).await, StatusCode::FORBIDDEN, "{method} {uri} as its own role");
         }
+    });
+}
+
+async fn announce(api: &Api, authorization: Option<&str>, cookie: Option<&str>, body: &str) -> StatusCode {
+    let mut headers: Vec<(&str, &str)> = Vec::new();
+    if let Some(a) = authorization {
+        headers.push(("authorization", a));
+    }
+    if let Some(c) = cookie {
+        headers.push(("cookie", c));
+    }
+    api.send(
+        Method::POST,
+        "/api/plugins/register",
+        Body::from(body.to_string()),
+        Some("application/json"),
+        &headers,
+    )
+    .await
+    .0
+}
+
+#[test]
+fn a_plugin_announces_itself_with_the_secret_and_a_login_is_no_substitute() {
+    const SECRET: &str = "shared-secret-0123456789";
+    let registry = Arc::new(crate::modules::Registry::with_secret(Some(SECRET.into())));
+    let api = Api::with_modules(registry.clone());
+    block(async {
+        let admin = login(&api).await;
+        let body = json!({"id": "video", "address": "http://video:8090"}).to_string();
+        let bearer = format!("Bearer {SECRET}");
+        assert_eq!(announce(&api, None, None, &body).await, StatusCode::UNAUTHORIZED, "no secret");
+        assert_eq!(
+            announce(&api, Some("Bearer wrong"), None, &body).await,
+            StatusCode::UNAUTHORIZED,
+            "the wrong secret"
+        );
+        assert_eq!(
+            announce(&api, None, Some(&admin), &body).await,
+            StatusCode::UNAUTHORIZED,
+            "an administrator's login is not the secret"
+        );
+        assert!(registry.plugins().is_empty());
+        let bad = json!({"id": "Video", "address": "http://video:8090"}).to_string();
+        assert_eq!(announce(&api, Some(&bearer), None, &bad).await, StatusCode::BAD_REQUEST, "an id that cannot be one");
+        assert_eq!(announce(&api, Some(&bearer), None, &body).await, StatusCode::OK);
+        assert_eq!(registry.plugins().iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["video"]);
     });
 }

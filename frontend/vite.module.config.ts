@@ -7,13 +7,14 @@ import { defineConfig, type Plugin } from 'vite'
 
 // Builds one module of the web app, apart from the app: `MODULE=video vite build --config vite.module.config.ts` (or
 // `npm run build:module -- video`) makes dist-modules/video/index.js, its chunks and style.css, which the module's
-// service serves (FAFNIRX_MODULE_UI). The app hands the module React, its own SDK and its ui kit when it loads it
+// service serves (FAFNIRX_PLUGIN_UI). The app hands the module React, its own SDK and its ui kit when it loads it
 // (src/sdk/runtime.ts), so those are not part of the build; whatever else the module imports (hls.js, icons) is.
+// A module that lives in another repository sets MODULE_SRC (its folder with index.ts) and MODULE_OUT, and builds with this file.
 const id = process.env.MODULE
 if (!id || !/^[a-z0-9]+$/.test(id)) throw new Error('Name the module: MODULE=<id> (a folder of src/modules)')
 const root = import.meta.dirname
-const source = path.join(root, 'src', 'modules', id)
-if (!fs.existsSync(path.join(source, 'index.ts'))) throw new Error(`src/modules/${id}/index.ts does not exist`)
+const source = process.env.MODULE_SRC ?? path.join(root, 'src', 'modules', id)
+if (!fs.existsSync(path.join(source, 'index.ts'))) throw new Error(`${source}/index.ts does not exist`)
 
 /** Imports the app provides at run time. */
 const provided = (name: string) => name === 'react' || name === 'react/jsx-runtime' || name === '@/sdk' || name.startsWith('@/components/ui/')
@@ -70,7 +71,7 @@ export default defineConfig({
   plugins: [providedByApp(), reactPlugin(), tailwindcss()],
   publicDir: false,
   build: {
-    outDir: path.join(root, 'dist-modules', id),
+    outDir: process.env.MODULE_OUT ?? path.join(root, 'dist-modules', id),
     emptyOutDir: true,
     lib: { entry: path.join(source, 'index.ts'), formats: ['es'], fileName: () => 'index.js', cssFileName: 'style' },
     cssCodeSplit: false,

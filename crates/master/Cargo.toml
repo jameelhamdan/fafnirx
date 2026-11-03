@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 fafnirx-common = { path = "../common", features = ["server"] }
 fafnirx-db = { path = "../db" }
+fafnirx-fetch-api = { path = "../fetch-api" }
 fafnirx-module-api = { path = "../module-api" }
 anyhow.workspace = true
 base64.workspace = true

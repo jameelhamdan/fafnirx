@@ -4,7 +4,7 @@ ingest, reads, thumbnails, uploads and a download. Appends one JSON line each. S
     python bench_docker.py <library> <results.jsonl> name=MASTER_CPUSET:PG_CPUSET[,ENV=value...] ...
     python bench_docker.py lib out.jsonl c1=0:0 rpi=0-1:0-1,MASTER_MEM=640m,PG_MEM=320m,FAFNIRX_DB_POOL=4
 
-<library> holds tiny/ and large/ made by bench-library.py. Needs the image: docker build --target master -t fafnirx:bench .
+<library> holds tiny/ and large/ made by bench-library.py. Needs the image: docker build -f docker/Dockerfile.master -t fafnirx:bench .
 """
 import http.client
 import json

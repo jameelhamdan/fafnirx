@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/common", "crates/db", "crates/master", "crates/client", "crates/sign", "crates/module-api", "modules/video/service"]
+members = ["crates/common", "crates/db", "crates/master", "crates/client", "crates/sign", "crates/module-api", "crates/fetch-api", "crates/module-kit", "modules/video/service", "modules/fetch/service"]
 
 [workspace.package]
 version = "3.18.0"

@@ -49,8 +49,6 @@ pub struct AppState {
     pub streams: Arc<Semaphore>,
     /// The modules that are set up (see `modules`).
     pub modules: Arc<crate::modules::Registry>,
-    /// The plugins in `<data>/plugins`, which the master runs as modules.
-    pub plugins: Arc<crate::modules::Plugins>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -59,7 +57,6 @@ impl AppState {
     pub fn new(db: Db, store: Arc<Store>, data_dir: PathBuf) -> Result<Self, anyhow::Error> {
         let modules = Arc::new(crate::modules::Registry::from_env());
         Ok(Self {
-            plugins: Arc::new(crate::modules::Plugins::new(&data_dir, modules.clone())),
             db,
             store,
             data_dir,
@@ -173,6 +170,7 @@ fn light() -> Router<Shared> {
         .route("/api/logout", post(auth::logout))
         .route("/api/session", get(auth::session))
         .route("/api/plugins", get(plugins::list))
+        .route("/api/plugins/register", post(plugins::register))
         .route("/api/me/password", post(auth::change_password))
         .route("/api/users", get(users::list).post(users::create))
         .route("/api/users/:name", axum::routing::patch(users::update))
@@ -300,11 +298,11 @@ async fn security_headers(req: axum::extract::Request, next: Next) -> Response {
     resp
 }
 
-/// Everything under `/api` except logging in needs a valid session (and tells the handlers who it is, as an
-/// [`access::Access`]); changes also need the marker header (a cross-site form cannot set it).
+/// Everything under `/api` except logging in and a plugin announcing itself (it has its own secret) needs a valid session (and tells
+/// the handlers who it is, as an [`access::Access`]); changes also need the marker header (a cross-site form cannot set it).
 async fn guard(State(state): State<Shared>, mut req: axum::extract::Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
-    if path.starts_with("/api/") && path != "/api/login" {
+    if path.starts_with("/api/") && path != "/api/login" && path != "/api/plugins/register" {
         let headers = req.headers().clone();
         let who = match crate::platform::db::with(&state.db, move |c| auth::user_of_session(c, &headers)).await {
             Ok(who) => who,

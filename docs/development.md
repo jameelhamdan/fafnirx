@@ -21,7 +21,7 @@ cargo run -p fafnirx -- enroll --no-service --server http://127.0.0.1:7443   # t
   `frontend/` before building the master you will use.
 - Client: `cargo build --profile client -p fafnirx`. Windows installer: `installer\build.ps1` (Inno Setup). Linux tray needs
   `libgtk-3-dev libayatana-appindicator3-dev libxdo-dev` (or `--no-default-features`). `FAFNIRX_TOKEN_STORE=file` avoids the keychain.
-- Master image: `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`.
+- Images from this checkout (the data folders then appear in `docker/`): `docker compose -f docker/docker-compose.yml -f docker/docker-compose.build.yml up -d --build`.
 
 ## Test
 
@@ -32,7 +32,6 @@ cargo run -p fafnirx -- enroll --no-service --server http://127.0.0.1:7443   # t
 | E2E: devices, uploads, watcher, renames, updates | `cd tests && npm i && node e2e.mjs` | Built binaries, test DB |
 | E2E: sources and mirrors | `node e2e-io.mjs` | `rclone` (`FAFNIRX_RCLONE`) |
 | E2E: video module | `node e2e-video.mjs` | `fafnirx-video` built |
-| E2E: plugins (FAFNIRX_PLUGINS install, update, UI files) | `node e2e-plugin.mjs` | `fafnirx-video` built |
 | E2E: delete and retention | `node e2e-retention.mjs` | ~2 min |
 | E2E: shared folders (several clients, two users) | `node e2e-shared.mjs` | Built binaries, test DB |
 | Benchmark of a running master (GET only) | `node bench-readonly.mjs http://host` | Optional `FAFNIRX_USER`, `FAFNIRX_PASSWORD` |
@@ -66,7 +65,7 @@ Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targ
 | `web` | HTTP shell, logins, roles | `mod.rs` (state, errors, routes), `auth.rs`, `access.rs`, `users.rs`, `events.rs`, `assets.rs`, `tests/` |
 | `files` | Content in and out | `ingest.rs` (commit, delete, rename, move), `livetree.rs`, `browse.rs`, `transfer.rs`, `zip.rs` |
 | `library` | Photos and videos | `meta.rs` (jobs, pictures), `artwork.rs`, `photos.rs`, `albums.rs` |
-| `modules` | The optional [modules](modules.md): found by environment, asked for capabilities, proxied for the web app | `mod.rs` (registry, `probe_video`, `poster`), `plugins.rs` (run, install, remove), `proxy.rs` |
+| `modules` | The optional [modules](modules.md): announced by the modules, asked for capabilities, proxied for the web app | `mod.rs` (registry, `probe_video`, `poster`), `proxy.rs` |
 | `integrations` | Sources, mirrors | `mod.rs`, `rclone_source.rs`, `syncsource.rs`, `mirror.rs`, `scope.rs`, `spec.rs`, `api.rs` |
 | `monitoring` | Dashboard, schedules, queue | `api.rs`, `jobs.rs`, `queue.rs` |
 
@@ -138,7 +137,7 @@ Vite, React 19, TypeScript, Tailwind v4, shadcn/ui, TanStack Query, React Router
 - **Modules:** `frontend/src/modules/<id>` is built apart (`npm run build:module -- <id>`, into `dist-modules/`) and joins the app
   only through `src/sdk` (checked by `npx oxlint`); the video module is `modules/video` (its player, `player/`, imports nothing
   from the app) with its backend in `modules/video/service`. To try one in development, build it, run its service with
-  `FAFNIRX_MODULE_UI=frontend/dist-modules/<id>`, and point the master at it (`FAFNIRX_MODULE_<ID>_URL`/`_TOKEN`). Keep both
+  `FAFNIRX_PLUGIN_UI=frontend/dist-modules/<id>`, and have it announce itself to the master (`FAFNIRX_MASTER_URL`, `FAFNIRX_PLUGIN_URL`, `FAFNIRX_PLUGIN_SECRET`). Keep both
   READMEs true. Adding one: [modules](modules.md#writing-one).
 
 ## Releasing

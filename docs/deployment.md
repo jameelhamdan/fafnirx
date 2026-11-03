@@ -16,7 +16,6 @@ files/<path>                        master files
 versions/<id>/<user>/<device>/<path> replaced or deleted versions
 tmp/                                uploads being assembled (removed after a day untouched)
 cache/thumbs/                       thumbnails and previews, made on demand and kept
-plugins/<id>/                       plugins (FAFNIRX_PLUGINS installs them; not user data)
 updates/<platform>/                 your own signed client builds (optional)
 ```
 
@@ -42,9 +41,10 @@ docker compose up -d
 
 ## Reverse proxy with Caddy
 
-`docker-compose.proxy.yml` puts [Caddy](https://caddyserver.com) in front and closes the master's ports:
+`docker-compose.proxy.yml` puts [Caddy](https://caddyserver.com) in front and closes the master's ports. Download it and the `Caddyfile` next to `docker-compose.yml`:
 
 ```sh
+for f in docker-compose.proxy.yml Caddyfile; do curl -fsSLO https://raw.githubusercontent.com/jameelhamdan/fafnirx/master/docker/$f; done
 docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d     # or COMPOSE_FILE=... in .env
 ```
 
@@ -110,6 +110,8 @@ major upgrade needs dump and restore. Clients update themselves from GitHub with
 - `8080` and `7443` off the internet unless behind TLS.
 - Device tokens are shown once and stored as SHA-256 hashes; revoke lost devices. A device adds data to its own device; it reads and writes only its user's shared folders.
 - Source and mirror credentials, and the encryption key of backup mirrors, are plain text in the database and `rclone.conf`: protect backups and the config folder. Keep a copy of each backup key away from the master.
+- The [fetch module](fetch.md) reaches any address your server can reach: give it only `data/tmp` (compose does), keep its port unpublished, only let people you trust add sources, and read its [legal notes](fetch.md#legal).
+- A [plugin](plugins.md) is a container with write access to `data/tmp`: run only what you trust. Don't publish its port; it has no login, only the shared token.
 - Keep the update signing key off the master.
 - The master's disk is not encrypted by fafnirx: use an encrypted dataset. A **backup** mirror is encrypted with its own key ([Mirrors](mirrors.md)); a replica is not.
 

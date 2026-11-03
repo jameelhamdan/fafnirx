@@ -1,76 +1,40 @@
 # Modules
 
-Optional features that run as a service of their own, so a server that doesn't need one doesn't carry it. Today: [video](video.md)
-(brings ffmpeg). Master works without any module; the web app just doesn't offer what the module adds. Modules don't know each other.
+The core of fafnirx is small: the master, PostgreSQL, the web app and the clients. Everything advanced is an **add-on container** that
+you start when you need it: [video](video.md) playback brings ffmpeg, [fetch](fetch.md) reads web sources, and anyone can write
+more, such as a new kind of source ([Plugins](plugins.md)). A server without an add-on doesn't carry its dependencies or spend
+its CPU, and the web app doesn't offer what it would have added. The heavy work (transcoding, downloading, third-party tools)
+runs in the add-on's container, which can sit on another host and have its own resource limits. Add-ons don't know each other.
 
-Two ways to run one, same contract:
+## Turn one on
 
-| | Plugin | Container |
-|---|---|---|
-| What | zip bundle in `<data>/plugins/<id>/`: program, web part, tools | image `fafnirx-<id>` next to the master |
-| Started by | master, loopback port, own random token | you (compose profile `<id>`) |
-| Install | `FAFNIRX_PLUGINS=<id>` on the master, or unzip by hand | `docker compose pull` |
-| Config | `FAFNIRX_PLUGINS` | `FAFNIRX_MODULE_<ID>_URL`, `FAFNIRX_MODULE_<ID>_TOKEN` |
-| Use for | single container, small images | other host, resource limits, GPU |
+In `.env`, then `docker compose up -d`:
 
-Address wins over plugin of same id (plugin not started).
+```sh
+FAFNIRX_PLUGIN_SECRET=<openssl rand -hex 24>    # once: the secret the master and every add-on share (16+ characters)
+COMPOSE_PROFILES=video,fetch                    # which add-on containers to start
+```
+
+That is all. A starting add-on tells the master where it is (`POST /api/plugins/register`, with the secret) and keeps telling it every
+30 s; the master asks it for its manifest, uses it while the id and contract match, and lists it under Settings → Plugins
+(administrators; read only). `GET /api/session` lists the add-ons that are up, and the web app shows an add-on's parts only for those.
+Turn one off by stopping its container: the master forgets an add-on that has been silent for 90 s. Its cache and what the master has
+already read stay. An add-on has no login and publishes no port: only the master reaches it, so keep it that way.
+
+Images: `fafnirx-video` and `fafnirx-fetch` come from the same release as the master. An add-on from somewhere else connects the same
+way: its container gets `FAFNIRX_PLUGIN_SECRET`, `FAFNIRX_MASTER_URL` (the master's web address, `http://master:8080`) and
+`FAFNIRX_PLUGIN_URL` (where the master reaches it), and it can run on another host.
 
 ```mermaid
 flowchart LR
     B["Browser"] -- "/api/m/&lt;id&gt;/&lt;file&gt;/… , /api/m/&lt;id&gt;/ui/…" --> M["master"]
-    M -- "bearer token<br/>/manifest /probe /poster /status /files/… /ui/…" --> S["module service"]
+    M -- "bearer token<br/>/manifest /probe /poster /status /files/… /ui/…" --> S["add-on container"]
     S -- "read-only" --> F[("data/files/")]
-    M -. "plugin: spawn, restart, stop" .-> S
 ```
-
-## Plugins
-
-Server admin only (env / files); the web app (Settings → Plugins, admin) lists state and changes nothing.
-
-- Install: `FAFNIRX_PLUGINS=video,…` in the master env. At start, for each id that is missing or not of the master's version, master
-  fetches `fafnirx-plugin-<id>-<version>-<platform>.zip` from the GitHub release of **its own version**, checks the `.sha256` next
-  to it, unpacks to `.<id>.new`, validates `plugin.json` (id, contract, platform, exec exists), stops the old one, swaps the folder,
-  starts. Failure → warning in the log, retry every minute. Upgrading the master upgrades the plugin the same way.
-- Offline: unzip into `<data>/plugins/<id>/`, master picks it up (scan every 2 s). Keep the version equal to the master's, or drop it
-  from `FAFNIRX_PLUGINS`.
-- Remove: delete `<data>/plugins/<id>/` and take it out of `FAFNIRX_PLUGINS` (else it is installed again at the next start). The
-  module goes away within seconds. Its cache and the metadata already read stay.
-
-- Crash → restart with backoff 1 s … 60 s. Master exits → plugin exits (stdin pipe closes, `FAFNIRX_MODULE_EXIT_WITH_STDIN=1`).
-- Env given to the plugin: `FAFNIRX_<ID>_*` from master env, basics (`PATH`, `HOME`, `TZ`, `TMP*`, `SYSTEMROOT`…), `plugin.json` `env`
-  (`{dir}` = plugin folder), then `FAFNIRX_MODULE_TOKEN`, `FAFNIRX_MODULE_LISTEN`, `FAFNIRX_DATA` (not overridable). DB url, passwords
-  etc. are not passed.
-- Runs as the master's user. Install from project releases only: checksum comes from the same release, protects against bad
-  downloads, not against a hostile release. Limits: 400 MB download, 1.5 GB unpacked.
-- Platforms: `linux-x86_64`, `linux-aarch64` (bundle is built on the master image's Debian so the binary runs there).
-
-Bundle:
-
-```
-fafnirx-plugin-<id>-<version>-<platform>.zip   (+ .zip.sha256: "<hex>  <name>")
-  plugin.json   {"id","version","contract","platform","exec":"bin/fafnirx-video","env":{"FAFNIRX_FFMPEG":"{dir}/bin/ffmpeg"}}
-  bin/          program + tools (static ffmpeg for video)
-  ui/           web part from `npm run build:module -- <id>`
-  licenses/
-```
-
-Made by Docker target `plugin-<id>`; the release workflow attaches them.
-
-## Container
-
-```sh
-FAFNIRX_MODULE_VIDEO_URL=http://video:8090
-FAFNIRX_MODULE_VIDEO_TOKEN=<openssl rand -hex 24>     # service reads it as FAFNIRX_MODULE_TOKEN
-```
-
-Don't publish the service port; it has no login, only the token.
-
-Both: master reads `/manifest` (every 2 s while a plugin starts, else every 30 s), uses the module while id + contract match. The
-session (`GET /api/session`) lists modules that are up; the web app shows a module's parts only for those.
 
 ## Contract
 
-`crates/module-api`, `CONTRACT = 1`. Every request has `Authorization: Bearer <token>` except `GET /health`. Master has already
+`crates/module-api`, `CONTRACT = 1` (the fetch requests are typed in `crates/fetch-api`, which only modules that read sources use). Every request has `Authorization: Bearer <token>` except `GET /health`. Master has already
 checked login and file access; modules have no users.
 
 | Request | By | Answer |
@@ -79,6 +43,7 @@ checked login and file access; modules have no users.
 | `GET /probe?p&h` | master, `probe.video` | length, size, codec, date, place |
 | `GET /poster?p&h&max[&at_ms]` | master, `poster` | JPEG ≤ `max` px (videos, HEIC/AVIF the master can't decode). A video's frame at `at_ms`; without it the module finds the first non-black frame at 10%, 20%, … and says where in `x-poster-ms` (ms), which the master stores and sends back as `at_ms` |
 | `GET /status` | master, `status` | `active`, `failed` tasks, each with `path`; other fields are the module's own |
+| `POST /fetch/list`, `POST /fetch/get` | master, `fetch.<kind>` | what a source offers; one file of it written to `<data>/tmp/…` ([fetch](fetch.md#api)). The one place a module writes; the master hashes and commits it |
 | `GET /files/<rest>?p&h` | browser via `/api/m/<id>/<file id>/<rest>` | module-specific, per file |
 | `GET /ui/<file>` | browser via `/api/m/<id>/ui/<file>` | web part (script, style), same for everybody |
 
@@ -87,7 +52,7 @@ hash → no stale cache). Browser reaches only `/files/` and `/ui/`. Master drop
 `ui` = `{entry, css?, sdk}`; `sdk` = `WEB_SDK` the script was built for.
 
 Capability = promise. Add one only when the master needs to ask a module something new (constant in `module-api`, hook in
-`crates/master/src/modules/mod.rs` returning `None` without module). Other `contract` → module not used.
+`crates/master/src/modules/mod.rs` returning `None` without a module). Other `contract` → module not used.
 
 ## Web part
 
@@ -96,7 +61,7 @@ Built apart, loaded by the browser from the module while it's up. Not in the app
 - `frontend/src/modules/<id>/index.ts` default-exports `FrontendModule` (`@/sdk`): optional `viewer`, optional `queue` section.
   Lazy-load heavy stuff (hls.js).
 - `npm run build:module -- <id>` → `frontend/dist-modules/<id>/` (`index.js`, chunks, `style.css`); the service serves it from
-  `FAFNIRX_MODULE_UI`. Build = `vite.module.config.ts`.
+  `FAFNIRX_PLUGIN_UI`. Build = `vite.module.config.ts`.
 - `react`, `react/jsx-runtime`, `@/sdk`, `@/components/ui/*` are not bundled: at run time they come from `window.__fafnirx`
   (`src/sdk/runtime.ts`), so one React, same i18n, toasts, look. Everything else (icons, hls.js) is bundled. `style.css` = Tailwind
   classes of the module, same theme (`src/theme.css`).
@@ -106,19 +71,23 @@ Built apart, loaded by the browser from the module while it's up. Not in the app
 
 ## Rules
 
-1. Module crate depends on `fafnirx-module-api` + `fafnirx-common` only (`crates/module-api/tests/rules.rs`).
+1. Module crate depends on `fafnirx-module-api` + `fafnirx-common` only (a module that reads sources also `fafnirx-fetch-api`) (`crates/module-api/tests/rules.rs`).
 2. Master never names a module; asks capabilities or proxies. No module → plain file (icon, native player, download).
 3. Web part imports `@/sdk`, `@/components/ui`, own folder only (oxlint). App never imports a module.
 4. Shared data goes through the master (columns it keeps per file). Own tables would be `m_<id>_*` with own migrations; none yet.
+   A module reads `files/` read-only; fetch modules write only directly in `tmp/`, which the master checks and commits.
 5. No login in modules; listen where only the master reaches, trust the token.
 
 ## Writing one
 
-1. `modules/<id>/service`, crate `fafnirx-<id>`, add to workspace. `/manifest` with real capabilities + `ui`
-   (`modules/video/service/src/ui.rs`), browser routes under `/files/`, `bearer_matches` guard on everything, validate `p` stays in
-   the tree, exit on stdin EOF when `FAFNIRX_MODULE_EXIT_WITH_STDIN` is set (`main.rs`).
-2. Web part in `frontend/src/modules/<id>/` incl. `style.css` (copy video's).
-3. Dockerfile targets `<id>` and `plugin-<id>`; compose service (profile `<id>`) in both compose files; matrix entries in
-   `docker.yml`; `smoke-image.sh`.
-4. Tests: service unit tests, e2e in `tests/` (`e2e-video.mjs`, `e2e-plugin.mjs`: real master + real service, fake heavy program).
+1. `modules/<id>/service`, crate `fafnirx-<id>`, added to the workspace. A module that reads sources implements the kit's `Fetcher`
+   ([Plugins](plugins.md)); another one (video) is its own service on the kit's `start`, `run` and `ui`: `/manifest` with real
+   capabilities and `ui`, browser routes under `/files/`, `bearer_matches` guard on everything, validate that `p` stays in the tree.
+2. Web part in `frontend/src/modules/<id>/` including `style.css` (copy video's).
+3. `docker/Dockerfile.<id>` (it builds only this module), a compose service with profile `<id>` in `docker/docker-compose.yml`, a
+   `connect` smoke test in `docker.yml`, the image in the release.
+4. Tests: service unit tests, e2e in `tests/` (`e2e-video.mjs`: real master + real service, fake heavy program).
    Docs page like [video](video.md).
+
+A module in its own repository does the same: its own Dockerfile and image, built against the `fafnirx-module-kit` crate (and
+`fafnirx-fetch-api` for a kind of source). [Plugins](plugins.md) is the guide.

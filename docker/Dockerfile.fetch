@@ -1,0 +1,33 @@
+# The fetch module (sources made of addresses of files and feeds), a container that connects to the master by itself (docs/modules.md).
+# Build from the repository root:  docker build -f docker/Dockerfile.fetch -t fafnirx-fetch .
+
+FROM node:22-bookworm-slim AS web
+WORKDIR /src/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend ./
+RUN npm run build:module -- fetch
+
+FROM rust:1-bookworm AS build
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates crates
+COPY modules modules
+COPY proto proto
+RUN cargo build --release -p fafnirx-fetch
+
+FROM debian:bookworm-slim
+# ca-certificates is for https addresses; curl is for the health check. The module runs no other program.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --uid 1000 --create-home fafnirx \
+    && mkdir /data && chown fafnirx /data
+COPY --from=build /src/target/release/fafnirx-fetch /usr/local/bin/fafnirx-fetch
+COPY --from=web /src/frontend/dist-modules/fetch /usr/share/fafnirx-fetch/ui
+ENV FAFNIRX_DATA=/data FAFNIRX_PLUGIN_LISTEN=0.0.0.0:8091 FAFNIRX_PLUGIN_UI=/usr/share/fafnirx-fetch/ui
+EXPOSE 8091
+USER fafnirx
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${FAFNIRX_PLUGIN_LISTEN##*:}/health" || exit 1
+CMD ["fafnirx-fetch"]

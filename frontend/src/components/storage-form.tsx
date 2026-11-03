@@ -6,27 +6,30 @@ import { PRESETS } from '@/lib/mirror-presets'
 import { presetOf, type Storage } from '@/lib/storage'
 import { cn } from '@/lib/utils'
 
-/** Picks a kind of storage and asks for what it needs. */
-export function StorageForm({ value, onChange, source = false }: { value: Storage; onChange: (next: Storage) => void; source?: boolean }) {
+/** Picks a kind of storage and asks for what it needs: the protocols, or (for a source) the providers called services. */
+export function StorageForm({ value, onChange, services = false }: { value: Storage; onChange: (next: Storage) => void; services?: boolean }) {
   const t = useT()
   const preset = presetOf(value)
   const set = (patch: Partial<Storage>) => onChange({ ...value, ...patch })
+  const offered = PRESETS.filter((p) => !!p.service === services)
   return (
     <div className="space-y-3">
-      <div role="radiogroup" aria-label={t('Storage')} className="grid gap-2 sm:grid-cols-3">
-        {PRESETS.filter((p) => source || !p.sourceOnly).map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            role="radio"
-            aria-checked={p.id === value.preset}
-            onClick={() => set({ preset: p.id, values: {} })}
-            className={cn('rounded-md border px-3 py-2 text-left text-sm transition-colors hover:bg-accent/50', p.id === value.preset && 'border-primary bg-primary/5 ring-1 ring-primary')}
-          >
-            {t(p.label)}
-          </button>
-        ))}
-      </div>
+      {offered.length > 1 && (
+        <div role="radiogroup" aria-label={t('Storage')} className="grid gap-2 sm:grid-cols-3">
+          {offered.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              role="radio"
+              aria-checked={p.id === value.preset}
+              onClick={() => set({ preset: p.id, values: {} })}
+              className={cn('rounded-md border px-3 py-2 text-left text-sm transition-colors hover:bg-accent/50', p.id === value.preset && 'border-primary bg-primary/5 ring-1 ring-primary')}
+            >
+              {t(p.label)}
+            </button>
+          ))}
+        </div>
+      )}
       <p className="text-xs text-muted-foreground">{t(preset.hint)}</p>
       <div className="grid gap-3 sm:grid-cols-2">
         {preset.fields.map((f) => (

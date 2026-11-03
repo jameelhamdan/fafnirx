@@ -9,6 +9,8 @@
 | [Mirrors](mirrors.md) | Keep offsite backups (compressed, encrypted) and replicas |
 | [Modules](modules.md) | Understand optional features that run as services of their own, and add one |
 | [Video module](video.md) | Set up video playback, subtitles, video details and poster frames |
+| [Fetch module](fetch.md) | Web sources (addresses and feeds): settings, running it, legal notes |
+| [Plugins](plugins.md) | Writing a plugin for a new kind of source |
 | [Deployment](deployment.md) | Plan storage, proxy, tunnel and backups |
 | [Architecture](architecture.md) | See components, data model, IDs, locking, API |
 | [Development](development.md) | Build, test, change the schema or the API, release |
