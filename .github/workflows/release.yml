@@ -149,7 +149,7 @@ jobs:
           - { os: ubuntu-22.04, name: linux-x86_64, deb: true }
           - { os: ubuntu-22.04-arm, name: linux-aarch64, deb: true }
           - { os: macos-15-intel, name: macos-x86_64 }
-          - { os: macos-latest, name: macos-aarch64 }
+          - { os: macos-15, name: macos-aarch64 }
           - { os: windows-latest, name: windows-x86_64 }
     runs-on: ${{ matrix.os }}
     env:
