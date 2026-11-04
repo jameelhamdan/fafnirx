@@ -76,16 +76,21 @@ X-GNOME-Autostart-enabled=true
     )
 }
 
+/// This program's file as it was when the process started (`main` asks for it first). An update replaces the file while this
+/// process runs: on Windows the running image is then renamed, and `current_exe` reports that name, which is not a program to
+/// start. Everything that starts the client again after an update runs this path, which is the new version.
+pub fn program() -> std::path::PathBuf {
+    static PROGRAM: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    PROGRAM.get_or_init(|| std::env::current_exe().unwrap_or_else(|_| "fafnirx".into())).clone()
+}
+
 /// Windows: starts this executable again with `args`, detached from the console.
 #[cfg(windows)]
 pub fn spawn_detached(args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>) -> std::io::Result<()> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
-    Command::new(std::env::current_exe()?)
-        .args(args)
-        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
-        .spawn()?;
+    Command::new(program()).args(args).creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS).spawn()?;
     Ok(())
 }
 
@@ -341,7 +346,7 @@ pub fn uninstall(config_path: &Path, dry: bool) -> Result<()> {
 
 /// Starts the client in the background without a service (an install of one user, or a build run by hand).
 pub fn start_background(config_path: &Path) -> Result<()> {
-    let mut command = Command::new(std::env::current_exe()?);
+    let mut command = Command::new(program());
     command.arg("--config").arg(config_path).args(["run", "--log-file"]);
     if cfg!(windows) {
         command.arg("--hidden");

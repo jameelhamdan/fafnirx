@@ -48,7 +48,7 @@ enum Action {
     /// Sync a local folder, to be chosen, with this existing synced folder.
     AttachSynced(String),
     /// Make a synced folder from a local folder, to be chosen.
-    NewShared,
+    NewSynced,
     DetachSynced(String),
     /// What the synced folder does with a file changed here and on the master.
     SetMode(String, Mode),
@@ -107,7 +107,7 @@ struct Menus {
     /// The line of each attached folder that says how it is doing.
     synced_states: Vec<(String, Line)>,
     /// The attached folders and the synced folders of the master that are not attached, as the submenu shows them.
-    shown_synced: (Vec<SyncedFolder>, Vec<String>),
+    shown_synced: (Vec<SyncedFolder>, Vec<(String, bool)>),
 }
 
 impl Menus {
@@ -122,7 +122,7 @@ impl Menus {
         let client = control("Stop client");
         let access = control("Full Disk Access settings...");
         let quit = control("Quit tray");
-        let add_folders = MenuItem::new("Add folders...", true, None);
+        let add_folders = MenuItem::new("Collect folders...", true, None);
         let open = [
             Line::new("Open config file", true),
             Line::new("Open log file", true),
@@ -145,9 +145,9 @@ impl Menus {
             (open[3].item.id().clone(), Action::OpenUrl(cfg.dashboard_url())),
         ];
 
-        let folders = Submenu::new("Folders", true);
+        let folders = Submenu::new("Collected folders", true);
         let folder_actions = fill_folders_menu(&folders, &add_folders, &cfg.folders);
-        let synced = Submenu::new("SyncedFolder folders", true);
+        let synced = Submenu::new("Synced folders", true);
         let (synced_actions, synced_states) = fill_synced_menu(&synced, &cfg.synced, &[]);
         let sep = PredefinedMenuItem::separator;
         let menu = Menu::new();
@@ -243,8 +243,8 @@ impl Menus {
     }
 
     /// Rebuilds the synced folders when the config or the master's list of them changed.
-    fn sync_synced(&mut self, attached: &[SyncedFolder], on_master: &[String]) {
-        let available: Vec<String> = on_master.iter().filter(|n| !attached.iter().any(|s| &s.name == *n)).cloned().collect();
+    fn sync_synced(&mut self, attached: &[SyncedFolder], on_master: &[(String, bool)]) {
+        let available: Vec<(String, bool)> = on_master.iter().filter(|(n, _)| !attached.iter().any(|s| &s.name == n)).cloned().collect();
         if (attached, available.as_slice()) != (self.shown_synced.0.as_slice(), self.shown_synced.1.as_slice()) {
             (self.synced_actions, self.synced_states) = fill_synced_menu(&self.synced, attached, &available);
             self.shown_synced = (attached.to_vec(), available);
@@ -272,7 +272,7 @@ impl Menus {
     }
 }
 
-/// Fills the "Folders" submenu: one entry per collected folder, then "Add folders...".
+/// Fills the "Collected folders" submenu: one entry per collected folder, then "Collect folders...".
 fn fill_folders_menu(menu: &Submenu, add_item: &MenuItem, folders: &[Folder]) -> Actions {
     for _ in 0..menu.items().len() {
         menu.remove_at(0);
@@ -296,9 +296,9 @@ fn fill_folders_menu(menu: &Submenu, add_item: &MenuItem, folders: &[Folder]) ->
     actions
 }
 
-/// Fills the "SyncedFolder folders" submenu: the folders synced here (⇄), the synced folders of the master that are not
+/// Fills the "Synced folders" submenu: the folders synced here (⇄), the synced folders of the master that are not
 /// synced here yet, and the way to make a new one.
-fn fill_synced_menu(menu: &Submenu, attached: &[SyncedFolder], available: &[String]) -> (Actions, Vec<(String, Line)>) {
+fn fill_synced_menu(menu: &Submenu, attached: &[SyncedFolder], available: &[(String, bool)]) -> (Actions, Vec<(String, Line)>) {
     for _ in 0..menu.items().len() {
         menu.remove_at(0);
     }
@@ -324,8 +324,12 @@ fn fill_synced_menu(menu: &Submenu, attached: &[SyncedFolder], available: &[Stri
     if !attached.is_empty() && !available.is_empty() {
         let _ = menu.append(&PredefinedMenuItem::separator());
     }
-    for name in available {
-        let item = MenuItem::new(format!("Sync \"{name}\" with a folder..."), true, None);
+    for (name, read_only) in available {
+        let item = MenuItem::new(
+            format!("Sync \"{name}\" with a folder...{}", if *read_only { " (read only)" } else { "" }),
+            true,
+            None,
+        );
         actions.push((item.id().clone(), Action::AttachSynced(name.clone())));
         let _ = menu.append(&item);
     }
@@ -333,7 +337,7 @@ fn fill_synced_menu(menu: &Submenu, attached: &[SyncedFolder], available: &[Stri
         let _ = menu.append(&PredefinedMenuItem::separator());
     }
     let new = MenuItem::new("New folder from a local folder...", true, None);
-    actions.push((new.id().clone(), Action::NewShared));
+    actions.push((new.id().clone(), Action::NewSynced));
     let _ = menu.append(&new);
     (actions, states)
 }
@@ -520,16 +524,17 @@ fn confirm_then(text: String, change: impl FnOnce() -> anyhow::Result<()>) {
 }
 
 /// Syncs a folder chosen by the user with an existing synced folder.
-fn attach_existing_synced(config_path: &Path, name: &str) {
+fn attach_existing_synced(config_path: &Path, name: &str, read_only: bool) {
     let Some(dir) = rfd::FileDialog::new().set_title(format!("Choose the folder to sync with \"{name}\"")).pick_folder() else {
         return;
     };
-    let text = format!(
-        "Sync {} with the synced folder \"{name}\"?\n\nFiles from both are merged: what is only on one side is copied to the \
-         other, and if a file differs on both sides the server's is kept and yours is put aside \
-         (the menu of the folder changes that).",
-        dir.display()
-    );
+    let rule = if read_only {
+        "It is shared with you to read only: its files come to this folder, and nothing of this folder is sent."
+    } else {
+        "Files from both are merged: what is only on one side is copied to the other, and if a file differs on both sides the \
+         server's is kept and yours is put aside (the menu of the folder changes that)."
+    };
+    let text = format!("Sync {} with the synced folder \"{name}\"?\n\n{rule}", dir.display());
     if ask_yes_no(rfd::MessageLevel::Info, text) {
         attach_synced_dialog(config_path, name, &dir, false);
     }
@@ -553,7 +558,7 @@ fn owner_of(status: Option<&daemon::Status>) -> &str {
 /// Makes a synced folder named after a folder chosen by the user, and syncs that folder with it. `owner` is the user, to
 /// show the folder the way the master names it.
 fn new_synced(config_path: &Path, on_master: &[(String, bool)], owner: &str) {
-    let Some(dir) = rfd::FileDialog::new().set_title("Choose the folder to share").pick_folder() else { return };
+    let Some(dir) = rfd::FileDialog::new().set_title("Choose the folder to sync").pick_folder() else { return };
     let Some(name) = synced_name_of(&dir) else {
         message(
             rfd::MessageLevel::Warning,
@@ -661,8 +666,11 @@ impl Env {
                 }
             }
             Action::RemoveFolder(name) => remove_folder_dialog(&self.config_path, &name),
-            Action::AttachSynced(name) => attach_existing_synced(&self.config_path, &name),
-            Action::NewShared => {
+            Action::AttachSynced(name) => {
+                let read_only = daemon::read_status(&self.state_dir).is_some_and(|s| s.synced_readonly.contains(&name));
+                attach_existing_synced(&self.config_path, &name, read_only);
+            }
+            Action::NewSynced => {
                 let known = self.on_master.locked().clone();
                 new_synced(&self.config_path, &known, owner_of(daemon::read_status(&self.state_dir).as_ref()));
             }
@@ -785,7 +793,8 @@ pub fn run(config_path: PathBuf) -> Result<()> {
             menus.show_access(blocked.as_deref());
             if let Some(c) = &cfg_now {
                 menus.sync_folders(&c.folders);
-                let on_master: Vec<String> = env.on_master.locked().iter().map(|(n, _)| n.clone()).collect();
+                let readonly = status.as_ref().map(|s| s.synced_readonly.as_slice()).unwrap_or_default();
+                let on_master: Vec<(String, bool)> = env.on_master.locked().iter().map(|(n, _)| (n.clone(), readonly.contains(n))).collect();
                 menus.sync_synced(&c.synced, &on_master);
             }
             menus.show_synced_state(status.as_ref(), unix);

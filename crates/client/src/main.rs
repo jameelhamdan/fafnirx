@@ -183,6 +183,8 @@ fn init_logging(file: Option<&std::path::Path>) {
 }
 
 fn main() -> Result<()> {
+    // Before anything can replace the program (an update): see `service::program`.
+    service::program();
     let cli = Cli::parse();
     let pause = cli.pause;
     let result = run(cli);

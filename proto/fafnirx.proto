@@ -154,6 +154,7 @@ message ListFoldersResponse {
   repeated string names = 1;    // every folder the user can use, as <owner>/<name>
   repeated string mine = 2;     // those of the names that are the user's own
   repeated string ids = 3;      // the stable id of each of the names, in the same order: it keeps working when the folder is renamed
+  repeated string readonly = 4; // those of the names the user can read but not change
 }
 
 message CreateFolderRequest {

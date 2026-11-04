@@ -21,6 +21,8 @@ struct SyncedNames {
     mine: Vec<String>,
     /// The stable id of each of `all`, in the same order.
     ids: Vec<String>,
+    /// The ones the user can read but not change.
+    readonly: Vec<String>,
 }
 
 impl SyncedNames {
@@ -41,7 +43,7 @@ impl SyncedNames {
 async fn synced_names(client: &mut net::Client) -> Result<SyncedNames> {
     use fafnirx_common::pb::ListFoldersRequest;
     let r = client.list_folders(ListFoldersRequest {}).await.map_err(synced_error)?.into_inner();
-    Ok(SyncedNames { all: r.names, mine: r.mine, ids: r.ids })
+    Ok(SyncedNames { all: r.names, mine: r.mine, ids: r.ids, readonly: r.readonly })
 }
 
 async fn make_folder(client: &mut net::Client, name: &str) -> Result<()> {
@@ -50,13 +52,15 @@ async fn make_folder(client: &mut net::Client, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Prints the synced folders of the user as `<owner>/<name>`, one per line; the user's own are followed by a tab and `own`.
+/// Prints the synced folders of the user as `<owner>/<name>`, one per line; the user's own are followed by a tab and `own`, those they cannot change by `read-only`.
 pub async fn list_available(config_path: PathBuf) -> Result<()> {
     let mut client = connect(&config_path)?.client;
     let names = synced_names(&mut client).await?;
     for name in &names.all {
         if names.mine.contains(name) {
             println!("{name}\town");
+        } else if names.readonly.contains(name) {
+            println!("{name}\tread-only");
         } else {
             println!("{name}");
         }
@@ -97,6 +101,9 @@ pub async fn sync_folder(config_path: PathBuf, name: String, dir: PathBuf, creat
     }
     let synced = config::attach_synced_to_file(&config_path, &full, names.id_of(&full), &dir, mode)?;
     println!("{} is synced with \"{}\" ({})", synced.path.display(), synced.name, mode.name());
+    if names.readonly.contains(&full) {
+        println!("note: \"{full}\" is shared with you to read only: what is in it comes here, and nothing is sent");
+    }
     wake_client(&config_path);
     Ok(())
 }

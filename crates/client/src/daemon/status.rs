@@ -52,6 +52,8 @@ pub struct SyncedStatus {
     pub failing: usize,
     /// Files changed here and on the master that wait for a person to choose (the `ask` policy).
     pub conflicts: Vec<ConflictInfo>,
+    /// The folder can be read but not changed by this user: nothing is sent from here.
+    pub read_only: bool,
 }
 
 /// A file that waits for a decision: what each side has.
@@ -76,6 +78,9 @@ impl SyncedStatus {
         } else {
             let ok = self.last_error.is_empty() && self.failing == 0;
             parts.push(if ok { "in step" } else { "needs attention" }.to_string());
+            if self.read_only {
+                parts.push("read only".to_string());
+            }
             parts.push(format!("{} files", self.files));
             parts.push(format!("synced {} ago", age(now - self.last_cycle)));
         }
@@ -148,6 +153,8 @@ pub struct Status {
     pub synced: Vec<SyncedStatus>,
     /// The synced folders the user can use on the master, with whether each is their own: what the tray offers to attach.
     pub synced_on_master: Vec<(String, bool)>,
+    /// Those of them the user can read but not change: they are received here and nothing is sent.
+    pub synced_readonly: Vec<String>,
     pub updated: i64,
 }
 
@@ -218,4 +225,17 @@ pub fn restart_tray_marker(state_dir: &Path) -> PathBuf {
 /// What the daemon answers to an update marker: the text of the marker (so an old answer is not taken for a new one), then `current <version>`, `updated <version>` or `failed: <why>`.
 pub fn update_result_file(state_dir: &Path) -> PathBuf {
     control_dir(state_dir).join("update-result")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_folder_that_can_only_be_read_says_so() {
+        let folder = SyncedStatus { last_cycle: 1_000, files: 3, read_only: true, ..Default::default() };
+        assert_eq!(folder.summary(1_030), "in step, read only, 3 files, synced 30s ago");
+        let own = SyncedStatus { read_only: false, ..folder };
+        assert_eq!(own.summary(1_030), "in step, 3 files, synced 30s ago");
+    }
 }

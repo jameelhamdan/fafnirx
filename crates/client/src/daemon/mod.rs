@@ -222,7 +222,10 @@ fn spawn_heartbeat(hub: Hub, mut client: Client, config_path: PathBuf, identity:
                             if let Ok(listed) = client.list_folders(pb::ListFoldersRequest {}).await {
                                 let listed = listed.into_inner();
                                 let names = listed.names.iter().map(|n| (n.clone(), listed.mine.contains(n))).collect();
-                                hub.status.edit(|s| s.synced_on_master = names);
+                                hub.status.edit(|s| {
+                                    s.synced_on_master = names;
+                                    s.synced_readonly = listed.readonly.clone();
+                                });
                                 // A folder renamed on the master is renamed here: it is attached by its id.
                                 let by_id: Vec<(String, String)> = listed.names.iter().cloned().zip(listed.ids.iter().cloned()).collect();
                                 match crate::config::follow_renames_in_file(&config_path, &by_id) {
@@ -524,8 +527,10 @@ async fn sync_attached(attached: &mut Vec<crate::synced::Attached>, cfg: &Config
             Err(e) => daemon.status.edit(|st| st.last_error = format!("{}: {e:#}", s.name)),
         }
     }
+    let readonly = daemon.status.snapshot().synced_readonly;
     for a in attached.iter_mut() {
         let name = a.name().to_string();
+        a.set_read_only(readonly.contains(&name));
         match a.cycle(cfg).await {
             Ok(r) => {
                 log_report(&r);

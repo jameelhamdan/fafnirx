@@ -44,6 +44,7 @@ pub struct Attached {
     /// Files answered at the start of this pull, with the master's content the answer was about: if the master lists that
     /// same change again (the cursor was held back), it is not a new conflict.
     answered: HashMap<String, Vec<u8>>,
+    read_only: bool,
 }
 
 /// What the master listed: the point to continue from next time, and the paths.
@@ -117,6 +118,8 @@ pub fn status_of(synced: &SyncedFolder, state: &State) -> SyncedStatus {
         last_error,
         held: state.held_files(),
         failing: state.pending_failures().unwrap_or(0) as usize,
+        // Only the running client knows (the master says); `Attached::status` sets it.
+        read_only: false,
         conflicts: state
             .pendings()
             .unwrap_or_default()
@@ -156,6 +159,7 @@ impl Attached {
             host,
             spellings: Spellings::new(&synced.path),
             answered: HashMap::new(),
+            read_only: false,
         })
     }
 
@@ -184,7 +188,13 @@ impl Attached {
 
     /// What this folder is doing, for the status file, the tray and the master.
     pub fn status(&self) -> SyncedStatus {
-        status_of(&self.synced, &self.engine.state)
+        SyncedStatus { read_only: self.read_only, ..status_of(&self.synced, &self.engine.state) }
+    }
+
+    /// The user may read this folder but not change it: what the master has is received, and nothing is sent (the master would
+    /// refuse every file). Files changed here stay as they are until the master's version replaces them.
+    pub fn set_read_only(&mut self, read_only: bool) {
+        self.read_only = read_only;
     }
 
     async fn run_cycle(&mut self, cfg: &Config) -> Result<Report, SyncError> {
@@ -193,6 +203,9 @@ impl Attached {
         // Sending only: nothing of the master's is asked for, so nothing is received or deleted here.
         if self.synced.mode.pulls() {
             self.pull(&mut report).await?;
+        }
+        if self.read_only {
+            return Ok(report);
         }
         // A file waiting for a person is neither sent nor taken for deleted.
         self.engine.skip = self.engine.state.pending_paths()?;

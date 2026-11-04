@@ -8,13 +8,12 @@ use fafnirx_common::LockExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 /// This program's file as it was when the tray started. After an update the file at that path is the new version, while the
 /// operating system may report the running (old) image under another name, so everything the tray starts uses this.
 pub fn exe() -> PathBuf {
-    static EXE: OnceLock<PathBuf> = OnceLock::new();
-    EXE.get_or_init(|| std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fafnirx"))).clone()
+    service::program()
 }
 
 /// Keeps a helper from flashing a console window on Windows.

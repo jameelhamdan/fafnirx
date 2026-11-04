@@ -70,7 +70,7 @@ var
   Dir: String;
 begin
   Dir := FolderEdit.Text;
-  if BrowseForFolder('Select the folder to back up', Dir, False) then
+  if BrowseForFolder('Select the folder to sync', Dir, False) then
     FolderEdit.Text := Dir;
 end;
 
@@ -116,8 +116,8 @@ begin
   ServerEdit := AddRow(0, 'Server address (for example nas.lan, or https://fafnirx.example.com)', ExpandConstant('{param:SERVER|}'), False, nil);
   TokenEdit := AddRow(ScaleY(48), 'Device token', ExpandConstant('{param:TOKEN|}'), False, nil);
   TokenEdit.PasswordChar := '*';
-  FolderEdit := AddRow(ScaleY(96), 'Folder to back up',
-    ExpandConstant('{param:FOLDER|{userdocs}}'), True, @BrowseFolder);
+  FolderEdit := AddRow(ScaleY(96), 'Folder to sync (optional: leave empty to add folders later from the tray)',
+    ExpandConstant('{param:FOLDER|}'), True, @BrowseFolder);
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
@@ -137,9 +137,9 @@ begin
       MsgBox('Enter the server address and the device token.', mbError, MB_OK);
       Result := False;
     end
-    else if not DirExists(FolderEdit.Text) then
+    else if (Trim(FolderEdit.Text) <> '') and not DirExists(FolderEdit.Text) then
     begin
-      MsgBox('Select an existing folder to back up.', mbError, MB_OK);
+      MsgBox('Select an existing folder to sync, or leave it empty.', mbError, MB_OK);
       Result := False;
     end;
   end;
@@ -168,6 +168,7 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   Server, Log: String;
   Output: AnsiString;
+  Ok: Boolean;
 begin
   if CurStep <> ssPostInstall then
     Exit;
@@ -188,9 +189,12 @@ begin
   Log := ExpandConstant('{tmp}\fafnirx-setup.log');
   WizardForm.StatusLabel.Caption := 'Connecting to the server...';
   SetEnvironmentVariable('FAFNIRX_TOKEN', Trim(TokenEdit.Text));
-  if not RunClient('enroll --no-service --server "' + Server + '"', Log)
-     or not RunClient('add-folder "' + RemoveBackslashUnlessRoot(FolderEdit.Text) + '"', Log)
-     or not RunClient('install-service', Log) then
+  Ok := RunClient('enroll --no-service --server "' + Server + '"', Log);
+  if Ok and (Trim(FolderEdit.Text) <> '') then
+    Ok := RunClient('add-folder "' + RemoveBackslashUnlessRoot(Trim(FolderEdit.Text)) + '"', Log);
+  if Ok then
+    Ok := RunClient('install-service', Log);
+  if not Ok then
   begin
     SetEnvironmentVariable('FAFNIRX_TOKEN', '');
     LoadStringFromFile(Log, Output);

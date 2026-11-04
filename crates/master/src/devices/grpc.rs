@@ -519,16 +519,17 @@ impl Collector for Service {
 
     async fn list_folders(&self, req: Request<ListFoldersRequest>) -> Result<Response<ListFoldersResponse>, Status> {
         let who = caller_of(&req, &self.trusted)?;
-        let (names, mine, ids) = self
+        let (names, mine, ids, readonly) = self
             .blocking(move |c| {
                 let (_, owner) = authenticate_user(c, &who)?;
                 let all = devices::folders(c, owner)?;
                 let mine = all.iter().filter(|f| f.mine).map(|f| f.folder.clone()).collect::<Vec<_>>();
                 let ids = all.iter().map(|f| f.public_id.to_string()).collect();
-                Ok((all.into_iter().map(|f| f.folder).collect::<Vec<_>>(), mine, ids))
+                let readonly = all.iter().filter(|f| !f.can_write).map(|f| f.folder.clone()).collect::<Vec<_>>();
+                Ok((all.into_iter().map(|f| f.folder).collect::<Vec<_>>(), mine, ids, readonly))
             })
             .await?;
-        Ok(Response::new(ListFoldersResponse { names, mine, ids }))
+        Ok(Response::new(ListFoldersResponse { names, mine, ids, readonly }))
     }
 
     async fn create_folder(&self, req: Request<CreateFolderRequest>) -> Result<Response<CreateFolderResponse>, Status> {
