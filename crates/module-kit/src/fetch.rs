@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use fafnirx_fetch_api::{Checked, FetchEntry, FetchGet, FetchListing, FetchRequest, Fetched, FETCH_CHECK_PATH, FETCH_GET_PATH, FETCH_LIST_PATH};
-use fafnirx_module_api::{bearer_matches, capability, Manifest, CONTRACT, HEALTH_PATH, MANIFEST_PATH, UI_PREFIX};
+use fafnirx_module_api::{bearer_matches, capability, Manifest, HEALTH_PATH, MANIFEST_PATH, UI_PREFIX};
 use serde_json::{Map, Value};
 use std::future::Future;
 use std::path::{Component, Path, PathBuf};
@@ -150,14 +150,11 @@ async fn manifest<M: Fetcher>(State(app): State<Arc<App<M>>>) -> Json<Manifest> 
         capabilities.push(fafnirx_fetch_api::capability(info.kind));
     }
     capabilities.push(capability::STATUS.into());
-    Json(Manifest {
-        id: info.id.into(),
-        version: info.version.into(),
-        contract: CONTRACT,
-        capabilities,
-        ui: crate::ui::describe(app.ui.as_deref()),
-        setup: readiness.setup,
-    })
+    Json(
+        Manifest::new(info.id, info.version, capabilities)
+            .ui(crate::ui::describe(app.ui.as_deref()))
+            .setup(readiness.setup),
+    )
 }
 
 async fn status<M: Fetcher>(State(app): State<Arc<App<M>>>) -> Json<Value> {
@@ -275,8 +272,7 @@ mod tests {
         }
 
         async fn list(&self, config: &String) -> anyhow::Result<FetchListing> {
-            let entry = FetchEntry { path: format!("{config}.txt"), marker: "1".into(), size: 0, mtime_ns: 0, reference: Value::Null };
-            Ok(FetchListing { items: vec![entry], skipped: 0, complete: true })
+            Ok(FetchListing::new(vec![FetchEntry::new(format!("{config}.txt"), "1")]))
         }
 
         async fn get(&self, config: &String, entry: &FetchEntry, dest: &Path) -> anyhow::Result<u64> {
@@ -340,7 +336,7 @@ mod tests {
         let (status, body) = call(&f.app, "GET", "/manifest", Some(T), None).await;
         assert_eq!(status, StatusCode::OK);
         let m: Manifest = serde_json::from_str(&body).unwrap();
-        assert_eq!((m.id.as_str(), m.version.as_str(), m.contract), ("echo", "1.2.3", CONTRACT));
+        assert_eq!((m.id.as_str(), m.version.as_str(), m.contract), ("echo", "1.2.3", fafnirx_module_api::CONTRACT));
         assert!(m.has("fetch.echo") && m.has(capability::STATUS) && m.setup.is_empty() && m.ui.is_none());
 
         let f = fixture(false);

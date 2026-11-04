@@ -1,8 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useState, type FormEvent } from 'react'
+import { useState } from 'react'
 import { toast } from 'sonner'
-import { Button } from '../ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog'
+import { FormDialog } from '../form-dialog'
 import { Input } from '../ui/input'
 import { api } from '@/lib/api'
 import { useT } from '@/lib/i18n'
@@ -27,22 +26,18 @@ export function MoveDialog({ device, path, onClose, onMoved }: { device: string;
     },
     onError: (e) => toast.error(e.message),
   })
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    if (to.trim() && to.trim() !== path) move.mutate()
-  }
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <form onSubmit={submit} className="space-y-4">
-          <DialogHeader>
-            <DialogTitle>{t('Move or rename')}</DialogTitle>
-            <DialogDescription>{t('Type the new path on {device}. Folders are made as needed. Albums that show the folder follow it.', { device })}</DialogDescription>
-          </DialogHeader>
-          <Input autoFocus value={to} onChange={(e) => setTo(e.target.value)} aria-label={t('New path')} />
-          <DialogFooter><Button type="submit" disabled={!to.trim() || to.trim() === path || move.isPending}>{t('Move')}</Button></DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={t('Move or rename')}
+      description={t('Type the new path on {device}. Folders are made as needed. Albums that show the folder follow it.', { device })}
+      onSubmit={() => move.mutate()}
+      submit={t('Move')}
+      disabled={!to.trim() || to.trim() === path}
+      pending={move.isPending}
+    >
+      <Input autoFocus value={to} onChange={(e) => setTo(e.target.value)} aria-label={t('New path')} />
+    </FormDialog>
   )
 }

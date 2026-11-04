@@ -11,7 +11,7 @@ icon in the top bar. Pages update live.
 | Files | Browse, search, preview, download, upload, move, delete; open media in the viewer |
 | Processing | Background work ([details](#processing)) |
 | Devices, Sources, Mirrors | Computers that send; Google Drive and other storage; offsite backups and replicas |
-| Shared folders | Make, share with users, delete (not for read-only users) |
+| Folders | Yours, those shared with you and the master folders, in one list: make one, share it with users, rename, delete (not for read-only users) |
 | Users, Settings | Administrators only (Settings are for the whole application) |
 
 Your name, top right, opens a menu with **Change password** (it ends your other logins) and **Log out**.
@@ -46,24 +46,27 @@ Anyone who cannot see a file gets 404 for it.
 
 ## Files
 
-The top level lists devices, local folders, sources and the master files. A badge shows **Changeable** (master files and
-local folders, if your role may write) or **Read-only** (computers and sources: browse, download, hide only).
+The top level lists devices, local folders (those a source writes into too) and the master files. A badge shows **Changeable**
+(master files and local folders, if your role may write) or **Read-only** (computers: browse, download, hide only).
 
 - **Search** (current folder and below), **Type**, **Sort**, **Deleted** (also list deleted files with their removal date), list or grid.
-- **Select** → Download (zip for several), Add to album, Use folder as album, Move or rename, Delete.
+- **Select** → Download (zip for several), Show as album, Move or rename, Delete.
 - **Details** of a file: preview, EXIF, content hash, **history** (each version downloadable and restorable; restoring adds a
   new newest version and loses nothing).
 - **Photos and videos** also have **Open in viewer** (or the play icon in the list) and **In the library**: favorite, archive,
-  albums, rating, description, tags, date, place: the same data as the Timeline. Read-only users can view, not change.
+  rating, description, tags, date, place: the same data as the Timeline. Read-only users can view, not change.
 - **Move or rename** (one file or folder): local folders, shared folders and master files only, to any path on the same device. A folder
-  moves with its contents; nothing moves if a name is in the way. One `rename` event, no Trash; albums showing the folder
-  follow it. Files a computer or source sent return 409: they are theirs to move.
+  moves with its contents; nothing moves if a name is in the way. One `rename` event per file, no Trash. Albums and sources
+  that point into a moved folder go with it, wherever it goes. Files a computer sent return 409: they are theirs to move.
+- **Rename folder** (the top-level folders you own: local and shared): changes the name everywhere at once. Files, history,
+  members, albums and sources stay attached. Computers that sync a renamed folder keep working (they address it by its id)
+  and their config takes the new name. Master folders are renamed in **Folders** the same way. Computers (devices) are not renamed here.
 - **Still processing:** a photo or video whose details are unread shows a spinner (Timeline, albums, viewer, file list); its
   details say waiting, running or failed, linking to Processing.
 - **Upload** into a local folder or the master files by drag and drop (8 MiB pieces, parallel, resumable). **New local folder** is on the top level.
 
 Delete in the web app moves a file to the Trash; data stays until retention ends or you choose **Delete forever** there, which also frees the disk space. Computer or source files: theirs stay
-untouched and are not re-fetched. Shared folders: deleted on every computer ([Deletes](#shared-folders-sync-both-ways)).
+untouched and are not re-fetched. Synced folders: deleted on every computer ([Deletes](#folders-sync-both-ways)).
 
 ## Photos and videos
 
@@ -76,22 +79,20 @@ A view of the same files; originals are never changed.
 - **Where date and place come from:** the EXIF time taken, else the time digitised or saved, else the GPS clock, then XMP; the
   EXIF GPS position, then XMP; for a video, its tags. A damaged EXIF block keeps what could be read. After an update that
   reads more, **Processing → Read everything again** reads the files already in the library again.
-- **Select** (circle on a picture, box by a day): Favorite, Add to album, Add tags, Archive, Download, Delete.
+- **Select** (circle on a picture, box by a day): Favorite, Add tags, Archive, Download, Delete.
 - **Archive** hides from the Timeline. **Delete** goes to the Trash, restorable with albums, tags and favorite. **Delete forever** in the Trash erases the file, its versions, albums and tags at once; it cannot be undone.
 
 ### Albums
 
-Files picked by hand, a folder, or both.
+An album is a shortcut to a folder (**Show as album** on a folder in Files, with a name you choose, and the same button ends it); it holds no files of its own. Everything in the folder
+and below is in it, new files included, in natural name order (`Episode 2` before `Episode 10`) with a heading per season
+folder. One per folder and user.
 
-- **Folder album** (Use folder as album): everything in the folder and below is in the album, new files included, in natural
-  name order (`Episode 2` before `Episode 10`) with a heading per season folder. One per folder and user.
-- **It follows the folder:** when a folder is renamed in place (same parent) or moved, by a computer, a source, a local
-  folder or Move or rename, the album moves to the new path once the old folder is empty, and an album still named after the
-  folder takes the new name. A renamed album keeps its name. A folder emptied into an unrelated place, or whose new path
-  already has an album, is not followed.
+- **It follows the folder:** rename the folder (**Rename folder**) or move it (**Move or rename**) and the album moves with it;
+  an album still named after the folder takes the new name. A renamed album keeps its name. A folder renamed or emptied file
+  by file (by a computer) is followed when it is renamed in place. An album of a folder that exists already is not moved.
 - **Cover**, first match: the file you chose; a poster image in the album (`poster`, `cover`, `folder`, `thumb` or
-  `thumbnail`; `.jpg .jpeg .png .webp`; nearest the top first); for a folder album its first video, else first photo; for a
-  picked album its newest file.
+  `thumbnail`; `.jpg .jpeg .png .webp`; nearest the top first); its first video, else first photo.
 
 ### Artwork and episode details
 
@@ -162,20 +163,20 @@ Progress, speed and time left show on the Dashboard, Devices and the device page
 
 ```sh
 fafnirx enroll --server http://nas.lan:7443     # asks for the token; installs the service (boot, all users)
-fafnirx add-folder ~/Documents --name documents
-fafnirx remove-folder documents                 # stops collecting; the master keeps its data
-fafnirx folders | pause | resume
-fafnirx status [--json]                         # what the client is doing, shared folders included (also when stopped)
+fafnirx folder add ~/Documents --name documents      # to this computer's namespace on the master (the default target)
+fafnirx folder add ~/Music --target master:Music   # or to a master folder, or a folder of yours: see Folders and targets
+fafnirx folder list | remove <name>             # remove stops syncing; the master keeps its data
+fafnirx pause | resume
+fafnirx status [--json]                         # what the client is doing, synced folders included (also when stopped)
 fafnirx sync                                    # one cycle in the foreground
 fafnirx run                                     # the client in the foreground
 fafnirx release-deletes                         # apply held-back deletions now, in every folder
 fafnirx update [--check]                        # install the newest release and restart on it, or only look
 fafnirx restart                                # restart the client and the tray
-fafnirx shared list | create | attach | detach | keep   # shared folders, below
 fafnirx install-service | uninstall-service | tray
 ```
 
-Config (TOML, made by `enroll`; `--config` selects another): `%LocalAppData%\fafnirx\config.toml` (Windows, yours), `/Library/Application Support/fafnirx/config.toml`, `/etc/fafnirx/config.toml`. On macOS and Linux commands that change it or read the token ask for administrator rights (`sudo`); on Windows they do not. A Windows computer that still has `%ProgramData%\fafnirx\config.toml` from an older version keeps using it, with administrator rights (UAC), until that version is removed.
+Config (TOML, made by `enroll`; `--config` selects another): `%LocalAppData%\fafnirx\config.toml` (Windows, yours), `/Library/Application Support/fafnirx/config.toml`, `/etc/fafnirx/config.toml`. On macOS and Linux commands that change it or read the token ask for administrator rights (`sudo`); on Windows they do not.
 
 ### The service
 
@@ -190,9 +191,10 @@ delete_hold_hours = 12          # delete guard
 auto_update = true              # check GitHub releases every 6 hours
 update_public_key = "..."       # only for your own signed builds
 web_url = "http://nas.lan:8080" # tray link
-[[folders]]                     # written by add-folder
-[[shared]]                      # written by shared attach: name = "<owner>/<name>", path = "...",
-                                # conflict = "theirs|mine|both|ask", ask_timeout_hours = 24 (both last two optional)
+[[folders]]                     # written by folder add (target computer)
+[[synced]]                      # written by folder add (any other target): name = "<owner>/<name>" or "master:<folder>",
+                                # path = "...", id = "<stable id>", mode = "up|mine|keep|ask" (both is the default),
+                                # ask_timeout_hours = 24 (the rest optional)
 ```
 
 The token is in the OS keychain (`FAFNIRX_TOKEN_STORE=file` uses a file beside the config).
@@ -212,7 +214,7 @@ the client stopped).
 
 ### The first sync
 
-`add-folder` wakes the client. It lists folders, then hashes and uploads one file at a time in 4 MiB chunks over parallel
+`folder add` wakes the client. It lists folders, then hashes and uploads one file at a time in 4 MiB chunks over parallel
 streams within the bandwidth limit. A file is done once verified; after a stop the next cycle skips done files and resumes
 partial ones. Unreadable files are skipped, reported, and retried. The client's record of what it sent belongs to one
 master: if the master's database is replaced it notices (every cycle asks the master's id) and collects everything again.
@@ -220,7 +222,7 @@ master: if the master's database is replaced it notices (every cycle asks the ma
 ### The tray
 
 `fafnirx tray`: green online, red error, amber paused, grey not running. The menu shows phase, last sync, totals and last
-error, and has pause/resume, sync now, the **Folders** and **Shared folders** submenus, and links to the config, log, client
+error, and has pause/resume, sync now, the **Synced folders** submenu, and links to the config, log, client
 data folder and web app. **Check for updates** looks for a newer version; when there is one the entry becomes
 **Update to `<version>`** (see [Client updates](#client-updates)).
 
@@ -228,39 +230,55 @@ On macOS and Linux the folder entries need no password: the tray leaves a reques
 applies it. It only touches folders that belong to the user who asked (owner of the directory); for others it says to use
 `sudo fafnirx`. The commands themselves still need `sudo`.
 
-## Shared folders: sync both ways
+## Folders: sync both ways
 
-`add-folder` folders are backup: up only, never written by the client. A **shared folder** belongs to a user, not a
-computer: any computer of that user attaches a local folder, changes reach the others. Android and `add-folder` stay one-way.
+Folders added with the target `computer` are backup: up only, never written by the client. Every other **folder** belongs to a user (or
+to the master files), not to a computer: any computer of that user attaches a local folder to it, and changes reach the others.
+Whether it is shared with other users is only a matter of who may use it. Android and the target `computer` stay one-way.
 
-Make and attach from the tray (**Shared folders**) or the CLI:
+A folder of this computer can go to any of these **targets**, with any local path:
+
+| Target | What it is |
+|---|---|
+| `computer` | This computer's own namespace on the master. Up only |
+| `master:<folder>` | A subfolder of the master files that an administrator made under **Folders**. Every user can sync it; read-only users only read. The master files as a whole are never a target. Names and case follow the rules of the most limited computer |
+| `<owner>/<name>`, or a bare name | A folder of yours, or one another user shared with you (also made in Files), both ways |
+
+`--mode` is one setting for which way it goes and who wins a clash (see Conflicts): `both` (the default), `up`, `mine`, `keep` or `ask`.
+A master folder is renamed in **Folders** like any
+other folder (its files, albums, sources and mirrors go with it); a computer attached by id follows the new name by itself.
+
+Add from the tray (**Synced folders**) or the CLI, which is one command for every target:
 
 ```sh
-fafnirx shared list                          # <owner>/<name>, your own marked "own"
-fafnirx shared create family                 # made as <you>/family
-fafnirx shared attach ana/family ~/Family    # --create makes it first; the folder is made if it is not there
-fafnirx shared detach ana/family             # keeps the files, here and on the master
-fafnirx shared keep ana/family               # keep files whose deletion on the master is held back (see Deletes)
-fafnirx shared conflict ana/family [theirs|mine|both|ask]   # what happens to a file changed here and on the master
-fafnirx shared resolve ana/family theirs [path]             # answer the files waiting under "ask"
-
-A folder is named `<owner>/<name>` everywhere: tray, config (`[[shared]] name`), `status`, Files and the web page. The commands
-also take the short name when only one attached folder has it.
+fafnirx folder add ~/Documents --name documents            # this computer (the default target)
+fafnirx folder add ~/Music --target master:Music           # a master folder, both ways
+fafnirx folder add ~/Camera --target ana/photos --mode up  # a folder of yours, up only
+fafnirx folder add ~/Family --target ana/family --create   # --create makes the shared folder first; the local folder is made too
+fafnirx folder list [--available]            # this computer's folders; with --available, what the master offers (your own marked "own")
+fafnirx folder create family                 # a shared folder, made as <you>/family
+fafnirx folder mode ana/family up|both|mine|keep|ask   # which way it goes, and who wins a clash (no mode: show it)
+fafnirx folder remove ana/family             # stops syncing here; keeps the files, here and on the master
+fafnirx folder keep ana/family               # keep files whose deletion on the master is held back (see Deletes)
+fafnirx folder resolve ana/family theirs [path]             # answer the files waiting under "ask"
 ```
 
+A folder is named `<owner>/<name>` (or `master:<folder>`) everywhere: tray, config (`[[synced]] name`), `status`, Files and the web page. The
+commands also take the short name when only one attached folder has it. The config also keeps the folder's stable id; when the folder is
+renamed on the master the name in the config is updated at the next check.
+
 Files and folders the client creates in an attached folder belong to the owner of that folder (the service is root, which an
-editor like Obsidian could not write to), with the other computer's mode plus owner read/write. Files made by an older version
-stay root's: `sudo chown -R $USER <folder>`.
+editor like Obsidian could not write to), with the other computer's mode plus owner read/write.
 
 On macOS the client needs Full Disk Access for folders in Documents, Desktop, Downloads, iCloud Drive and on other volumes. It
 checks, and when a folder of that kind is blocked `fafnirx status` says `ATTENTION`, the tray shows `Needs Full Disk Access` (and
 asks once, with the menu entry **Allow Full Disk Access** opening the settings), and attaching such a folder from the tray
-or `add-folder`/`shared attach` warns first. After allowing it, `sudo fafnirx restart`.
+or `folder add` warns first. After allowing it, `sudo fafnirx restart`.
 
 The service never writes through a link (symlink) inside the folder: a file whose
 path crosses one fails with "is a link".
 
-Tray: **Shared folders** lists every usable folder as `<owner>/<name>`; **New shared folder from a folder...** names it
+Tray: **Synced folders** lists every usable folder as `<owner>/<name>` (or `master:<folder>`); **New folder from a local folder...** names it
 after the picked folder. Stored on the master as `files/users/<owner>/<name>/` with versions, trash,
 mirrors. The attached folder is not also backed up to the computer's device.
 
@@ -271,34 +289,35 @@ mirrors. The attached folder is not also backed up to the computer's device.
   The master refuses a new path breaking either rule and tells the sender. Same two rules for web upload/move into local
   folders and master files (SMB-visible); watcher and computer backups are taken as is. Case-only rename of a file or folder
   is a rename. Existing clashes: a computer keeps the first in sorted order, skips the rest with a message.
-- **Conflicts.** Two-way folders are for working together on files being changed, not for backup, and the master's
-  version has priority, as in Google Drive or OneDrive. A file changed here and on the master (or edited here and deleted
-  there, or edited while it is received) is settled by the folder's policy, set per folder and per computer (tray: the
-  folder's menu; CLI: `shared conflict`; `--conflict` on `shared attach`; config `[[shared]] conflict`):
-  - `theirs` (default): the master's version is kept, this computer's goes to `.fafnirx-conflicts/` in the folder (never
+- **Mode and conflicts.** Two-way folders are for working together on files being changed, not for backup, and the master's
+  version has priority, as in Google Drive or OneDrive. One setting per folder and per computer says which way it goes and what
+  happens to a file changed here and on the master (or edited here and deleted there, or edited while it is received). Tray: the
+  folder's menu; CLI: `folder mode`, or `--mode` on `folder add`; config `[[synced]] mode`:
+  - `both` (default): both ways. The master's version is kept, this computer's goes to `.fafnirx-conflicts/` in the folder (never
     synced).
-  - `mine`: this computer's version is sent and becomes the current one for every computer; the master keeps the old one
-    in its history. Replaces others' work: use it on the one computer that owns the file.
-  - `both`: this computer's becomes `name (conflict <computer> <date>).ext` and is sent as a new file; the master's takes
+  - `up`: send only. Nothing of the master's is received or deleted here, so there is no clash.
+  - `mine`: both ways. This computer's version is sent and becomes the current one for every computer; the master keeps the old
+    one in its history. Replaces others' work: use it on the one computer that owns the file.
+  - `keep`: both ways. This computer's becomes `name (conflict <computer> <date>).ext` and is sent as a new file; the master's takes
     the name. Copies reach every computer.
-  - `ask`: needs a screen (Windows, macOS, Linux desktop with the tray; refused on a computer without one). The file is
+  - `ask`: both ways, and needs a screen (Windows, macOS, Linux desktop with the tray; refused on a computer without one). The file is
     left alone on both sides and the tray shows a native dialog with both versions' size and time: **Keep the server's**,
     **Keep both** or **Keep mine** (asks once more, as it replaces the server's version); closing it decides later (folder menu: **Choose for the files that wait**).
-    `fafnirx shared resolve` answers the same from the command line. Nobody choosing within `ask_timeout_hours` (config
-    `[[shared]]`, default 24, 0 = wait for ever) keeps both, as Syncthing does.
-  One-way folders (`add-folder`) are unchanged: the client's files have priority. Replaced versions stay in history.
+    `fafnirx folder resolve` answers the same from the command line. Nobody choosing within `ask_timeout_hours` (config
+    `[[synced]]`, default 24, 0 = wait for ever) keeps both, as Syncthing does.
+  One-way folders (target `computer`) are unchanged: the client's files have priority. Replaced versions stay in history.
 - **Deletes.** Web app deletes apply on every computer at once; Trash keeps a version (restore returns it everywhere).
   Deletes by other computers pass the [delete guard](#the-delete-guard) both ways. A large one is held on this computer,
-  no timeout: `fafnirx release-deletes` deletes here, `fafnirx shared keep <name>` keeps the files and re-sends them. A held
+  no timeout: `fafnirx release-deletes` deletes here, `fafnirx folder keep <name>` keeps the files and re-sends them. A held
   deletion raises **Deletions held back** (see Alerts). A computer offline longer than trash retention gets the full file
   list: in-step paths not listed count as deleted (same guard); changed files follow the conflict policy.
-- **Status.** `fafnirx status` "shared folders" section (works with the client stopped; `--json` key `shared`): per folder
+- **Status.** `fafnirx status` "synced folders" section (works with the client stopped; `--json` key `synced`): per folder
   in step or not, files, last sync, held deletions, last problem. Tray: a line per folder. Web: computer page; the owner's
   folder page lists every attached computer.
-- **Web page.** **Shared folders** lists yours and those shared with you (filter, search): files, size, last change, the
+- **Web page.** **Folders** lists yours, those shared with you and the master folders (filter, search): files, size, last change, the
   computers that have it and how each is doing, and the command to attach it. The owner adds users (read-only or read and
-  change), changes their access and removes them; a member can **Leave**.
-- **Other users.** Own folders work on all your computers. Members see `<owner>/<name>` in tray and Files (read-only: browse,
+  change), changes their access and removes them; a member can **Leave**. An administrator adds, renames and removes master folders there.
+- **Other users.** Own folders work on all your computers; any folder of yours can be shared. Members see `<owner>/<name>` in tray and Files (read-only: browse,
   download). Only the owner manages access. Removing a member or leaving ends access at once; local files stay.
 - **Deleting a folder.** Delete its files first; deleting the folder then removes trash, history and disk copy. Attached
   computers are told and keep their files; `detach` them.
@@ -357,7 +376,7 @@ plain replicas. See [Sources](sources.md) and [Mirrors](mirrors.md).
 | Disk usage | Data disk over 80% | Usage drops |
 | Source / Mirror failed | Run fails or is partial | A good run |
 | Device used by two computers | A second computer uses the token | It stops |
-| Deletions held back | A computer holds a large deletion (delete guard, shared folders) | Dealt with (`release-deletes`, `shared keep`), or 15 min without a heartbeat reporting it |
+| Deletions held back | A computer holds a large deletion (delete guard, shared folders) | Dealt with (`release-deletes`, `folder keep`), or 15 min without a heartbeat reporting it |
 | Files outside a device folder | Files in `files/users/` not under `<user>/<device>/` (not recorded) | Moved or removed |
 | Master files in a reserved folder | Master files under `users/` | Renamed in the web app |
 

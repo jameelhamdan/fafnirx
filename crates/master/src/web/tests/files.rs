@@ -13,10 +13,7 @@ fn upload_browse_download_history_and_delete() {
             .json(Method::POST, "/api/uploads", json!({"device": "admin/pc", "path": "a.txt", "size": 1}))
             .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(
-            api.json(Method::POST, "/api/devices", json!({"name": "photos", "kind": "local"})).await.0,
-            StatusCode::OK
-        );
+        assert_eq!(api.json(Method::POST, "/api/folders", json!({"name": "photos"})).await.0, StatusCode::OK);
 
         api.upload("admin/photos", "2024/a.txt", b"hello world").await;
         api.upload("admin/photos", "2024/b.txt", b"second").await;
@@ -132,7 +129,7 @@ fn an_upload_resumes_where_it_stopped_and_rejects_gaps() {
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
-        api.json(Method::POST, "/api/devices", json!({"name": "up", "kind": "local"})).await;
+        api.json(Method::POST, "/api/folders", json!({"name": "up"})).await;
         let (_, started) = api
             .json(Method::POST, "/api/uploads", json!({"device": "admin/up", "path": "f.bin", "size": 10}))
             .await;
@@ -162,7 +159,7 @@ fn an_upload_that_could_not_be_finished_can_be_finished_again() {
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
-        api.json(Method::POST, "/api/devices", json!({"name": "up", "kind": "local"})).await;
+        api.json(Method::POST, "/api/folders", json!({"name": "up"})).await;
         assert_eq!(try_upload(&api, "admin/up", "a", b"one").await, StatusCode::OK);
         // `a` is a file now, so nothing can be placed below it.
         let (_, started) = api
@@ -183,10 +180,7 @@ fn names_in_any_script_are_listed_downloaded_and_found() {
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
-        assert_eq!(
-            api.json(Method::POST, "/api/devices", json!({"name": "d", "kind": "local"})).await.0,
-            StatusCode::OK
-        );
+        assert_eq!(api.json(Method::POST, "/api/folders", json!({"name": "d"})).await.0, StatusCode::OK);
         // A folder in Arabic, a name with an accent written decomposed (as macOS does) and one in Japanese, at depth.
         let files = ["اناشيد/ألبوم الطفل/ملف.txt", "cafe\u{301}/menu.txt", "日本語/写真/猫.txt"];
         for path in files {
@@ -237,7 +231,7 @@ fn files_and_folders_of_the_master_can_be_moved_but_not_those_of_a_device() {
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
-        api.json(Method::POST, "/api/devices", json!({"name": "docs", "kind": "local"})).await;
+        api.json(Method::POST, "/api/folders", json!({"name": "docs"})).await;
         api.upload("admin/docs", "Show/S1/a.txt", b"one").await;
         api.upload("admin/docs", "Show/S1/b.txt", b"two").await;
         api.upload("admin/docs", "keep.txt", b"keep").await;

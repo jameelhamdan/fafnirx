@@ -20,8 +20,10 @@ mod devices;
 mod fetch;
 mod files;
 mod library;
+mod master_sync;
 mod routes;
 mod shared;
+mod sources;
 mod users;
 
 /// The database pool must be made and dropped outside the runtime, so the tests are plain functions.
@@ -127,6 +129,10 @@ impl Api {
         let (status, done) = self.json(Method::POST, &format!("/api/uploads/{id}/finish"), json!({})).await;
         assert_eq!(status, StatusCode::OK, "{done}");
     }
+}
+
+fn master_folders_of(all: &Value) -> Vec<Value> {
+    all.as_array().unwrap().iter().filter(|f| f["master"] == true).cloned().collect()
 }
 
 async fn login(api: &Api) -> String {

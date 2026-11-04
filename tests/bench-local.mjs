@@ -83,7 +83,7 @@ try {
   }
 
   // Uploads through the web API, in chunks as the web app does it.
-  await admin.post('/api/devices', { name: 'up', kind: 'local' })
+  await admin.post('/api/folders', { name: 'up' })
   const upload = async (relative, size, chunkSize) => {
     const started = await admin.post('/api/uploads', { device: 'admin/up', path: relative, size })
     const id = started.json.id

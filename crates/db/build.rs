@@ -22,13 +22,13 @@ fn server_of(url: &str) -> String {
     }
 }
 
-/// The migrations, which are the schema, in the order they apply.
+/// The migrations (`NNNN_name.sql`), which are the schema, in the order they apply.
 fn migrations(dir: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
         .unwrap_or_else(|e| panic!("cannot read the migrations in {}: {e}", dir.display()))
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "sql"))
+        .filter(|p| p.extension().is_some_and(|x| x == "sql") && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(char::is_numeric)))
         .collect();
     files.sort();
     files

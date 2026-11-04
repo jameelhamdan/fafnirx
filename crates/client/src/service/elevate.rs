@@ -173,8 +173,8 @@ mod tests {
         let default = crate::config::default_config_path();
         let default = default.to_string_lossy();
         assert_eq!(
-            by_hand(&line(&["/usr/local/bin/fafnirx", "--config", &default, "remove-folder", "Documents"])),
-            "sudo fafnirx remove-folder Documents",
+            by_hand(&line(&["/usr/local/bin/fafnirx", "--config", &default, "folder", "remove", "Documents"])),
+            "sudo fafnirx folder remove Documents",
             "the program by its name, the usual config left out"
         );
         assert_eq!(
@@ -182,7 +182,7 @@ mod tests {
             "sudo fafnirx --config '/Library/Application Support/x.toml' folders",
             "another config is kept, quoted"
         );
-        assert_eq!(by_hand(&line(&["fafnirx", "add-folder", "/a/it's"])), r"sudo fafnirx add-folder '/a/it'\''s'");
+        assert_eq!(by_hand(&line(&["fafnirx", "folder", "add", "/a/it's"])), r"sudo fafnirx folder add '/a/it'\''s'");
     }
 
     #[test]

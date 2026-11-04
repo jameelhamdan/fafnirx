@@ -15,6 +15,19 @@ use serde::{Deserialize, Serialize};
 /// log), so a module and a master of different generations never half-work together.
 pub const CONTRACT: u32 = 1;
 
+/// The version of the contract crates, which move with the master. A module built against them needs a master of this version or
+/// newer (`Manifest::core`).
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Whether a master of version `running` is at least `needed` (`major.minor.patch`; a text that is not one is not satisfied).
+pub fn core_satisfied(needed: &str, running: &str) -> bool {
+    let numbers = |v: &str| -> Option<[u64; 3]> {
+        let mut parts = v.split(['.', '-', '+']).take(3).map(|p| p.parse::<u64>().ok());
+        Some([parts.next()??, parts.next()??, parts.next()??])
+    };
+    matches!((numbers(needed), numbers(running)), (Some(n), Some(r)) if r >= n)
+}
+
 /// `GET /manifest`: what the module is and what it can do.
 pub const MANIFEST_PATH: &str = "/manifest";
 /// `GET /health`: `200` without the token, for container health checks.
@@ -44,8 +57,9 @@ pub mod capability {
     pub const STATUS: &str = "status";
 }
 
-/// `GET /manifest`.
+/// `GET /manifest`. Made with [`Manifest::new`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Manifest {
     /// The same id the master has the module under (`video`). It is also the id the web
     /// app's module of the same name is registered with.
@@ -53,6 +67,9 @@ pub struct Manifest {
     pub version: String,
     /// [`CONTRACT`] as the module was built against it.
     pub contract: u32,
+    /// The oldest master it works with: the [`VERSION`] of the crates it was built against. A master older than this does not use it
+    /// and says why.
+    pub core: String,
     /// What it provides: the [`capability`] names.
     pub capabilities: Vec<String>,
     /// Its part of the web app, if it has one.
@@ -74,9 +91,35 @@ pub struct Ui {
     pub css: Option<String>,
     /// [`WEB_SDK`] as the script was built against it.
     pub sdk: u32,
+    /// The languages the module has translations for: `strings.<lang>.json` under [`UI_PREFIX`], English text -> translation. The
+    /// app fetches the one of the language in use and merges it with its own strings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strings: Vec<String>,
 }
 
 impl Manifest {
+    pub fn new(id: impl Into<String>, version: impl Into<String>, capabilities: Vec<String>) -> Self {
+        Self {
+            id: id.into(),
+            version: version.into(),
+            contract: CONTRACT,
+            core: VERSION.into(),
+            capabilities,
+            ui: None,
+            setup: Vec::new(),
+        }
+    }
+
+    pub fn ui(mut self, ui: Option<Ui>) -> Self {
+        self.ui = ui;
+        self
+    }
+
+    pub fn setup(mut self, setup: Vec<String>) -> Self {
+        self.setup = setup;
+        self
+    }
+
     pub fn has(&self, capability: &str) -> bool {
         self.capabilities.iter().any(|c| c == capability)
     }
@@ -112,6 +155,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_master_must_be_at_least_the_version_a_module_needs() {
+        assert!(core_satisfied("3.20.0", "3.20.0") && core_satisfied("3.20.0", "3.21.1") && core_satisfied("3.20.0", "4.0.0"));
+        assert!(!core_satisfied("3.20.0", "3.19.9") && !core_satisfied("3.20.1", "3.20.0"));
+        assert!(core_satisfied("3.20.0", "3.20.0-rc1"), "a pre-release counts as its number");
+        assert!(
+            !core_satisfied("x", "3.20.0") && !core_satisfied("3.20.0", ""),
+            "what is not a version is not satisfied"
+        );
+        let m = Manifest::new("video", "1", vec![]);
+        assert!(core_satisfied(&m.core, VERSION) && m.contract == CONTRACT);
+    }
+
+    #[test]
     fn the_whole_token_is_compared() {
         assert!(bearer_matches(Some("Bearer secret-token"), "secret-token"));
         for bad in [
@@ -129,12 +185,12 @@ mod tests {
 
     #[test]
     fn a_manifest_says_what_it_provides() {
-        let m: Manifest = serde_json::from_str(r#"{"id":"video","version":"1.0.0","contract":1,"capabilities":["poster","status"]}"#).unwrap();
+        let m: Manifest = serde_json::from_str(r#"{"id":"video","version":"1.0.0","contract":1,"core":"3.20.0","capabilities":["poster","status"]}"#).unwrap();
         assert!(m.has(capability::POSTER) && m.has(capability::STATUS) && !m.has(capability::PROBE_VIDEO));
         assert!(m.ui.is_none(), "a module without screens says nothing of them");
-        let json = format!(r#"{{"id":"video","version":"1","contract":1,"capabilities":[],"ui":{{"entry":"index.js","sdk":{WEB_SDK}}}}}"#);
+        let json = format!(r#"{{"id":"video","version":"1","contract":1,"core":"3.20.0","capabilities":[],"ui":{{"entry":"index.js","sdk":{WEB_SDK}}}}}"#);
         let with: Manifest = serde_json::from_str(&json).unwrap();
-        assert_eq!(with.ui, Some(Ui { entry: "index.js".into(), css: None, sdk: WEB_SDK }));
+        assert_eq!(with.ui, Some(Ui { entry: "index.js".into(), css: None, sdk: WEB_SDK, strings: vec![] }));
     }
 
     #[test]

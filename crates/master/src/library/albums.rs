@@ -1,14 +1,14 @@
-//! Albums. An album belongs to the user who made it and holds files that user can see.
-//!
-//! An album holds the files picked into it and, when it shows a folder (a TV show with its seasons, a trip), whatever
-//! is in that folder as it comes and goes. This module checks what a request says and shapes the answer; what is
-//! stored, and how it is found, is in `repo::albums` and `repo::library`.
+//! Albums. An album belongs to the user who made it and is a shortcut to a folder (a TV show with its seasons, a trip):
+//! whatever is in that folder, as it comes and goes, is in the album, and it follows the folder when that is renamed or
+//! moved. This module checks what a request says and shapes the answer; what is stored, and how it is found, is in
+//! `repo::albums` and `repo::library`.
 
 use crate::library::photos::{nullable, Asset, MAX_ASSETS};
 use crate::platform::db;
-use crate::platform::id::{uuids, Id};
+use crate::platform::id::Id;
 use crate::repo::{albums, library};
 use crate::web::access::Access;
+use crate::web::input;
 use crate::web::{act, change, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
@@ -16,8 +16,6 @@ use fafnirx_common::unix_now;
 use fafnirx_db::client::GenericClient;
 use fafnirx_db::queries as sql;
 use serde::{Deserialize, Serialize};
-
-const MAX_FILES: usize = 10_000;
 
 /// A place in the file tree: a device's folder name and a path below it.
 #[derive(Serialize, Deserialize, Clone)]
@@ -39,10 +37,10 @@ pub struct AlbumInfo {
     /// Live photos and videos in it.
     count: i64,
     bytes: i64,
-    /// The file shown for the album: the one chosen, else the newest.
+    /// The file shown for the album: the one chosen, else a poster, its first video or its first picture.
     cover: Option<Id>,
-    /// Set when the album shows a folder: its files are in it as they come and go.
-    folder: Option<Folder>,
+    /// The folder it shows: its files are in the album as they come and go.
+    folder: Folder,
 }
 
 impl From<albums::Album> for AlbumInfo {
@@ -56,12 +54,12 @@ impl From<albums::Album> for AlbumInfo {
             count: a.files,
             bytes: a.bytes,
             cover: a.cover.map(Id),
-            folder: a.folder.map(|(device, prefix)| Folder { device, path: prefix.trim_end_matches('/').to_string() }),
+            folder: Folder { device: a.folder.0, path: a.folder.1.trim_end_matches('/').to_string() },
         }
     }
 }
 
-/// The cover of an album that shows a folder, has none chosen and no poster picture: its first video as the names sort (episode 1 of season 1),
+/// The cover of an album that has none chosen and no poster picture: its first video as the names sort (episode 1 of season 1),
 /// or its first picture when there are no videos.
 fn first_of(media: Vec<(uuid::Uuid, String)>) -> Option<uuid::Uuid> {
     let video = |path: &str| crate::library::meta::kind(path) == Some("video");
@@ -75,8 +73,7 @@ fn with_cover(c: &mut impl GenericClient, mut album: albums::Album) -> anyhow::R
     if album.cover.is_none() {
         album.cover = match sql::albums::album_poster().bind(c, &album.id).opt()? {
             Some(poster) => Some(poster),
-            None if album.folder.is_some() => first_of(albums::media(c, album.id)?),
-            None => album.newest,
+            None => first_of(albums::media(c, album.id)?),
         };
     }
     Ok(album.into())
@@ -109,48 +106,31 @@ fn clean_name(name: &str) -> Result<&str, ApiError> {
     Ok(name)
 }
 
-fn clean_ids(count: usize) -> Result<(), ApiError> {
-    if count > MAX_FILES {
-        return Err(ApiError::bad(format!("At most {MAX_FILES} files at a time")));
-    }
-    Ok(())
-}
-
 #[derive(Deserialize)]
 pub struct NewAlbum {
+    /// The name may be left out: the folder's is used.
+    #[serde(default)]
     name: String,
     #[serde(default)]
     description: String,
-    /// Files to start with.
-    #[serde(default)]
-    ids: Vec<Id>,
-    /// Files (or folders: the photos and videos below them) to start with, by where they are.
-    #[serde(default)]
-    items: Vec<Folder>,
-    /// A folder to show. The name may then be left out: the folder's is used.
-    folder: Option<Folder>,
+    /// The folder to show.
+    folder: Folder,
 }
 
 pub async fn create(State(state): State<Shared>, Extension(who): Extension<Access>, Json(body): Json<NewAlbum>) -> Res<AlbumInfo> {
     who.require_workspace()?;
-    clean_ids(body.ids.len() + body.items.len())?;
     let out = run(&state, move |c| {
-        // An album for a folder: one per folder, so asking again gives the one there is.
-        let folder = body.folder.as_ref().map(|f| find_folder(c, &who, f)).transpose()?;
-        if let Some(shown) = &folder {
-            if let Some(id) = albums::following(c, who.user_id, shown.device_id, &shown.prefix)? {
-                return load_album(c, &who, id);
-            }
+        // One album per folder, so asking again gives the one there is.
+        let shown = find_folder(c, &who, &body.folder)?;
+        if let Some(id) = albums::following(c, who.user_id, shown.device_id, &shown.prefix)? {
+            return load_album(c, &who, id);
         }
-        let name = match (&folder, body.name.trim()) {
-            (Some(shown), "") => shown.name.clone(),
+        let name = match body.name.trim() {
+            "" => shown.name.clone(),
             _ => clean_name(&body.name)?.to_string(),
         };
         let mut tx = c.transaction()?;
-        let follows = folder.as_ref().map(|f| (f.device_id, f.prefix.as_str()));
-        let id = albums::insert(&mut tx, who.user_id, &name, body.description.trim(), follows, unix_now())?;
-        add_files(&mut tx, &who, id, &uuids(&body.ids))?;
-        add_items(&mut tx, &who, id, &body.items)?;
+        let id = albums::insert(&mut tx, who.user_id, &name, body.description.trim(), (shown.device_id, &shown.prefix), unix_now())?;
         db::notify(&mut tx, "library", "")?;
         let album = load_album(&mut tx, &who, id)?;
         tx.commit()?;
@@ -158,15 +138,6 @@ pub async fn create(State(state): State<Shared>, Extension(who): Extension<Acces
     })
     .await?;
     Ok(Json(out))
-}
-
-/// A path below a device from a request, cleaned and without slashes at the ends; empty for the whole device.
-fn clean_folder_path(path: &str) -> Result<String, ApiError> {
-    let path = path.trim_matches('/');
-    if path.is_empty() {
-        return Ok(String::new());
-    }
-    fafnirx_common::clean_remote_path(path).map_err(|e| ApiError::bad(e.to_string()))
 }
 
 /// A folder of a device the user can see, as an album shows it.
@@ -180,7 +151,7 @@ struct FolderShown {
 
 fn find_folder(c: &mut postgres::Client, who: &Access, folder: &Folder) -> anyhow::Result<FolderShown> {
     let device = crate::files::browse::find_device(c, who, &folder.device)?;
-    let path = clean_folder_path(&folder.path)?;
+    let path = input::folder_path(&folder.path)?;
     let name = path
         .rsplit('/')
         .next()
@@ -191,40 +162,18 @@ fn find_folder(c: &mut postgres::Client, who: &Access, folder: &Folder) -> anyho
     Ok(FolderShown { device_id: device.id, prefix, name })
 }
 
-/// Puts the files in the album: those the user can see.
-fn add_files(tx: &mut impl GenericClient, who: &Access, album: uuid::Uuid, ids: &[uuid::Uuid]) -> Result<u64, postgres::Error> {
-    albums::add_files(tx, who.viewer(), album, ids, unix_now())
-}
-
-/// Puts the photos and videos at these places in the album: a file, or everything below a folder. Those the user can see.
-fn add_items(tx: &mut impl GenericClient, who: &Access, album: uuid::Uuid, items: &[Folder]) -> anyhow::Result<u64> {
-    let mut added = 0;
-    for item in items {
-        let path = clean_folder_path(&item.path)?;
-        added += albums::add_place(tx, who.viewer(), album, &item.device, &path, unix_now())?;
-    }
-    Ok(added)
-}
-
 #[derive(Serialize)]
 pub struct AlbumAssets {
     album: AlbumInfo,
     assets: Vec<Asset>,
 }
 
-/// An album and what is in it: newest first, or for an album that shows a folder in the order of the files' names, in which
-/// "Episode 2" comes before "Episode 10".
+/// An album and what is in it, in the order of the files' names, in which "Episode 2" comes before "Episode 10".
 pub async fn detail(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>) -> Res<AlbumAssets> {
     let out = run(&state, move |c| {
         let album = load_album(c, &who, id)?;
-        let by_path = album.folder.is_some();
-        let mut assets: Vec<Asset> = library::album_assets(c, who.viewer(), id, by_path, MAX_ASSETS)?
-            .into_iter()
-            .map(Asset::from)
-            .collect();
-        if by_path {
-            assets.sort_by(|a, b| natural_cmp(&a.device, &b.device).then_with(|| natural_cmp(&a.path, &b.path)));
-        }
+        let mut assets: Vec<Asset> = library::album_assets(c, who.viewer(), id, MAX_ASSETS)?.into_iter().map(Asset::from).collect();
+        assets.sort_by(|a, b| natural_cmp(&a.device, &b.device).then_with(|| natural_cmp(&a.path, &b.path)));
         Ok(AlbumAssets { album, assets })
     })
     .await?;
@@ -312,44 +261,6 @@ pub async fn delete(State(state): State<Shared>, Extension(who): Extension<Acces
         Ok(())
     })
     .await
-}
-
-#[derive(Deserialize)]
-pub struct Ids {
-    #[serde(default)]
-    ids: Vec<Id>,
-    /// Files, or folders (the photos and videos below them), by where they are: for the file browser, which has no ids.
-    #[serde(default)]
-    items: Vec<Folder>,
-}
-
-#[derive(Serialize)]
-pub struct Count {
-    count: u64,
-}
-
-pub async fn add(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>, Json(body): Json<Ids>) -> Res<Count> {
-    clean_ids(body.ids.len() + body.items.len())?;
-    let count = change(&state, "library", move |tx| {
-        load_album(tx, &who, id)?;
-        let count = add_files(tx, &who, id, &uuids(&body.ids))? + add_items(tx, &who, id, &body.items)?;
-        albums::touch(tx, id, unix_now())?;
-        Ok(count)
-    })
-    .await?;
-    Ok(Json(Count { count }))
-}
-
-pub async fn remove(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>, Json(body): Json<Ids>) -> Res<Count> {
-    clean_ids(body.ids.len())?;
-    let count = change(&state, "library", move |tx| {
-        load_album(tx, &who, id)?;
-        let count = albums::remove_files(tx, id, &uuids(&body.ids))?;
-        albums::touch(tx, id, unix_now())?;
-        Ok(count)
-    })
-    .await?;
-    Ok(Json(Count { count }))
 }
 
 #[cfg(test)]

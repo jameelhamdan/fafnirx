@@ -1,6 +1,5 @@
 use anyhow::{bail, Result};
-use fafnirx_common::{chunk_hash, mtime_ns, root_hash, CHUNK_SIZE, HASH_LEN};
-use std::io::Read;
+use fafnirx_common::{hash_path, mtime_ns, HASH_LEN};
 use std::path::Path;
 
 #[derive(Clone)]
@@ -16,43 +15,21 @@ pub fn stat(path: &Path) -> std::io::Result<(u64, i64)> {
     Ok((m.len(), mtime_ns(&m)))
 }
 
-/// Reads the file once, in 4 MiB chunks. Fails if the file changes while it
-/// is being read.
+/// Reads the file once. Fails if the file changes while it is being read.
 pub fn hash_file(path: &Path) -> Result<Hashed> {
     let (size0, mtime0) = stat(path)?;
-    let mut file = std::fs::File::open(path)?;
-    let mut buf = vec![0u8; CHUNK_SIZE];
-    let mut chunks = Vec::new();
-    let mut total = 0u64;
-    loop {
-        let mut filled = 0;
-        while filled < CHUNK_SIZE {
-            let n = file.read(&mut buf[filled..])?;
-            if n == 0 {
-                break;
-            }
-            filled += n;
-        }
-        if filled == 0 {
-            break;
-        }
-        chunks.push(chunk_hash(&buf[..filled]));
-        total += filled as u64;
-        if filled < CHUNK_SIZE {
-            break;
-        }
-    }
+    let hashed = hash_path(path)?;
     let (size1, mtime1) = stat(path)?;
-    if (size0, mtime0) != (size1, mtime1) || total != size1 {
+    if (size0, mtime0) != (size1, mtime1) || hashed.size != size1 {
         bail!("file changed while it was being read");
     }
-    let root = root_hash(&chunks, total);
-    Ok(Hashed { size: total, mtime_ns: mtime1, chunks, root })
+    Ok(Hashed { size: hashed.size, mtime_ns: mtime1, chunks: hashed.chunks, root: hashed.root })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fafnirx_common::{chunk_hash, root_hash, CHUNK_SIZE};
 
     #[test]
     fn hashes_match_chunk_layout() {

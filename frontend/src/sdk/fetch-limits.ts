@@ -26,6 +26,12 @@ export function limitsBody(l: FileLimits) {
   return { include: l.include.trim(), exclude: l.exclude.trim(), min_mb: optionalNumber(l.minMb), max_gb: optionalNumber(l.maxGb), max_per_run: Number(l.perRun) }
 }
 
+/** The limits as the form holds them, from the settings the master gave back. */
+export function limitsFrom(c: Record<string, unknown>): FileLimits {
+  const text = (v: unknown) => (typeof v === 'number' || typeof v === 'string' ? String(v) : '')
+  return { include: text(c.include), exclude: text(c.exclude), minMb: text(c.min_mb), maxGb: text(c.max_gb), perRun: text(c.max_per_run) || NO_LIMITS.perRun }
+}
+
 /** Why the files per run cannot be used, or null. */
 export function perRunProblem(perRun: string, t: T): string | null {
   const per = Number(perRun)
@@ -42,3 +48,11 @@ export function limitsProblem(l: FileLimits, t: T): string | null {
 /** Why the confirmation that the user may copy what the source downloads is missing, or null. */
 export const acknowledgedProblem = (acknowledged: boolean, t: T): string | null =>
   acknowledged ? null : t('Confirm that you have the right to copy what this downloads.')
+
+/** What is wrong with a file name template: a token the module does not offer, or a character no file name can have. */
+export function nameRuleProblem(rule: string, tokens: string[], t: T): string | null {
+  const unknown = [...rule.matchAll(/\{([^}]*)\}/g)].map((m) => m[1]).find((name) => !tokens.includes(name))
+  if (unknown !== undefined) return t('Unknown {name} in the file name', { name: `{${unknown}}` })
+  if (/[\\/:*?"<>|]/.test(rule.replace(/\{[^}]*\}/g, ''))) return t('A file name cannot have / \\ : * ? " < > |')
+  return null
+}

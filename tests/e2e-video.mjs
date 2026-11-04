@@ -81,7 +81,7 @@ try {
   check(up?.id === 'video' && up.contract === 1 && up.capabilities.includes('poster'), 'the master asks the module for its manifest, and the web app is told that the module is up')
 
   // A video in a local folder.
-  await admin.post('/api/devices', { name: 'videos', kind: 'local' })
+  await admin.post('/api/folders', { name: 'videos' })
   fs.mkdirSync(path.join(data, 'files', 'users', 'admin', 'videos', 'trip'), { recursive: true })
   fs.writeFileSync(path.join(data, 'files', 'users', 'admin', 'videos', 'trip', 'clip.mkv'), 'pretend this is a video')
   const id = await until(async () => (await schema.rows("SELECT id FROM files WHERE path = 'trip/clip.mkv'"))[0]?.[0], 30, 300)

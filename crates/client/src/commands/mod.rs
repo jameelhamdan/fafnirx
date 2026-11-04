@@ -1,9 +1,9 @@
 //! The one-shot CLI commands: everything `fafnirx <command>` does except running the daemon.
 
-mod shared;
+mod folder;
 mod status;
 
-pub use shared::{shared_attach, shared_conflict, shared_create, shared_detach, shared_keep, shared_list, shared_resolve};
+pub use folder::{create_folder, folder_add, keep_held, list_available, resolve_waiting, set_mode, sync_folder, unsync_folder};
 pub use status::{release_deletes, status};
 
 use crate::config::credentials;
@@ -24,14 +24,14 @@ pub fn remove_folder(config_path: &Path, name: &str) -> Result<()> {
 
 pub fn list_folders(config_path: &Path) -> Result<()> {
     let cfg = Config::load(config_path)?;
-    if cfg.folders.is_empty() && cfg.shared.is_empty() {
-        println!("no folders yet: fafnirx add-folder <path>");
+    if cfg.folders.is_empty() && cfg.synced.is_empty() {
+        println!("no folders yet: fafnirx folder add <path>");
     }
     for f in &cfg.folders {
         println!("{}\t{}", f.name, f.path.display());
     }
-    for s in &cfg.shared {
-        println!("{}\t{}\t(shared, both ways, conflicts: {})", s.name, s.path.display(), s.conflict.name());
+    for s in &cfg.synced {
+        println!("{}\t{}\t(synced {})", s.name, s.path.display(), s.mode.name());
     }
     Ok(())
 }
@@ -87,7 +87,7 @@ pub async fn enroll(config_path: PathBuf, server: String, token: String, start_s
             Err(e) => println!("warning: could not start the client as a service ({e:#}); run `fafnirx install-service` to retry"),
         }
     }
-    println!("next: fafnirx add-folder <path> [<path>...]; it collects them as soon as they are added");
+    println!("next: fafnirx folder add <path>; it collects them as soon as they are added");
     Ok(())
 }
 
@@ -173,11 +173,11 @@ pub async fn sync_once(config_path: PathBuf) -> Result<()> {
         Ok(r) => r,
         Err(e) => bail!("sync failed: {e}"),
     };
-    for shared in &cfg.shared {
-        let mut attached = crate::shared::Attached::open(&cfg, &token, &dir, shared, Arc::new(Mutex::new(Vec::new())))?;
+    for synced in &cfg.synced {
+        let mut attached = crate::synced::Attached::open(&cfg, &token, &dir, synced, Arc::new(Mutex::new(Vec::new())))?;
         match attached.cycle(&cfg).await {
             Ok(r) => report.add(&r),
-            Err(e) => bail!("sync of the shared folder {} failed: {e}", shared.name),
+            Err(e) => bail!("sync of the synced folder {} failed: {e}", synced.name),
         }
     }
     println!("{report}, {} bytes sent", report.bytes);

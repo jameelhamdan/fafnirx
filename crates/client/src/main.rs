@@ -5,8 +5,8 @@ mod config;
 mod daemon;
 mod net;
 mod service;
-mod shared;
 mod sync;
+mod synced;
 #[cfg(feature = "tray")]
 mod tray;
 mod update;
@@ -42,23 +42,8 @@ enum Cmd {
         #[arg(long)]
         no_service: bool,
     },
-    /// Add one or more folders to collect
-    AddFolder {
-        #[arg(required = true)]
-        paths: Vec<PathBuf>,
-        /// Name inside the device namespace (default: the folder name). Only with a single folder.
-        #[arg(long)]
-        name: Option<String>,
-    },
-    /// Stop collecting a folder (what is already on the master stays there)
-    RemoveFolder {
-        name: String,
-    },
-    /// List the collected folders
-    Folders,
-    /// Shared folders: folders of your user that any of your computers can attach, synced in both directions
-    #[command(subcommand)]
-    Shared(SharedCmd),
+    /// Folders of this computer and where each one goes: this computer's own namespace on the master, a master folder, or a folder of yours
+    Folder(FolderCmd),
     /// Run in the foreground: watch, upload, stay connected
     Run {
         /// Also write the log to a file in the state directory
@@ -106,9 +91,6 @@ enum Cmd {
     },
     /// Restart the client (the service, when it is installed) and the tray, which run the program file as it is now
     Restart,
-    /// What the Windows Service Control Manager runs
-    #[command(hide = true)]
-    Service,
 }
 
 impl Cmd {
@@ -116,50 +98,70 @@ impl Cmd {
     fn needs_admin(&self) -> bool {
         match self {
             Cmd::InstallService { dry_run } | Cmd::UninstallService { dry_run } => !dry_run,
-            Cmd::Enroll { .. } | Cmd::AddFolder { .. } | Cmd::RemoveFolder { .. } | Cmd::Sync | Cmd::ReleaseDeletes | Cmd::Shared(_) => true,
+            Cmd::Enroll { .. } | Cmd::Sync | Cmd::ReleaseDeletes => true,
+            // Listing what this computer has changes and reads nothing secret; every other thing a folder does does.
+            Cmd::Folder(FolderCmd { action: FolderAction::List { available: false } }) => false,
+            Cmd::Folder(_) => true,
             _ => false,
         }
     }
 }
 
+#[derive(clap::Args)]
+struct FolderCmd {
+    #[command(subcommand)]
+    action: FolderAction,
+}
+
 #[derive(Subcommand)]
-enum SharedCmd {
-    /// List the shared folders on the master
-    List,
-    /// Make a shared folder
-    Create { name: String },
-    /// Sync a local folder with a shared folder
-    Attach {
-        name: String,
-        path: PathBuf,
-        /// Make the shared folder first when there is none of that name
+enum FolderAction {
+    /// Add a folder: where it goes is its target
+    Add {
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// computer (this computer's own namespace, upload only), master:<folder> (a subfolder of the master files that an
+        /// administrator made), or <owner>/<folder> / the name of a folder of yours
+        #[arg(long, default_value = "computer")]
+        target: String,
+        /// Name in this computer's namespace (only with the target computer; default: the folder name)
+        #[arg(long)]
+        name: Option<String>,
+        /// both (default; the server's version wins a clash), up (send only), mine, keep or ask: see `folder mode`
+        #[arg(long)]
+        mode: Option<config::Mode>,
+        /// Make the folder first when there is none of that name (your own synced folders)
         #[arg(long)]
         create: bool,
-        /// What to do with a file changed here and on the master: theirs (default), mine, both or ask
-        #[arg(long, default_value = "theirs")]
-        conflict: config::Conflict,
     },
-    /// Show or set what happens to a file changed here and on the master: theirs (the master's is kept and this computer's put
-    /// aside), mine (this computer's is sent), both (both are kept) or ask (a question on screen)
-    Conflict {
+    /// List the folders of this computer and where each one goes; with --available, the folders on the master that can be added
+    List {
+        #[arg(long)]
+        available: bool,
+    },
+    /// Make a folder of yours on the master that your computers and other users can sync (add it with `folder add`)
+    Create { name: String },
+    /// Show or set how a synced folder syncs: both (both ways; the master's version wins a file changed on both sides and this
+    /// computer's is put aside), up (send only; nothing comes back), mine (both ways; this computer's version wins), keep (both ways;
+    /// both versions are kept) or ask (both ways; a question on screen)
+    Mode {
         name: String,
-        policy: Option<config::Conflict>,
+        mode: Option<config::Mode>,
         /// With ask: hours a file waits for an answer before both versions are kept (0: for ever; default 24)
         #[arg(long)]
         ask_timeout_hours: Option<u64>,
     },
-    /// Say which version of the files waiting for a decision (policy `ask`) is kept
+    /// Say which version of the files waiting for a decision (mode `ask`) is kept
     Resolve {
         name: String,
         #[arg(value_parser = ["theirs", "mine", "both"])]
         keep: String,
-        /// Only this file (a path in the shared folder); all that wait when not given
+        /// Only this file (a path in the folder); all that wait when not given
         path: Option<String>,
     },
-    /// Stop syncing a shared folder on this computer (nothing is deleted)
-    Detach { name: String },
     /// Keep the files whose deletion on the master is held back (instead of `release-deletes`, which deletes them here)
     Keep { name: String },
+    /// Stop syncing a folder on this computer (nothing is deleted): a collected one or a synced one
+    Remove { name: String },
 }
 
 fn init_logging(file: Option<&std::path::Path>) {
@@ -239,16 +241,23 @@ fn run(cli: Cli) -> Result<()> {
             let token = commands::read_token()?;
             tokio_main(commands::enroll(config_path, server, token, !no_service))
         }
-        Cmd::AddFolder { paths, name } => commands::add_folders(&config_path, &paths, name.as_deref()),
-        Cmd::RemoveFolder { name } => commands::remove_folder(&config_path, &name),
-        Cmd::Folders => commands::list_folders(&config_path),
-        Cmd::Shared(SharedCmd::List) => tokio_main(commands::shared_list(config_path)),
-        Cmd::Shared(SharedCmd::Create { name }) => tokio_main(commands::shared_create(config_path, name)),
-        Cmd::Shared(SharedCmd::Attach { name, path, create, conflict }) => tokio_main(commands::shared_attach(config_path, name, path, create, conflict)),
-        Cmd::Shared(SharedCmd::Conflict { name, policy, ask_timeout_hours }) => commands::shared_conflict(&config_path, &name, policy, ask_timeout_hours),
-        Cmd::Shared(SharedCmd::Resolve { name, keep, path }) => commands::shared_resolve(&config_path, &name, &keep, path.as_deref()),
-        Cmd::Shared(SharedCmd::Detach { name }) => commands::shared_detach(&config_path, &name),
-        Cmd::Shared(SharedCmd::Keep { name }) => commands::shared_keep(&config_path, &name),
+        Cmd::Folder(FolderCmd { action }) => match action {
+            FolderAction::Add { paths, target, name, mode, create } => tokio_main(commands::folder_add(config_path, paths, target, name, create, mode)),
+            FolderAction::List { available: false } => commands::list_folders(&config_path),
+            FolderAction::List { available: true } => tokio_main(commands::list_available(config_path)),
+            FolderAction::Create { name } => tokio_main(commands::create_folder(config_path, name)),
+            FolderAction::Resolve { name, keep, path } => commands::resolve_waiting(&config_path, &name, &keep, path.as_deref()),
+            FolderAction::Keep { name } => commands::keep_held(&config_path, &name),
+            FolderAction::Mode { name, mode, ask_timeout_hours } => commands::set_mode(&config_path, &name, mode, ask_timeout_hours),
+            FolderAction::Remove { name } => {
+                // A synced folder if the name means one (an ambiguous name is said so); else one collected into this computer.
+                if config::Config::load(&config_path)?.synced.iter().any(|s| config::names_synced(&s.name, &name)) {
+                    commands::unsync_folder(&config_path, &name)
+                } else {
+                    commands::remove_folder(&config_path, &name)
+                }
+            }
+        },
         Cmd::Status { json } => commands::status(&config_path, json),
         Cmd::ReleaseDeletes => commands::release_deletes(&config_path),
         Cmd::Pause => commands::set_paused(&config_path, true),
@@ -258,16 +267,6 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Restart => {
             init_logging(None);
             tokio_main(commands::restart(config_path))
-        }
-        Cmd::Service => {
-            let cfg = Config::load(&config_path)?;
-            let state_dir = cfg.state_dir(&config_path);
-            std::fs::create_dir_all(config::control_dir(&state_dir))?;
-            init_logging(Some(&daemon::log_file(&state_dir)));
-            #[cfg(windows)]
-            return service::windows::run(config_path);
-            #[cfg(not(windows))]
-            anyhow::bail!("the service is run by Windows; use afnirx run to run the client by hand")
         }
     }
 }

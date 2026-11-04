@@ -28,7 +28,7 @@ fn stand_in_fetch_module(plan: Arc<Mutex<Plan>>) -> String {
                 if !allowed(&h) {
                     return (StatusCode::UNAUTHORIZED, "no".to_string()).into_response();
                 }
-                let manifest = json!({"id": "fetch", "version": "1.0.0", "contract": fafnirx_module_api::CONTRACT, "capabilities": ["fetch.demo"]});
+                let manifest = json!({"id": "fetch", "version": "1.0.0", "contract": fafnirx_module_api::CONTRACT, "core": fafnirx_module_api::VERSION, "capabilities": ["fetch.demo"]});
                 axum::Json(manifest).into_response()
             }),
         )
@@ -94,14 +94,21 @@ async fn source_row(api: &Api, name: &str) -> SourceRow {
             "SELECT s.id, s.kind, s.config, s.device_id, d.folder FROM sources s JOIN devices d ON d.id = s.device_id WHERE s.name = $1",
             &[&name],
         )?;
-        Ok(SourceRow { id: r.get(0), kind: r.get(1), config: r.get(2), device: Device { id: r.get(3), name: r.get(4) } })
+        Ok(SourceRow {
+            id: r.get(0),
+            kind: r.get(1),
+            config: r.get(2),
+            device: Device { id: r.get(3), name: r.get(4) },
+            prefix: String::new(),
+            key: format!("admin/{name}"),
+        })
     })
     .await
     .unwrap()
 }
 
 async fn live(api: &Api, device_id: i64) -> Vec<String> {
-    let mut paths: Vec<String> = crate::platform::db::with(&api.db, move |c| Ok(fafnirx_db::queries::sources::live_paths().bind(c, &device_id).all()?))
+    let mut paths: Vec<String> = crate::platform::db::with(&api.db, move |c| Ok(fafnirx_db::queries::sources::live_paths().bind(c, &"", &device_id).all()?))
         .await
         .unwrap();
     paths.sort();
@@ -169,7 +176,14 @@ fn a_source_a_module_reads_is_fetched_in_parts_and_deletes_only_what_it_is_sure_
         assert_eq!(listed[0]["detail"]["remote"], "1 × demo");
         assert!(!listed.to_string().contains("acknowledged"), "settings are not sent back to the browser");
 
-        let src = |row: &SourceRow| SourceRow { id: row.id, kind: row.kind.clone(), config: row.config.clone(), device: row.device.clone() };
+        let src = |row: &SourceRow| SourceRow {
+            id: row.id,
+            kind: row.kind.clone(),
+            config: row.config.clone(),
+            device: row.device.clone(),
+            prefix: row.prefix.clone(),
+            key: row.key.clone(),
+        };
         let row = source_row(&api, "tor").await;
         let (id, device) = (row.id, row.device.id);
 

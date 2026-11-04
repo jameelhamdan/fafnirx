@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, Download, FileImage, FolderPlus, Heart, Info, Link2, Loader2, MoreVertical, Trash2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, Download, FileImage, Heart, Info, Link2, Loader2, MoreVertical, Trash2, X } from 'lucide-react'
 import { lazy, Suspense, useEffect, useRef, useState, type PointerEvent } from 'react'
 import { toast } from 'sonner'
 import { usePicture, useReadyUrl } from '@/lib/pictures'
@@ -14,7 +14,6 @@ import { useLibraryActions } from '@/lib/library'
 import { fileOfAsset } from '@/lib/module-file'
 import { hasWorkspace, useRole } from '@/lib/session'
 import type { Asset } from '@/lib/types'
-import { AlbumPicker } from './album-picker'
 import { ModuleViewer, useHasViewer } from '@/sdk'
 import { useT } from '@/lib/i18n'
 
@@ -154,7 +153,7 @@ export function Viewer({
   const mine = hasWorkspace(useRole())
   const { edit, remove } = useLibraryActions()
   const [info, setInfo] = useState(() => window.matchMedia('(min-width: 1024px)').matches)
-  const [dialog, setDialog] = useState<'album' | 'delete' | null>(null)
+  const [dialog, setDialog] = useState<'delete' | null>(null)
   const root = useRef<HTMLDivElement>(null)
   const index = assets.findIndex((a) => a.id === id)
   const [lastIndex, setLastIndex] = useState(Math.max(0, index))
@@ -259,7 +258,6 @@ export function Viewer({
           <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className={bare} aria-label={t('More actions')}><MoreVertical className="size-5" /></Button></DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem onSelect={copyLink}><Link2 className="size-4" />{t('Copy link')}</DropdownMenuItem>
-            {mine && <DropdownMenuItem onSelect={() => setDialog('album')}><FolderPlus className="size-4" />{t('Add to album')}</DropdownMenuItem>}
             <DropdownMenuItem asChild><a href={mediaUrl(asset.id, 'download', asset.hash)}><Download className="size-4" />{t('Download')}</a></DropdownMenuItem>
             {mine && (
               <DropdownMenuItem onSelect={() => edit.mutate({ id: asset.id, archived: !asset.archived }, { onSuccess: moveOn })}>
@@ -303,7 +301,6 @@ export function Viewer({
         )}
       </div>
 
-      <AlbumPicker open={dialog === 'album'} ids={[asset.id]} onClose={() => setDialog(null)} />
       <Confirm
         open={dialog === 'delete'}
         title={t('Delete this file?')}

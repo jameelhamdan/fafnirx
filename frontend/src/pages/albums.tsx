@@ -1,70 +1,26 @@
-import { useMutation } from '@tanstack/react-query'
-import { FolderOpen, Images, Plus } from 'lucide-react'
-import { useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { toast } from 'sonner'
+import { FolderOpen, Images } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { Empty, ErrorNote, PageHeader } from '@/components/common'
 import { Thumb } from '@/components/library/thumb'
-import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api, mediaUrl } from '@/lib/api'
+import { mediaUrl } from '@/lib/api'
 import { bytes, plural } from '@/lib/format'
-import { useAlbums, useRefreshLibrary } from '@/lib/library'
-import type { AlbumInfo } from '@/lib/types'
+import { useAlbums } from '@/lib/library'
 import { useT } from '@/lib/i18n'
-
-function NewAlbum({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const t = useT()
-  const refresh = useRefreshLibrary()
-  const navigate = useNavigate()
-  const [name, setName] = useState('')
-  const create = useMutation({
-    mutationFn: () => api.post<AlbumInfo>('/api/albums', { name }),
-    onSuccess: (album) => {
-      void refresh()
-      setName('')
-      onClose()
-      navigate(`/albums/${album.id}`)
-    },
-    onError: (e) => toast.error(e.message),
-  })
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    if (name.trim()) create.mutate()
-  }
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <form onSubmit={submit} className="space-y-4">
-          <DialogHeader>
-            <DialogTitle>{t('New album')}</DialogTitle>
-            <DialogDescription>{t('An album groups photos and videos without moving them. Add to it from the timeline: select some and choose Add to album.')}</DialogDescription>
-          </DialogHeader>
-          <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder={t('Summer 2024')} aria-label={t('Album name')} maxLength={120} />
-          <DialogFooter><Button type="submit" disabled={!name.trim() || create.isPending}>{t('Create')}</Button></DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
-}
 
 export default function Albums() {
   const t = useT()
   const albums = useAlbums()
-  const [creating, setCreating] = useState(false)
   return (
     <div>
       <PageHeader
         title={t('Albums')}
-        description={t('Groups of photos and videos. The files stay where they are; deleting an album never deletes them.')}
-        actions={<Button onClick={() => setCreating(true)}><Plus className="size-4" />{t('New album')}</Button>}
+        description={t('Shortcuts to folders. What is in the folder is in the album, and it follows the folder when that is renamed or moved. Deleting an album never deletes the files.')}
       />
       {albums.error ? <ErrorNote error={albums.error} /> : !albums.data ? (
         <Skeleton className="h-64" />
       ) : albums.data.length === 0 ? (
-        <Empty title={t('No albums yet')}>{t('Create one, then add photos to it from the timeline.')}</Empty>
+        <Empty title={t('No albums yet')}>{t('In Files, open a folder and choose Show as album.')}</Empty>
       ) : (
         <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
           {albums.data.map((a) => (
@@ -76,11 +32,9 @@ export default function Albums() {
                   ) : (
                     <div className="grid size-full place-items-center"><Images className="size-8 text-muted-foreground" /></div>
                   )}
-                  {a.folder && (
-                    <span title={t('Shows a folder')} className="absolute top-1.5 left-1.5 grid size-6 place-items-center rounded-full bg-black/55 text-white">
-                      <FolderOpen className="size-3.5" />
-                    </span>
-                  )}
+                  <span title={t('Shows a folder')} className="absolute top-1.5 left-1.5 grid size-6 place-items-center rounded-full bg-black/55 text-white">
+                    <FolderOpen className="size-3.5" />
+                  </span>
                 </div>
                 <div className="p-3">
                   <p className="truncate font-medium">{a.name}</p>
@@ -91,7 +45,6 @@ export default function Albums() {
           ))}
         </ul>
       )}
-      <NewAlbum open={creating} onClose={() => setCreating(false)} />
     </div>
   )
 }

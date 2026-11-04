@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use tonic::{Request, Response, Status, Streaming};
 
-/// What the recording master was told, and what it answers: the paths it lists as changed and the content it serves for a shared folder.
+/// What the recording master was told, and what it answers: the paths it lists as changed and the content it serves for a synced folder.
 #[derive(Default)]
 pub(crate) struct Calls {
     /// Paths committed by the client, with the path each was renamed from (empty if none).
@@ -15,11 +15,11 @@ pub(crate) struct Calls {
     pub deleted: Vec<String>,
     /// Paths for which the master says it already holds the content.
     pub already: Vec<String>,
-    /// What a shared folder lists as changed.
+    /// What a synced folder lists as changed.
     pub changes: Vec<pb::Change>,
     /// The listing is every live path, as when the computer was away longer than deletions are remembered.
     pub complete: bool,
-    /// The content a shared folder serves.
+    /// The content a synced folder serves.
     pub files: HashMap<String, Vec<u8>>,
 }
 
@@ -75,10 +75,10 @@ impl Collector for Recorder {
     async fn download_update(&self, _: Request<pb::UpdateInfoRequest>) -> Result<Response<Self::DownloadUpdateStream>, Status> {
         Err(Status::unimplemented("not under test"))
     }
-    async fn list_shared(&self, _: Request<pb::ListSharedRequest>) -> Result<Response<pb::ListSharedResponse>, Status> {
+    async fn list_folders(&self, _: Request<pb::ListFoldersRequest>) -> Result<Response<pb::ListFoldersResponse>, Status> {
         Err(Status::unimplemented("not under test"))
     }
-    async fn create_shared(&self, _: Request<pb::CreateSharedRequest>) -> Result<Response<pb::CreateSharedResponse>, Status> {
+    async fn create_folder(&self, _: Request<pb::CreateFolderRequest>) -> Result<Response<pb::CreateFolderResponse>, Status> {
         Err(Status::unimplemented("not under test"))
     }
     type ListChangesStream = tokio_stream::Iter<std::vec::IntoIter<Result<pb::ChangeEvent, Status>>>;
@@ -94,12 +94,12 @@ impl Collector for Recorder {
         }
         Ok(Response::new(tokio_stream::iter(events)))
     }
-    type WatchSharedStream = tokio_stream::Empty<Result<pb::SharedChanged, Status>>;
-    async fn watch_shared(&self, _: Request<pb::WatchSharedRequest>) -> Result<Response<Self::WatchSharedStream>, Status> {
+    type WatchFolderStream = tokio_stream::Empty<Result<pb::FolderChanged, Status>>;
+    async fn watch_folder(&self, _: Request<pb::WatchFolderRequest>) -> Result<Response<Self::WatchFolderStream>, Status> {
         Err(Status::unimplemented("not under test"))
     }
-    type DownloadSharedStream = tokio_stream::Iter<std::vec::IntoIter<Result<pb::FileData, Status>>>;
-    async fn download_shared(&self, r: Request<pb::DownloadSharedRequest>) -> Result<Response<Self::DownloadSharedStream>, Status> {
+    type DownloadFolderStream = tokio_stream::Iter<std::vec::IntoIter<Result<pb::FileData, Status>>>;
+    async fn download_folder(&self, r: Request<pb::DownloadFolderRequest>) -> Result<Response<Self::DownloadFolderStream>, Status> {
         let data = self.0.lock().unwrap().files.get(&r.get_ref().path).cloned();
         let data = data.ok_or_else(|| Status::not_found("no such file"))?;
         Ok(Response::new(tokio_stream::iter(vec![Ok(pb::FileData { data })])))

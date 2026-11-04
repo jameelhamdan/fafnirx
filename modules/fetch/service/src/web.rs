@@ -210,13 +210,12 @@ pub async fn list(cfg: &Config) -> Result<FetchListing> {
                 } else {
                     format!("{}-{}", hex::encode(sha2_prefix(&address)), name)
                 };
-                items.push(FetchEntry {
-                    path,
-                    marker: h.marker,
-                    size: h.length.unwrap_or(0),
-                    mtime_ns: h.mtime_ns.unwrap_or(now_ns),
-                    reference: json!({ "url": address }),
-                });
+                items.push(
+                    FetchEntry::new(path, h.marker)
+                        .size(h.length.unwrap_or(0))
+                        .mtime_ns(h.mtime_ns.unwrap_or(now_ns))
+                        .reference(json!({ "url": address })),
+                );
             }
             Err(e) => {
                 tracing::info!("{address}: {e:#}");
@@ -225,7 +224,7 @@ pub async fn list(cfg: &Config) -> Result<FetchListing> {
         }
     }
     items.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(FetchListing { items, skipped, complete: cfg.feed.is_none() && skipped == 0 })
+    Ok(FetchListing::new(items).skipped(skipped).complete(cfg.feed.is_none() && skipped == 0))
 }
 
 /// The first bytes of the SHA-256 of an address, to tell two files of the same name apart.

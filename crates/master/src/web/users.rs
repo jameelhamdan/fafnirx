@@ -3,9 +3,9 @@
 use super::access::{Access, Role};
 use super::auth::{self, MIN_PASSWORD};
 use super::{act, run, ApiError, Done, Res, Shared};
-use crate::devices::api::NAME_RULE;
 use crate::platform::db;
 use crate::repo::users;
+use crate::web::input::NAME_RULE;
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use fafnirx_common::{unix_now, valid_device_name};

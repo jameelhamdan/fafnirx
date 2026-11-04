@@ -9,7 +9,7 @@ mod text;
 
 pub use open::ensure_tray;
 
-use crate::config::{control_dir, Config, Conflict, Folder, Shared};
+use crate::config::{control_dir, Config, Folder, Mode, SyncedFolder};
 use crate::daemon::{self, requests::Request};
 use crate::service::disk_access;
 use anyhow::{Context, Result};
@@ -45,14 +45,14 @@ enum Action {
     OpenUrl(String),
     AddFolders,
     RemoveFolder(String),
-    /// Sync a local folder, to be chosen, with this existing shared folder.
-    AttachShared(String),
-    /// Make a shared folder from a local folder, to be chosen.
+    /// Sync a local folder, to be chosen, with this existing synced folder.
+    AttachSynced(String),
+    /// Make a synced folder from a local folder, to be chosen.
     NewShared,
-    DetachShared(String),
-    /// What the shared folder does with a file changed here and on the master.
-    SetConflict(String, Conflict),
-    /// Ask again about the files of this shared folder that wait for a decision.
+    DetachSynced(String),
+    /// What the synced folder does with a file changed here and on the master.
+    SetMode(String, Mode),
+    /// Ask again about the files of this synced folder that wait for a decision.
     ResolveConflicts(String),
 }
 
@@ -102,12 +102,12 @@ struct Menus {
     actions: Actions,
     folder_actions: Actions,
     shown_folders: Vec<Folder>,
-    shared: Submenu,
-    shared_actions: Actions,
+    synced: Submenu,
+    synced_actions: Actions,
     /// The line of each attached folder that says how it is doing.
-    shared_states: Vec<(String, Line)>,
-    /// The attached folders and the shared folders of the master that are not attached, as the submenu shows them.
-    shown_shared: (Vec<Shared>, Vec<String>),
+    synced_states: Vec<(String, Line)>,
+    /// The attached folders and the synced folders of the master that are not attached, as the submenu shows them.
+    shown_synced: (Vec<SyncedFolder>, Vec<String>),
 }
 
 impl Menus {
@@ -147,8 +147,8 @@ impl Menus {
 
         let folders = Submenu::new("Folders", true);
         let folder_actions = fill_folders_menu(&folders, &add_folders, &cfg.folders);
-        let shared = Submenu::new("Shared folders", true);
-        let (shared_actions, shared_states) = fill_shared_menu(&shared, &cfg.shared, &[]);
+        let synced = Submenu::new("SyncedFolder folders", true);
+        let (synced_actions, synced_states) = fill_synced_menu(&synced, &cfg.synced, &[]);
         let sep = PredefinedMenuItem::separator;
         let menu = Menu::new();
         menu.append_items(&[
@@ -169,7 +169,7 @@ impl Menus {
             &downloads.item,
             &sep(),
             &folders,
-            &shared,
+            &synced,
             &sep(),
             &open[0].item,
             &open[1].item,
@@ -200,10 +200,10 @@ impl Menus {
             actions,
             folder_actions,
             shown_folders: cfg.folders.clone(),
-            shared,
-            shared_actions,
-            shared_states,
-            shown_shared: (cfg.shared.clone(), Vec::new()),
+            synced,
+            synced_actions,
+            synced_states,
+            shown_synced: (cfg.synced.clone(), Vec::new()),
         })
     }
 
@@ -242,19 +242,19 @@ impl Menus {
         }
     }
 
-    /// Rebuilds the shared folders when the config or the master's list of them changed.
-    fn sync_shared(&mut self, attached: &[Shared], on_master: &[String]) {
+    /// Rebuilds the synced folders when the config or the master's list of them changed.
+    fn sync_synced(&mut self, attached: &[SyncedFolder], on_master: &[String]) {
         let available: Vec<String> = on_master.iter().filter(|n| !attached.iter().any(|s| &s.name == *n)).cloned().collect();
-        if (attached, available.as_slice()) != (self.shown_shared.0.as_slice(), self.shown_shared.1.as_slice()) {
-            (self.shared_actions, self.shared_states) = fill_shared_menu(&self.shared, attached, &available);
-            self.shown_shared = (attached.to_vec(), available);
+        if (attached, available.as_slice()) != (self.shown_synced.0.as_slice(), self.shown_synced.1.as_slice()) {
+            (self.synced_actions, self.synced_states) = fill_synced_menu(&self.synced, attached, &available);
+            self.shown_synced = (attached.to_vec(), available);
         }
     }
 
-    /// Says how each attached shared folder is doing, as the client last wrote it.
-    fn show_shared_state(&mut self, status: Option<&daemon::Status>, now: i64) {
-        for (name, line) in &mut self.shared_states {
-            let text = match status.and_then(|s| s.shared.iter().find(|f| f.name == *name)) {
+    /// Says how each attached synced folder is doing, as the client last wrote it.
+    fn show_synced_state(&mut self, status: Option<&daemon::Status>, now: i64) {
+        for (name, line) in &mut self.synced_states {
+            let text = match status.and_then(|s| s.synced.iter().find(|f| f.name == *name)) {
                 Some(f) => f.summary(now),
                 None => "waiting for the client".to_string(),
             };
@@ -266,7 +266,7 @@ impl Menus {
         self.actions
             .iter()
             .chain(&self.folder_actions)
-            .chain(&self.shared_actions)
+            .chain(&self.synced_actions)
             .find(|(i, _)| i == id)
             .map(|(_, a)| a.clone())
     }
@@ -296,14 +296,14 @@ fn fill_folders_menu(menu: &Submenu, add_item: &MenuItem, folders: &[Folder]) ->
     actions
 }
 
-/// Fills the "Shared folders" submenu: the folders synced here (⇄), the shared folders of the master that are not
+/// Fills the "SyncedFolder folders" submenu: the folders synced here (⇄), the synced folders of the master that are not
 /// synced here yet, and the way to make a new one.
-fn fill_shared_menu(menu: &Submenu, attached: &[Shared], available: &[String]) -> (Actions, Vec<(String, Line)>) {
+fn fill_synced_menu(menu: &Submenu, attached: &[SyncedFolder], available: &[String]) -> (Actions, Vec<(String, Line)>) {
     for _ in 0..menu.items().len() {
         menu.remove_at(0);
     }
     let mut actions = Actions::new();
-    // One line per attached folder that says how it is doing; `show_shared_state` keeps it current.
+    // One line per attached folder that says how it is doing; `show_synced_state` keeps it current.
     let mut states = Vec::new();
     for s in attached {
         let state = Line::new("waiting for the client", false);
@@ -311,7 +311,7 @@ fn fill_shared_menu(menu: &Submenu, attached: &[Shared], available: &[String]) -
         let open = MenuItem::new("Open folder", true, None);
         let stop = MenuItem::new("Stop syncing here", true, None);
         actions.push((open.id().clone(), Action::OpenFolder(s.path.clone())));
-        actions.push((stop.id().clone(), Action::DetachShared(s.name.clone())));
+        actions.push((stop.id().clone(), Action::DetachSynced(s.name.clone())));
         let (conflicts, conflict_actions) = conflict_menu(s);
         actions.extend(conflict_actions);
         let title = format!("{} \u{21c4}", s.name);
@@ -326,41 +326,41 @@ fn fill_shared_menu(menu: &Submenu, attached: &[Shared], available: &[String]) -
     }
     for name in available {
         let item = MenuItem::new(format!("Sync \"{name}\" with a folder..."), true, None);
-        actions.push((item.id().clone(), Action::AttachShared(name.clone())));
+        actions.push((item.id().clone(), Action::AttachSynced(name.clone())));
         let _ = menu.append(&item);
     }
     if !attached.is_empty() || !available.is_empty() {
         let _ = menu.append(&PredefinedMenuItem::separator());
     }
-    let new = MenuItem::new("New shared folder from a folder...", true, None);
+    let new = MenuItem::new("New folder from a local folder...", true, None);
     actions.push((new.id().clone(), Action::NewShared));
     let _ = menu.append(&new);
     (actions, states)
 }
 
-/// "When a file changes in both places": the choice of this folder, one entry checked, and (with `ask`) the way to be asked again
-/// about what waits.
-fn conflict_menu(shared: &Shared) -> (Submenu, Actions) {
+/// The mode of this folder, one entry checked, and (with `ask`) the way to be asked again about what waits.
+fn conflict_menu(synced: &SyncedFolder) -> (Submenu, Actions) {
     let mut actions = Actions::new();
-    let sub = Submenu::new("When a file changes here and on the server", true);
+    let sub = Submenu::new("How it syncs", true);
     let choices = [
-        (Conflict::Theirs, "Keep the server's (mine is put aside)"),
-        (Conflict::Mine, "Keep mine (replaces the server's)"),
-        (Conflict::Both, "Keep both"),
-        (Conflict::Ask, "Ask me"),
+        (Mode::Both, "Both ways (the server's wins a clash; mine is put aside)"),
+        (Mode::Up, "Send only (nothing comes back)"),
+        (Mode::Mine, "Both ways, mine wins a clash (replaces the server's)"),
+        (Mode::Keep, "Both ways, keep both on a clash"),
+        (Mode::Ask, "Both ways, ask me on a clash"),
     ];
-    for (conflict, text) in choices {
-        if conflict == Conflict::Ask && !Conflict::ask_available() {
+    for (mode, text) in choices {
+        if mode == Mode::Ask && !Mode::ask_available() {
             continue;
         }
-        let item = CheckMenuItem::new(text, true, shared.conflict == conflict, None);
-        actions.push((item.id().clone(), Action::SetConflict(shared.name.clone(), conflict)));
+        let item = CheckMenuItem::new(text, true, synced.mode == mode, None);
+        actions.push((item.id().clone(), Action::SetMode(synced.name.clone(), mode)));
         let _ = sub.append(&item);
     }
-    if shared.conflict == Conflict::Ask {
+    if synced.mode == Mode::Ask {
         let _ = sub.append(&PredefinedMenuItem::separator());
         let again = MenuItem::new("Choose for the files that wait...", true, None);
-        actions.push((again.id().clone(), Action::ResolveConflicts(shared.name.clone())));
+        actions.push((again.id().clone(), Action::ResolveConflicts(synced.name.clone())));
         let _ = sub.append(&again);
     }
     (sub, actions)
@@ -374,7 +374,7 @@ fn ask_about_conflicts(config_path: &Path, status: Option<&daemon::Status>) {
     let mut asked = ASKED.locked();
     // No status (the client is restarting): not a reason to forget what was asked.
     let Some(status) = status else { return };
-    let waiting: Vec<(String, daemon::ConflictInfo)> = status.shared.iter().flat_map(|f| f.conflicts.iter().map(|c| (f.name.clone(), c.clone()))).collect();
+    let waiting: Vec<(String, daemon::ConflictInfo)> = status.synced.iter().flat_map(|f| f.conflicts.iter().map(|c| (f.name.clone(), c.clone()))).collect();
     asked.retain(|(folder, path)| waiting.iter().any(|(f, c)| f == folder && &c.path == path));
     let new: Vec<_> = waiting.into_iter().filter(|(f, c)| !asked.contains(&(f.clone(), c.path.clone()))).collect();
     if new.is_empty() {
@@ -455,18 +455,18 @@ fn ask_which(folder: &str, file: &daemon::ConflictInfo) -> Option<&'static str> 
     }
 }
 
-/// A name the master accepts for a shared folder, made from the name of a directory.
-fn shared_name_of(dir: &Path) -> Option<String> {
+/// A name the master accepts for a synced folder, made from the name of a directory.
+fn synced_name_of(dir: &Path) -> Option<String> {
     let raw = dir.file_name()?.to_string_lossy().to_lowercase();
     let name: String = raw.chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '-' }).collect();
     let name = name.trim_matches(['-', '.', '_']).chars().take(63).collect::<String>();
     fafnirx_common::valid_device_name(&name).then_some(name)
 }
 
-/// Asks for a folder and syncs it with the shared folder `name`, made first when `create` is set.
-fn attach_shared_dialog(config_path: &Path, name: &str, dir: &Path, create: bool) {
+/// Asks for a folder and syncs it with the synced folder `name`, made first when `create` is set.
+fn attach_synced_dialog(config_path: &Path, name: &str, dir: &Path, create: bool) {
     warn_before_attaching(config_path, &[dir.to_path_buf()]);
-    let request = Request::AttachShared { name: name.into(), path: dir.into(), create };
+    let request = Request::AttachSynced { name: name.into(), path: dir.into(), create };
     if let Err(e) = change_folders(config_path, &request) {
         message(rfd::MessageLevel::Error, format!("Could not sync \"{name}\":\n\n{e}")).show();
     }
@@ -478,7 +478,7 @@ fn blocked_folder(status: Option<&daemon::Status>, config: &Config) -> Option<Pa
         .folders
         .iter()
         .map(|f| f.path.as_path())
-        .chain(config.shared.iter().map(|s| s.path.as_path()));
+        .chain(config.synced.iter().map(|s| s.path.as_path()));
     disk_access::first_blocked(status.and_then(|s| s.full_disk_access), paths).map(Path::to_path_buf)
 }
 
@@ -519,23 +519,23 @@ fn confirm_then(text: String, change: impl FnOnce() -> anyhow::Result<()>) {
     }
 }
 
-/// Syncs a folder chosen by the user with an existing shared folder.
-fn attach_existing_shared(config_path: &Path, name: &str) {
+/// Syncs a folder chosen by the user with an existing synced folder.
+fn attach_existing_synced(config_path: &Path, name: &str) {
     let Some(dir) = rfd::FileDialog::new().set_title(format!("Choose the folder to sync with \"{name}\"")).pick_folder() else {
         return;
     };
     let text = format!(
-        "Sync {} with the shared folder \"{name}\"?\n\nFiles from both are merged: what is only on one side is copied to the \
+        "Sync {} with the synced folder \"{name}\"?\n\nFiles from both are merged: what is only on one side is copied to the \
          other, and if a file differs on both sides the server's is kept and yours is put aside \
          (the menu of the folder changes that).",
         dir.display()
     );
     if ask_yes_no(rfd::MessageLevel::Info, text) {
-        attach_shared_dialog(config_path, name, &dir, false);
+        attach_synced_dialog(config_path, name, &dir, false);
     }
 }
 
-/// A shared folder as people read it, with the user it belongs to in front: `ana/family`. Without the user (not known before
+/// A synced folder as people read it, with the user it belongs to in front: `ana/family`. Without the user (not known before
 /// the client first reached the master) it is the bare name.
 fn with_owner(owner: &str, name: &str) -> String {
     if owner.is_empty() || name.contains('/') {
@@ -550,15 +550,15 @@ fn owner_of(status: Option<&daemon::Status>) -> &str {
     status.and_then(|s| s.device.split_once('/')).map_or("", |(owner, _)| owner)
 }
 
-/// Makes a shared folder named after a folder chosen by the user, and syncs that folder with it. `owner` is the user, to
+/// Makes a synced folder named after a folder chosen by the user, and syncs that folder with it. `owner` is the user, to
 /// show the folder the way the master names it.
-fn new_shared(config_path: &Path, on_master: &[(String, bool)], owner: &str) {
+fn new_synced(config_path: &Path, on_master: &[(String, bool)], owner: &str) {
     let Some(dir) = rfd::FileDialog::new().set_title("Choose the folder to share").pick_folder() else { return };
-    let Some(name) = shared_name_of(&dir) else {
+    let Some(name) = synced_name_of(&dir) else {
         message(
             rfd::MessageLevel::Warning,
             format!(
-                "\"{}\" cannot be the name of a shared folder. Use the command line to choose one:\nfafnirx shared attach <name> <folder> --create",
+                "\"{}\" cannot be the name of a synced folder. Use the command line to choose one:\nfafnirx folder add <folder> --target <name> --create",
                 dir.display()
             ),
         )
@@ -569,27 +569,27 @@ fn new_shared(config_path: &Path, on_master: &[(String, bool)], owner: &str) {
     let existing = on_master.iter().find(|(n, own)| *own && n.rsplit('/').next() == Some(name.as_str()));
     if let Some((full, _)) = existing {
         let text = format!(
-            "There is a shared folder called \"{full}\" already.\n\nSync {} with it? Files from both are merged.",
+            "There is a synced folder called \"{full}\" already.\n\nSync {} with it? Files from both are merged.",
             dir.display()
         );
         if ask_yes_no(rfd::MessageLevel::Info, text) {
-            attach_shared_dialog(config_path, full, &dir, false);
+            attach_synced_dialog(config_path, full, &dir, false);
         }
     } else if ask_yes_no(
         rfd::MessageLevel::Info,
         format!(
-            "Make the shared folder \"{}\" and keep {} in sync with it?",
+            "Make the synced folder \"{}\" and keep {} in sync with it?",
             with_owner(owner, &name),
             dir.display()
         ),
     ) {
-        attach_shared_dialog(config_path, &name, &dir, true);
+        attach_synced_dialog(config_path, &name, &dir, true);
     }
 }
 
-fn detach_shared_dialog(config_path: &Path, name: &str) {
+fn detach_synced_dialog(config_path: &Path, name: &str) {
     let text = format!("Stop syncing \"{name}\" on this computer?\n\nNothing is deleted: the files stay in the folder and on the server.");
-    confirm_then(text, || cli_change(config_path, &Request::DetachShared { name: name.into() }));
+    confirm_then(text, || cli_change(config_path, &Request::DetachSynced { name: name.into() }));
 }
 
 fn message(level: rfd::MessageLevel, text: String) -> rfd::MessageDialog {
@@ -624,7 +624,7 @@ struct Env {
     config_path: PathBuf,
     state_dir: PathBuf,
     updates: Updates,
-    /// The shared folders the master lists for this user, as last looked up.
+    /// The synced folders the master lists for this user, as last looked up.
     on_master: Arc<Mutex<Vec<(String, bool)>>>,
 }
 
@@ -661,14 +661,14 @@ impl Env {
                 }
             }
             Action::RemoveFolder(name) => remove_folder_dialog(&self.config_path, &name),
-            Action::AttachShared(name) => attach_existing_shared(&self.config_path, &name),
+            Action::AttachSynced(name) => attach_existing_synced(&self.config_path, &name),
             Action::NewShared => {
                 let known = self.on_master.locked().clone();
-                new_shared(&self.config_path, &known, owner_of(daemon::read_status(&self.state_dir).as_ref()));
+                new_synced(&self.config_path, &known, owner_of(daemon::read_status(&self.state_dir).as_ref()));
             }
-            Action::DetachShared(name) => detach_shared_dialog(&self.config_path, &name),
-            Action::SetConflict(name, conflict) => {
-                if let Err(e) = cli_change(&self.config_path, &Request::SetConflict { name, conflict }) {
+            Action::DetachSynced(name) => detach_synced_dialog(&self.config_path, &name),
+            Action::SetMode(name, mode) => {
+                if let Err(e) = cli_change(&self.config_path, &Request::SetMode { name, mode }) {
                     message(rfd::MessageLevel::Error, format!("{e:#}")).show();
                 }
             }
@@ -676,7 +676,7 @@ impl Env {
                 if let Ok(mut asked) = ASKED.lock() {
                     asked.retain(|(folder, _)| *folder != name);
                 }
-                let waiting = daemon::read_status(&self.state_dir).is_some_and(|s| s.shared.iter().any(|f| f.name == name && !f.conflicts.is_empty()));
+                let waiting = daemon::read_status(&self.state_dir).is_some_and(|s| s.synced.iter().any(|f| f.name == name && !f.conflicts.is_empty()));
                 if !waiting {
                     message(rfd::MessageLevel::Info, format!("No file of \"{name}\" is waiting for a choice.")).show();
                 }
@@ -695,7 +695,7 @@ pub fn run(config_path: PathBuf) -> Result<()> {
     // Fix the path of the program before anything replaces it (see `open::exe`).
     open::exe();
     // A tray that is replaced by a new one after an update starts it first, so it may have to wait for the old one to go.
-    // One tray for each user who is logged in: in a system-wide install the control folder is shared.
+    // One tray for each user who is logged in: in a system-wide install the control folder is synced.
     if !crate::service::instance::claim(&control, &format!("tray-{}", crate::service::instance::user_name()), 20)? {
         println!("the fafnirx tray is already running");
         return Ok(());
@@ -778,17 +778,17 @@ pub fn run(config_path: PathBuf) -> Result<()> {
             if asked_to_restart(&restart_marker, started) && !env.updates.restart.load(Ordering::SeqCst) {
                 restart_tray(&config_path, &env.updates);
             }
-            // The client asks the master for the shared folders (it holds the token); the tray only reads what it found.
+            // The client asks the master for the synced folders (it holds the token); the tray only reads what it found.
             if let (Some(s), Ok(mut listed)) = (&status, env.on_master.lock()) {
-                *listed = s.shared_on_master.clone();
+                *listed = s.synced_on_master.clone();
             }
             menus.show_access(blocked.as_deref());
             if let Some(c) = &cfg_now {
                 menus.sync_folders(&c.folders);
                 let on_master: Vec<String> = env.on_master.locked().iter().map(|(n, _)| n.clone()).collect();
-                menus.sync_shared(&c.shared, &on_master);
+                menus.sync_synced(&c.synced, &on_master);
             }
-            menus.show_shared_state(status.as_ref(), unix);
+            menus.show_synced_state(status.as_ref(), unix);
             ask_about_conflicts(&config_path, status.as_ref());
             let update_text = env.updates.text.locked().clone();
             menus.show(&info, paused, current.stopped, &update_text, env.updates.available().as_deref());
@@ -836,7 +836,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_shared_folder_is_shown_with_its_owner() {
+    fn a_synced_folder_is_shown_with_its_owner() {
         assert_eq!(with_owner("ana", "family"), "ana/family");
         assert_eq!(with_owner("ana", "bo/trip"), "bo/trip", "already named in full");
         assert_eq!(with_owner("", "family"), "family", "before the master has said who the user is");

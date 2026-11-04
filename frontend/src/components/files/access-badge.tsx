@@ -11,9 +11,7 @@ export function AccessBadge({ writable, kind }: { writable: boolean; kind: Entry
     ? t('You can upload, delete and restore files here.')
     : kind === 'device'
       ? t('This computer sends its own files: nothing can be uploaded or edited here. You can browse and download them, and hide them by deleting.')
-      : kind === 'source'
-        ? t('A source fills this folder: nothing can be uploaded or edited here. You can browse and download its files, and hide them by deleting.')
-        : t('Your account can only read here.')
+      : t('Your account can only read here.')
   return (
     <Tooltip>
       <TooltipTrigger asChild>

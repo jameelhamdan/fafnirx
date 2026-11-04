@@ -105,13 +105,43 @@ impl ChunkHasher {
         }
     }
 
-    /// (root hash, size) of everything fed so far.
-    pub fn finish(mut self) -> ([u8; HASH_LEN], u64) {
+    /// The hashes of everything fed so far.
+    pub fn finish(mut self) -> Hashed {
         if self.filled > 0 {
             self.chunks.push(*self.hasher.finalize().as_bytes());
         }
-        (root_hash(&self.chunks, self.size), self.size)
+        Hashed { root: root_hash(&self.chunks, self.size), size: self.size, chunks: self.chunks }
     }
+}
+
+/// What hashing a content gives: the hash of each chunk, the root hash over them, and the size.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Hashed {
+    pub root: [u8; HASH_LEN],
+    pub size: u64,
+    pub chunks: Vec<[u8; HASH_LEN]>,
+}
+
+/// Hashes everything `reader` gives, the way a file is hashed.
+pub fn hash_reader(mut reader: impl std::io::Read) -> std::io::Result<Hashed> {
+    let mut hasher = ChunkHasher::default();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        match reader.read(&mut buf)? {
+            0 => return Ok(hasher.finish()),
+            n => hasher.update(&buf[..n]),
+        }
+    }
+}
+
+/// Hashes a file.
+pub fn hash_path(path: &Path) -> std::io::Result<Hashed> {
+    hash_reader(std::fs::File::open(path)?)
+}
+
+/// Whether the file holds the content with this root hash (a file that cannot be read does not).
+pub fn file_has_root(path: &Path, root: &[u8; HASH_LEN]) -> bool {
+    hash_path(path).is_ok_and(|h| h.root == *root)
 }
 
 pub fn to_hash(bytes: &[u8]) -> Result<[u8; HASH_LEN]> {
@@ -315,11 +345,11 @@ mod tests {
                 "MarkDeleted",
                 "GetUpdateInfo",
                 "DownloadUpdate",
-                "ListShared",
-                "CreateShared",
+                "ListFolders",
+                "CreateFolder",
                 "ListChanges",
-                "DownloadShared",
-                "WatchShared"
+                "DownloadFolder",
+                "WatchFolder"
             ]
         );
         // The only streams from the master to a device carry the client update and the shared folders.
@@ -328,7 +358,7 @@ mod tests {
             .filter(|l| l.contains("returns (stream"))
             .map(|l| l.trim().strip_prefix("rpc ").unwrap().split('(').next().unwrap())
             .collect();
-        assert_eq!(returning_streams, ["DownloadUpdate", "ListChanges", "DownloadShared", "WatchShared"]);
+        assert_eq!(returning_streams, ["DownloadUpdate", "ListChanges", "DownloadFolder", "WatchFolder"]);
     }
 
     #[test]
@@ -380,8 +410,14 @@ mod tests {
         for piece in data.chunks(1_000_003) {
             h.update(piece);
         }
-        assert_eq!(h.finish(), (root_hash(&chunks, data.len() as u64), data.len() as u64));
-        assert_eq!(ChunkHasher::default().finish(), (root_hash(&[], 0), 0));
+        let done = h.finish();
+        assert_eq!(
+            (done.root, done.size, done.chunks),
+            (root_hash(&chunks, data.len() as u64), data.len() as u64, chunks)
+        );
+        let empty = ChunkHasher::default().finish();
+        assert_eq!((empty.root, empty.size, empty.chunks.len()), (root_hash(&[], 0), 0, 0));
+        assert!(hash_reader(&b"abc"[..]).unwrap().root == root_hash(&[chunk_hash(b"abc")], 3));
     }
 
     #[test]
@@ -414,6 +450,57 @@ mod tests {
         assert_eq!(clean_remote_path("e\u{301}.txt").unwrap(), "\u{e9}.txt");
         for bad in ["", "/etc/passwd", "a/../b", "a//b", "a\\b", "./a", "a/\u{0}b"] {
             assert!(clean_remote_path(bad).is_err(), "{bad:?} should be rejected");
+        }
+    }
+}
+
+/// A folder key as it goes in a request header, which carries ASCII only: anything else is written as `%XX`.
+pub fn header_encode(key: &str) -> String {
+    let mut out = String::new();
+    for b in key.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'/' | b':') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// The key [`header_encode`] made of `encoded`.
+pub fn header_decode(encoded: &str) -> String {
+    let bytes = encoded.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = (bytes[i] == b'%')
+            .then(|| encoded.get(i + 1..i + 3))
+            .flatten()
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match hex {
+            Some(b) => {
+                out.push(b);
+                i += 3;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[cfg(test)]
+mod header_tests {
+    use super::*;
+
+    #[test]
+    fn a_key_survives_the_header() {
+        for key in ["family", "bob/work", "master:Música/Rock & Roll", "master:100%"] {
+            let sent = header_encode(key);
+            assert!(sent.is_ascii());
+            assert_eq!(header_decode(&sent), key);
         }
     }
 }

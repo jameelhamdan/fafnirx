@@ -666,7 +666,7 @@ pub fn snapshot(c: &mut Client) -> anyhow::Result<serde_json::Value> {
     use serde_json::json;
     use std::collections::BTreeMap;
 
-    /// The files of each album or tag, by the id of the album or tag.
+    /// The files of each tag, by the id of the tag.
     fn files_by<'a>(rows: impl Iterator<Item = (uuid::Uuid, &'a str, &'a str)>) -> BTreeMap<uuid::Uuid, Vec<serde_json::Value>> {
         let mut map: BTreeMap<uuid::Uuid, Vec<serde_json::Value>> = BTreeMap::new();
         for (id, device, path) in rows {
@@ -675,15 +675,13 @@ pub fn snapshot(c: &mut Client) -> anyhow::Result<serde_json::Value> {
         map
     }
 
-    let album_files = sql::library::snapshot_album_files().bind(c).all()?;
-    let mut files_of_album = files_by(album_files.iter().map(|f| (f.album_id, f.folder.as_str(), f.path.as_str())));
     let albums: Vec<_> = sql::library::snapshot_albums()
         .bind(c)
         .all()?
         .into_iter()
         .map(|a| {
             json!({ "user": a.owner, "name": a.name, "description": a.description, "created_at": a.created_at,
-                    "files": files_of_album.remove(&a.id).unwrap_or_default() })
+                    "folder": { "device": a.folder, "path": a.folder_prefix.trim_end_matches('/') } })
         })
         .collect();
 

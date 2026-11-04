@@ -4,8 +4,8 @@ package fafnirx.v1;
 
 // Device API. Auth: `authorization: Bearer <token>` metadata.
 // Additive: no call reads, lists or removes what is stored for the caller's device (MarkDeleted only marks; data stays until
-// retention). Reads: update downloads, and shared folders of the caller's user (ListShared, ListChanges, DownloadShared,
-// WatchShared). Negotiate, UploadChunks, Commit and MarkDeleted act on a shared folder when `x-fafnirx-shared:
+// retention). Reads: update downloads, and folders of the caller's user (ListFolders, ListChanges, DownloadFolder,
+// WatchFolder). Negotiate, UploadChunks, Commit and MarkDeleted act on a folder when `x-fafnirx-folder:
 // <owner>/<name>` is set (bare `<name>` = the user's own).
 service Collector {
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
@@ -33,21 +33,21 @@ service Collector {
   rpc GetUpdateInfo(UpdateInfoRequest) returns (UpdateInfo);
   rpc DownloadUpdate(UpdateInfoRequest) returns (stream UpdateChunk);
 
-  // The shared folders of the user of the calling device.
-  rpc ListShared(ListSharedRequest) returns (ListSharedResponse);
+  // The folders of the user of the calling device.
+  rpc ListFolders(ListFoldersRequest) returns (ListFoldersResponse);
 
-  // Makes a shared folder for the user of the calling device. Succeeds when it exists already.
-  rpc CreateShared(CreateSharedRequest) returns (CreateSharedResponse);
+  // Makes a folder for the user of the calling device. Succeeds when it exists already.
+  rpc CreateFolder(CreateFolderRequest) returns (CreateFolderResponse);
 
-  // The paths of a shared folder written or deleted since `since`, as they are now: the cursor first, then the paths.
+  // The paths of a folder written or deleted since `since`, as they are now: the cursor first, then the paths.
   rpc ListChanges(ListChangesRequest) returns (stream ChangeEvent);
 
-  // The current content of a file of a shared folder.
-  rpc DownloadShared(DownloadSharedRequest) returns (stream FileData);
+  // The current content of a file of a folder.
+  rpc DownloadFolder(DownloadFolderRequest) returns (stream FileData);
 
-  // Says when one of the named shared folders changed, so that a computer need not poll: once for each folder when the call
+  // Says when one of the named folders changed, so that a computer need not poll: once for each folder when the call
   // starts (look now), then whenever a file in it was written or deleted. Folders the caller cannot use are left out.
-  rpc WatchShared(WatchSharedRequest) returns (stream SharedChanged);
+  rpc WatchFolder(WatchFolderRequest) returns (stream FolderChanged);
 }
 
 message HeartbeatRequest {
@@ -65,11 +65,11 @@ message HeartbeatRequest {
   uint64 bytes_done = 11;      // of bytes_total, this cycle
   uint64 bytes_total = 12;
   uint64 speed_bps = 13;       // upload speed, bytes per second
-  repeated SharedState shared = 14;  // the shared folders attached here, all of them on every beat
+  repeated FolderState folders = 14;  // the synced folders attached here, all of them on every beat
 }
 
-// What one shared folder attached to a computer is doing.
-message SharedState {
+// What one folder attached to a computer is doing.
+message FolderState {
   string name = 1;             // <owner>/<name>
   uint64 files = 2;            // in step with the master
   uint64 bytes = 3;
@@ -148,21 +148,22 @@ message UpdateChunk {
   bytes data = 1;
 }
 
-message ListSharedRequest {}
+message ListFoldersRequest {}
 
-message ListSharedResponse {
-  repeated string names = 1;    // every shared folder the user can use, as <owner>/<name>
+message ListFoldersResponse {
+  repeated string names = 1;    // every folder the user can use, as <owner>/<name>
   repeated string mine = 2;     // those of the names that are the user's own
+  repeated string ids = 3;      // the stable id of each of the names, in the same order: it keeps working when the folder is renamed
 }
 
-message CreateSharedRequest {
+message CreateFolderRequest {
   string name = 1;              // a device-style name: lowercase letters, digits, '.', '_' and '-'
 }
 
-message CreateSharedResponse {}
+message CreateFolderResponse {}
 
 message ListChangesRequest {
-  string shared = 1;
+  string folder = 1;
   int64 since = 2;              // a cursor from an earlier answer; 0 lists every path
 }
 
@@ -187,8 +188,8 @@ message Change {
   bool from_web = 7;            // a deletion made in the web app: deliberate, and in the Trash to restore, so it is not held
 }
 
-message DownloadSharedRequest {
-  string shared = 1;
+message DownloadFolderRequest {
+  string folder = 1;
   string path = 2;
 }
 
@@ -196,10 +197,10 @@ message FileData {
   bytes data = 1;
 }
 
-message WatchSharedRequest {
-  repeated string shared = 1;   // as in `x-fafnirx-shared`
+message WatchFolderRequest {
+  repeated string folders = 1;   // as in `x-fafnirx-folder`
 }
 
-message SharedChanged {
-  string shared = 1;            // as the caller named it
+message FolderChanged {
+  string folder = 1;            // as the caller named it
 }

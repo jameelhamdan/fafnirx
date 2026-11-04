@@ -75,7 +75,7 @@ WHERE f.id = ANY(:ids) AND f.deleted_at IS NULL
 ORDER BY shown_at DESC, f.id DESC;
 
 --! album_assets : Asset(width?, height?, duration_ms?, rating?, lat?, lon?)
--- What is in an album: newest first, or by path (which the caller then sorts the way people read names).
+-- What is in an album, by path (which the caller then sorts the way people read names).
 SELECT f.id, d.folder, f.path, v.size, v.root_hash, m.width, m.height, m.duration_ms,
        COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000) AS shown_at,
        COALESCE(s.favorite, false) AS favorite, COALESCE(s.archived, false) AS archived, s.rating,
@@ -87,10 +87,8 @@ LEFT JOIN file_meta m ON m.root_hash = v.root_hash
 LEFT JOIN file_state s ON s.file_id = f.id AND s.user_id = :uid
 WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
   AND visible(d, :scope_user::bigint, :all::boolean)
-  AND EXISTS (SELECT 1 FROM albums a WHERE a.id = :album_id
-              AND (EXISTS (SELECT 1 FROM album_files af WHERE af.album_id = a.id AND af.file_id = f.id)
-                   OR (a.folder_device_id = f.device_id AND starts_with(f.path, a.folder_prefix))))
-ORDER BY CASE WHEN :by_path::boolean THEN f.path END, shown_at DESC, f.id DESC LIMIT :limit;
+  AND EXISTS (SELECT 1 FROM albums a WHERE a.id = :album_id AND a.folder_device_id = f.device_id AND starts_with(f.path, a.folder_prefix))
+ORDER BY f.path, f.id DESC LIMIT :limit;
 
 --! asset_extras : (mime?, camera_when?, camera_lat?, camera_lon?, exif?, codec?, caption?, keywords?)
 -- What the detail view shows besides the asset itself: what the camera said before any correction, and whether
@@ -212,12 +210,8 @@ DELETE FROM tags WHERE id = :id AND user_id = :uid;
 -- What a mirror keeps of the library, so that albums, tags and favorites survive losing the database.
 
 --! snapshot_albums
-SELECT a.id, a.name, a.description, a.created_at, u.name AS owner
-FROM albums a JOIN users u ON u.id = a.user_id ORDER BY a.created_at, a.id;
-
---! snapshot_album_files
-SELECT af.album_id, d.folder, f.path FROM album_files af
-JOIN files f ON f.id = af.file_id JOIN devices d ON d.id = f.device_id ORDER BY af.album_id, f.path;
+SELECT a.id, a.name, a.description, a.created_at, u.name AS owner, d.folder, a.folder_prefix
+FROM albums a JOIN users u ON u.id = a.user_id JOIN devices d ON d.id = a.folder_device_id ORDER BY a.created_at, a.id;
 
 --! snapshot_tags
 SELECT t.id, t.name, u.name AS owner FROM tags t JOIN users u ON u.id = t.user_id ORDER BY lower(t.name), t.id;

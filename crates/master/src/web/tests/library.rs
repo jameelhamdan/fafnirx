@@ -4,8 +4,8 @@ use super::*;
 use fafnirx_common::LockExt;
 
 /// A stand-in for a module: answers only with the right token, says what it was asked for, and has a report that only
-/// the master may read. `contract` is what its manifest says.
-fn stand_in_module(contract: u32) -> String {
+/// the master may read. `contract` and `core` are what its manifest says.
+fn stand_in_module(contract: u32, core: &'static str) -> String {
     use axum::extract::{Path, Query};
     use axum::http::HeaderMap;
     let allowed = |h: &HeaderMap| h.get("authorization").and_then(|v| v.to_str().ok()) == Some("Bearer module-token-0123456789");
@@ -16,7 +16,7 @@ fn stand_in_module(contract: u32) -> String {
                 if !allowed(&h) {
                     return (StatusCode::UNAUTHORIZED, "no".to_string()).into_response();
                 }
-                axum::Json(json!({"id": "video", "version": "1.0.0", "contract": contract, "capabilities": ["status"]})).into_response()
+                axum::Json(json!({"id": "video", "version": "1.0.0", "contract": contract, "core": core, "capabilities": ["status"]})).into_response()
             }),
         )
         .route(
@@ -82,7 +82,10 @@ fn a_module_is_for_whoever_can_see_the_file_and_only_when_it_is_set_up() {
         assert_eq!(api.get("/api/m/video/AAAAAAAAAAAAAAAAAAAAAA/hls/master.m3u8").await.0, StatusCode::NOT_FOUND);
     });
 
-    let registry = registry_of(&stand_in_module(fafnirx_module_api::CONTRACT), "module-token-0123456789");
+    let registry = registry_of(
+        &stand_in_module(fafnirx_module_api::CONTRACT, fafnirx_module_api::VERSION),
+        "module-token-0123456789",
+    );
     let mut api = Api::with_modules(registry.clone());
     block(async {
         api.cookie = login(&api).await;
@@ -92,7 +95,7 @@ fn a_module_is_for_whoever_can_see_the_file_and_only_when_it_is_set_up() {
         registry.refresh_all().await;
         let session = api.get("/api/session").await.1;
         assert_eq!(session["modules"]["video"]["capabilities"], json!(["status"]));
-        api.json(Method::POST, "/api/devices", json!({"name": "videos", "kind": "local"})).await;
+        api.json(Method::POST, "/api/folders", json!({"name": "videos"})).await;
         api.upload("admin/videos", "trip/clip.mkv", b"video bytes").await;
         let id: uuid::Uuid = crate::platform::db::with(&api.db, |c| Ok(c.query_one("SELECT id FROM files WHERE path = 'trip/clip.mkv'", &[])?.get(0)))
             .await
@@ -161,12 +164,22 @@ fn a_module_is_for_whoever_can_see_the_file_and_only_when_it_is_set_up() {
 }
 
 #[test]
-fn a_module_that_refuses_the_token_or_speaks_another_contract_is_not_used() {
-    let other_contract = registry_of(&stand_in_module(fafnirx_module_api::CONTRACT + 1), "module-token-0123456789");
-    let wrong_token = registry_of(&stand_in_module(fafnirx_module_api::CONTRACT), "not-the-token-0123456789");
+fn a_module_that_refuses_the_token_or_speaks_another_contract_or_needs_a_newer_master_is_not_used() {
+    let other_contract = registry_of(
+        &stand_in_module(fafnirx_module_api::CONTRACT + 1, fafnirx_module_api::VERSION),
+        "module-token-0123456789",
+    );
+    let too_new = registry_of(&stand_in_module(fafnirx_module_api::CONTRACT, "999.0.0"), "module-token-0123456789");
+    let wrong_token = registry_of(
+        &stand_in_module(fafnirx_module_api::CONTRACT, fafnirx_module_api::VERSION),
+        "not-the-token-0123456789",
+    );
     block(async {
         other_contract.refresh_all().await;
         assert!(other_contract.active().is_empty(), "another contract version");
+
+        too_new.refresh_all().await;
+        assert!(too_new.active().is_empty(), "it needs a newer master than this one");
 
         wrong_token.refresh_all().await;
         assert!(wrong_token.active().is_empty(), "the token is refused");
@@ -183,7 +196,7 @@ fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
-        api.json(Method::POST, "/api/devices", json!({"name": "photos", "kind": "local"})).await;
+        api.json(Method::POST, "/api/folders", json!({"name": "photos"})).await;
         api.upload("admin/photos", "trip/a.png", &png(8, 4, [200, 10, 10])).await;
         api.upload("admin/photos", "b.png", &png(4, 4, [0, 200, 0])).await;
         api.upload("admin/photos", "notes.txt", b"not a photo").await;
@@ -346,11 +359,11 @@ fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
 }
 
 #[test]
-fn a_folder_can_be_an_album_and_files_are_added_from_the_file_browser() {
+fn a_folder_is_an_album_and_what_comes_into_it_is_in_the_album() {
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
-        api.json(Method::POST, "/api/devices", json!({"name": "tv", "kind": "local"})).await;
+        api.json(Method::POST, "/api/folders", json!({"name": "tv"})).await;
         for (path, shade) in [("Show/S1/Episode 10.png", 1), ("Show/S1/Episode 2.png", 2), ("Other/x.png", 3)] {
             api.upload("admin/tv", path, &png(4, 4, [shade, shade, shade])).await;
         }
@@ -397,48 +410,39 @@ fn a_folder_can_be_an_album_and_files_are_added_from_the_file_browser() {
             api.json(Method::POST, "/api/albums", json!({"name": "x", "folder": nobody})).await.0,
             StatusCode::NOT_FOUND
         );
-
-        // From the file browser: files and folders by where they are, without ids.
-        let (_, trip) = api.json(Method::POST, "/api/albums", json!({"name": "Trip"})).await;
-        let trip_id = trip["id"].as_str().unwrap().to_string();
-        let items = json!({"items": [{"device": "admin/tv", "path": "Other/x.png"}, {"device": "admin/tv", "path": "Show"}]});
-        let (_, added) = api.json(Method::POST, &format!("/api/albums/{trip_id}/files"), items).await;
-        assert_eq!(added["count"], 4, "the file, and the three below the folder");
-        let (_, detail) = api.get(&format!("/api/albums/{trip_id}")).await;
-        assert_eq!(detail["album"]["count"], 4);
-        assert!(detail["album"]["folder"].is_null());
     });
 }
 
 #[test]
-fn albums_collect_files_and_leave_the_files_alone() {
+fn an_album_shows_its_folder_and_leaves_the_files_alone() {
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
-        api.json(Method::POST, "/api/devices", json!({"name": "photos", "kind": "local"})).await;
+        api.json(Method::POST, "/api/folders", json!({"name": "photos"})).await;
         api.upload("admin/photos", "a.png", &png(8, 4, [1, 1, 1])).await;
         api.upload("admin/photos", "b.png", &png(4, 4, [2, 2, 2])).await;
-        api.upload("admin/photos", "c.png", &png(2, 2, [3, 3, 3])).await;
-        let (a, b, c) = (photo_id(&api, "a.png").await, photo_id(&api, "b.png").await, photo_id(&api, "c.png").await);
+        api.json(Method::POST, "/api/folders", json!({"name": "other"})).await;
+        api.upload("admin/other", "c.png", &png(2, 2, [3, 3, 3])).await;
+        let (a, b) = (photo_id(&api, "a.png").await, photo_id(&api, "b.png").await);
+        let whole = json!({"device": "admin/photos", "path": ""});
 
-        assert_eq!(api.json(Method::POST, "/api/albums", json!({"name": "  "})).await.0, StatusCode::BAD_REQUEST);
-        let (status, album) = api.json(Method::POST, "/api/albums", json!({"name": " Trip ", "ids": [a]})).await;
-        assert_eq!(status, StatusCode::OK);
-        let id = album["id"].as_str().unwrap().to_string();
+        // An album needs a folder.
         assert_eq!(
-            (album["name"].clone(), album["count"].clone(), album["cover"].clone()),
-            (json!("Trip"), json!(1), json!(a))
+            api.json(Method::POST, "/api/albums", json!({"name": "Trip"})).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY
         );
-
-        let (_, added) = api.json(Method::POST, &format!("/api/albums/{id}/files"), json!({"ids": [a, b]})).await;
-        assert_eq!(added["count"], 1, "a is already in it");
+        let (status, album) = api.json(Method::POST, "/api/albums", json!({"name": " Trip ", "folder": whole})).await;
+        assert_eq!(status, StatusCode::OK, "{album}");
+        let id = album["id"].as_str().unwrap().to_string();
+        assert_eq!((album["name"].clone(), album["count"].clone()), (json!("Trip"), json!(2)));
         let (_, detail) = api.get(&format!("/api/albums/{id}")).await;
-        assert_eq!(detail["album"]["count"], 2);
         assert_eq!(detail["assets"].as_array().unwrap().len(), 2);
         assert_eq!(api.get(&format!("/api/library/{a}")).await.1["albums"][0]["name"], "Trip");
 
-        let not_member = api.json(Method::PATCH, &format!("/api/albums/{id}"), json!({"cover": c})).await;
-        assert_eq!(not_member.0, StatusCode::BAD_REQUEST, "c is not in it");
+        // The cover is a file of the album, or chosen again.
+        let c = photo_id(&api, "c.png").await;
+        let outside = api.json(Method::PATCH, &format!("/api/albums/{id}"), json!({"cover": c})).await;
+        assert_eq!(outside.0, StatusCode::BAD_REQUEST, "c is not in the folder");
         let (_, edited) = api
             .json(
                 Method::PATCH,
@@ -448,16 +452,10 @@ fn albums_collect_files_and_leave_the_files_alone() {
             .await;
         assert_eq!((edited["name"].clone(), edited["cover"].clone()), (json!("Trip 2024"), json!(b)));
 
-        let (_, removed) = api.json(Method::POST, &format!("/api/albums/{id}/files/remove"), json!({"ids": [b]})).await;
-        assert_eq!(removed["count"], 1);
-        let (_, after) = api.get("/api/albums").await;
-        assert_eq!(after[0]["count"], 1);
-        assert_eq!(after[0]["cover"], a, "the cover that left is replaced by the newest file");
-
-        // Deleting a file takes it out of the album's count; deleting the album leaves the photos.
+        // Deleting a file takes it out of the album's count; restoring puts it back; deleting the album leaves the photos.
         api.json(Method::POST, "/api/files/delete", json!({"items": [{"device": "admin/photos", "path": "a.png"}]}))
             .await;
-        assert_eq!(api.get("/api/albums").await.1[0]["count"], 0);
+        assert_eq!(api.get("/api/albums").await.1[0]["count"], 1);
         let version = api.get("/api/trash").await.1["entries"][0]["version"].clone();
         let restored = api
             .json(
@@ -467,7 +465,7 @@ fn albums_collect_files_and_leave_the_files_alone() {
             )
             .await;
         assert_eq!(restored.0, StatusCode::OK);
-        assert_eq!(api.get("/api/albums").await.1[0]["count"], 1, "and it is back in the album when restored");
+        assert_eq!(api.get("/api/albums").await.1[0]["count"], 2, "and it is back in the album when restored");
         assert_eq!(
             api.send(Method::DELETE, &format!("/api/albums/{id}"), Body::empty(), None, &[]).await.0,
             StatusCode::OK
@@ -482,7 +480,7 @@ fn an_album_uses_its_poster_as_the_cover_and_a_viewer_steps_through_a_folder() {
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
-        api.json(Method::POST, "/api/devices", json!({"name": "tv", "kind": "local"})).await;
+        api.json(Method::POST, "/api/folders", json!({"name": "tv"})).await;
         for (path, shade) in [("Show/S1/E1.png", 1), ("Show/S1/E2.png", 2), ("Show/poster.png", 3), ("Show/S1/cover.png", 4)] {
             api.upload("admin/tv", path, &png(4, 4, [shade, shade, shade])).await;
         }
@@ -511,7 +509,7 @@ fn the_folder_of_a_viewer_takes_wildcards_in_names_literally() {
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
-        api.json(Method::POST, "/api/devices", json!({"name": "pics", "kind": "local"})).await;
+        api.json(Method::POST, "/api/folders", json!({"name": "pics"})).await;
         for (path, shade) in [("a_b/one.png", 1), ("axb/two.png", 2), ("a_b/sub/three.png", 3)] {
             api.upload("admin/pics", path, &png(4, 4, [shade, shade, shade])).await;
         }
@@ -558,7 +556,7 @@ fn nothing_is_made_when_thumbnails_are_off() {
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
-        api.json(Method::POST, "/api/devices", json!({"name": "photos", "kind": "local"})).await;
+        api.json(Method::POST, "/api/folders", json!({"name": "photos"})).await;
         api.upload("admin/photos", "a.png", &png(8, 4, [200, 10, 10])).await;
         let a = photo_id(&api, "a.png").await;
         let settings = |on: bool| json!({"version_count": 5, "retention_days": 30, "thumbnails": on});

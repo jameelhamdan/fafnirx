@@ -61,8 +61,8 @@ pub struct Caller {
     token: String,
     instance: String,
     ip: Option<String>,
-    /// The shared folder the call acts on instead of the device, named in the `x-fafnirx-shared` metadata.
-    shared: Option<String>,
+    /// The folder the call acts on instead of the device, named in the `x-fafnirx-folder` metadata.
+    folder: Option<String>,
 }
 
 /// The instance of a caller that does not name one: all such callers count as one computer.
@@ -82,28 +82,50 @@ fn caller_of<T>(req: &Request<T>, trusted: &crate::platform::proxy::Trusted) -> 
         .map(|v| clip(v, 64))
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| UNNAMED_INSTANCE.into());
-    let shared = req
+    let folder = req
         .metadata()
-        .get("x-fafnirx-shared")
+        .get("x-fafnirx-folder")
         .and_then(|v| v.to_str().ok())
-        .map(|v| clip(v, 130))
+        .map(|v| clip(&fafnirx_common::header_decode(&clip(v, 700)), 130))
         .filter(|v| !v.is_empty());
-    Ok(Caller { token: bearer(req)?, instance, ip: address_of(req, trusted), shared })
+    Ok(Caller { token: bearer(req)?, instance, ip: address_of(req, trusted), folder })
 }
 
-/// What the call works on: the device, or the shared folder it names. The owner of a shared folder reaches it through any
-/// of their devices; another user only when the owner added them, and to change it only when they may write.
+/// What the call works on: the device, or the folder it names. The owner of a folder reaches it through any of their devices;
+/// another user only when the owner added them (or it is a master folder), and to change it only when they may write.
 fn acting(conn: &mut Client, who: &Caller, write: bool) -> Result<Device, Status> {
+    Ok(place(conn, who, write)?.device)
+}
+
+/// Where a call works: a device and, for a master folder, the path of it in the master files (empty or ending in a slash).
+/// Paths in the messages are relative to it.
+struct Place {
+    device: Device,
+    prefix: String,
+    /// A call that names a folder: what is written there has to be named so that every kind of computer can hold it.
+    folder: bool,
+}
+
+impl Place {
+    /// A path of the message as the path of the device.
+    fn inside(&self, path: &str) -> String {
+        format!("{}{path}", self.prefix)
+    }
+}
+
+/// The folder a caller names in `x-fafnirx-folder` (or in the message): any folder the user can use is found the same way, by its
+/// name or its stable id, whoever owns it. Without a name the call is about the device.
+fn place(conn: &mut Client, who: &Caller, write: bool) -> Result<Place, Status> {
     let (dev, user) = authenticate_user(conn, who)?;
-    let Some(key) = &who.shared else { return Ok(dev) };
-    let found = devices::shared_folder(conn, user, key)
+    let Some(key) = &who.folder else { return Ok(Place { device: dev, prefix: String::new(), folder: false }) };
+    let found = devices::folder(conn, user, key)
         .map_err(internal)?
-        .ok_or_else(|| Status::not_found(format!("no shared folder called \"{key}\"")))?;
+        .ok_or_else(|| Status::not_found(format!("no folder called \"{key}\"")))?;
     if write && !found.can_write {
         // Not PermissionDenied, which is about the device (in use by another computer) and stops the whole client.
         return Err(Status::failed_precondition(format!("\"{key}\" is shared with you to read only")));
     }
-    Ok(Device { id: found.id, name: found.folder })
+    Ok(Place { prefix: found.prefix_path(), device: Device { id: found.id, name: found.storage }, folder: true })
 }
 
 /// How long a device that is not heard from keeps its credentials to itself. After that another computer using the
@@ -208,25 +230,25 @@ fn stream_file<T: Send + 'static>(mut file: tokio::fs::File, wrap: fn(Vec<u8>) -
     ReceiverStream::new(rx)
 }
 
-/// The caller acting on the shared folder a request names (the calls that name it in the message, not in the metadata).
-fn on_shared_folder(who: Caller, shared: String) -> Result<Caller, Status> {
-    if shared.is_empty() {
-        return Err(Status::invalid_argument("name the shared folder"));
+/// The caller acting on the folder a request names (the calls that name it in the message, not in the metadata).
+fn on_folder(who: Caller, folder: String) -> Result<Caller, Status> {
+    if folder.is_empty() {
+        return Err(Status::invalid_argument("name the folder"));
     }
-    Ok(Caller { shared: Some(shared), ..who })
+    Ok(Caller { folder: Some(folder), ..who })
 }
 
 /// A computer that holds back deletions waits for a person: an alert on its device says so until it is dealt with, and it
 /// closes by itself when the computer stops reporting any (or stops reporting at all, see the minute job).
-fn alert_held_deletions(c: &mut Client, device: &str, shared: &[devices::SharedState]) -> anyhow::Result<()> {
-    let held: Vec<String> = shared.iter().filter(|s| s.held > 0).map(|s| format!("{} ({} files)", s.name, s.held)).collect();
+fn alert_held_deletions(c: &mut Client, device: &str, states: &[devices::FolderState]) -> anyhow::Result<()> {
+    let held: Vec<String> = states.iter().filter(|s| s.held > 0).map(|s| format!("{} ({} files)", s.name, s.held)).collect();
     if held.is_empty() {
         alerts::resolve(c, "deletions_held", device)?;
         return Ok(());
     }
     let message = format!(
         "Deletions are held back here for {}. `fafnirx release-deletes` applies them; \
-         `fafnirx shared keep <name>` keeps the files instead.",
+         `fafnirx folder keep <name>` keeps the files instead.",
         held.join(", ")
     );
     alerts::raise(c, "deletions_held", device, &message)?;
@@ -301,13 +323,13 @@ impl Collector for Service {
                 };
                 devices::record_heartbeat(c, dev.id, &info, unix_now())?;
                 // Only folders this computer's user can use: a name is the caller's word, and the owner of a folder is shown it.
-                let usable: Vec<String> = devices::shared_folders(c, owner)?.into_iter().map(|s| s.folder).collect();
-                let shared_state: Vec<devices::SharedState> = hb
-                    .shared
+                let usable: Vec<String> = devices::folders(c, owner)?.into_iter().map(|f| f.folder).collect();
+                let states: Vec<devices::FolderState> = hb
+                    .folders
                     .iter()
                     .filter(|s| usable.contains(&s.name))
                     .take(50)
-                    .map(|s| devices::SharedState {
+                    .map(|s| devices::FolderState {
                         name: clip(&s.name, 130),
                         files: s.files as i64,
                         bytes: s.bytes as i64,
@@ -318,8 +340,8 @@ impl Collector for Service {
                         updated_at: 0,
                     })
                     .collect();
-                devices::save_shared_state(c, dev.id, &shared_state, unix_now())?;
-                alert_held_deletions(c, &dev.name, &shared_state)?;
+                devices::save_folder_state(c, dev.id, &states, unix_now())?;
+                alert_held_deletions(c, &dev.name, &states)?;
                 // A conflict that has not come back for ten minutes is over.
                 if alerts::resolve_if_quiet(c, "device_conflict", &dev.name, unix_now() - 600)? {
                     db::notify(c, "alerts", &dev.name)?;
@@ -358,17 +380,18 @@ impl Collector for Service {
         let m = check_manifest(req.get_ref())?;
         let store = self.store.clone();
         self.blocking(move |c| {
-            let dev = acting(c, &who, true)?;
-            let current = files::live_content(c, dev.id, &m.path)?.map(|(root, _)| root);
+            let at = place(c, &who, true)?;
+            let (dev, path) = (&at.device, at.inside(&m.path));
+            let current = files::live_content(c, dev.id, &path)?.map(|(root, _)| root);
             // A backup device is told it is up to date for a path deleted in the web app, whatever it holds now. A shared
             // folder is not: its computers delete such a file themselves, so a file there is a new one.
-            let hidden = who.shared.is_none() && files::deleted_in_web_app(c, dev.id, &m.path)?;
+            let hidden = who.folder.is_none() && files::deleted_in_web_app(c, dev.id, &path)?;
             if current == Some(m.root) || hidden {
                 return Ok(Response::new(NegotiateResponse { missing: vec![], already_current: true }));
             }
             // The device already has this content under another path (a rename or a copy): the commit
             // takes it from there, nothing needs to be sent.
-            if files::live_path_with_root(c, dev.id, &m.root, None)?.is_some() {
+            if files::live_path_with_root(c, dev.id, &at.prefix, &m.root, None)?.is_some() {
                 return Ok(Response::new(NegotiateResponse { missing: vec![], already_current: false }));
             }
             let missing = store.missing_chunks(dev.id, &m.root, &m.chunks);
@@ -413,13 +436,19 @@ impl Collector for Service {
         let store = self.store.clone();
         let version_id = self
             .blocking(move |c| {
-                let dev = acting(c, &who, true)?;
-                if who.shared.is_none() && files::deleted_in_web_app(c, dev.id, &m.path)? {
+                let at = place(c, &who, true)?;
+                let (dev, path) = (&at.device, at.inside(&m.path));
+                let renamed_from = renamed_from.map(|from| at.inside(&from));
+                if who.folder.is_none() && files::deleted_in_web_app(c, dev.id, &path)? {
                     return Ok(0);
+                }
+                if at.folder {
+                    // The master files take the rules of the most limited computer for what is synced into them.
+                    ingest::check_names(c, dev, &path, renamed_from.as_deref(), true)?;
                 }
                 // Content the device already has under another path is taken from there; otherwise the
                 // upload must be complete and intact.
-                let staged = match files::live_path_with_root(c, dev.id, &m.root, renamed_from.as_deref())? {
+                let staged = match files::live_path_with_root(c, dev.id, &at.prefix, &m.root, renamed_from.as_deref())? {
                     Some(from) => store
                         .copy_live_to_temp(&dev.name, &from, &m.root)
                         .map_err(|e| Status::failed_precondition(format!("the file this one is copied from changed: {e:#}")))?,
@@ -432,8 +461,8 @@ impl Collector for Service {
                     &store,
                     &staged,
                     &ingest::NewVersion {
-                        device: &dev,
-                        path: &m.path,
+                        device: dev,
+                        path: &path,
                         root: m.root,
                         size: m.size,
                         mtime: r.mtime,
@@ -451,8 +480,8 @@ impl Collector for Service {
         let path = clean_remote_path(&req.get_ref().path).map_err(invalid)?;
         let store = self.store.clone();
         self.blocking(move |c| {
-            let dev = acting(c, &who, true)?;
-            ingest::mark_deleted(c, &store, &dev, &path, false)?;
+            let at = place(c, &who, true)?;
+            ingest::mark_deleted(c, &store, &at.device, &at.inside(&path), false)?;
             Ok(())
         })
         .await?;
@@ -488,37 +517,38 @@ impl Collector for Service {
         Ok(Response::new(stream_file(file, |data| UpdateChunk { data })))
     }
 
-    async fn list_shared(&self, req: Request<ListSharedRequest>) -> Result<Response<ListSharedResponse>, Status> {
+    async fn list_folders(&self, req: Request<ListFoldersRequest>) -> Result<Response<ListFoldersResponse>, Status> {
         let who = caller_of(&req, &self.trusted)?;
-        let (names, mine) = self
+        let (names, mine, ids) = self
             .blocking(move |c| {
                 let (_, owner) = authenticate_user(c, &who)?;
-                let all = devices::shared_folders(c, owner)?;
-                let mine = all.iter().filter(|s| s.mine).map(|s| s.folder.clone()).collect::<Vec<_>>();
-                Ok((all.into_iter().map(|s| s.folder).collect::<Vec<_>>(), mine))
+                let all = devices::folders(c, owner)?;
+                let mine = all.iter().filter(|f| f.mine).map(|f| f.folder.clone()).collect::<Vec<_>>();
+                let ids = all.iter().map(|f| f.public_id.to_string()).collect();
+                Ok((all.into_iter().map(|f| f.folder).collect::<Vec<_>>(), mine, ids))
             })
             .await?;
-        Ok(Response::new(ListSharedResponse { names, mine }))
+        Ok(Response::new(ListFoldersResponse { names, mine, ids }))
     }
 
-    async fn create_shared(&self, req: Request<CreateSharedRequest>) -> Result<Response<CreateSharedResponse>, Status> {
+    async fn create_folder(&self, req: Request<CreateFolderRequest>) -> Result<Response<CreateFolderResponse>, Status> {
         let who = caller_of(&req, &self.trusted)?;
         let name = req.into_inner().name;
         let made = self
             .blocking(move |c| {
                 let (_, owner) = authenticate_user(c, &who)?;
                 // Making one that is there already is not an error.
-                if devices::shared_folder(c, owner, &name)?.is_some_and(|s| s.mine) {
+                if devices::folder(c, owner, &name)?.is_some_and(|f| f.mine) {
                     return Ok(None);
                 }
-                Ok(Some(super::shared::make(c, owner, &name)?))
+                Ok(Some(super::folders::make(c, owner, &name)?))
             })
             .await?;
         if let Some(folder) = made {
             // The folder exists from the start so that a network share shows it.
             let _ = std::fs::create_dir_all(self.store.live_dir(&folder));
         }
-        Ok(Response::new(CreateSharedResponse {}))
+        Ok(Response::new(CreateFolderResponse {}))
     }
 
     type ListChangesStream = tokio_stream::Iter<std::vec::IntoIter<Result<ChangeEvent, Status>>>;
@@ -526,16 +556,20 @@ impl Collector for Service {
     async fn list_changes(&self, req: Request<ListChangesRequest>) -> Result<Response<Self::ListChangesStream>, Status> {
         let who = caller_of(&req, &self.trusted)?;
         let r = req.into_inner();
-        let who = on_shared_folder(who, r.shared)?;
+        let who = on_folder(who, r.folder)?;
         // Taken before the query and rewound a little, so that a write racing with it is listed by the next call at the latest.
         let cursor = (unix_now() - 2).max(0);
         let since = r.since.max(0);
         let (changes, complete) = self
             .blocking(move |c| {
-                let dev = acting(c, &who, false)?;
+                let at = place(c, &who, false)?;
                 let complete = deletions_may_be_missing(c, since);
                 // A caller that may have missed deletions is sent everything that is live, to compare with what it has.
-                Ok((files::changes_since(c, dev.id, if complete { 0 } else { since })?, complete))
+                let mut changes = files::changes_since(c, at.device.id, &at.prefix, if complete { 0 } else { since })?;
+                for change in &mut changes {
+                    change.path.drain(..at.prefix.len());
+                }
+                Ok((changes, complete))
             })
             .await?;
         let event = |item| Ok(ChangeEvent { item: Some(item) });
@@ -558,19 +592,20 @@ impl Collector for Service {
         Ok(Response::new(tokio_stream::iter(events)))
     }
 
-    type WatchSharedStream = ReceiverStream<Result<SharedChanged, Status>>;
+    type WatchFolderStream = ReceiverStream<Result<FolderChanged, Status>>;
 
-    async fn watch_shared(&self, req: Request<WatchSharedRequest>) -> Result<Response<Self::WatchSharedStream>, Status> {
+    async fn watch_folder(&self, req: Request<WatchFolderRequest>) -> Result<Response<Self::WatchFolderStream>, Status> {
         let who = caller_of(&req, &self.trusted)?;
-        let asked = req.into_inner().shared;
+        let asked = req.into_inner().folders;
         // The names the caller may use, with the folder each one is.
         let watched: Vec<(String, String)> = self
             .blocking(move |c| {
                 let (_, user) = authenticate_user(c, &who)?;
                 let mut found = Vec::new();
                 for name in asked {
-                    if let Some(s) = devices::shared_folder(c, user, &name)? {
-                        found.push((name, s.folder));
+                    // The caller may name a folder by its stable id; the answer names it the way it was asked.
+                    if let Some(f) = devices::folder(c, user, &name)? {
+                        found.push((name, f.storage));
                     }
                 }
                 Ok(found)
@@ -581,7 +616,7 @@ impl Collector for Service {
         let (tx, rx) = tokio::sync::mpsc::channel(16);
         tokio::spawn(async move {
             for (name, _) in &watched {
-                if tx.send(Ok(SharedChanged { shared: name.clone() })).await.is_err() {
+                if tx.send(Ok(FolderChanged { folder: name.clone() })).await.is_err() {
                     return;
                 }
             }
@@ -604,7 +639,7 @@ impl Collector for Service {
                     folders.extend(changed_folder(&payload));
                 }
                 for (name, folder) in &watched {
-                    if about(&folders, folder) && tx.send(Ok(SharedChanged { shared: name.clone() })).await.is_err() {
+                    if about(&folders, folder) && tx.send(Ok(FolderChanged { folder: name.clone() })).await.is_err() {
                         return;
                     }
                 }
@@ -613,22 +648,23 @@ impl Collector for Service {
         Ok(Response::new(ReceiverStream::new(rx)))
     }
 
-    type DownloadSharedStream = ReceiverStream<Result<FileData, Status>>;
+    type DownloadFolderStream = ReceiverStream<Result<FileData, Status>>;
 
-    async fn download_shared(&self, req: Request<DownloadSharedRequest>) -> Result<Response<Self::DownloadSharedStream>, Status> {
+    async fn download_folder(&self, req: Request<DownloadFolderRequest>) -> Result<Response<Self::DownloadFolderStream>, Status> {
         let who = caller_of(&req, &self.trusted)?;
         let r = req.into_inner();
-        let who = on_shared_folder(who, r.shared)?;
+        let who = on_folder(who, r.folder)?;
         let path = clean_remote_path(&r.path).map_err(invalid)?;
         let store = self.store.clone();
         let file_path = {
             let path = path.clone();
             self.blocking(move |c| {
-                let dev = acting(c, &who, false)?;
-                if files::live_content(c, dev.id, &path)?.is_none() {
+                let at = place(c, &who, false)?;
+                let path = at.inside(&path);
+                if files::live_content(c, at.device.id, &path)?.is_none() {
                     return Err(Status::not_found("no such file").into());
                 }
-                store.live_path(&dev.name, &path)
+                store.live_path(&at.device.name, &path)
             })
             .await?
         };
@@ -643,12 +679,12 @@ mod tests {
     use crate::platform::db::testing::{db_with_device, open_alerts};
 
     fn caller(instance: &str) -> Caller {
-        Caller { token: "secret".into(), instance: instance.into(), ip: Some("10.0.0.9".into()), shared: None }
+        Caller { token: "secret".into(), instance: instance.into(), ip: Some("10.0.0.9".into()), folder: None }
     }
 
     /// What a computer says about a shared folder.
-    fn said(name: &str, files: i64, held: i64, error: &str) -> devices::SharedState {
-        devices::SharedState {
+    fn said(name: &str, files: i64, held: i64, error: &str) -> devices::FolderState {
+        devices::FolderState {
             name: name.into(),
             files,
             bytes: files * 10,
@@ -671,8 +707,8 @@ mod tests {
         let mut conn = db.get().unwrap();
         let c: &mut Client = &mut conn;
         let (_, owner) = authenticate_user(c, &caller("first")).unwrap();
-        let folder = devices::create_shared(c, owner, "family", 0).unwrap().expect("made");
-        let on = |who: Caller, key: &str| Caller { shared: Some(key.into()), ..who };
+        let folder = devices::create_folder(c, owner, "family", 0).unwrap().expect("made");
+        let on = |who: Caller, key: &str| Caller { folder: Some(key.into()), ..who };
 
         let found = acting(c, &on(caller("first"), "family"), true).expect("the owner needs no setup");
         assert_eq!(found.name, folder);
@@ -683,12 +719,12 @@ mod tests {
         // Another user, with a device of their own.
         let bob = add_user(c, "bob");
         devices::insert(c, bob, "phone", "device", &db::hash_token("bobtoken"), 0).unwrap();
-        let bobs = Caller { token: "bobtoken".into(), instance: "b".into(), ip: None, shared: None };
+        let bobs = Caller { token: "bobtoken".into(), instance: "b".into(), ip: None, folder: None };
         for key in [folder.as_str(), "family"] {
             let refused = acting(c, &on(bobs.clone(), key), false);
             assert_eq!(refused.unwrap_err().code(), tonic::Code::NotFound, "{key} is not shared with bob");
         }
-        assert!(devices::shared_folders(c, bob).unwrap().is_empty());
+        assert!(devices::folders(c, bob).unwrap().is_empty());
 
         // The owner adds bob to read.
         c.execute(
@@ -696,7 +732,7 @@ mod tests {
             &[&found.id, &bob],
         )
         .unwrap();
-        let theirs = devices::shared_folders(c, bob).unwrap();
+        let theirs = devices::folders(c, bob).unwrap();
         assert_eq!(theirs.iter().map(|s| s.folder.as_str()).collect::<Vec<_>>(), [folder.as_str()]);
         assert!(!theirs[0].mine, "it is not bob's own");
         assert_eq!(acting(c, &on(bobs.clone(), &folder), false).unwrap().id, found.id);
@@ -722,6 +758,49 @@ mod tests {
     }
 
     #[test]
+    fn a_master_folder_is_a_prefix_of_the_master_files_that_every_user_may_use() {
+        let db = setup();
+        let mut conn = db.get().unwrap();
+        let c: &mut Client = &mut conn;
+        let (_, owner) = authenticate_user(c, &caller("first")).unwrap();
+        let on = |key: &str| Caller { folder: Some(key.into()), ..caller("first") };
+        assert_eq!(
+            place(c, &on("master:Music"), false).err().map(|e| e.code()),
+            Some(tonic::Code::NotFound),
+            "none made yet"
+        );
+
+        let path = super::super::master_folders::check(c, "/Music/", None).unwrap();
+        assert_eq!(path, "Music");
+        devices::insert_master_folder(c, &path, 1).unwrap();
+        let at = place(c, &on("master:Music"), true).unwrap();
+        assert_eq!((at.device.id, at.prefix.as_str(), at.inside("a/b.txt").as_str()), (0, "Music/", "Music/a/b.txt"));
+        assert_eq!(
+            place(c, &on("master:music"), false).err().map(|e| e.code()),
+            Some(tonic::Code::NotFound),
+            "exact name"
+        );
+        assert_eq!(devices::folders(c, owner).unwrap().iter().filter(|f| f.master).count(), 1);
+
+        // Neither inside another, nor around one, nor in the folders of the users, nor a name Windows cannot keep.
+        for bad in ["Music/Rock", "music", "users/x", "A:b"] {
+            assert!(super::super::master_folders::check(c, bad, None).is_err(), "{bad}");
+        }
+        assert!(super::super::master_folders::check(c, "Photos", None).is_ok());
+
+        // A local folder of the user is a target too, theirs alone.
+        devices::insert(c, owner, "docs", "local", "-", 0).unwrap();
+        let own: Vec<_> = devices::folders(c, owner).unwrap().into_iter().filter(|f| f.mine).collect();
+        assert_eq!(own.len(), 1, "the device of the test is a computer, not a folder");
+        assert_eq!(place(c, &on(&own[0].folder), true).unwrap().device.id, own[0].id);
+
+        // A read-only account reads it and never writes.
+        c.execute("UPDATE users SET role = 'readonly' WHERE id = $1", &[&owner]).unwrap();
+        assert_eq!(place(c, &on("master:Music"), true).err().map(|e| e.code()), Some(tonic::Code::FailedPrecondition));
+        place(c, &on("master:Music"), false).expect("but still reads");
+    }
+
+    #[test]
     fn a_computer_that_may_have_missed_deletions_is_sent_the_whole_list() {
         let db = setup();
         let mut conn = db.get().unwrap();
@@ -740,22 +819,22 @@ mod tests {
         let mut conn = db.get().unwrap();
         let c: &mut Client = &mut conn;
         let device = authenticate(c, &caller("first")).unwrap().id;
-        devices::save_shared_state(c, device, &[said("alice/family", 3, 0, ""), said("alice/work", 1, 0, "boom")], 500).unwrap();
-        let first = devices::shared_state_of_device(c, device).unwrap();
+        devices::save_folder_state(c, device, &[said("alice/family", 3, 0, ""), said("alice/work", 1, 0, "boom")], 500).unwrap();
+        let first = devices::folder_states_of_device(c, device).unwrap();
         assert_eq!(first.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["alice/family", "alice/work"]);
         assert_eq!((first[0].files, first[1].last_error.as_str(), first[0].updated_at), (3, "boom", 500));
         // The next beat names only one: the other is no longer attached.
-        devices::save_shared_state(c, device, &[said("alice/family", 4, 0, "")], 600).unwrap();
-        let second = devices::shared_state_of_device(c, device).unwrap();
+        devices::save_folder_state(c, device, &[said("alice/family", 4, 0, "")], 600).unwrap();
+        let second = devices::folder_states_of_device(c, device).unwrap();
         assert_eq!((second.len(), second[0].files), (1, 4));
         // The owner of a folder sees every computer with it attached, another user only their own.
         let owner: i64 = authenticate_user(c, &caller("first")).unwrap().1;
-        assert_eq!(devices::shared_state_of_folder(c, "alice/family", true, -1).unwrap().len(), 1);
-        assert_eq!(devices::shared_state_of_folder(c, "alice/family", false, owner).unwrap().len(), 1);
-        assert!(devices::shared_state_of_folder(c, "alice/family", false, owner + 1).unwrap().is_empty());
-        devices::save_shared_state(c, device, &[], 700).unwrap();
+        assert_eq!(devices::folder_states_of_folder(c, "alice/family", true, -1).unwrap().len(), 1);
+        assert_eq!(devices::folder_states_of_folder(c, "alice/family", false, owner).unwrap().len(), 1);
+        assert!(devices::folder_states_of_folder(c, "alice/family", false, owner + 1).unwrap().is_empty());
+        devices::save_folder_state(c, device, &[], 700).unwrap();
         assert!(
-            devices::shared_state_of_device(c, device).unwrap().is_empty(),
+            devices::folder_states_of_device(c, device).unwrap().is_empty(),
             "a computer with none attached says nothing"
         );
     }
@@ -766,7 +845,7 @@ mod tests {
         let mut conn = db.get().unwrap();
         let c: &mut Client = &mut conn;
         let (_, owner) = authenticate_user(c, &caller("first")).unwrap();
-        let family = devices::create_shared(c, owner, "family", 0).unwrap().expect("made");
+        let family = devices::create_folder(c, owner, "family", 0).unwrap().expect("made");
         let (member, stranger) = (add_user(c, "member"), add_user(c, "stranger"));
         let folder_id: i64 = c.query_one("SELECT id FROM devices WHERE folder = $1", &[&family]).unwrap().get(0);
         devices::add_shared_member(c, folder_id, member, false, 0).unwrap();
@@ -825,8 +904,8 @@ mod tests {
         let mut conn = db.get().unwrap();
         let c: &mut Client = &mut conn;
         let (_, owner) = authenticate_user(c, &caller("first")).unwrap();
-        devices::create_shared(c, owner, "family", 0).unwrap();
-        let id = devices::shared_folders(c, owner).unwrap()[0].id;
+        devices::create_folder(c, owner, "family", 0).unwrap();
+        let id = devices::folders(c, owner).unwrap()[0].id;
 
         let root = [7u8; 32];
         for (path, at) in [("a.txt", 100), ("b.txt", 200)] {
@@ -835,7 +914,7 @@ mod tests {
             files::make_current(c, file, v).unwrap();
         }
         let paths = |c: &mut Client, since| -> Vec<(String, bool)> {
-            files::changes_since(c, id, since)
+            files::changes_since(c, id, "", since)
                 .unwrap()
                 .into_iter()
                 .map(|x| (x.path, x.root.is_some()))
@@ -847,7 +926,7 @@ mod tests {
 
         files::delete_path(c, id, "a.txt", 400, false).unwrap();
         assert_eq!(paths(c, 300), [("a.txt".into(), false)], "a deletion is a change, without content");
-        let all = files::changes_since(c, id, 0).unwrap();
+        let all = files::changes_since(c, id, "", 0).unwrap();
         let b = all.iter().find(|x| x.path == "b.txt").unwrap();
         assert_eq!((b.root, b.size, b.mtime, b.mode), (Some(root), 3, 5, 0o644));
     }

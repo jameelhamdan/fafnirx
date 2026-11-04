@@ -1,3 +1,4 @@
+import { EventList } from '@/components/event-list'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { FolderOpen, KeyRound, Ban, Unplug } from 'lucide-react'
 import { useState } from 'react'
@@ -5,7 +6,7 @@ import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ActivityView, ErrorNote, Fact, KindBadge, PageHeader, StatusDot } from '@/components/common'
 import { EnrollDialog } from '@/components/enroll-dialog'
-import { SharedStateList } from '@/components/shared-state'
+import { FolderStateList } from '@/components/folder-state'
 import { Confirm } from '@/components/confirm'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -14,8 +15,8 @@ import { useNow } from '@/hooks/use-now'
 import { api } from '@/lib/api'
 import { ago, bytes, count, dateTime } from '@/lib/format'
 import type { DeviceDetail } from '@/lib/types'
-import { cn } from '@/lib/utils'
 import { useT } from '@/lib/i18n'
+import { filesLink } from '@/lib/links'
 import { deviceAddress } from '@/lib/session'
 
 export default function DeviceDetailPage() {
@@ -55,7 +56,7 @@ export default function DeviceDetailPage() {
         description={<span className="flex items-center gap-3"><KindBadge kind={d.kind} />{d.kind === 'device' && <StatusDot status={d.revoked ? 'revoked' : d.online ? 'online' : 'offline'} label={d.revoked ? t('Revoked') : d.online ? t('Online') : t('Offline, seen {when}', { when: ago(d.last_seen, now) })} />}</span>}
         actions={
           <>
-            <Button variant="outline" asChild><Link to={`/files?device=${encodeURIComponent(d.folder)}`}><FolderOpen className="size-4" />{t('Browse files')}</Link></Button>
+            <Button variant="outline" asChild><Link to={filesLink(d.folder)}><FolderOpen className="size-4" />{t('Browse files')}</Link></Button>
             {d.kind === 'device' && (
               <>
                 <Button variant="outline" onClick={() => setConfirm('rotate')}><KeyRound className="size-4" />{d.revoked ? t('New token (re-enables)') : t('Rotate token')}</Button>
@@ -94,25 +95,15 @@ export default function DeviceDetailPage() {
         <Card className="lg:col-span-2">
           <CardHeader><CardTitle>{t('Recent changes')}</CardTitle></CardHeader>
           <CardContent>
-            {data.events.length === 0 ? <p className="text-sm text-muted-foreground">{t('Nothing collected yet.')}</p> : (
-              <ul className="divide-y">
-                {data.events.map((e) => (
-                  <li key={e.id} className="flex items-center gap-3 py-2 text-sm">
-                    <span className={cn('w-16 shrink-0 text-xs font-medium uppercase', e.action === 'delete' ? 'text-destructive' : e.action === 'update' ? 'text-warning' : e.action === 'rename' ? 'text-foreground' : 'text-success')}>{e.action}</span>
-                    <Link to={`/files?device=${encodeURIComponent(d.folder)}&file=${encodeURIComponent(e.path)}`} className="min-w-0 flex-1 truncate hover:underline" title={e.path}>{e.path}</Link>
-                    <span className="shrink-0 text-xs text-muted-foreground">{ago(e.ts, now)}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
+            <EventList events={data.events} empty={t('Nothing collected yet.')} folder={d.folder} />
           </CardContent>
         </Card>
       </div>
 
-      {data.shared.length > 0 && (
+      {data.folders.length > 0 && (
         <Card className="mt-6">
-          <CardHeader><CardTitle>{t('Shared folders')}</CardTitle></CardHeader>
-          <CardContent><SharedStateList rows={data.shared} folders /></CardContent>
+          <CardHeader><CardTitle>{t('Synced folders')}</CardTitle></CardHeader>
+          <CardContent><FolderStateList rows={data.folders} folders /></CardContent>
         </Card>
       )}
 

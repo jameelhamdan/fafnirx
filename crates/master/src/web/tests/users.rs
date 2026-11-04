@@ -136,9 +136,9 @@ fn every_user_has_a_workspace_and_the_master_files_belong_to_everyone() {
         // The same device name for two users is two devices, each in the folder of its user.
         for (who, cookie) in [("bob", &bob), ("alice", &alice)] {
             api.cookie = cookie.clone();
-            let (status, made) = api.json(Method::POST, "/api/devices", json!({"name": "phone", "kind": "local"})).await;
+            let (status, made) = api.json(Method::POST, "/api/folders", json!({"name": "phone"})).await;
             assert_eq!(status, StatusCode::OK, "{made}");
-            assert_eq!(made["device"]["folder"], format!("{who}/phone"));
+            assert_eq!(made["folder"], format!("{who}/phone"));
             assert!(api._dir.path().join(format!("files/users/{who}/phone")).is_dir());
             assert_eq!(api.json(Method::POST, "/api/devices", json!({"name": "phone"})).await.0, StatusCode::CONFLICT);
             assert_eq!(try_upload(&api, &format!("{who}/phone"), "me.txt", who.as_bytes()).await, StatusCode::OK);
@@ -204,11 +204,20 @@ fn every_user_has_a_workspace_and_the_master_files_belong_to_everyone() {
         assert_eq!((status, body.as_slice()), (StatusCode::OK, &b"for everyone"[..]));
         assert_eq!(api.get("/api/files?device=bob/phone").await.0, StatusCode::NOT_FOUND);
         assert_eq!(try_upload(&api, "_master", "docs/x.txt", b"x").await, StatusCode::FORBIDDEN);
-        let own = json!({"name": "mine", "kind": "local"});
-        assert_eq!(api.json(Method::POST, "/api/devices", own).await.0, StatusCode::FORBIDDEN);
+        let own = json!({"name": "mine"});
+        assert_eq!(api.json(Method::POST, "/api/folders", own).await.0, StatusCode::FORBIDDEN);
         let delete = json!({"items": [{"device": "_master", "path": "docs/readme.txt"}]});
         assert_eq!(api.json(Method::POST, "/api/files/delete", delete).await.0, StatusCode::FORBIDDEN);
-        assert_eq!(api.json(Method::POST, "/api/albums", json!({"name": "mine"})).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(
+            api.json(
+                Method::POST,
+                "/api/albums",
+                json!({"name": "mine", "folder": {"device": "_master", "path": "shared"}})
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
 
         // The administrator reaches everything.
         api.cookie = admin;
@@ -243,7 +252,13 @@ fn what_people_say_about_a_master_file_is_their_own() {
         let id = photo_id(&api, "pic.png").await;
         let edit = json!({"favorite": true, "description": "bob's view", "tags": ["Holiday"]});
         assert_eq!(api.json(Method::PATCH, &format!("/api/library/{id}"), edit).await.0, StatusCode::OK);
-        let (status, album) = api.json(Method::POST, "/api/albums", json!({"name": "Bob's", "ids": [id]})).await;
+        let (status, album) = api
+            .json(
+                Method::POST,
+                "/api/albums",
+                json!({"name": "Bob's", "folder": {"device": "_master", "path": "shared"}}),
+            )
+            .await;
         assert_eq!((status, album["count"].clone()), (StatusCode::OK, json!(1)));
         let album_id = album["id"].as_str().unwrap().to_string();
         assert_eq!(api.get("/api/timeline/buckets?scope=favorites").await.1["total"], 1);

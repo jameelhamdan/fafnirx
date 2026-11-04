@@ -102,7 +102,7 @@ fn a_mirror_holds_one_folder_chosen_from_the_tree() {
     block(async {
         let bob = add_user(&mut api, "bob", "normal").await;
         api.cookie = bob.clone();
-        api.json(Method::POST, "/api/shared", json!({"name": "family"})).await;
+        api.json(Method::POST, "/api/folders", json!({"name": "family"})).await;
         assert_eq!(try_upload(&api, "bob/family", "2024/trip/a.txt", b"hello").await, StatusCode::OK);
         api.cookie = login(&api).await;
 
@@ -117,7 +117,7 @@ fn a_mirror_holds_one_folder_chosen_from_the_tree() {
         let top = names(&api.get("/api/mirrors/scope").await.1);
         assert_eq!(top[0], ("_master".to_string(), "master".to_string()));
         assert!(top.contains(&("bob".to_string(), "user".to_string())), "{top:?}");
-        assert_eq!(names(&api.get(&pick("bob")).await.1), [("family".to_string(), "shared".to_string())]);
+        assert_eq!(names(&api.get(&pick("bob")).await.1), [("family".to_string(), "local".to_string())]);
         assert_eq!(names(&api.get(&pick("bob/family")).await.1), [("2024".to_string(), "folder".to_string())]);
         assert_eq!(names(&api.get(&pick("bob/family/2024")).await.1), [("trip".to_string(), "folder".to_string())]);
         assert!(names(&api.get(&pick("bob/family/2024/trip")).await.1).is_empty(), "a.txt is a file, not a folder");

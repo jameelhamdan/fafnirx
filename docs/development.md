@@ -33,7 +33,7 @@ cargo run -p fafnirx -- enroll --no-service --server http://127.0.0.1:7443   # t
 | E2E: sources and mirrors | `node e2e-io.mjs` | `rclone` (`FAFNIRX_RCLONE`) |
 | E2E: video module | `node e2e-video.mjs` | `fafnirx-video` built |
 | E2E: delete and retention | `node e2e-retention.mjs` | ~2 min |
-| E2E: shared folders (several clients, two users) | `node e2e-shared.mjs` | Built binaries, test DB |
+| E2E: synced folders (several clients, two users) | `node e2e-folders.mjs` | Built binaries, test DB |
 | Benchmark of a running master (GET only) | `node bench-readonly.mjs http://host` | Optional `FAFNIRX_USER`, `FAFNIRX_PASSWORD` |
 | Benchmark of a release build with a synthetic library | `node bench-local.mjs [tiny] [large]` | `FAFNIRX_BIN_DIR` (release), test DB, Python with Pillow |
 | Scaling in Docker (cores, RAM, settings) | `python bench_docker.py <library> out.jsonl b1=0:0 b2=0-1:0-1` | Image `fafnirx:bench`, library from `bench-library.py` |
@@ -61,7 +61,7 @@ Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targ
 |---|---|---|
 | `platform` | What apps build on | `db.rs` (pool, locks, `NOTIFY`), `migrations.rs`, `store.rs`, `id.rs` (UUID ↔ short id), `proxy.rs` |
 | `repo` | Storage; what is more than one plain query | One module per aggregate, and `listing.rs` (the one query built at run time) |
-| `devices` | Clients, tokens, shared folders | `grpc.rs` (device API), `api.rs`, `shared.rs`, `totals.rs` |
+| `devices` | Clients, tokens, folders | `grpc.rs` (device API), `api.rs`, `folders.rs`, `master_folders.rs`, `rename.rs`, `totals.rs` |
 | `web` | HTTP shell, logins, roles | `mod.rs` (state, errors, routes), `auth.rs`, `access.rs`, `users.rs`, `events.rs`, `assets.rs`, `tests/` |
 | `files` | Content in and out | `ingest.rs` (commit, delete, rename, move), `livetree.rs`, `browse.rs`, `transfer.rs`, `zip.rs` |
 | `library` | Photos and videos | `meta.rs` (jobs, pictures), `artwork.rs`, `photos.rs`, `albums.rs` |
@@ -96,15 +96,17 @@ Synchronous `postgres` behind an `r2d2` pool.
 - Changing a path: `db::lock_path` first, move files before the transaction ends, `db::notify` in the same transaction
   (`ingest::commit_version` is the model).
 - A rename is `commit_version` with `renamed_from` (clients), `adopt_live` with `renamed_from` (watcher) or
-  `move_path` (web app; only `local`, `shared` and `master` devices). Each logs one `rename`, calls `files::vacate_renamed` (never
+  `move_path` (web app; only `local` and `master` devices). Each logs one `rename`, calls `files::vacate_renamed` (never
   `delete_path`) and `albums::follow_folder_move`.
 - A job returns `Ok(Some(note))` to show a note in Processing.
 
 ## Changing things
 
-**Schema.** Add `NNNN_name.sql` to `crates/master/migrations/` and an entry at the end of `ALL` in `platform/migrations.rs`.
-Applied on start, in order, in one transaction behind an advisory lock, with a checksum. Never edit a released migration; a
-newer database than the master is refused. Avoid long locks. Test on populated data (see `ids_become_uuids_and_every_link_follows`).
+**Schema.** `crates/master/migrations/0001_schema.sql` is the schema of 4.0.0. Add `NNNN_name.sql` next to it and an entry at
+the end of `ALL` in `platform/migrations.rs`. Applied on start, in order, in one transaction behind an advisory lock, with a
+checksum. Never edit a released migration; a newer database than the master is refused. Avoid long locks, and test on populated
+data. `upgrade_from_3.sql` is the one-time way from the 3.x schema; delete it and its code in `migrations.rs` when no such
+database is left.
 Update the [diagram](architecture.md#database) and `frontend/src/lib/types.ts`.
 
 **API.** Handler in the app, registered in `light()` or `heavy()` (moves file contents) in `web/mod.rs`; type in `types.ts`; a
@@ -114,14 +116,16 @@ test in `web/tests/`; a line in `ROUTES` (`routes.rs`). Errors are `ApiError` (`
 with `Id` and check visibility like any input. Test each role.
 
 **Device contract.** Edit `proto/fafnirx.proto` (types regenerate). Keep it additive. Reads are limited to client updates
-and the user's shared folders; any other call that reads, lists or deletes stored data changes the security model (see
+and the folders the user syncs (shared, master and own); any other call that reads, lists or deletes stored data changes the security model (see
 [CONTRIBUTING](../CONTRIBUTING.md)).
 
-**A source.** Model: `integrations/rclone_source.rs` (a file is known by its path). A `sources` row
-plus a `source-<name>` device (`integrations/api.rs`), claimed by `integrations::claim_source`, dispatched by `kind`. A source
-lists its files as `syncsource::Item`s and fetches one; `syncsource::apply` compares the listing with `source_items` and live
-`files`, downloads to temp files, records with `ingest::commit_version` and `mark_deleted`, and
-deletes nothing if listing fails.
+**A source.** Model: `integrations/rclone_source.rs` (a file is known by its path). A `sources` row says where it writes
+(`device_id` and `folder_prefix`, from the `folder` of the request, checked by `integrations/api.rs`; a source without one gets a
+`local` folder `source-<name>`), claimed by `integrations::claim_source`, dispatched by `kind`. A source lists its files as
+`syncsource::Item`s (path, optional key, marker) and fetches one; `syncsource::apply` compares the listing with `source_items` (by
+key, else path) and live `files` below the prefix, moves a file whose key has a new name (`ingest::move_path`), downloads the
+rest to temp files, records with `ingest::commit_version` and `mark_deleted`, and deletes nothing if listing fails. A kind of
+module also offers `load` in the SDK so the Edit form can show its settings.
 
 ## The web app
 

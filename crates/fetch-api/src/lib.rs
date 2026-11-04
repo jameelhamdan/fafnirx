@@ -28,13 +28,19 @@ pub struct FetchRequest {
     pub config: serde_json::Value,
 }
 
-/// One file a source offers.
+/// One file a source offers. Made with [`FetchEntry::new`], so that a field added later never breaks a module that is built again.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FetchEntry {
     /// Where it goes in the source's folder, `/`-separated.
     pub path: String,
     /// Changes when the file the source would make changes (a new version, another format); the master fetches again.
     pub marker: String,
+    /// What the file is, whatever its path or format: the same key with another path is the same file, renamed (the master
+    /// moves it, nothing is fetched); with another marker it is made again at the new path and the old one is removed.
+    /// Without one the path is the identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
     /// Bytes, 0 when not known before the file is made.
     #[serde(default)]
     pub size: u64,
@@ -46,8 +52,42 @@ pub struct FetchEntry {
     pub reference: serde_json::Value,
 }
 
-/// The answer to `POST /fetch/list`.
+impl FetchEntry {
+    pub fn new(path: impl Into<String>, marker: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            marker: marker.into(),
+            key: None,
+            size: 0,
+            mtime_ns: 0,
+            reference: serde_json::Value::Null,
+        }
+    }
+
+    pub fn key(mut self, key: impl Into<String>) -> Self {
+        self.key = Some(key.into());
+        self
+    }
+
+    pub fn size(mut self, size: u64) -> Self {
+        self.size = size;
+        self
+    }
+
+    pub fn mtime_ns(mut self, mtime_ns: i64) -> Self {
+        self.mtime_ns = mtime_ns;
+        self
+    }
+
+    pub fn reference(mut self, reference: serde_json::Value) -> Self {
+        self.reference = reference;
+        self
+    }
+}
+
+/// The answer to `POST /fetch/list`. Made with [`FetchListing::new`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FetchListing {
     pub items: Vec<FetchEntry>,
     /// Entries it could not offer (not available, or not yet); they are tried again next run.
@@ -61,6 +101,23 @@ pub struct FetchListing {
 
 fn complete() -> bool {
     true
+}
+
+impl FetchListing {
+    /// A listing of `items` that is the whole truth and left nothing out.
+    pub fn new(items: Vec<FetchEntry>) -> Self {
+        Self { items, skipped: 0, complete: true }
+    }
+
+    pub fn skipped(mut self, skipped: usize) -> Self {
+        self.skipped = skipped;
+        self
+    }
+
+    pub fn complete(mut self, complete: bool) -> Self {
+        self.complete = complete;
+        self
+    }
 }
 
 /// `POST /fetch/get`: write the file of `entry` to `dest`, a path under the master's `tmp` folder (the module may write nowhere

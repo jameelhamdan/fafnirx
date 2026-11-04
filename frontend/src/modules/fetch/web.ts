@@ -1,4 +1,4 @@
-import { acknowledgedProblem, isWebAddress, limitsBody, limitsProblem, NO_LIMITS, splitLines, type FileLimits, type T } from '@/sdk'
+import { acknowledgedProblem, isWebAddress, limitsBody, limitsFrom, limitsProblem, NO_LIMITS, splitLines, type FileLimits, type T } from '@/sdk'
 
 /** The settings of a web source, as the form holds them. */
 export interface Web extends FileLimits {
@@ -13,6 +13,11 @@ export const NO_WEB: Web = { urls: '', feed: '', ...NO_LIMITS, acknowledged: fal
 /** The part of the API body that holds the settings. */
 export function webBody(s: Web) {
   return { urls: splitLines(s.urls), feed: s.feed.trim(), ...limitsBody(s), acknowledged: s.acknowledged }
+}
+
+/** The form's settings from what the master gave back. */
+export function webLoad(c: Record<string, unknown>): Web {
+  return { urls: Array.isArray(c.urls) ? c.urls.join('\n') : '', feed: typeof c.feed === 'string' ? c.feed : '', ...limitsFrom(c), acknowledged: true }
 }
 
 /** Why the settings cannot be used yet, or null. */

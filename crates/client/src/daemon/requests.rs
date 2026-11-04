@@ -19,7 +19,7 @@ use tokio::sync::Notify;
 
 /// A request is a small file; anything larger is not one.
 const MAX_REQUEST_BYTES: u64 = 64 << 10;
-/// Answers nobody collected are removed after this long (a user cannot remove the service's files from the shared folder).
+/// Answers nobody collected are removed after this long (a user cannot remove the service's files from the synced folder).
 const ANSWER_KEEP: Duration = Duration::from_secs(300);
 /// How long the one who asks waits for the answer.
 const ANSWER_WAIT: Duration = Duration::from_secs(60);
@@ -34,17 +34,17 @@ pub enum Request {
     RemoveFolder {
         name: String,
     },
-    AttachShared {
+    AttachSynced {
         name: String,
         path: PathBuf,
         create: bool,
     },
-    DetachShared {
+    DetachSynced {
         name: String,
     },
-    SetConflict {
+    SetMode {
         name: String,
-        conflict: crate::config::Conflict,
+        mode: crate::config::Mode,
     },
     /// `keep`: theirs, mine or both; `path` None: every file that waits.
     Resolve {
@@ -58,21 +58,21 @@ impl Request {
     /// The command line that does the same.
     pub fn args(&self) -> Vec<OsString> {
         match self {
-            Self::AddFolder { paths } => std::iter::once("add-folder".into()).chain(paths.iter().map(|p| p.as_os_str().to_owned())).collect(),
-            Self::RemoveFolder { name } => vec!["remove-folder".into(), name.into()],
-            Self::AttachShared { name, path, create } => {
-                let mut args = vec!["shared".into(), "attach".into(), name.into(), path.as_os_str().to_owned()];
+            Self::AddFolder { paths } => ["folder".into(), "add".into()]
+                .into_iter()
+                .chain(paths.iter().map(|p| p.as_os_str().to_owned()))
+                .collect(),
+            Self::RemoveFolder { name } | Self::DetachSynced { name } => vec!["folder".into(), "remove".into(), name.into()],
+            Self::AttachSynced { name, path, create } => {
+                let mut args = vec!["folder".into(), "add".into(), path.as_os_str().to_owned(), "--target".into(), name.into()];
                 if *create {
                     args.push("--create".into());
                 }
                 args
             }
-            Self::DetachShared { name } => vec!["shared".into(), "detach".into(), name.into()],
-            Self::SetConflict { name, conflict } => {
-                vec!["shared".into(), "conflict".into(), name.into(), conflict.name().into()]
-            }
+            Self::SetMode { name, mode } => vec!["folder".into(), "mode".into(), name.into(), mode.name().into()],
             Self::Resolve { name, keep, path } => {
-                let mut args: Vec<OsString> = vec!["shared".into(), "resolve".into(), name.into(), keep.into()];
+                let mut args: Vec<OsString> = vec!["folder".into(), "resolve".into(), name.into(), keep.into()];
                 // After `--`: a file name that begins with a dash is not an option.
                 if let Some(path) = path {
                     args.extend(["--".into(), path.into()]);
@@ -174,39 +174,40 @@ async fn apply(config_path: &Path, request: Request, mine: &(dyn Fn(&Path) -> bo
             let cfg = Config::load(config_path)?;
             let folder = cfg.folders.iter().find(|f| f.name == name).with_context(|| format!("no folder named \"{name}\""))?;
             if !mine(&folder.path) {
-                bail!("\"{name}\" is not yours; ask an administrator to remove it with `sudo fafnirx remove-folder`");
+                bail!("\"{name}\" is not yours; ask an administrator to remove it with `sudo fafnirx folder remove`");
             }
             config::remove_folder_from_file(config_path, &name)?;
             Ok(String::new())
         }
-        Request::AttachShared { name, path, create } => {
+        Request::AttachSynced { name, path, create } => {
             let path = own_directory(&path, mine)?;
-            commands::shared_attach(config_path.to_path_buf(), name, path, create, Default::default()).await?;
+            commands::sync_folder(config_path.to_path_buf(), name, path, create, Default::default()).await?;
             Ok(String::new())
         }
-        Request::SetConflict { name, conflict } => {
+        Request::SetMode { name, mode } => {
             let cfg = Config::load(config_path)?;
-            if !mine(&cfg.shared_named(&name)?.path) {
-                bail!("\"{name}\" is not yours; ask an administrator to change it with `sudo fafnirx shared conflict`");
+            if !mine(&cfg.synced_named(&name)?.path) {
+                bail!("\"{name}\" is not yours; ask an administrator to change it with `sudo fafnirx folder mode`");
             }
             // The question is shown by the tray, which is on a screen: no need to look for one here.
-            config::set_shared_conflict_in_file(config_path, &name, conflict, None)?;
+            mode.check_available()?;
+            config::set_synced_mode_in_file(config_path, &name, mode, None)?;
             Ok(String::new())
         }
         Request::Resolve { name, keep, path } => {
             let cfg = Config::load(config_path)?;
-            if !mine(&cfg.shared_named(&name)?.path) {
-                bail!("\"{name}\" is not yours; ask an administrator to answer with `sudo fafnirx shared resolve`");
+            if !mine(&cfg.synced_named(&name)?.path) {
+                bail!("\"{name}\" is not yours; ask an administrator to answer with `sudo fafnirx folder resolve`");
             }
-            commands::shared_resolve(config_path, &name, &keep, path.as_deref())?;
+            commands::resolve_waiting(config_path, &name, &keep, path.as_deref())?;
             Ok(String::new())
         }
-        Request::DetachShared { name } => {
+        Request::DetachSynced { name } => {
             let cfg = Config::load(config_path)?;
-            if !mine(&cfg.shared_named(&name)?.path) {
-                bail!("\"{name}\" is not yours; ask an administrator to detach it with `sudo fafnirx shared detach`");
+            if !mine(&cfg.synced_named(&name)?.path) {
+                bail!("\"{name}\" is not yours; ask an administrator to detach it with `sudo fafnirx folder remove`");
             }
-            config::detach_shared_from_file(config_path, &name)?;
+            config::detach_synced_from_file(config_path, &name)?;
             Ok(String::new())
         }
     }
@@ -324,24 +325,24 @@ mod tests {
     fn a_request_is_the_command_it_stands_for() {
         let words = |r: Request| r.args().iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
         let add = Request::AddFolder { paths: vec!["C:/a b".into(), "D:/c".into()] };
-        assert_eq!(words(add), ["add-folder", "C:/a b", "D:/c"], "one command for all the folders");
-        assert_eq!(words(Request::RemoveFolder { name: "docs".into() }), ["remove-folder", "docs"]);
-        let attach = Request::AttachShared { name: "ana/family".into(), path: "/f".into(), create: true };
-        assert_eq!(words(attach), ["shared", "attach", "ana/family", "/f", "--create"]);
-        assert_eq!(words(Request::DetachShared { name: "family".into() }), ["shared", "detach", "family"]);
-        let set = Request::SetConflict { name: "family".into(), conflict: crate::config::Conflict::Mine };
-        assert_eq!(words(set), ["shared", "conflict", "family", "mine"]);
+        assert_eq!(words(add), ["folder", "add", "C:/a b", "D:/c"], "one command for all the folders");
+        assert_eq!(words(Request::RemoveFolder { name: "docs".into() }), ["folder", "remove", "docs"]);
+        let attach = Request::AttachSynced { name: "ana/family".into(), path: "/f".into(), create: true };
+        assert_eq!(words(attach), ["folder", "add", "/f", "--target", "ana/family", "--create"]);
+        assert_eq!(words(Request::DetachSynced { name: "family".into() }), ["folder", "remove", "family"]);
+        let set = Request::SetMode { name: "family".into(), mode: crate::config::Mode::Mine };
+        assert_eq!(words(set), ["folder", "mode", "family", "mine"]);
         let one = Request::Resolve { name: "family".into(), keep: "both".into(), path: Some("a b.txt".into()) };
-        assert_eq!(words(one), ["shared", "resolve", "family", "both", "--", "a b.txt"]);
+        assert_eq!(words(one), ["folder", "resolve", "family", "both", "--", "a b.txt"]);
         let all = Request::Resolve { name: "family".into(), keep: "theirs".into(), path: None };
-        assert_eq!(words(all), ["shared", "resolve", "family", "theirs"]);
+        assert_eq!(words(all), ["folder", "resolve", "family", "theirs"]);
     }
 
     #[test]
     fn a_request_survives_the_file() {
-        let request = Request::AttachShared { name: "docs".into(), path: "/a b".into(), create: false };
+        let request = Request::AttachSynced { name: "docs".into(), path: "/a b".into(), create: false };
         let text = serde_json::to_string(&request).unwrap();
-        assert!(text.contains(r#""op":"attach-shared""#), "{text}");
+        assert!(text.contains(r#""op":"attach-synced""#), "{text}");
         assert_eq!(serde_json::from_str::<Request>(&text).unwrap(), request);
         assert!(
             serde_json::from_str::<Request>(r#"{"op":"enroll"}"#).is_err(),

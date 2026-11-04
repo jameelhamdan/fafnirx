@@ -95,10 +95,10 @@ pub fn insert(c: &mut impl GenericClient, user_id: i64, name: &str, kind: &str, 
     q::insert_device().bind(c, &name, &kind, &token_hash, &now, &user_id).opt()
 }
 
-/// Adds a shared folder to a user. It has no token (no computer is it). Returns its folder, or `None` when the user already
-/// has a device or folder of that name.
-pub fn create_shared(c: &mut impl GenericClient, owner: i64, name: &str, now: i64) -> Result<Option<String>, Error> {
-    insert(c, owner, name, "shared", "!", now)
+/// Adds a folder to a user. It has no token (no computer is it). Returns its folder, or `None` when the user already has a device
+/// or folder of that name.
+pub fn create_folder(c: &mut impl GenericClient, owner: i64, name: &str, now: i64) -> Result<Option<String>, Error> {
+    insert(c, owner, name, "local", "!", now)
 }
 
 /// A new token for a client; ends a revocation and frees the device for whichever computer connects next.
@@ -174,20 +174,33 @@ pub fn id_and_kind(c: &mut impl GenericClient, folder: &str) -> Result<Option<(i
     Ok(q::device_id_and_kind_by_folder().bind(c, &folder).opt()?.map(|d| (d.id, d.kind)))
 }
 
-/// A shared folder a user can use, as the web app shows it.
+/// A folder a user can use, whoever owns it, as the web app shows it. The same thing is a folder of the user, one another user shared
+/// with them, or a folder of the master files: the difference is the owner and who may change it.
 #[derive(serde::Serialize)]
-pub struct Shared {
+pub struct Folder {
+    /// The device it is kept in (0 for a master folder).
     #[serde(skip)]
     pub id: i64,
+    /// The stable address of the folder: it stays when the folder is renamed.
+    pub public_id: uuid::Uuid,
     pub name: String,
-    /// How the clients name it: `<owner>/<name>`.
+    /// How the clients name it: `<owner>/<name>`, or `master:<path>`.
     pub folder: String,
-    /// The user it belongs to.
+    /// The folder of the device it is kept in, for the file store (`_master` for a master folder).
+    #[serde(skip)]
+    pub storage: String,
+    /// Where in that device it starts: empty for the whole device, else a path without a slash at the end.
+    #[serde(skip)]
+    pub prefix: String,
+    /// The user it belongs to; empty for a master folder.
     pub owner: String,
     /// Their own, not one another user shared with them.
     pub mine: bool,
     /// Whether the user may change what is in it.
     pub can_write: bool,
+    /// Other users use it (or, for a master folder, all of them do).
+    pub shared: bool,
+    pub master: bool,
     pub created_at: i64,
     /// What is in it now (not live: see `devices::totals`).
     pub files: i64,
@@ -196,40 +209,85 @@ pub struct Shared {
     pub changed_at: Option<i64>,
 }
 
-fn shared_matching(c: &mut impl GenericClient, user_id: i64, key: Option<&str>) -> Result<Vec<Shared>, Error> {
-    Ok(q::shared_folders_for_user()
+impl Folder {
+    /// The paths in the device that the folder holds start with this (empty, or a path and a slash).
+    pub fn prefix_path(&self) -> String {
+        if self.prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", self.prefix)
+        }
+    }
+}
+
+fn folders_matching(c: &mut impl GenericClient, user_id: i64, key: Option<&str>) -> Result<Vec<Folder>, Error> {
+    Ok(q::folders_for_user()
         .bind(c, &user_id, &key)
         .all()?
         .into_iter()
-        .map(|s| Shared {
-            id: s.id,
-            owner: s.folder.split_once('/').map_or_else(String::new, |(owner, _)| owner.to_string()),
-            name: s.name,
-            folder: s.folder,
-            mine: s.mine,
-            can_write: s.can_write,
-            created_at: s.created_at,
-            files: s.file_count,
-            bytes: s.total_bytes,
-            changed_at: s.last_collected,
+        .map(|f| Folder {
+            id: f.id,
+            public_id: f.public_id,
+            name: f.name,
+            folder: f.folder,
+            storage: f.storage,
+            prefix: f.prefix,
+            owner: f.owner,
+            mine: f.mine,
+            can_write: f.can_write,
+            shared: f.shared,
+            master: f.master,
+            created_at: f.created_at,
+            files: f.files,
+            bytes: f.bytes,
+            changed_at: f.last_collected,
         })
         .collect())
 }
 
-/// Every shared folder a user can use: their own, and those shared with them.
-pub fn shared_folders(c: &mut impl GenericClient, user_id: i64) -> Result<Vec<Shared>, Error> {
-    shared_matching(c, user_id, None)
+/// Every folder a user can use: their own, those shared with them, and the master folders.
+pub fn folders(c: &mut impl GenericClient, user_id: i64) -> Result<Vec<Folder>, Error> {
+    folders_matching(c, user_id, None)
 }
 
-/// The shared folder a user means by `key`: the name of one of their own, or the `<owner>/<name>` of one shared with them.
-pub fn shared_folder(c: &mut impl GenericClient, user_id: i64, key: &str) -> Result<Option<Shared>, Error> {
-    Ok(shared_matching(c, user_id, Some(key))?.into_iter().next())
+/// The folder a user means by `key`: the name of one of their own, the `<owner>/<name>` or `master:<path>` of any, or its stable id.
+pub fn folder(c: &mut impl GenericClient, user_id: i64, key: &str) -> Result<Option<Folder>, Error> {
+    Ok(folders_matching(c, user_id, Some(key))?.into_iter().next())
+}
+
+/// The paths of all master folders.
+pub fn master_prefixes(c: &mut impl GenericClient) -> Result<Vec<String>, Error> {
+    q::all_master_prefixes().bind(c).all()
+}
+
+/// Adds a master folder; false when it exists.
+pub fn insert_master_folder(c: &mut impl GenericClient, prefix: &str, now: i64) -> Result<bool, Error> {
+    Ok(q::insert_master_folder().bind(c, &prefix, &now)? > 0)
+}
+
+/// The path of the master folder with this id.
+pub fn master_folder_path(c: &mut impl GenericClient, public_id: uuid::Uuid) -> Result<Option<String>, Error> {
+    q::master_folder_prefix().bind(c, &public_id).opt()
+}
+
+/// Gives the master folder another path (its files are moved by the caller).
+pub fn rename_master_folder(c: &mut impl GenericClient, public_id: uuid::Uuid, prefix: &str) -> Result<(), Error> {
+    q::rename_master_folder().bind(c, &prefix, &public_id).map(drop)
+}
+
+/// Removes the entry of a master folder (its files stay), returning its path.
+pub fn delete_master_folder(c: &mut impl GenericClient, public_id: uuid::Uuid) -> Result<Option<String>, Error> {
+    let prefix = q::master_folder_prefix().bind(c, &public_id).opt()?;
+    if prefix.is_some() {
+        q::delete_master_folder().bind(c, &public_id)?;
+    }
+    Ok(prefix)
 }
 
 /// What a computer says about a shared folder attached to it. `name` is the shared folder when a computer is asked, and the
 /// computer when a shared folder is.
 #[derive(serde::Serialize)]
-pub struct SharedState {
+pub struct FolderState {
     pub name: String,
     pub files: i64,
     pub bytes: i64,
@@ -242,22 +300,22 @@ pub struct SharedState {
 }
 
 /// Keeps what a computer reports about its shared folders, in place of what it reported before.
-pub fn save_shared_state(c: &mut impl GenericClient, device_id: i64, reported: &[SharedState], now: i64) -> Result<(), Error> {
-    q::clear_shared_state().bind(c, &device_id)?;
+pub fn save_folder_state(c: &mut impl GenericClient, device_id: i64, reported: &[FolderState], now: i64) -> Result<(), Error> {
+    q::clear_folder_state().bind(c, &device_id)?;
     for s in reported {
-        q::save_shared_state().bind(c, &device_id, &s.name, &s.files, &s.bytes, &s.last_cycle, &s.last_error, &s.held, &s.failing, &now)?;
+        q::save_folder_state().bind(c, &device_id, &s.name, &s.files, &s.bytes, &s.last_cycle, &s.last_error, &s.held, &s.failing, &now)?;
     }
     Ok(())
 }
 
 /// What a computer last said about its shared folders.
-pub fn shared_state_of_device(c: &mut impl GenericClient, device_id: i64) -> Result<Vec<SharedState>, Error> {
-    Ok(q::shared_state_of_device()
+pub fn folder_states_of_device(c: &mut impl GenericClient, device_id: i64) -> Result<Vec<FolderState>, Error> {
+    Ok(q::folder_states_of_device()
         .bind(c, &device_id)
         .all()?
         .into_iter()
-        .map(|r| SharedState {
-            name: r.shared,
+        .map(|r| FolderState {
+            name: r.folder,
             files: r.files,
             bytes: r.bytes,
             last_cycle: r.last_cycle,
@@ -270,12 +328,12 @@ pub fn shared_state_of_device(c: &mut impl GenericClient, device_id: i64) -> Res
 }
 
 /// What the computers that have a shared folder attached say about it: all of them (`all`), or only those of `user`.
-pub fn shared_state_of_folder(c: &mut impl GenericClient, shared: &str, all: bool, user: i64) -> Result<Vec<SharedState>, Error> {
-    Ok(q::shared_state_of_folder()
-        .bind(c, &shared, &all, &user)
+pub fn folder_states_of_folder(c: &mut impl GenericClient, folder: &str, all: bool, user: i64) -> Result<Vec<FolderState>, Error> {
+    Ok(q::folder_states_of_folder()
+        .bind(c, &folder, &all, &user)
         .all()?
         .into_iter()
-        .map(|r| SharedState {
+        .map(|r| FolderState {
             name: r.computer,
             files: r.files,
             bytes: r.bytes,
@@ -314,12 +372,12 @@ pub fn remove_shared_member(c: &mut impl GenericClient, folder_id: i64, user_id:
     Ok(q::remove_shared_member().bind(c, &folder_id, &user_id)? > 0)
 }
 
-/// Removes a shared folder for good with everything left of it: the files in the trash, their versions and their log. Returns
+/// Removes a folder for good with everything left of it: the files in the trash, their versions and their log. Returns
 /// the versions, whose stored copies the caller removes. Refuses (returns `None`) while the folder has files that are not deleted.
-pub fn purge_shared_folder(c: &mut postgres::Client, id: i64) -> Result<Option<Vec<i64>>, Error> {
+pub fn purge_folder(c: &mut postgres::Client, id: i64) -> Result<Option<Vec<i64>>, Error> {
     let mut tx = c.transaction()?;
     // The folder is locked first, so that nothing is written to it between the check and the removal.
-    if lock(&mut tx, id)?.is_none() || q::shared_has_live_files().bind(&mut tx, &id).one()? {
+    if lock(&mut tx, id)?.is_none() || q::folder_has_live_files().bind(&mut tx, &id).one()? {
         return Ok(None);
     }
     let files = q::device_file_ids().bind(&mut tx, &id).all()?;
@@ -327,7 +385,10 @@ pub fn purge_shared_folder(c: &mut postgres::Client, id: i64) -> Result<Option<V
     super::retention::delete_files(&mut tx, &files)?;
     q::delete_device_events().bind(&mut tx, &id)?;
     clear_progress(&mut tx, id)?;
-    let removed = q::delete_shared_device().bind(&mut tx, &id)?;
+    // Nothing is removed when the device stays (a source writes into it): the transaction is dropped.
+    if q::delete_folder_device().bind(&mut tx, &id)? != 1 {
+        return Ok(None);
+    }
     tx.commit()?;
-    Ok((removed == 1).then_some(versions))
+    Ok(Some(versions))
 }

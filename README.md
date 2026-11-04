@@ -2,12 +2,12 @@
 
 Collect the files of your computers on a server you own, keep every version, browse them from anywhere, and copy them
 offsite. Backups flow one way: devices → master → mirrors. The master never changes a file on a device, and a device
-cannot read or list what the master holds, except the shared folders of its own user, which sync both ways.
+cannot read or list what the master holds, except the shared folders and master folders it is let into, and its own user's folders, which sync both ways.
 
 ```mermaid
 flowchart LR
     D["Devices<br/>(client: fafnirx)"] -->|"upload"| M["Master<br/>(fafnirx-master + web app + PostgreSQL)"]
-    M -.->|"shared folders"| D
+    M -.->|"synced folders"| D
     G["Other storage<br/>(sources)"] --> M
     U["Users, in the browser"] <-->|"browse, upload, download"| M
     M -->|"rclone"| O["Offsite mirrors"]
@@ -17,13 +17,14 @@ flowchart LR
 
 - **Client** (Windows, macOS, Linux): watches folders, uploads changes (resumable, verified, deduplicated), tray icon,
   self-update from GitHub releases. **Android:** [fafnirx-android](https://github.com/jameelhamdan/fafnirx-android).
-- **Shared folders**: a folder that belongs to a user, not to a computer, kept in sync both ways by any of their computers.
-  Other users get access only when the owner adds them.
+- **Folders**: a folder that belongs to a user (or is a folder of the master files), not to a computer, kept in sync both ways by
+  any of their computers. One list for yours, those shared with you and the master folders; other users get access to yours only when
+  the owner adds them. A folder can also be shown as an album.
 - **Master**: one Rust binary with the web app built in. Files are stored as plain files in
   `files/users/<user>/<device>/<path>`; the newest 5 versions are kept, deleted files are removed after 30 days (both configurable).
 - **File browser**: search, filter, sort, preview, version history, zip download, drag-and-drop upload, delete and restore.
   Photos and videos can be opened in the viewer and rated or favorited from here.
-- **Photo and video library** over the same files: timeline, favorites, archive, trash, albums (a folder can be an album),
+- **Photo and video library** over the same files: timeline, favorites, archive, trash, albums (a shortcut to a folder),
   tags, ratings, corrected dates and places. Originals are never changed.
 - **Video player** with subtitles and adaptive quality, as the optional [video module](docs/video.md), installed from the web app, so a server without videos carries no ffmpeg.
 - **Sources and mirrors**: Google Drive and any other [rclone](https://rclone.org) storage in, web files and feeds with the optional [fetch module](docs/fetch.md) and more kinds of source with [plugins](docs/plugins.md); any rclone remote out.
@@ -43,7 +44,7 @@ from the [latest release](https://github.com/jameelhamdan/fafnirx/releases/lates
 
 ```sh
 fafnirx enroll --server http://<server>:7443     # asks for the token
-fafnirx add-folder ~/Documents
+fafnirx folder add ~/Documents
 ```
 
 ## Performance

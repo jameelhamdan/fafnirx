@@ -32,7 +32,7 @@ pub fn folder_of(path: &str) -> &str {
     path.split('/').next().unwrap_or("")
 }
 
-/// All paths are one folder with no name of its own (a shared folder, whose files are at the top).
+/// All paths are one folder with no name of its own (a synced folder, whose files are at the top).
 pub fn at_the_top(_: &str) -> &str {
     ""
 }
@@ -82,7 +82,7 @@ mod tests {
     }
 
     #[test]
-    fn a_shared_folder_is_one_folder_whatever_its_subfolders() {
+    fn a_synced_folder_is_one_folder_whatever_its_subfolders() {
         let mut gone: Vec<Synced> = Vec::new();
         for dir in ["a", "b", "c"] {
             gone.extend(self::gone(dir, 4));

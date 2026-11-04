@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { registerModule, type FrontendModule } from '@/sdk'
+import { addStrings, useI18n, type Lang } from './i18n'
 import { publishRuntime, SDK } from '@/sdk/runtime'
 import { useSession } from './session'
 import type { ModuleInfo } from './types'
@@ -36,12 +37,35 @@ async function load(id: string, info: ModuleInfo) {
   }
 }
 
+const stringsLoaded = new Set<string>()
+
+/** Merges the translations a module brings for the language in use (`strings.<lang>.json`, English text -> translation), once per language. */
+async function loadStrings(id: string, info: ModuleInfo, lang: Lang) {
+  const key = `${id}@${info.version}:${lang}`
+  if (lang === 'en' || !info.ui?.strings?.includes(lang) || stringsLoaded.has(key)) return
+  stringsLoaded.add(key)
+  try {
+    const found = await fetch(`${base(id)}strings.${lang}.json?v=${encodeURIComponent(info.version)}`)
+    if (!found.ok) throw new Error(String(found.status))
+    addStrings({ [lang]: (await found.json()) as Record<string, string> })
+  } catch (e) {
+    stringsLoaded.delete(key)
+    console.warn(`The ${id} module's translations could not be loaded:`, e)
+  }
+}
+
 /** Loads the script of every module the master has up, once. Until it has arrived the module's files open as plain downloads. */
 export function useModuleScripts() {
   const modules = useSession()?.modules
+  const { lang } = useI18n()
   useEffect(() => {
     if (!modules) return
     publishRuntime()
     for (const [id, info] of Object.entries(modules)) void load(id, info)
   }, [modules])
+  // Also when the language changes: the words of a module arrive for the language in use.
+  useEffect(() => {
+    if (!modules) return
+    for (const [id, info] of Object.entries(modules)) void loadStrings(id, info, lang)
+  }, [modules, lang])
 }

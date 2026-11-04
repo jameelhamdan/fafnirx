@@ -12,7 +12,7 @@ pub use proxy::{proxy, ui};
 
 use anyhow::{bail, Context, Result};
 use fafnirx_fetch_api::{Checked, FetchEntry, FetchGet, FetchListing, FetchRequest, Fetched, FETCH_CHECK_PATH, FETCH_GET_PATH, FETCH_LIST_PATH};
-use fafnirx_module_api::{bearer_matches, capability, valid_id, Manifest, Probe, CONTRACT, MANIFEST_PATH};
+use fafnirx_module_api::{bearer_matches, capability, core_satisfied, valid_id, Manifest, Probe, CONTRACT, MANIFEST_PATH};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -108,6 +108,9 @@ impl Module {
         }
         if manifest.contract != CONTRACT {
             bail!("speaks contract {}, this master speaks {CONTRACT}", manifest.contract);
+        }
+        if !core_satisfied(&manifest.core, env!("CARGO_PKG_VERSION")) {
+            bail!("needs a master of version {} or newer, this is {}", manifest.core, env!("CARGO_PKG_VERSION"));
         }
         Ok(manifest)
     }

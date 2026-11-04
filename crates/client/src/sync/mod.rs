@@ -1,5 +1,5 @@
 //! One collection cycle: scan, detect renames and deletes, upload what changed.
-//! Upload only: nothing here asks the master for data. A shared folder receives first (`shared`) and then sends with this engine.
+//! Upload only: nothing here asks the master for data. A synced folder receives first (`synced`) and then sends with this engine.
 
 pub mod guard;
 pub mod hash;
@@ -34,7 +34,7 @@ pub enum SyncError {
     Offline(String),
     /// A problem with this one file.
     File(String),
-    /// The master refuses the folder (a shared folder that is read-only for this user): its cycle ends, with nothing recorded
+    /// The master refuses the folder (a synced folder that is read-only for this user): its cycle ends, with nothing recorded
     /// against any file, so a change of mind on the master takes effect at once. Nothing else is affected.
     Refused(String),
     Paused,
@@ -81,7 +81,7 @@ pub struct Report {
     pub deleted: usize,
     pub failed: usize,
     pub bytes: u64,
-    /// Files received from a shared folder, and files of this computer kept under another name because both sides changed.
+    /// Files received from a synced folder, and files of this computer kept under another name because both sides changed.
     #[serde(default)]
     pub downloaded: usize,
     #[serde(default)]
@@ -131,9 +131,9 @@ pub struct Engine {
     pub exclude: Option<PathBuf>,
     /// Which folder a synced path belongs to, for the delete guard.
     pub group: Grouping,
-    /// Remote paths that are neither sent nor taken for deleted this cycle (a shared folder's files waiting for a decision).
+    /// Remote paths that are neither sent nor taken for deleted this cycle (a synced folder's files waiting for a decision).
     pub skip: HashSet<String>,
-    /// The last problem reported (errors are drained by the heartbeat), for the status of a shared folder.
+    /// The last problem reported (errors are drained by the heartbeat), for the status of a synced folder.
     last_issue: Mutex<String>,
     logged_skips: HashSet<String>,
 }

@@ -58,14 +58,16 @@ a plugin has no users.
 **Manifest**
 
 ```json
-{ "id": "myplugin", "version": "1.2.0", "contract": 1,
+{ "id": "myplugin", "version": "1.2.0", "contract": 1, "core": "3.20.0",
   "capabilities": ["fetch.ftp", "status"],
   "ui": { "entry": "index.js", "css": "style.css", "sdk": 2 },
   "setup": ["curl was not found: install it"] }
 ```
 
 `id` is what the plugin announces itself as: lower-case letters and digits, up to 24. `contract` must be the master's
-(`fafnirx_module_api::CONTRACT`); another number and the module is not used. A kind of source is the capability **`fetch.<kind>`**
+(`fafnirx_module_api::CONTRACT`); another number and the module is not used. `core` is the oldest master it works with: the version of the contract
+crates (`fafnirx_module_api::VERSION`) it was built against, which `Manifest::new` fills in; a master older than that does not use it
+and says why in its log. A kind of source is the capability **`fetch.<kind>`**
 (`fetch.ftp` for the kind `ftp`): list one only when you can read it now. A module that is up without it shows the kind as *Needs setting up*.
 `setup` lists, in words for the administrator, what is missing; it is shown under *Settings*. `ui.sdk` is the web SDK version
 (`fafnirx_module_api::WEB_SDK`); omit `ui` if there is no web part.
@@ -88,9 +90,14 @@ copy what the source downloads (`acknowledged`) and the limit of files per run (
 
 - `path`: where the file goes in the source's folder: relative, `/`-separated, no `.`/`..`/empty parts, no control characters, each part
   at most 255 bytes. The master rejects the entry (and counts it as skipped) otherwise, and also a path that appears twice.
+- `key` (optional): what the file is, whatever its path or format (a video id). The same key under a new `path` is the same
+  file renamed: the master moves it and fetches nothing; with a new `marker` it is made again at the new path and the old one is
+  removed. Without a key the path is the identity.
 - `marker`: any string that **changes when the file the source would make changes** (an entity tag, a version, a format). The master
   fetches an entry again only when its marker or path is new. Don't put the time of the listing in it.
 - `size` (0 if unknown), `mtime_ns` (Unix nanoseconds; when it was last changed, or now): shown to users.
+
+In Rust, entries and listings are made with `FetchEntry::new(path, marker).key(..).size(..).mtime_ns(..).reference(..)` and `FetchListing::new(items).skipped(..).complete(..)`; the types are `#[non_exhaustive]`, so a field added to the contract later never breaks a plugin that is built again.
 - `reference`: whatever you need to make the file later (an id, a URL); the master hands it back unread.
 - `skipped`: entries you could not offer (not available, or not yet); they are tried again next run.
 - `complete`: **true only if the listing is the whole truth.** When it is false, or when `items` is empty, the master deletes nothing
@@ -136,7 +143,6 @@ checking the login, while the module is up. The default export tells the app wha
 ```ts
 import { defineSourceKind, FetchQueueCard, msg, type FrontendModule } from '@/sdk'
 import { MyForm, NO_FORM, toConfig, problem, type Form } from './form'
-import { strings } from './strings'
 
 export default {
   sources: [
@@ -151,12 +157,13 @@ export default {
     }),
   ],
   queue: FetchQueueCard,                        // optional: a card on the Processing page, given GET /status
-  strings,                                      // optional: { es: { 'FTP': '…' }, zh: { … } }
 } satisfies FrontendModule
 ```
 
-- **`strings`** is language → English text → translation (`es`, `zh`, `ar`, `ru`, `ja`). The English text is the key, as everywhere in the
-  app. The app adds them to its own and never lets a plugin replace one of its strings; a text without a translation shows in English.
+- **Translations** are JSON files like the app's own: `web/translations/<lang>.json` (`es`, `zh`, `ar`, `ru`, `ja`), English text → translation.
+  The build serves them beside the script as `strings.<lang>.json` and the manifest lists the languages (`ui.strings`). The app fetches the
+  file of the language in use when it is needed and merges it with its own strings; it never lets a plugin replace one of its strings, and a
+  text without a translation shows in English.
 - **Shared pieces:** the SDK has what every kind of source needs, so the plugin writes only what is its own: `FetchQueueCard` (the card above;
   `children` add lines to it), and for the form `FileLimitsFields` (include and exclude patterns, sizes, files per run), `PerRunField`, `TextField`
   and `AcknowledgeField` (the confirmation to copy), with their body and checks (`limitsBody`, `limitsProblem`, `perRunProblem`,

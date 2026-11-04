@@ -8,12 +8,13 @@ use crate::monitoring::api::Recent;
 use crate::platform::db::{self, Device};
 use crate::platform::store::MASTER_FOLDER;
 use crate::repo::listing::{self, Listed, Page, Sort};
-use crate::repo::{devices, events, files, settings};
+use crate::repo::{albums, devices, events, files, settings, sources};
 use crate::web::access::Access;
+use crate::web::input;
 use crate::web::{act, run, ApiError, Done, Res, Shared};
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
-use fafnirx_common::{base_name, clean_remote_path, secs_of_ns, DAY_SECS};
+use fafnirx_common::{base_name, clean_remote_path, secs_of_ns, unix_now, DAY_SECS};
 use fafnirx_db::queries as sql;
 use postgres::Client;
 use serde::{Deserialize, Serialize};
@@ -99,7 +100,7 @@ pub struct Listing {
 /// Whether the web app changes the files of a device of this kind: the master files, local folders and shared folders. What
 /// a device or a source sends is theirs to change; here it can be read, downloaded and brought back from the trash.
 pub fn editable_kind(kind: &str) -> bool {
-    matches!(kind, "local" | "master" | "shared")
+    matches!(kind, "local" | "master")
 }
 
 /// The device with this folder, if `who` may look at it: a device someone else owns does not exist for them.
@@ -114,15 +115,6 @@ pub fn find_device(c: &mut Client, who: &Access, folder: &str) -> anyhow::Result
 pub fn find_device_to_change(c: &mut Client, who: &Access, folder: &str) -> anyhow::Result<Device> {
     who.check_write(folder)?;
     find_device(c, who, folder)
-}
-
-/// `a/b/` for `a/b`, and `""` for the root.
-fn prefix_of(path: &str) -> Result<String, ApiError> {
-    let path = path.trim_matches('/');
-    if path.is_empty() {
-        return Ok(String::new());
-    }
-    clean_remote_path(path).map(|p| p + "/").map_err(|e| ApiError::bad(e.to_string()))
 }
 
 /// What a request for a listing asks for, once it is checked.
@@ -165,7 +157,7 @@ impl ListQuery {
             .filter(|s| !s.is_empty())
             .map(|s| format!("%{}%", db::like_escape(s)));
         Ok(View {
-            prefix: prefix_of(&self.path)?,
+            prefix: input::folder_prefix(&self.path)?,
             path: self.path.trim_matches('/').to_string(),
             sort,
             descending,
@@ -191,22 +183,17 @@ fn top_level(c: &mut Client, who: &Access, path: String, retention_days: i64) ->
         writable: who.can_write(MASTER_FOLDER),
         ..Default::default()
     }];
-    entries.extend(
-        device_summaries(c, who, None)?
-            .into_iter()
-            .filter(|d| d.kind != "source" || d.files > 0)
-            .map(|d| Entry {
-                kind: "device",
-                // A shared folder is always named with its owner, like the clients name it.
-                name: if d.user == who.name && d.kind != "shared" { d.name.clone() } else { d.folder.clone() },
-                writable: editable_kind(&d.kind) && who.can_write(&d.folder),
-                device_kind: Some(d.kind),
-                device: d.folder,
-                files: Some(d.files),
-                size: Some(d.bytes),
-                ..Default::default()
-            }),
-    );
+    entries.extend(device_summaries(c, who, None)?.into_iter().map(|d| Entry {
+        kind: "device",
+        // A shared folder is always named with its owner, like the clients name it.
+        name: if d.user == who.name { d.name.clone() } else { d.folder.clone() },
+        writable: editable_kind(&d.kind) && who.can_write(&d.folder),
+        device_kind: Some(d.kind),
+        device: d.folder,
+        files: Some(d.files),
+        size: Some(d.bytes),
+        ..Default::default()
+    }));
     let total = entries.len() as i64;
     Ok(Listing {
         device: None,
@@ -549,29 +536,42 @@ pub async fn move_files(State(state): State<Shared>, Extension(who): Extension<A
         if !editable_kind(&devices::kind_of(c, dev.id)?) {
             return Err(ApiError::conflict("Files sent by a device or a source cannot be moved here").into());
         }
-        let clean = |p: &str| clean_remote_path(p.trim_matches('/')).map_err(|e| ApiError::bad(e.to_string()));
-        let (from, to) = (clean(&b.from)?, clean(&b.to)?);
-        if to == from || to.starts_with(&format!("{from}/")) {
-            return Err(ApiError::bad("Choose a different place, not inside the folder itself").into());
-        }
-        let paths = expand(c, &dev, &from, false)?;
-        if paths.is_empty() {
-            return Err(ApiError::not_found("No such file or folder").into());
-        }
-        let targets: Vec<(String, String)> = paths.into_iter().map(|p| (format!("{to}{}", &p[from.len()..]), p)).collect();
-        // Nothing moves if something is in the way.
-        for (new, _) in &targets {
-            let parents = new.match_indices('/').map(|(i, _)| &new[..i]);
-            if parents.chain([new.as_str()]).any(|p| files::live_content(c, dev.id, p).ok().flatten().is_some()) {
-                return Err(ApiError::conflict(format!("{new} exists already")).into());
-            }
-        }
-        for (new, old) in &targets {
-            ingest::move_path(c, &store, &dev, old, new)?;
-        }
-        db::notify(c, "files", &dev.name)?;
-        Ok(targets.len())
+        move_tree(c, &store, &dev, &input::path_inside(&b.from)?, &input::path_inside(&b.to)?)
     })
     .await?;
     Ok(Json(Moved { moved }))
+}
+
+/// Moves a file, or a folder with everything below it, to `to` within a device (both cleaned paths); returns how many files
+/// moved. Nothing moves if something is in the way. A folder moved as a whole takes the albums and the sources that point into
+/// it along, wherever it goes. The caller checked that the device is changeable.
+pub fn move_tree(c: &mut Client, store: &crate::platform::store::Store, dev: &Device, from: &str, to: &str) -> anyhow::Result<usize> {
+    if to == from || to.starts_with(&format!("{from}/")) {
+        return Err(ApiError::bad("Choose a different place, not inside the folder itself").into());
+    }
+    let paths = expand(c, dev, from, false)?;
+    if paths.is_empty() {
+        return Err(ApiError::not_found("No such file or folder").into());
+    }
+    let targets: Vec<(String, String)> = paths.into_iter().map(|p| (format!("{to}{}", &p[from.len()..]), p)).collect();
+    for (new, _) in &targets {
+        let parents = new.match_indices('/').map(|(i, _)| &new[..i]);
+        if parents.chain([new.as_str()]).any(|p| files::live_content(c, dev.id, p).ok().flatten().is_some()) {
+            return Err(ApiError::conflict(format!("{new} exists already")).into());
+        }
+    }
+    for (new, old) in &targets {
+        ingest::move_path(c, store, dev, old, new)?;
+    }
+    if targets.len() > 1 || targets[0].1 != from {
+        let (old, new) = (format!("{from}/"), format!("{to}/"));
+        let followed = albums::follow_folder(c, dev.id, &old, &new, unix_now(), false)?;
+        let sourced = sources::follow_folder(c, dev.id, &old, &new)? > 0;
+        if followed || sourced {
+            db::notify(c, "library", "")?;
+            db::notify(c, "jobs", "")?;
+        }
+    }
+    db::notify(c, "files", &dev.name)?;
+    Ok(targets.len())
 }

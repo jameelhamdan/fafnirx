@@ -1,6 +1,6 @@
 // Shapes of the master's web API (`web`, `devices`, `files`, ... in crates/master/src).
 
-export type DeviceKind = 'device' | 'local' | 'source' | 'shared'
+export type DeviceKind = 'device' | 'local' | 'master'
 
 export interface Activity {
   phase: string
@@ -45,8 +45,8 @@ export interface Recent {
   device: string
 }
 
-/** What a computer says about one shared folder attached to it (`name` is the folder, or on a folder's page the computer). */
-export interface SharedState {
+/** What a computer says about one folder attached to it (`name` is the folder, or on a folder's page the computer). */
+export interface FolderState {
   name: string
   files: number
   bytes: number
@@ -61,8 +61,8 @@ export interface SharedState {
 export interface DeviceDetail {
   device: DeviceSummary
   events: Recent[]
-  /** The shared folders attached to the computer. */
-  shared: SharedState[]
+  /** The folders attached to the computer. */
+  folders: FolderState[]
   token: string | null
 }
 
@@ -200,13 +200,20 @@ export interface ScopeChoice {
 }
 
 /** A folder that belongs to a user, not to a computer, and that their computers keep in step. */
-export interface SharedFolder {
-  /** `<owner>/<name>`: how the clients name it. */
+export interface Folder {
+  /** The stable address of the folder: it stays when the folder is renamed. */
+  public_id: string
+  /** `<owner>/<name>`, or `master:<path>` for a master folder: how the clients name it. */
   folder: string
   name: string
+  /** The user it belongs to; empty for a master folder. */
   owner: string
   mine: boolean
   can_write: boolean
+  /** Other users use it (a master folder: all of them do). */
+  shared: boolean
+  /** A folder of the master files, made by an administrator. */
+  master: boolean
   created_at: number
   files: number
   bytes: number
@@ -215,7 +222,7 @@ export interface SharedFolder {
   /** The other users who use it (only for its owner). */
   members: { user: string; can_write: boolean }[]
   /** The computers that have it attached: all for its owner, the user's own otherwise. */
-  computers: SharedState[]
+  computers: FolderState[]
 }
 
 /** A plugin as the administrator's page shows it. */
@@ -235,7 +242,7 @@ export interface ModuleInfo {
   version: string
   contract: number
   capabilities: string[]
-  ui?: { entry: string; css?: string; sdk: number }
+  ui?: { entry: string; css?: string; sdk: number; strings?: string[] }
 }
 
 export interface Session {
@@ -351,8 +358,8 @@ export interface AlbumInfo {
   count: number
   bytes: number
   cover: string | null
-  /** Set when the album shows a folder of a device: what is in the folder is in the album. */
-  folder: { device: string; path: string } | null
+  /** The folder the album is a shortcut to: what is in the folder is in the album. */
+  folder: { device: string; path: string }
 }
 
 export interface TrashEntry {
@@ -373,4 +380,3 @@ export interface Trash {
   total: number
   retention_days: number
 }
-

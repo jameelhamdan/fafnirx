@@ -6,24 +6,22 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use axum::Json;
-use fafnirx_module_api::{capability, Manifest, Probe, CONTRACT};
+use fafnirx_module_api::{capability, Manifest, Probe};
 use serde::Deserialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub(crate) async fn manifest(State(app): State<Arc<App>>) -> Json<Manifest> {
-    Json(Manifest {
-        id: "video".into(),
-        version: env!("CARGO_PKG_VERSION").into(),
-        contract: CONTRACT,
-        capabilities: [capability::PROBE_VIDEO, capability::POSTER, capability::STATUS]
-            .into_iter()
-            .map(String::from)
-            .collect(),
-        ui: fafnirx_module_kit::ui::describe(app.cfg.ui.as_deref()),
-        setup: missing(&app).await,
-    })
+    let capabilities = [capability::PROBE_VIDEO, capability::POSTER, capability::STATUS]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    Json(
+        Manifest::new("video", env!("CARGO_PKG_VERSION"), capabilities)
+            .ui(fafnirx_module_kit::ui::describe(app.cfg.ui.as_deref()))
+            .setup(missing(&app).await),
+    )
 }
 
 /// How long a look at what is missing is trusted: the master asks for the manifest every 2 s while the module does not answer.

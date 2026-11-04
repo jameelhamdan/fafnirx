@@ -1,6 +1,5 @@
-//! Albums: a user's named set of files, picked by hand and/or following a folder of a device.
+//! Albums: a user's shortcut to a folder of a device.
 
-use super::Viewer;
 use fafnirx_db::client::GenericClient;
 use fafnirx_db::client::Params;
 use fafnirx_db::queries::albums as q;
@@ -17,12 +16,10 @@ pub struct Album {
     /// Live photos and videos in it.
     pub files: i64,
     pub bytes: i64,
-    /// The file chosen as the cover, if one was (`library::albums` falls back on a poster, a first video, the newest).
+    /// The file chosen as the cover, if one was (`library::albums` falls back on a poster, the first video, the first picture).
     pub cover: Option<Uuid>,
-    /// The newest file of an album of picked files; not set for an album that follows a folder.
-    pub newest: Option<Uuid>,
-    /// The folder the album follows, as (device folder name, prefix of the paths below it).
-    pub folder: Option<(String, String)>,
+    /// The folder the album shows, as (device folder name, prefix of the paths below it).
+    pub folder: (String, String),
 }
 
 impl From<q::FindAlbums> for Album {
@@ -36,8 +33,7 @@ impl From<q::FindAlbums> for Album {
             files: a.files,
             bytes: a.bytes,
             cover: a.chosen,
-            newest: a.newest,
-            folder: a.folder_device.map(|device| (device, a.folder_prefix.unwrap_or_default())),
+            folder: (a.folder_device, a.folder_prefix),
         }
     }
 }
@@ -64,30 +60,10 @@ pub fn following(c: &mut impl GenericClient, user_id: i64, device_id: i64, prefi
     q::album_of_folder().params(c, &q::AlbumOfFolderParams { user_id, device_id, prefix }).opt()
 }
 
-/// A new album, optionally following the folder `(device id, prefix)`. Returns its id.
-pub fn insert(c: &mut impl GenericClient, user_id: i64, name: &str, description: &str, folder: Option<(i64, &str)>, now: i64) -> Result<Uuid, Error> {
-    let params = q::InsertAlbumParams {
-        name,
-        description,
-        now,
-        user_id,
-        folder_device_id: folder.map(|(device, _)| device),
-        folder_prefix: folder.map(|(_, prefix)| prefix),
-    };
+/// A new album showing the folder `(device id, prefix)`. Returns its id.
+pub fn insert(c: &mut impl GenericClient, user_id: i64, name: &str, description: &str, folder: (i64, &str), now: i64) -> Result<Uuid, Error> {
+    let params = q::InsertAlbumParams { name, description, now, user_id, folder_device_id: folder.0, folder_prefix: folder.1 };
     q::insert_album().params(c, &params).one()
-}
-
-/// Puts files in the album: those the viewer can see. Returns how many were added.
-pub fn add_files(c: &mut impl GenericClient, who: Viewer, album_id: Uuid, ids: &[Uuid], now: i64) -> Result<u64, Error> {
-    let params = q::AddFilesToAlbumParams { album_id, now, ids, all: who.all, scope_user: who.scope_user };
-    q::add_files_to_album().params(c, &params)
-}
-
-/// Puts the photos and videos at a place in the album: a file, or everything below a folder (`path` empty for the
-/// whole device), of a device the viewer can see. Returns how many were added.
-pub fn add_place(c: &mut impl GenericClient, who: Viewer, album_id: Uuid, device: &str, path: &str, now: i64) -> Result<u64, Error> {
-    let params = q::AddPlaceToAlbumParams { album_id, now, device, path, all: who.all, scope_user: who.scope_user };
-    q::add_place_to_album().params(c, &params)
 }
 
 pub fn rename(c: &mut impl GenericClient, id: Uuid, name: &str) -> Result<(), Error> {
@@ -98,12 +74,12 @@ pub fn set_description(c: &mut impl GenericClient, id: Uuid, description: &str) 
     q::set_album_description().params(c, &q::SetAlbumDescriptionParams { id, description }).map(drop)
 }
 
-/// Whether the file is in the album: picked into it, or below the folder it follows.
+/// Whether the file is below the folder the album shows.
 pub fn contains(c: &mut impl GenericClient, album_id: Uuid, file_id: Uuid) -> Result<bool, Error> {
     q::file_is_in_album().params(c, &q::FileIsInAlbumParams { album_id, file_id }).one()
 }
 
-/// The file shown for the album, or `None` to show the newest again.
+/// The file shown for the album, or `None` to choose one again.
 pub fn set_cover(c: &mut impl GenericClient, id: Uuid, cover: Option<Uuid>) -> Result<(), Error> {
     q::set_album_cover().params(c, &q::SetAlbumCoverParams { id, cover }).map(drop)
 }
@@ -116,13 +92,6 @@ pub fn touch(c: &mut impl GenericClient, id: Uuid, now: i64) -> Result<(), Error
 /// Deletes the user's album; the files stay where they are. Returns false when they have no such album.
 pub fn delete(c: &mut impl GenericClient, user_id: i64, id: Uuid) -> Result<bool, Error> {
     Ok(q::delete_album().params(c, &q::DeleteAlbumParams { id, user_id })? > 0)
-}
-
-/// Takes files out of the album, and the cover if it is one of them. Returns how many were taken out.
-pub fn remove_files(c: &mut impl GenericClient, album_id: Uuid, ids: &[Uuid]) -> Result<u64, Error> {
-    let removed = q::remove_files_from_album().params(&mut *c, &q::RemoveFilesFromAlbumParams { album_id, ids })?;
-    q::clear_cover_among().params(c, &q::ClearCoverAmongParams { album_id, ids })?;
-    Ok(removed)
 }
 
 /// The albums of the user that hold a file, as (id, name).
@@ -163,10 +132,18 @@ pub fn follow_folder_move(c: &mut impl GenericClient, device_id: i64, old: &str,
     if from.is_empty() || parent(&from) != parent(&to) {
         return Ok(false);
     }
+    follow_folder(c, device_id, &from, &to, now, true)
+}
+
+/// A folder was moved from `from` to `to` (both end with a slash) as a whole: the albums that follow it, or a folder below
+/// it, follow it to the new place, wherever it is (the folder operation knows; a file-by-file move has to guess, see
+/// [`follow_folder_move`]). With `when_emptied` an album waits until nothing is left in the old folder. An album of a folder
+/// that exists already is left alone. Returns whether an album changed.
+pub fn follow_folder(c: &mut impl GenericClient, device_id: i64, from: &str, to: &str, now: i64, when_emptied: bool) -> Result<bool, Error> {
     let mut moved = false;
     for album in q::albums_under_folder().bind(&mut *c, &device_id, &from).all()? {
         let Some(prefix) = album.folder_prefix else { continue };
-        if !q::folder_is_empty().bind(&mut *c, &device_id, &prefix).one()? {
+        if when_emptied && !q::folder_is_empty().bind(&mut *c, &device_id, &prefix).one()? {
             continue;
         }
         let target = format!("{to}{}", &prefix[from.len()..]);

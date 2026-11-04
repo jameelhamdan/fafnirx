@@ -1,15 +1,14 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { ArrowLeft, FolderOpen, Image as ImageIcon, Pencil, Trash2 } from 'lucide-react'
-import { useCallback, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Confirm } from '@/components/confirm'
 import { Empty, ErrorNote, PageHeader } from '@/components/common'
-import { DayGrid } from '@/components/library/day-grid'
 import { FolderGrid } from '@/components/library/folder-grid'
 import { SelectionBar } from '@/components/library/selection-bar'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { FormDialog } from '@/components/form-dialog'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
@@ -36,24 +35,21 @@ function EditAlbum({ album, onClose }: { album: AlbumInfo; onClose: () => void }
     },
     onError: (e) => toast.error(e.message),
   })
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    if (name.trim()) save.mutate()
-  }
+
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <form onSubmit={submit} className="space-y-4">
-          <DialogHeader>
-            <DialogTitle>{t('Edit album')}</DialogTitle>
-            <DialogDescription>{t('The name and description show on the album.')}</DialogDescription>
-          </DialogHeader>
-          <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} aria-label={t('Album name')} maxLength={120} />
-          <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t('Description (optional)')} aria-label={t('Description')} rows={3} />
-          <DialogFooter><Button type="submit" disabled={!name.trim() || save.isPending}>{t('Save')}</Button></DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={t('Edit album')}
+      description={t('The name and description show on the album.')}
+      onSubmit={() => save.mutate()}
+      submit={t('Save')}
+      disabled={!name.trim()}
+      pending={save.isPending}
+    >
+      <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} aria-label={t('Album name')} maxLength={120} />
+      <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t('Description (optional)')} aria-label={t('Description')} rows={3} />
+    </FormDialog>
   )
 }
 
@@ -73,7 +69,6 @@ export default function Album() {
   const byId = useMemo(() => new Map((assets ?? []).map((a) => [a.id, a])), [assets])
   const ids = useMemo(() => new Set(selected.keys()), [selected])
   const toggle = useCallback((id: string) => setSelected((s) => { const n = new Map(s); const a = byId.get(id); if (!n.delete(id) && a) n.set(id, a); return n }), [byId])
-  const toggleMany = useCallback((list: string[], on: boolean) => setSelected((s) => { const n = new Map(s); list.forEach((id) => { const a = byId.get(id); if (on && a) n.set(id, a); else n.delete(id) }); return n }), [byId])
   const clear = useCallback(() => setSelected(new Map()), [])
   const source = useMemo(() => (assets ? { assets } : null), [assets])
   useViewerSource(source)
@@ -110,13 +105,13 @@ export default function Album() {
         description={
           <>
             {plural(album.count, 'item')} · {bytes(album.bytes)}
-            {folder && <span className="mt-1 block">{t('Shows the folder {folder}', { folder: [folder.device, folder.path].filter(Boolean).join('/') })}</span>}
+            <span className="mt-1 block">{t('Shows the folder {folder}', { folder: [folder.device, folder.path].filter(Boolean).join('/') })}</span>
             {album.description && <span className="mt-1 block whitespace-pre-line">{album.description}</span>}
           </>
         }
         actions={
           <>
-            {folder && <Button variant="outline" asChild><Link to={`/files${query({ device: folder.device, path: folder.path })}`}><FolderOpen className="size-4" />{t('Open folder')}</Link></Button>}
+            <Button variant="outline" asChild><Link to={`/files${query({ device: folder.device, path: folder.path })}`}><FolderOpen className="size-4" />{t('Open folder')}</Link></Button>
             <Button variant="outline" onClick={() => setDialog('edit')}><Pencil className="size-4" />{t('Edit')}</Button>
             <Button variant="outline" onClick={() => setDialog('delete')}><Trash2 className="size-4" />{t('Delete album')}</Button>
           </>
@@ -125,20 +120,16 @@ export default function Album() {
 
       {selected.size > 0 && (
         <div className="sticky top-14 z-20 -mx-3 mb-2 flex items-center gap-2 bg-background/90 px-3 py-2 backdrop-blur md:-mx-6 md:px-6">
-          <div className="min-w-0 flex-1"><SelectionBar selected={[...selected.values()]} onClear={clear} albumId={folder ? undefined : id} /></div>
+          <div className="min-w-0 flex-1"><SelectionBar selected={[...selected.values()]} onClear={clear} /></div>
           {selected.size === 1 && <Button variant="outline" size="sm" onClick={() => cover.mutate([...selected.keys()][0])}><ImageIcon className="size-4" />{t('Use as cover')}</Button>}
         </div>
       )}
 
       {assets && assets.length === 0 ? (
-        <Empty title={t('This album is empty')}>{folder ? t('No photos or videos in this folder yet.') : t('Open the timeline, select photos and choose Add to album.')}</Empty>
+        <Empty title={t('This album is empty')}>{t('No photos or videos in this folder yet.')}</Empty>
       ) : (
         <>
-          {folder ? (
-            <FolderGrid assets={shown} root={folder.path} src={(a) => mediaUrl(a.id, 'thumb', a.hash)} selected={ids} onOpen={(a) => openMedia(a.id)} onToggle={toggle} />
-          ) : (
-            <DayGrid assets={shown} src={(a) => mediaUrl(a.id, 'thumb', a.hash)} selected={ids} onOpen={(a) => openMedia(a.id)} onToggle={toggle} onToggleMany={toggleMany} />
-          )}
+          <FolderGrid assets={shown} root={folder.path} src={(a) => mediaUrl(a.id, 'thumb', a.hash)} selected={ids} onOpen={(a) => openMedia(a.id)} onToggle={toggle} />
           {assets && assets.length > shown.length && (
             <div className="py-4 text-center"><Button variant="outline" onClick={() => setShowAll(true)}>{t('Show all {count}', { count: assets.length.toLocaleString() })}</Button></div>
           )}

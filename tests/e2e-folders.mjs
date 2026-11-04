@@ -1,11 +1,11 @@
-// End-to-end test of shared folders: the real master, the real web API and several real client binaries, as different computers
+// End-to-end test of folders: the real master, the real web API and several real client binaries, as different computers
 // of one user and of another.
-//   cd tests && npm install && node e2e-shared.mjs
+//   cd tests && npm install && node e2e-folders.mjs
 import fs from 'node:fs'
 import path from 'node:path'
 import { CLIENT, MASTER, run, check, enrollDevice, harness, namesIn as names, passedChecks, readIn as read, sleep, startDaemon, stopDaemon, until, writeIn as write } from './lib.mjs'
 
-const h = await harness('fafnirx-shared-', { binaries: [MASTER, CLIENT] })
+const h = await harness('fafnirx-folders-', { binaries: [MASTER, CLIENT] })
 const { tmp, data, schema, master } = h
 
 /** What the master holds for a path of a folder, or null: the live file, or null when it is deleted or not there. */
@@ -37,17 +37,17 @@ try {
   // --- make one and attach the first folder -----------------------------------------------------------------------------------------
   write(dirL, 'a.txt', 'hello')
   write(dirL, 'docs/b.txt', 'second')
-  const attached = laptop.c('shared', 'attach', 'family', dirL, '--create').stdout
+  const attached = laptop.c('folder', 'add', dirL, '--target', 'family', '--create').stdout
   check(attached.includes('"alice/family"'), `a shared folder is made and attached from the command line (${attached.trim()})`)
-  check(laptop.c('shared', 'list').stdout.trim() === 'alice/family\town', 'the list names it as <owner>/<name> and marks the user\'s own')
-  check(laptop.c('folders').stdout.includes('(shared, both ways'), 'and `folders` shows it')
+  check(laptop.c('folder', 'list', '--available').stdout.trim() === 'alice/family\town', 'the list names it as <owner>/<name> and marks the user\'s own')
+  check(laptop.c('folder', 'list').stdout.includes('(synced both'), 'and `folder list` shows it')
   const first = laptop.c('sync').stdout
   check(first.includes('2 uploaded'), `the first sync uploads its files (${first.trim()})`)
   check(stored('alice/family', 'docs/b.txt') === 'second', 'they are in the folder of the shared folder on the master, at its root')
   check((await live('alice/laptop')).length === 0, 'and are not also backed up to the computer\'s own device')
 
   // --- a second computer of the same user ---------------------------------------------------------------------------------------------
-  desktop.c('shared', 'attach', 'alice/family', dirD)
+  desktop.c('folder', 'add', dirD, '--target', 'alice/family')
   const received = desktop.c('sync').stdout
   check(received.includes('2 downloaded') && read(dirD, 'a.txt') === 'hello' && read(dirD, 'docs/b.txt') === 'second', `another computer receives them (${received.trim()})`)
   check(desktop.c('sync').stdout.includes('0 uploaded') && !desktop.c('sync').stdout.includes('downloaded'), 'and does not send them back')
@@ -60,7 +60,7 @@ try {
 
   // --- both change the same file: the policy of the folder says what happens (per computer, per folder) ---------------------------------------
   const aside = path.join(dirL, '.fafnirx-conflicts')
-  check(laptop.c('shared', 'conflict', 'family').stdout.includes('theirs'), 'the default is the master\'s version')
+  check(laptop.c('folder', 'mode', 'family').stdout.includes('both,'), 'the default is both ways, and the master\'s version wins')
   write(dirL, 'a.txt', 'L')
   write(dirD, 'a.txt', 'D')
   desktop.c('sync')
@@ -69,7 +69,7 @@ try {
   check(conflict.includes('1 conflicts') && (await live('alice/family')).every((p) => !p.includes('conflict')), 'and what was put aside is not sent')
   check(!names(dirL).some((n) => n.includes('(conflict ')), 'no conflict copy among the files')
 
-  check(laptop.c('shared', 'conflict', 'family', 'mine').stdout.includes('"mine"'), 'a folder can be set to keep this computer\'s version')
+  check(laptop.c('folder', 'mode', 'family', 'mine').stdout.includes('"mine"'), 'a folder can be set to keep this computer\'s version')
   write(dirL, 'a.txt', 'L')
   write(dirD, 'a.txt', 'D')
   desktop.c('sync')
@@ -78,8 +78,8 @@ try {
   desktop.c('sync')
   check(read(dirD, 'a.txt') === 'L', 'and reaches the other computer')
 
-  check(desktop.c('shared', 'conflict', 'family').stdout.includes('theirs'), 'the other computer keeps its own setting')
-  laptop.c('shared', 'conflict', 'family', 'both')
+  check(desktop.c('folder', 'mode', 'family').stdout.includes('both,'), 'the other computer keeps its own setting')
+  laptop.c('folder', 'mode', 'family', 'keep')
   write(dirL, 'a.txt', 'L')
   write(dirD, 'a.txt', 'D')
   desktop.c('sync')
@@ -91,7 +91,7 @@ try {
   check(read(dirD, kept[0]) === 'L', 'and reaches the other computer')
 
   // ask needs a screen: where there is none it is refused, where there is one the file waits for the answer
-  const askSet = run(CLIENT, ['--config', laptop.cfg, 'shared', 'conflict', 'family', 'ask'], { ok: false })
+  const askSet = run(CLIENT, ['--config', laptop.cfg, 'folder', 'mode', 'family', 'ask'], { ok: false })
   if (askSet.code === 0) {
     write(dirL, 'ask.txt', 'start')
     laptop.c('sync')
@@ -102,13 +102,13 @@ try {
     laptop.c('sync')
     check(read(dirL, 'ask.txt') === 'L' && stored('alice/family', 'ask.txt') === 'D', 'ask: nothing changes on either side while the file waits')
     check(laptop.c('status').stdout.includes('need a decision'), 'and status says it waits')
-    laptop.c('shared', 'resolve', 'family', 'theirs', 'ask.txt')
+    laptop.c('folder', 'resolve', 'family', 'theirs', 'ask.txt')
     laptop.c('sync')
     check(read(dirL, 'ask.txt') === 'D' && names(aside).length === 2, 'the answer is applied at the next sync, ours is put aside')
   } else {
     check(askSet.stderr.includes('needs a screen'), 'ask is refused on a computer without a screen')
   }
-  laptop.c('shared', 'conflict', 'family', 'both')
+  laptop.c('folder', 'mode', 'family', 'keep')
 
   // --- delete and rename ---------------------------------------------------------------------------------------------------------------------
   fs.rmSync(path.join(dirD, 'docs', 'b.txt'))
@@ -213,7 +213,7 @@ try {
   const stopped = desktop.c('status').stdout
   check(heldCount(stopped) >= 12 && stopped.includes('deletions held back'), 'with the client stopped, `status` still says so')
   const heldJson = JSON.parse(desktop.c('status', '--json').stdout)
-  check(heldJson.shared.find((s) => s.name === 'alice/family')?.held >= 12, 'and so does `status --json`, from the folder\'s own state')
+  check(heldJson.synced.find((s) => s.name === 'alice/family')?.held >= 12, 'and so does `status --json`, from the folder\'s own state')
   const released = desktop.c('release-deletes').stdout
   check(released.includes('applied at the next cycle'), `release-deletes reaches the shared folder (${released.split('\n')[0]})`)
   const deleted = desktop.c('sync').stdout
@@ -221,7 +221,7 @@ try {
   check(!desktop.c('status').stdout.includes('holding'), 'nothing is held after that')
 
   // --- the master's own folders keep one spelling of a name too, for what a person adds in the web app --------------------------------------------------
-  check((await api.alice.post('/api/devices', { name: 'library', kind: 'local' })).status === 200, 'a local folder is made')
+  check((await api.alice.post('/api/folders', { name: 'library' })).status === 200, 'a local folder is made')
   check((await api.alice.upload('alice/library', 'Docs/a.txt', 'x')) === 200, 'a file is added to it')
   check((await api.alice.upload('alice/library', 'docs/b.txt', 'y')) === 409, 'another spelling of its folder is refused')
   check((await api.alice.upload('alice/library', 'what?.txt', 'y')) === 400, 'and so is a name Windows cannot keep')
@@ -237,42 +237,42 @@ try {
   const took = Math.round((Date.now() - started) / 1000)
   check(took < 20, `and within seconds, without waiting for the next poll (${took} s)`)
 
-  // --- what the client says about its shared folders ------------------------------------------------------------------------------------------------
+  // --- what the client says about its folders ------------------------------------------------------------------------------------------------
   // The folder holds a path that cannot be received (it differs only by case from another), which stays a problem to look at.
   const said = await until(() => /alice\/family \(.*\): (in step|needs attention)/.test(desktop.c('status').stdout), 40)
   const statusText = desktop.c('status').stdout
   check(said && statusText.includes('differs only by case'), `status lists the shared folder and how it is doing (${statusText.split('\n').find((l) => l.includes('alice/family'))?.trim()})`)
   const asJson = JSON.parse(desktop.c('status', '--json').stdout)
-  const entry = asJson.status.shared.find((s) => s.name === 'alice/family')
+  const entry = asJson.status.synced.find((s) => s.name === 'alice/family')
   check(asJson.running === true && entry?.files > 0 && entry.last_cycle > 0 && entry.last_error.includes('differs only by case'), 'and `status --json` has the same for scripts')
-  const onMaster = await until(async () => (await api.alice.get('/api/devices/alice%2Fdesktop')).json?.shared?.some((s) => s.name === 'alice/family'), 60)
+  const onMaster = await until(async () => (await api.alice.get('/api/devices/alice%2Fdesktop')).json?.folders?.some((s) => s.name === 'alice/family'), 60)
   check(onMaster, 'the web app shows it on the computer\'s page')
-  const card = (await api.alice.get('/api/shared')).json.find((f) => f.folder === 'alice/family')
+  const card = (await api.alice.get('/api/folders')).json.find((f) => f.folder === 'alice/family')
   check(card.computers.some((c) => c.name === 'alice/desktop' && c.last_cycle > 0), 'and on the folder, with the computers that have it')
   stopDaemon(daemon)
   await sleep(1500)
 
   // --- another user: nothing until the owner adds them --------------------------------------------------------------------------------------------
-  check(!phone.c('shared', 'list').stdout.includes('alice/family'), 'another user does not see the shared folder')
-  check(phone.c.try('shared', 'attach', 'alice/family', dirB).code !== 0, 'and cannot attach it')
+  check(!phone.c('folder', 'list', '--available').stdout.includes('alice/family'), 'another user does not see the shared folder')
+  check(phone.c.try('folder', 'add', dirB, '--target', 'alice/family').code !== 0, 'and cannot attach it')
   check((await api.bob.get('/api/files?device=alice/family')).status === 404, 'nor see it in the web app')
-  check((await api.alice.post('/api/shared/family/members', { user: 'bob', can_write: false })).status === 200, 'the owner adds them to read')
-  check(phone.c('shared', 'list').stdout.includes('alice/family'), 'now they see it')
+  check((await api.alice.post('/api/folders/family/members', { user: 'bob', can_write: false })).status === 200, 'the owner adds them to read')
+  check(phone.c('folder', 'list', '--available').stdout.includes('alice/family'), 'now they see it')
   check((await api.bob.get('/api/files?device=alice/family')).status === 200, 'in the web app too')
-  phone.c('shared', 'attach', 'alice/family', dirB)
+  phone.c('folder', 'add', dirB, '--target', 'alice/family')
   phone.c('sync')
   check(read(dirB, 'a.txt') === 'D' && read(dirB, 'd.txt') !== null, 'and receive its files')
   write(dirB, 'bobs.txt', 'not allowed yet')
   const refused = phone.c.try('sync')
   check(`${refused.stdout}${refused.stderr}`.includes('read only'), 'a change from a read-only member is refused, and says why')
   check(stored('alice/family', 'bobs.txt') === null, 'nothing of theirs reached the folder')
-  check((await api.alice.post('/api/shared/family/members', { user: 'bob', can_write: true })).status === 200, 'the owner lets them change it')
+  check((await api.alice.post('/api/folders/family/members', { user: 'bob', can_write: true })).status === 200, 'the owner lets them change it')
   check(phone.c('sync').stdout.includes('1 uploaded') && stored('alice/family', 'bobs.txt') === 'not allowed yet', 'and their file goes up')
 
   // --- the owner takes it away -------------------------------------------------------------------------------------------------------------------------
-  check((await api.alice.delete('/api/shared/family/members/bob')).status === 200, 'the owner removes them')
-  check(phone.c.try('sync').code !== 0 && !phone.c('shared', 'list').stdout.includes('alice/family'), 'they lose it at once')
-  phone.c('shared', 'detach', 'alice/family')
+  check((await api.alice.delete('/api/folders/family/members/bob')).status === 200, 'the owner removes them')
+  check(phone.c.try('sync').code !== 0 && !phone.c('folder', 'list', '--available').stdout.includes('alice/family'), 'they lose it at once')
+  phone.c('folder', 'remove', 'alice/family')
   check(read(dirB, 'a.txt') === 'D', 'detaching keeps the files they have')
 
   // --- deletions held back can be kept instead (last for the desktop: files deleted in the web app cannot come back from here) ----------------------------
@@ -282,21 +282,54 @@ try {
   deleteFromTheLaptop(lot('keep', 12))
   desktop.c('sync')
   check(heldCount(desktop.c('status').stdout) >= 12, 'twelve more deletions are held')
-  const keeping = desktop.c('shared', 'keep', 'family').stdout
+  const keeping = desktop.c('folder', 'keep', 'family').stdout
   check(/keeping the \d+ files/.test(keeping), `they can be kept instead (${keeping.split('\n')[0]})`)
   desktop.c('sync')
   check(lot('keep', 12).every((p) => read(dirD, p) !== null) && !desktop.c('status').stdout.includes('holding'), 'the files stay and nothing is held any more')
-  check(desktop.c('shared', 'keep', 'family').stdout.includes('no deletions of the master are held'), 'keeping when nothing is held says so')
+  check(desktop.c('folder', 'keep', 'family').stdout.includes('no deletions of the master are held'), 'keeping when nothing is held says so')
+
+  // --- a master folder: computers of any user sync it both ways, and nothing else of the master files --------------------------------------------------
+  check((await api.alice.post('/api/master-folders', { path: 'Music' })).status === 403, 'only an administrator makes a master folder')
+  check((await admin.post('/api/master-folders', { path: 'Music' })).status === 200, 'an administrator makes one')
+  check((await admin.post('/api/master-folders', { path: 'Music/Rock' })).status === 409, 'not inside another')
+  write(path.join(data, 'files'), 'Other/x.txt', 'not in the folder')
+  const dirLM = path.join(tmp, 'laptop-music')
+  const dirDM = path.join(tmp, 'desktop-music')
+  const dirBM = path.join(tmp, 'bob-music')
+  write(dirLM, 'song.txt', 'la la')
+  check(laptop.c('folder', 'list', '--available').stdout.includes('master:Music'), 'the folder is listed as master:<folder>')
+  laptop.c('folder', 'add', dirLM, '--target', 'master:Music')
+  check(laptop.c('sync').stdout.includes('uploaded') && fs.readFileSync(path.join(data, 'files', 'Music', 'song.txt'), 'utf8') === 'la la', 'a file goes into the folder, below its path')
+  desktop.c('folder', 'add', dirDM, '--target', 'master:Music')
+  desktop.c('sync')
+  check(read(dirDM, 'song.txt') === 'la la' && read(dirDM, 'x.txt') === null && read(dirDM, 'Other/x.txt') === null, 'another computer receives it, and nothing from outside the folder')
+  write(dirDM, 'Rock/b.txt', 'from the desktop')
+  desktop.c('sync')
+  laptop.c('sync')
+  check(read(dirLM, 'Rock/b.txt') === 'from the desktop', 'and what it adds reaches the first')
+  check(phone.c.try('folder', 'add', dirBM, '--target', 'master:Nope').code !== 0, 'a master folder that does not exist cannot be attached')
+  phone.c('folder', 'add', dirBM, '--target', 'master:Music', '--mode', 'up')
+  write(dirBM, 'bob.txt', 'from bob')
+  const upOnly = phone.c('sync').stdout
+  check(read(dirBM, 'song.txt') === null && fs.readFileSync(path.join(data, 'files', 'Music', 'bob.txt'), 'utf8') === 'from bob', `another user's computer in up mode only sends (${upOnly.trim()})`)
+  check(phone.c('folder', 'list').stdout.includes('master:Music') && phone.c('folder', 'list').stdout.includes('synced up'), 'and `folder list` says which way it goes')
+  phone.c('folder', 'mode', 'master:Music', 'both')
+  phone.c('sync')
+  check(read(dirBM, 'song.txt') === 'la la', 'in both ways mode it receives too')
+  check(phone.c.try('folder', 'add', path.join(tmp, 'nope'), '--target', 'computer', '--mode', 'both').code !== 0, 'the computer target is up only')
+  for (const who of [phone, desktop, laptop]) who.c('folder', 'remove', 'master:Music')
+  const musicId = (await api.alice.get('/api/folders')).json.find((f) => f.master).public_id
+  check((await admin.delete(`/api/master-folders/${musicId}`)).status === 200 && fs.existsSync(path.join(data, 'files', 'Music', 'song.txt')), 'removing the entry keeps the files')
 
   // --- delete the files, then the folder ------------------------------------------------------------------------------------------------------------------
-  check((await api.alice.delete('/api/shared/family')).status === 409, 'a folder with files cannot be deleted')
+  check((await api.alice.delete('/api/folders/family')).status === 409, 'a folder with files cannot be deleted')
   const items = (await live('alice/family')).map((p) => ({ device: 'alice/family', path: p }))
   check((await api.alice.post('/api/files/delete', { items })).status === 200, 'its files are deleted')
-  check((await api.alice.delete('/api/shared/family')).status === 200, 'then the folder can be')
+  check((await api.alice.delete('/api/folders/family')).status === 200, 'then the folder can be')
   check(!fs.existsSync(path.join(data, 'files', 'users', 'alice', 'family')) && (await schema.rows("SELECT 1 FROM devices WHERE folder = 'alice/family'")).length === 0, 'it takes its trash and its place on disk with it')
   const gone = laptop.c.try('sync')
-  check(gone.code !== 0 && `${gone.stdout}${gone.stderr}`.includes('no shared folder'), 'a computer that still has it attached is told it is gone')
-  const detached = laptop.c('shared', 'detach', 'family').stdout
+  check(gone.code !== 0 && `${gone.stdout}${gone.stderr}`.includes('no folder called'), 'a computer that still has it attached is told it is gone')
+  const detached = laptop.c('folder', 'remove', 'family').stdout
   check(detached.includes('"alice/family"'), `detaching by the short name says which folder it was (${detached.trim()})`)
   check(read(dirL, 'a.txt') === 'D', 'and keeps its files when it lets go')
 

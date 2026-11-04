@@ -1,4 +1,4 @@
-//! How the names of a shared folder are spelled on this computer.
+//! How the names of a synced folder are spelled on this computer.
 
 use fafnirx_common::fold_path;
 use std::collections::{HashMap, HashSet};
@@ -42,7 +42,7 @@ impl DirNames {
     }
 }
 
-/// How the names of a shared folder are spelled on this computer. Every kind of computer treats names that differ only in
+/// How the names of a synced folder are spelled on this computer. Every kind of computer treats names that differ only in
 /// case (or Unicode form) as one, and a file system that folds case cannot be asked, so the folders are read. Each is read once
 /// and then kept up to date as files are received, moved and deleted: asking the file system per path would read a folder of
 /// ten thousand files ten thousand times.

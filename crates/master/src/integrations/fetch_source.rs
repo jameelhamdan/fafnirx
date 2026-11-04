@@ -6,7 +6,7 @@
 //! A run fetches at most `max_per_run` files and, when more are waiting, asks for another run at once: a long list
 //! arrives over several runs, and a restart or a failure loses at most the file being made.
 
-use crate::integrations::syncsource::{self, Download, Item, Listing, Rules};
+use crate::integrations::syncsource::{self, Download, Item, Listing, Rules, Target};
 use crate::integrations::{Outcome, SourceRow};
 use crate::modules;
 use crate::platform::db::{self, Db};
@@ -68,7 +68,13 @@ fn items_of(entries: Vec<FetchEntry>) -> (Vec<Item>, HashMap<String, FetchEntry>
         match clean_remote_path(&entry.path) {
             Ok(path) if seen.insert(path.clone()) => {
                 entry.path = path.clone();
-                items.push(Item { path: path.clone(), marker: entry.marker.clone(), size: entry.size, mtime_ns: entry.mtime_ns });
+                items.push(Item {
+                    path: path.clone(),
+                    key: entry.key.clone(),
+                    marker: entry.marker.clone(),
+                    size: entry.size,
+                    mtime_ns: entry.mtime_ns,
+                });
                 kept.insert(path, entry);
             }
             _ => skipped += 1,
@@ -93,7 +99,7 @@ pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
         db.clone(),
         store,
         source_id,
-        src.device,
+        Target { device: src.device, prefix: src.prefix },
         Listing { items, skipped: listing.skipped + left_out },
         rules,
         |item| {

@@ -84,8 +84,7 @@ Windows `fafnirx-setup-<version>.exe`; macOS `fafnirx-<version>-macos-{aarch64,x
 
 - **Windows:** run the setup (SmartScreen: *More info* → *Run anyway*; no administrator rights are needed). It installs into
   your profile (`%LocalAppData%\Programs\fafnirx`), asks for `http://<server>:7443`, the token and a folder, enrolls, and starts
-  the client and its tray, which start again whenever you log in. An older version installed a service of the computer: remove
-  that version first (*Apps* → *fafnirx*). Silent:
+  the client and its tray, which start again whenever you log in. Silent:
   `fafnirx-setup-<version>.exe /VERYSILENT /SERVER=nas.lan /TOKEN=<token> /FOLDER="C:\Users\me\Documents"`.
 - **macOS, Linux:**
   ```sh
@@ -101,7 +100,7 @@ Windows `fafnirx-setup-<version>.exe`; macOS `fafnirx-<version>-macos-{aarch64,x
   on, then `sudo fafnirx restart`. The installer says so at the end; without it these folders fail with `Operation not permitted`
   (see Troubleshooting).
 - **Debian, Ubuntu:** `sudo apt install ./fafnirx_<version>-1_amd64.deb`, then `sudo fafnirx enroll --server http://<server>:7443`
-  (asks for the token; it starts the service) and `sudo fafnirx add-folder ~/Documents`.
+  (asks for the token; it starts the service) and `sudo fafnirx folder add ~/Documents`.
 
 On Linux and macOS the client is **a service of the computer**: it starts at boot, is started again when it fails, reads the
 folders of every user, and its tray starts when a user logs in. Its config, token and state are in `/etc/fafnirx` and
@@ -110,12 +109,12 @@ that change them ask for administrator rights (`sudo`); the tray's folder entrie
 in, and its config (`%LocalAppData%\fafnirx\config.toml`), token (Credential Manager) and state are in your profile, so the tray
 and the commands change them without asking for anything.
 
-Check with `fafnirx status` and `fafnirx folders`; the device shows online within a minute. [Commands](usage.md#the-client).
+Check with `fafnirx status` and `fafnirx folder list`; the device shows online within a minute. [Commands](usage.md#the-client).
 
 **Other clients:** for Android, use [fafnirx-android](https://github.com/jameelhamdan/fafnirx-android).
 
 A folder is stored as `<you>/<device>/<name>/`; the name defaults to the folder's own (a second `photos` becomes `photos-2`) or
-use `--name`. Names are compared ignoring case and accents; `add-folder` refuses a clash. **Address:** on a LAN/VPN
+use `--name`. Names are compared ignoring case and accents; `folder add` refuses a clash. **Address:** on a LAN/VPN
 `http://<master>:7443`; over the internet an `https://` address in front of the master (`enroll` warns about plain `http://`).
 
 **Uninstall:** Windows *Apps* → *fafnirx*; Linux/macOS `sudo fafnirx uninstall-service` and delete `/usr/local/bin/fafnirx` (or
@@ -129,7 +128,7 @@ use `--name`. Names are compared ignoring case and accents; `add-folder` refuses
 | `not sending: device in use ...` | Another computer uses the token: **Release** on the device page, or wait 90 s |
 | `unknown or revoked device token` | Token rotated or device revoked: enroll again |
 | `status` says holding deletions | A large part of a folder vanished: [delete guard](usage.md#the-delete-guard) |
-| `add-folder`/`shared attach`: `... overlaps ... collect one of them` | A folder cannot sit inside, or contain, another collected folder. To share a folder inside one you collect, `remove-folder` the outer one and `add-folder` its other subfolders (the master keeps its data) |
+| `folder add`: `... overlaps ... collect one of them` | A folder cannot sit inside, or contain, another collected folder. To share a folder inside one you collect, `folder remove` the outer one and `folder add` its other subfolders (the master keeps its data) |
 | macOS: `cannot replace the file: Operation not permitted` (or the tray says `Needs Full Disk Access`) | The client lacks Full Disk Access for a folder in Documents, Desktop, Downloads, iCloud Drive or another volume: *Privacy & Security* → *Full Disk Access* → add `/usr/local/bin/fafnirx`, then `sudo fafnirx restart`. If it is not that: the file is locked (`ls -lO` shows `uchg`; `sudo chflags nouchg <file>`) |
 | Master: `cannot connect to the database` | PostgreSQL unreachable, or password differs from the first start's |
 | Device shown offline | No heartbeat for 60 s: check `fafnirx status` |

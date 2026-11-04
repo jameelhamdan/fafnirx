@@ -1,8 +1,8 @@
-//! Shared folders: a local folder kept in step with a shared folder of the master, in both directions.
+//! Synced folders: a local folder kept in step with a folder of the master, in both directions.
 //!
 //! A cycle receives what changed on the master, then sends what changed here with the engine that uploads the collected
 //! folders, so a file changed on both sides is noticed before the upload replaces the other side's version. Nothing is
-//! overwritten silently: what becomes of this computer's version depends on the folder's `Conflict` policy (the master's is
+//! overwritten silently: what becomes of this computer's version depends on the folder's mode (the master's is
 //! kept and this one put aside; this one is sent; both are kept; or a person is asked).
 //!
 //! `State::synced` records each path as it was when last in step. A local file that still matches it is unchanged here, so
@@ -11,8 +11,8 @@
 mod spellings;
 
 use self::spellings::Spellings;
-use crate::config::{Config, Conflict, Folder, Shared};
-use crate::daemon::{self, SharedStatus};
+use crate::config::{Config, Folder, Mode, SyncedFolder};
+use crate::daemon::{self, SyncedStatus};
 use crate::net;
 use crate::sync::guard;
 use crate::sync::hash::{hash_file, stat};
@@ -29,16 +29,16 @@ use tokio::io::AsyncWriteExt;
 /// A file being received is written under this prefix next to its place and renamed when it is complete and checked.
 pub const PART_PREFIX: &str = ".fafnirx-part-";
 
-/// Where this computer's version of a file goes when the master's is kept (`Conflict::Theirs`): beside the files, never synced.
+/// Where this computer's version of a file goes when the master's is kept (`Mode::Both`): beside the files, never synced.
 pub const CONFLICT_DIR: &str = ".fafnirx-conflicts";
 
 /// Where in the state the point up to which the master's changes were seen is kept.
-const CURSOR: &str = "shared_cursor";
+const CURSOR: &str = "synced_cursor";
 
-/// A shared folder attached to a folder of this computer.
+/// A synced folder attached to a folder of this computer.
 pub struct Attached {
     engine: Engine,
-    shared: Shared,
+    synced: SyncedFolder,
     host: String,
     spellings: Spellings,
     /// Files answered at the start of this pull, with the master's content the answer was about: if the master lists that
@@ -96,20 +96,21 @@ enum Applied {
 /// How far before its own time the master lists changes (`list_changes` rewinds its cursor by this much).
 const LISTING_LAG: i64 = 2;
 
-/// The state database of a shared folder: one per folder, beside the client's own.
-pub fn state_file(state_dir: &Path, name: &str) -> PathBuf {
-    let id = hex::encode(&chunk_hash(name.as_bytes())[..4]);
-    state_dir.join(format!("shared-{id}.db"))
+/// The state database of a synced folder: one per folder, beside the client's own. `key` is the stable id of the folder (`SyncedFolder::key`),
+/// so that a folder renamed on the master keeps its state.
+pub fn state_file(state_dir: &Path, key: &str) -> PathBuf {
+    let id = hex::encode(&chunk_hash(key.as_bytes())[..4]);
+    state_dir.join(format!("synced-{id}.db"))
 }
 
-/// What a shared folder is doing, from its state database alone. It is all kept there (what is in step, what is held back,
+/// What a synced folder is doing, from its state database alone. It is all kept there (what is in step, what is held back,
 /// how the last cycle ended), so `status` and `release-deletes` work with the client stopped.
-pub fn status_of(shared: &Shared, state: &State) -> SharedStatus {
+pub fn status_of(synced: &SyncedFolder, state: &State) -> SyncedStatus {
     let (files, bytes) = state.totals().unwrap_or((0, 0));
     let (last_cycle, last_error) = state.outcome().unwrap_or_default();
-    SharedStatus {
-        name: shared.name.clone(),
-        path: shared.path.display().to_string(),
+    SyncedStatus {
+        name: synced.name.clone(),
+        path: synced.path.display().to_string(),
         files,
         bytes,
         last_cycle,
@@ -135,10 +136,10 @@ pub fn status_of(shared: &Shared, state: &State) -> SharedStatus {
 }
 
 impl Attached {
-    pub fn open(cfg: &Config, token: &str, state_dir: &Path, shared: &Shared, errors: Arc<Mutex<Vec<String>>>) -> Result<Self> {
-        let client = net::shared_client(cfg, token, &crate::service::instance::client_id(state_dir), &shared.name)?;
-        let mut state = State::open(&state_file(state_dir, &shared.name))?;
-        state.adopt_folder(&shared.path.display().to_string())?;
+    pub fn open(cfg: &Config, token: &str, state_dir: &Path, synced: &SyncedFolder, errors: Arc<Mutex<Vec<String>>>) -> Result<Self> {
+        let client = net::synced_client(cfg, token, &crate::service::instance::client_id(state_dir), synced.key())?;
+        let mut state = State::open(&state_file(state_dir, synced.key()))?;
+        state.adopt_folder(&synced.path.display().to_string())?;
         let mut engine = Engine::new(
             client,
             state,
@@ -151,20 +152,20 @@ impl Attached {
         let host = gethostname::gethostname().to_string_lossy().into_owned();
         Ok(Self {
             engine,
-            shared: shared.clone(),
+            synced: synced.clone(),
             host,
-            spellings: Spellings::new(&shared.path),
+            spellings: Spellings::new(&synced.path),
             answered: HashMap::new(),
         })
     }
 
     pub fn name(&self) -> &str {
-        &self.shared.name
+        &self.synced.name
     }
 
     /// Whether this is still the folder attached in the config.
-    pub fn is(&self, shared: &Shared) -> bool {
-        self.shared.name == shared.name && self.shared.path == shared.path
+    pub fn is(&self, synced: &SyncedFolder) -> bool {
+        self.synced.name == synced.name && self.synced.path == synced.path
     }
 
     /// Receives, then sends, and notes how it went for `status`.
@@ -176,26 +177,29 @@ impl Attached {
             Err(e) => (self.engine.state.outcome().map_or(0, |(last, _)| last), e.to_string()),
         };
         if let Err(e) = self.engine.state.set_outcome(outcome.0, &outcome.1) {
-            tracing::warn!("{}: cannot note how the cycle went: {e:#}", self.shared.name);
+            tracing::warn!("{}: cannot note how the cycle went: {e:#}", self.synced.name);
         }
         result
     }
 
     /// What this folder is doing, for the status file, the tray and the master.
-    pub fn status(&self) -> SharedStatus {
-        status_of(&self.shared, &self.engine.state)
+    pub fn status(&self) -> SyncedStatus {
+        status_of(&self.synced, &self.engine.state)
     }
 
     async fn run_cycle(&mut self, cfg: &Config) -> Result<Report, SyncError> {
         self.engine.check_master().await?;
         let mut report = Report::default();
-        self.pull(&mut report).await?;
+        // Sending only: nothing of the master's is asked for, so nothing is received or deleted here.
+        if self.synced.mode.pulls() {
+            self.pull(&mut report).await?;
+        }
         // A file waiting for a person is neither sent nor taken for deleted.
         self.engine.skip = self.engine.state.pending_paths()?;
-        // The engine collects one folder with no name of its own: the files of a shared folder are at the top.
+        // The engine collects one folder with no name of its own: the files of a synced folder are at the top.
         let mut one = cfg.clone();
-        one.folders = vec![Folder { path: self.shared.path.clone(), name: String::new() }];
-        one.shared.clear();
+        one.folders = vec![Folder { path: self.synced.path.clone(), name: String::new() }];
+        one.synced.clear();
         let pushed = self.engine.cycle(&one).await?;
         report.add(&pushed);
         Ok(report)
@@ -239,7 +243,7 @@ impl Attached {
         let mut stream = self
             .engine
             .client
-            .list_changes(pb::ListChangesRequest { shared: self.shared.name.clone(), since })
+            .list_changes(pb::ListChangesRequest { folder: self.synced.key().to_string(), since })
             .await?
             .into_inner();
         let (mut cursor, mut complete, mut changes) = (None, false, Vec::new());
@@ -277,7 +281,7 @@ impl Attached {
                 self.skipped(&path, &format!("differs only by case from {first:?}"));
             } else {
                 names.insert(folded, path.clone());
-                let target = local_path(&self.shared.path, &path);
+                let target = local_path(&self.synced.path, &path);
                 plan.live.push((path, target, change));
             }
         }
@@ -297,7 +301,7 @@ impl Attached {
 
     /// Adds a path deleted on the master to the plan when the file here is unchanged.
     fn queue_deletion(&self, path: &str, from_web: bool, plan: &mut Plan, report: &mut Report) -> Result<(), SyncError> {
-        let target = local_path(&self.shared.path, path);
+        let target = local_path(&self.synced.path, path);
         match self.deleted_on_master(path, &target, report) {
             Ok(Some(base)) => {
                 if from_web {
@@ -314,7 +318,7 @@ impl Attached {
     /// A file that is not received because this computer cannot hold it the way every other computer does. It is said once
     /// per listing and not retried: the same rule applies on every kind of computer.
     fn skipped(&self, path: &str, why: &str) {
-        self.engine.report_error(format!("{}/{path}: not received: {why}", self.shared.name));
+        self.engine.report_error(format!("{}/{path}: not received: {why}", self.synced.name));
     }
 
     /// A problem with one file is counted and reported and the next one goes on; a problem with the master ends the cycle.
@@ -323,7 +327,7 @@ impl Attached {
         match e {
             SyncError::File(msg) => {
                 report.failed += 1;
-                self.engine.report_error(format!("{}/{path}: {msg} (will retry)", self.shared.name));
+                self.engine.report_error(format!("{}/{path}: {msg} (will retry)", self.synced.name));
                 Ok(true)
             }
             other => Err(other),
@@ -387,7 +391,7 @@ impl Attached {
         // The content of a file that is deleted on the master is what a rename moved: move it here too.
         if let Some(i) = deletions.iter().position(|(b, _)| b.root_hash == change.root_hash) {
             let (old, old_target) = deletions.remove(i);
-            make_parent(&self.shared.path, target)?;
+            make_parent(&self.synced.path, target)?;
             std::fs::rename(&old_target, target)?;
             self.spellings.removed(&old_target);
             self.spellings.added(target);
@@ -452,15 +456,15 @@ impl Attached {
                 }
                 state.clear_pull_hold()?;
                 self.engine
-                    .report_error(format!("{}: kept the {} files that were deleted on the server", self.shared.name, deletions.len()));
+                    .report_error(format!("{}: kept the {} files that were deleted on the server", self.synced.name, deletions.len()));
                 return Ok(Applied::Kept);
             }
             // Held until a person decides: there is no time after which it is applied by itself.
             state.hold_pull(deletions.len(), unix_now())?;
             self.engine.report_error(format!(
                 "{name}: {n} files were deleted on the server, a large part of the folder. They are not deleted here. \
-                 `fafnirx release-deletes` deletes them here; `fafnirx shared keep {name}` keeps them",
-                name = self.shared.name,
+                 `fafnirx release-deletes` deletes them here; `fafnirx folder keep {name}` keeps them",
+                name = self.synced.name,
                 n = deletions.len()
             ));
             return Ok(Applied::Held);
@@ -498,7 +502,7 @@ impl Attached {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => {
-                    self.engine.report_error(format!("{}/{}: {e}", self.shared.name, base.path));
+                    self.engine.report_error(format!("{}/{}: {e}", self.synced.name, base.path));
                     continue;
                 }
             }
@@ -518,10 +522,10 @@ impl Attached {
     }
 
     /// The policy of this folder. `ask` needs the tray to show the question; a build without it cannot, and keeps the master's.
-    fn policy(&self) -> Conflict {
-        match self.shared.conflict {
-            Conflict::Ask if !Conflict::ask_possible() => Conflict::Theirs,
-            policy => policy,
+    fn policy(&self) -> Mode {
+        match self.synced.mode {
+            Mode::Ask if !Mode::ask_possible() => Mode::Both,
+            mode => mode,
         }
     }
 
@@ -531,25 +535,25 @@ impl Attached {
     fn settle(&self, path: &str, target: &Path, master: Master<'_>, report: &mut Report) -> Result<Settled, SyncError> {
         let state = &self.engine.state;
         let settled = match self.policy() {
-            Conflict::Theirs => {
+            Mode::Both | Mode::Up => {
                 self.put_aside(path, target, report)?;
                 Settled::Receive
             }
-            Conflict::Both => {
+            Mode::Keep => {
                 self.keep_as_conflict(path, target, report)?;
                 Settled::Receive
             }
-            Conflict::Mine => {
+            Mode::Mine => {
                 // No longer in step, so the next send makes it the master's current version (the old one stays in its history).
                 report.conflicts += 1;
                 self.engine.report_error(format!(
                     "{}/{path}: changed here and on the server. This computer's version is kept and sent",
-                    self.shared.name
+                    self.synced.name
                 ));
                 state.remove_synced(path)?;
                 Settled::Leave
             }
-            Conflict::Ask => {
+            Mode::Ask => {
                 let (local_size, local_mtime_ns) = local_stat(target)?.unwrap_or_default();
                 let mut pending = Pending { path: path.to_string(), local_size, local_mtime_ns, found_at: unix_now(), ..Default::default() };
                 match master {
@@ -561,7 +565,7 @@ impl Attached {
                 state.add_pending(&pending)?;
                 self.engine.report_error(format!(
                     "{}/{path}: changed here and on the server. Nothing is changed until you choose which one to keep",
-                    self.shared.name
+                    self.synced.name
                 ));
                 return Ok(Settled::Leave);
             }
@@ -574,14 +578,14 @@ impl Attached {
 
     /// Moves this computer's version of a file into `CONFLICT_DIR` (never synced), so that the master's can take its place.
     fn put_aside(&self, path: &str, target: &Path, report: &mut Report) -> Result<(), SyncError> {
-        let dir = self.shared.path.join(CONFLICT_DIR);
+        let dir = self.synced.path.join(CONFLICT_DIR);
         let kept = conflict_name(&local_path(&dir, path), &self.host, unix_now());
-        make_parent(&self.shared.path, &kept)?;
+        make_parent(&self.synced.path, &kept)?;
         std::fs::rename(target, &kept)?;
         report.conflicts += 1;
         self.engine.report_error(format!(
             "{}/{path}: changed here and on the server. The server's is kept; this computer's is in {CONFLICT_DIR}/{}",
-            self.shared.name,
+            self.synced.name,
             kept.strip_prefix(&dir).unwrap_or(&kept).display()
         ));
         Ok(())
@@ -589,7 +593,7 @@ impl Attached {
 
     /// Applies the answers given for the files that waited, and settles those nobody answered in time as `both`.
     async fn apply_answers(&mut self, report: &mut Report) -> Result<(), SyncError> {
-        let (now, hours) = (unix_now(), self.shared.ask_timeout_hours);
+        let (now, hours) = (unix_now(), self.synced.ask_timeout_hours);
         let wait = (hours * 3600) as i64;
         for pending in self.engine.state.pendings()? {
             let choice = match pending.choice.as_deref() {
@@ -597,7 +601,7 @@ impl Attached {
                 None if wait > 0 && now - pending.found_at >= wait => {
                     self.engine.report_error(format!(
                         "{}/{}: nobody chose in {} hours; both versions are kept",
-                        self.shared.name, pending.path, hours
+                        self.synced.name, pending.path, hours
                     ));
                     "both".to_string()
                 }
@@ -614,7 +618,7 @@ impl Attached {
     }
 
     async fn apply_choice(&mut self, p: &Pending, choice: &str, report: &mut Report) -> Result<(), SyncError> {
-        let target = local_path(&self.shared.path, &p.path);
+        let target = local_path(&self.synced.path, &p.path);
         let here = local_stat(&target)?.is_some();
         let change = pb::Change {
             path: p.path.clone(),
@@ -652,7 +656,7 @@ impl Attached {
         report.conflicts += 1;
         self.engine.report_error(format!(
             "{}/{path}: changed here and on the server. Both are kept; the one from this computer is {}",
-            self.shared.name,
+            self.synced.name,
             kept.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
         ));
         Ok(())
@@ -663,7 +667,7 @@ impl Attached {
     /// A local file edited while this runs (it can take minutes) is settled as a conflict, not replaced. Returns whether the
     /// master's version was put in place.
     async fn download(&mut self, path: &str, target: &Path, change: &pb::Change, report: &mut Report) -> Result<bool, SyncError> {
-        make_parent(&self.shared.path, target)?;
+        make_parent(&self.synced.path, target)?;
         let before = local_stat(target)?;
         let tmp = target.with_file_name(format!("{PART_PREFIX}{}", hex::encode(&change.root_hash[..change.root_hash.len().min(6)])));
         if let Err(e) = self.receive_checked(path, &tmp, change).await {
@@ -686,7 +690,7 @@ impl Attached {
                 let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(change.mode & 0o777 | 0o600));
             }
         }
-        give_to_owner_of(&self.shared.path, &tmp);
+        give_to_owner_of(&self.synced.path, &tmp);
         tokio::fs::rename(&tmp, target).await.map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
             let why = if e.kind() == std::io::ErrorKind::PermissionDenied && cfg!(target_os = "macos") && crate::service::disk_access::is_protected(target) {
@@ -704,7 +708,7 @@ impl Attached {
         let mut stream = self
             .engine
             .client
-            .download_shared(pb::DownloadSharedRequest { shared: self.shared.name.clone(), path: path.to_string() })
+            .download_folder(pb::DownloadFolderRequest { folder: self.synced.key().to_string(), path: path.to_string() })
             .await?
             .into_inner();
         let mut file = tokio::fs::File::create(tmp).await?;
@@ -719,7 +723,7 @@ impl Attached {
         Ok(())
     }
 }
-/// The place of a path of the shared folder on this computer. The path is clean: relative, without `..`.
+/// The place of a path of the synced folder on this computer. The path is clean: relative, without `..`.
 fn local_path(root: &Path, remote: &str) -> PathBuf {
     remote.split('/').fold(root.to_path_buf(), |p, part| p.join(part))
 }
@@ -824,7 +828,7 @@ mod tests {
     #[test]
     fn nothing_is_written_through_a_link_in_the_folder() {
         let dir = tempfile::tempdir().unwrap();
-        let (root, outside) = (dir.path().join("shared"), dir.path().join("outside"));
+        let (root, outside) = (dir.path().join("synced"), dir.path().join("outside"));
         std::fs::create_dir_all(root.join("real")).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
         std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
@@ -865,7 +869,7 @@ mod tests {
         assert!(matches!(in_use, SyncError::Offline(_)), "a problem with the device: nothing can sync");
     }
 
-    /// Changes of a shared folder as the master lists them.
+    /// Changes of a synced folder as the master lists them.
     mod master {
         use super::*;
         use fafnirx_common::{root_hash, CHUNK_SIZE};
@@ -910,15 +914,16 @@ mod tests {
             let held = Arc::new(Mutex::new(Calls::default()));
             let url = serve(held.clone()).await;
             let (folder, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-            let shared = Shared {
+            let synced = SyncedFolder {
                 name: "alice/family".into(),
                 path: folder.path().to_path_buf(),
-                conflict: Conflict::Both,
+                id: None,
+                mode: Mode::Keep,
                 ask_timeout_hours: 24,
             };
             let mut cfg = Config::new(url);
-            cfg.shared.push(shared.clone());
-            let attached = Attached::open(&cfg, "token", state.path(), &shared, Arc::new(Mutex::new(Vec::new()))).unwrap();
+            cfg.synced.push(synced.clone());
+            let attached = Attached::open(&cfg, "token", state.path(), &synced, Arc::new(Mutex::new(Vec::new()))).unwrap();
             Self { attached, cfg, held, folder, _state: state }
         }
 
@@ -974,6 +979,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_folder_synced_up_only_sends_and_receives_nothing() {
+        let mut rig = Rig::new().await;
+        rig.attached.synced.mode = Mode::Up;
+        rig.remote_has("from-master.txt", b"theirs");
+        std::fs::write(rig.folder.path().join("mine.txt"), "mine").unwrap();
+        let report = rig.cycle().await;
+        assert_eq!(report.downloaded, 0, "nothing of the master's comes down");
+        assert!(rig.local("from-master.txt").is_none());
+        assert!(rig.sent("mine.txt"), "what is here goes up");
+    }
+
+    #[tokio::test]
     async fn a_file_changed_on_both_sides_keeps_both() {
         let mut rig = Rig::new().await;
         std::fs::write(rig.folder.path().join("b.txt"), "mine").unwrap();
@@ -992,8 +1009,8 @@ mod tests {
     }
 
     impl Rig {
-        fn with_policy(mut self, conflict: Conflict) -> Self {
-            self.attached.shared.conflict = conflict;
+        fn with_policy(mut self, mode: Mode) -> Self {
+            self.attached.synced.mode = mode;
             self
         }
 
@@ -1018,7 +1035,7 @@ mod tests {
 
     #[tokio::test]
     async fn theirs_keeps_the_masters_version_and_puts_ours_aside_unsent() {
-        let mut rig = Rig::new().await.with_policy(Conflict::Theirs);
+        let mut rig = Rig::new().await.with_policy(Mode::Both);
         std::fs::write(rig.folder.path().join("b.txt"), "mine").unwrap();
         rig.remote_has("b.txt", b"theirs");
         let report = rig.cycle().await;
@@ -1039,7 +1056,7 @@ mod tests {
 
     #[tokio::test]
     async fn mine_keeps_ours_and_sends_it() {
-        let mut rig = Rig::new().await.with_policy(Conflict::Mine);
+        let mut rig = Rig::new().await.with_policy(Mode::Mine);
         std::fs::write(rig.folder.path().join("b.txt"), "mine").unwrap();
         rig.remote_has("b.txt", b"theirs");
         let report = rig.cycle().await;
@@ -1051,7 +1068,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_file_edited_here_and_deleted_there_follows_the_policy() {
-        let mut rig = Rig::new().await.with_policy(Conflict::Theirs);
+        let mut rig = Rig::new().await.with_policy(Mode::Both);
         rig.remote_has("d.txt", b"one");
         rig.cycle().await;
         std::fs::write(rig.folder.path().join("d.txt"), "edited here").unwrap();
@@ -1062,7 +1079,7 @@ mod tests {
         assert_eq!(aside.len(), 1, "{aside:?}");
         assert!(!rig.sent("d.txt") && rig.conflicts().is_empty());
 
-        let mut rig = Rig::new().await.with_policy(Conflict::Mine);
+        let mut rig = Rig::new().await.with_policy(Mode::Mine);
         rig.remote_has("d.txt", b"one");
         rig.cycle().await;
         std::fs::write(rig.folder.path().join("d.txt"), "edited here").unwrap();
@@ -1077,7 +1094,7 @@ mod tests {
         use super::*;
 
         async fn waiting() -> Rig {
-            let mut rig = Rig::new().await.with_policy(Conflict::Ask);
+            let mut rig = Rig::new().await.with_policy(Mode::Ask);
             std::fs::write(rig.folder.path().join("b.txt"), "mine").unwrap();
             rig.remote_has("b.txt", b"theirs");
             rig.cycle().await;
@@ -1138,7 +1155,7 @@ mod tests {
         #[tokio::test]
         async fn nobody_answering_keeps_both_after_the_timeout() {
             let mut rig = waiting().await;
-            rig.attached.shared.ask_timeout_hours = 1;
+            rig.attached.synced.ask_timeout_hours = 1;
             rig.cycle().await;
             assert_eq!(rig.attached.engine.state.pendings().unwrap().len(), 1, "not yet");
             rig.attached.engine.state.backdate_pending(unix_now() - 2 * 3600).unwrap();
@@ -1403,15 +1420,16 @@ mod tests {
     async fn held_deletions_are_kept_in_the_state_so_they_show_with_the_client_stopped() {
         let (rig, _) = held_rig().await;
         assert_eq!(rig.attached.engine.state.pull_hold().unwrap().map(|(n, _)| n), Some(12));
-        let shared = Shared {
+        let synced = SyncedFolder {
             name: "alice/family".into(),
             path: rig.folder.path().to_path_buf(),
-            conflict: Conflict::Both,
+            id: None,
+            mode: Mode::Keep,
             ask_timeout_hours: 24,
         };
         // Another process (`fafnirx status`) opens the same database and sees the same.
         let reopened = State::open(&state_file(rig._state.path(), "alice/family")).unwrap();
-        let seen = status_of(&shared, &reopened);
+        let seen = status_of(&synced, &reopened);
         assert_eq!((seen.held, seen.files), (12, 12));
         assert!(seen.last_cycle > 0, "and how the last cycle ended");
         assert_eq!(seen, rig.attached.status());

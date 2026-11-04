@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Archive, ArchiveRestore, Clapperboard, Download, ExternalLink, FolderPlus, Heart, History, Play, RotateCcw, Trash2 } from 'lucide-react'
+import { Archive, ArchiveRestore, Clapperboard, Download, ExternalLink, Heart, History, Play, RotateCcw, Trash2 } from 'lucide-react'
 import { lazy, Suspense, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -20,7 +20,6 @@ import { useReadyUrl } from '@/lib/pictures'
 import { hasWorkspace, useRole } from '@/lib/session'
 import { useWatchState } from '@/lib/viewer-source'
 import type { AssetDetail, FileInfo } from '@/lib/types'
-import { AlbumPicker } from '../library/album-picker'
 import { Thumb } from '../library/thumb'
 import { WorkNote } from '../work-note'
 import { FileIcon } from './file-icon'
@@ -96,14 +95,13 @@ function Preview({ info }: { info: FileInfo }) {
 }
 
 /**
- * What people say about a photo or video, the same as in the timeline and the viewer: favorite, archive, albums, rating,
+ * What people say about a photo or video, the same as in the timeline and the viewer: favorite, archive, rating,
  * description, tags, date and place. Only for files the library lists (live photos and videos).
  */
 function LibrarySection({ id }: { id: string }) {
   const t = useT()
   const mine = hasWorkspace(useRole())
   const { edit } = useLibraryActions()
-  const [album, setAlbum] = useState(false)
   const { data: d } = useQuery({ queryKey: ['asset', id], queryFn: () => api.get<AssetDetail>(`/api/library/${id}`) })
   return (
     <section className="space-y-3">
@@ -116,11 +114,9 @@ function LibrarySection({ id }: { id: string }) {
           <Button variant="outline" size="sm" onClick={() => edit.mutate({ id, archived: !d.archived })}>
             {d.archived ? <ArchiveRestore className="size-4" /> : <Archive className="size-4" />}{d.archived ? t('Unarchive') : t('Archive')}
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setAlbum(true)}><FolderPlus className="size-4" />{t('Add to album')}</Button>
         </div>
       )}
       <Suspense fallback={<Skeleton className="h-40" />}><InfoPanel id={id} embedded /></Suspense>
-      <AlbumPicker open={album} ids={[id]} onClose={() => setAlbum(false)} onDone={() => setAlbum(false)} />
     </section>
   )
 }

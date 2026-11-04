@@ -1,35 +1,38 @@
-//! Shared folders in the web app: make, add members (read or read-write), delete. Computers use them through the client
-//! sync (see `grpc`).
+//! Folders in the web app: yours, those shared with you and the master folders, in one list. Make one, add members (read or
+//! read-write), delete. Computers use them through the client sync (see `grpc`); the master folders are made by an administrator
+//! (`master_folders`).
 
 use crate::platform::db;
 use crate::repo::devices;
 use crate::web::access::{Access, Role};
-use crate::web::{act, done, run, ApiError, Done, Res, Shared};
+use crate::web::input;
+use crate::web::{act, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
-use fafnirx_common::{unix_now, valid_device_name};
+use fafnirx_common::unix_now;
 use fafnirx_db::queries as sql;
 use postgres::Client;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
-pub struct SharedFolder {
+pub struct FolderInfo {
     #[serde(flatten)]
-    folder: devices::Shared,
+    folder: devices::Folder,
     /// Who else uses it. Only its owner sees this.
     members: Vec<devices::Member>,
-    /// The computers that have it attached, as they last said: all of them for its owner, the user's own otherwise.
-    computers: Vec<devices::SharedState>,
+    /// The computers that have it attached, as they last said: all of them for its owner (and an administrator, for a master
+    /// folder), the user's own otherwise.
+    computers: Vec<devices::FolderState>,
 }
 
-/// The shared folders the user owns and those shared with them.
-pub async fn list(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Vec<SharedFolder>> {
+/// The folders the user can use: their own, those shared with them and the master folders.
+pub async fn list(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Vec<FolderInfo>> {
     let folders = run(&state, move |c| {
         let mut out = Vec::new();
-        for folder in devices::shared_folders(c, who.user_id)? {
+        for folder in devices::folders(c, who.user_id)? {
             let members = if folder.mine { devices::shared_members(c, folder.id)? } else { Vec::new() };
-            let computers = devices::shared_state_of_folder(c, &folder.folder, folder.mine, who.user_id)?;
-            out.push(SharedFolder { folder, members, computers });
+            let computers = devices::folder_states_of_folder(c, &folder.folder, folder.mine || (folder.master && who.is_admin()), who.user_id)?;
+            out.push(FolderInfo { folder, members, computers });
         }
         Ok(out)
     })
@@ -37,13 +40,11 @@ pub async fn list(State(state): State<Shared>, Extension(who): Extension<Access>
     Ok(Json(folders))
 }
 
-/// Makes a shared folder of `owner` and says so; returns its folder. The one place a name is checked and a clash refused, for
+/// Makes a folder of `owner` and says so; returns its folder. The one place a name is checked and a clash refused, for
 /// the web app and for the clients.
 pub fn make(c: &mut Client, owner: i64, name: &str) -> anyhow::Result<String> {
-    if !valid_device_name(name) {
-        return Err(ApiError::bad(crate::devices::api::NAME_RULE).into());
-    }
-    let Some(folder) = devices::create_shared(c, owner, name, unix_now())? else {
+    let name = input::device_name(name)?;
+    let Some(folder) = devices::create_folder(c, owner, &name, unix_now())? else {
         return Err(ApiError::conflict(format!("You have a device or folder called {name} already")).into());
     };
     db::notify(c, "devices", &folder)?;
@@ -51,24 +52,29 @@ pub fn make(c: &mut Client, owner: i64, name: &str) -> anyhow::Result<String> {
 }
 
 #[derive(Deserialize)]
-pub struct NewShared {
+pub struct NewFolder {
     name: String,
 }
 
-pub async fn create(State(state): State<Shared>, Extension(who): Extension<Access>, Json(body): Json<NewShared>) -> Res<Done> {
-    who.require_workspace()?;
-    let name = body.name.trim().to_lowercase();
-    let folder = run(&state, move |c| make(c, who.user_id, &name)).await?;
-    // The folder exists from the start so that a network share shows it.
-    let _ = std::fs::create_dir_all(state.store.live_dir(&folder));
-    done()
+#[derive(Serialize)]
+pub struct Created {
+    /// The folder as clients name it: `<owner>/<name>`.
+    folder: String,
 }
 
-/// The shared folder `name` of the user, which only they can manage.
-fn own(c: &mut Client, who: &Access, name: &str) -> anyhow::Result<devices::Shared> {
-    devices::shared_folder(c, who.user_id, name)?
-        .filter(|s| s.mine)
-        .ok_or_else(|| ApiError::not_found("You have no such shared folder").into())
+pub async fn create(State(state): State<Shared>, Extension(who): Extension<Access>, Json(body): Json<NewFolder>) -> Res<Created> {
+    who.require_workspace()?;
+    let folder = run(&state, move |c| make(c, who.user_id, &body.name)).await?;
+    // The folder exists from the start so that a network share shows it.
+    let _ = std::fs::create_dir_all(state.store.live_dir(&folder));
+    Ok(Json(Created { folder }))
+}
+
+/// The folder `name` of the user, which only they can manage.
+fn own(c: &mut Client, who: &Access, name: &str) -> anyhow::Result<devices::Folder> {
+    devices::folder(c, who.user_id, name)?
+        .filter(|f| f.mine)
+        .ok_or_else(|| ApiError::not_found("You have no such folder").into())
 }
 
 pub async fn delete(State(state): State<Shared>, Extension(who): Extension<Access>, Path(name): Path<String>) -> Res<Done> {
@@ -76,8 +82,8 @@ pub async fn delete(State(state): State<Shared>, Extension(who): Extension<Acces
     let store = state.store.clone();
     act(&state, move |c| {
         let folder = own(c, &who, &name)?;
-        let Some(versions) = devices::purge_shared_folder(c, folder.id)? else {
-            return Err(ApiError::conflict("It still has files. Delete them first; deleting the folder then also removes the trash and the history").into());
+        let Some(versions) = devices::purge_folder(c, folder.id)? else {
+            return Err(ApiError::conflict("It still has files, or a source writes into it. Delete them first; deleting the folder then also removes the trash and the history").into());
         };
         for version in versions {
             store.remove_version(version);
@@ -89,7 +95,7 @@ pub async fn delete(State(state): State<Shared>, Extension(who): Extension<Acces
     .await
 }
 
-/// Removes the folder of a deleted shared folder when nothing but empty folders is left in it. A file that is there anyway (put
+/// Removes the directory of a deleted folder when nothing but empty folders is left in it. A file that is there anyway (put
 /// in by hand, not yet noticed by the watcher) is not ours to remove.
 fn remove_if_only_folders(dir: &std::path::Path) {
     fn has_files(dir: &std::path::Path) -> bool {
@@ -112,8 +118,8 @@ pub struct Leave {
 pub async fn leave(State(state): State<Shared>, Extension(who): Extension<Access>, Json(body): Json<Leave>) -> Res<Done> {
     who.require_workspace()?;
     act(&state, move |c| {
-        let folder = devices::shared_folder(c, who.user_id, &body.folder)?
-            .filter(|s| !s.mine)
+        let folder = devices::folder(c, who.user_id, &body.folder)?
+            .filter(|f| !f.mine && !f.master)
             .ok_or_else(|| ApiError::not_found("No folder is shared with you under that name"))?;
         devices::remove_shared_member(c, folder.id, who.user_id)?;
         db::notify(c, "devices", &folder.folder)?;
@@ -160,7 +166,7 @@ pub async fn add_member(State(state): State<Shared>, Extension(who): Extension<A
     act(&state, move |c| {
         let folder = own(c, &who, &name)?;
         if user == who.name {
-            return Err(ApiError::bad("You use your own shared folders on all your computers already").into());
+            return Err(ApiError::bad("You use your own folders on all your computers already").into());
         }
         let (user_id, role) = devices::user_for_device(c, &user)?.ok_or_else(|| ApiError::bad(format!("There is no user named {user}")))?;
         if Role::parse(&role) == Some(Role::Readonly) && body.can_write {

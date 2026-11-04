@@ -16,7 +16,7 @@ COMPOSE_PROFILES=video,fetch                    # which add-on containers to sta
 ```
 
 That is all. A starting add-on tells the master where it is (`POST /api/plugins/register`, with the secret) and keeps telling it every
-30 s; the master asks it for its manifest, uses it while the id and contract match, and lists it under Settings → Plugins
+30 s; the master asks it for its manifest, uses it while the id and contract match and the master is at least the version it asks for (`core`), and lists it under Settings → Plugins
 (administrators; read only). `GET /api/session` lists the add-ons that are up, and the web app shows an add-on's parts only for those.
 **Required add-ons.** An add-on announces itself, so the master cannot tell "not wanted" from "failed to start". `FAFNIRX_PLUGINS` (comma
 separated ids) says which ones should be there: any of them that is not connected, not reachable or not set up shows administrators a red
@@ -43,7 +43,7 @@ checked login and file access; modules have no users.
 
 | Request | By | Answer |
 |---|---|---|
-| `GET /manifest` | master | `{id, version, contract, capabilities, ui?, setup?}`; `setup` lists what is missing for it to work (shown under Settings as "Running, not set up") |
+| `GET /manifest` | master | `{id, version, contract, core, capabilities, ui?, setup?}`; `setup` lists what is missing for it to work (shown under Settings as "Running, not set up") |
 | `GET /probe?p&h` | master, `probe.video` | length, size, codec, date, place |
 | `GET /poster?p&h&max[&at_ms]` | master, `poster` | JPEG ≤ `max` px (videos, HEIC/AVIF the master can't decode). A video's frame at `at_ms`; without it the module finds the first non-black frame at 10%, 20%, … and says where in `x-poster-ms` (ms), which the master stores and sends back as `at_ms` |
 | `GET /status` | master, `status` | `active`, `failed` tasks, each with `path`; other fields are the module's own |

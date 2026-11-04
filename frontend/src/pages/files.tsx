@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowDownUp, ChevronRight, Download, FolderInput, FolderPlus, Grid2x2, Images, List, Search, Trash2, Upload, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { ArrowDownUp, ChevronRight, Download, FolderInput, FolderPlus, Grid2x2, Images, List, Pencil, Search, Trash2, Upload, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Empty, ErrorNote, PageHeader } from '@/components/common'
 import { Confirm } from '@/components/confirm'
@@ -9,11 +9,12 @@ import { DetailsSheet } from '@/components/files/details-sheet'
 import { FileGrid } from '@/components/files/file-grid'
 import { FileList } from '@/components/files/file-list'
 import { MoveDialog } from '@/components/files/move-dialog'
+import { NewFolder } from '@/components/new-folder'
+import { FolderAlbum, FolderAlbumButton, type FolderRef } from '@/components/files/folder-album'
+import { RenameFolder } from '@/components/files/rename-folder'
 import { entryKey } from '@/lib/entries'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
@@ -27,9 +28,8 @@ import { isLibraryFile } from '@/lib/entries'
 import { MASTER, hasWorkspace, useRole } from '@/lib/session'
 import { useOpenMedia } from '@/lib/viewer-source'
 import { AccessBadge } from '@/components/files/access-badge'
-import { AlbumPicker } from '@/components/library/album-picker'
 import { RescanButton } from '@/components/files/rescan-button'
-import type { AlbumInfo, DeviceSummary, Entry, Listing } from '@/lib/types'
+import type { Entry, Listing } from '@/lib/types'
 import { collectDropped, enqueueUploads, fromInput } from '@/lib/upload'
 import { cn } from '@/lib/utils'
 
@@ -50,43 +50,6 @@ const SORTS = [
   ['size', msg('Size')],
   ['type', msg('Type')],
 ] as const
-
-function NewFolder({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (name: string) => void }) {
-  const t = useT()
-  const client = useQueryClient()
-  const [name, setName] = useState('')
-  const create = useMutation({
-    mutationFn: () => api.post<{ device: DeviceSummary }>('/api/devices', { name, kind: 'local' }),
-    onSuccess: (made) => {
-      void client.invalidateQueries({ queryKey: ['devices'] })
-      void client.invalidateQueries({ queryKey: ['files'] })
-      setName('')
-      onCreated(made.device.folder)
-    },
-  })
-  const submit = (e: FormEvent) => { e.preventDefault(); create.mutate() }
-  return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) { onClose(); create.reset() } }}>
-      <DialogContent>
-        <form onSubmit={submit} className="space-y-4">
-          <DialogHeader>
-            <DialogTitle>{t('New local folder')}</DialogTitle>
-            <DialogDescription>
-              {t('A folder of yours that lives on the master. Upload into it from this page, or copy files straight into files/<you>/<name>/ on the server.')}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="folder-name">{t('Name')}</Label>
-            <Input id="folder-name" autoFocus placeholder="photos" value={name} onChange={(e) => setName(e.target.value)} />
-            <p className="text-xs text-muted-foreground">{t('Lowercase letters, digits, dot, underscore and dash.')}</p>
-            {create.error && <p role="alert" className="text-sm text-destructive">{create.error.message}</p>}
-          </div>
-          <DialogFooter><Button type="submit" disabled={!name.trim() || create.isPending}>{t('Create')}</Button></DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
-}
 
 export default function Files() {
   const t = useT()
@@ -126,8 +89,8 @@ export default function Files() {
   const [moving, setMoving] = useState<Entry | null>(null)
   useEffect(() => setSelected(new Set()), [device, path, q, type, showDeleted])
   const [newFolder, setNewFolder] = useState(false)
+  const [renaming, setRenaming] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [albumPicker, setAlbumPicker] = useState(false)
   const [dragging, setDragging] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const folderInput = useRef<HTMLInputElement>(null)
@@ -175,17 +138,8 @@ export default function Files() {
   const toggleAll = () => setSelected((s) => (entries.every((e) => s.has(entryKey(e))) ? new Set() : new Set(entries.map(entryKey))))
   const chosen = entries.filter((e) => selected.has(entryKey(e)))
 
-  const navigate = useNavigate()
-  // A folder becomes an album that shows what is in it as it comes (a show, a trip). There is one per folder, so asking
-  // again opens the one there is.
-  const asAlbum = useMutation({
-    mutationFn: (folder: { device: string; path: string }) => api.post<AlbumInfo>('/api/albums', { name: '', folder }),
-    onSuccess: (album) => {
-      void client.invalidateQueries({ queryKey: ['albums'] })
-      navigate(`/albums/${album.id}`)
-    },
-    onError: (e) => toast.error(e.message),
-  })
+  // A folder can be shown as an album (a show, a trip): the dialog makes it, renames it or ends it.
+  const [albumOf, setAlbumOf] = useState<FolderRef | null>(null)
   const remove = useMutation({
     mutationFn: () => api.post<{ deleted: number }>('/api/files/delete', { items: chosen.map((e) => ({ device: e.device, path: e.path })) }),
     onSuccess: (r) => {
@@ -230,7 +184,7 @@ export default function Files() {
         actions={
           <>
             {role === 'admin' && <RescanButton />}
-            {!device && hasWorkspace(role) && <Button variant="outline" onClick={() => setNewFolder(true)}><FolderPlus className="size-4" />{t('New local folder')}</Button>}
+            {!device && hasWorkspace(role) && <Button variant="outline" onClick={() => setNewFolder(true)}><FolderPlus className="size-4" />{t('New folder')}</Button>}
             {device && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -283,11 +237,7 @@ export default function Files() {
           {t('Deleted')}
         </label>
         <div className="ml-auto flex items-center gap-2">
-          {device && hasWorkspace(role) && !showDeleted && (
-            <Button variant="outline" size="sm" disabled={asAlbum.isPending} onClick={() => asAlbum.mutate({ device, path })}>
-              <Images className="size-4" />{t('Use folder as album')}
-            </Button>
-          )}
+          {device && hasWorkspace(role) && !showDeleted && <FolderAlbumButton folder={{ device, path }} />}
           <ToggleGroup
             value={view}
             onChange={(v) => go({ view: v === 'grid' ? 'grid' : null }, true)}
@@ -304,12 +254,12 @@ export default function Files() {
             <Button size="sm" variant="outline" onClick={() => downloadZip(chosen.map((e) => ({ device: e.device, path: e.kind === 'device' ? '' : e.path })), chosen.length === 1 ? chosen[0].name : device || 'fafnirx')}>
               <Download className="size-4" />{chosen.length === 1 && chosen[0].kind === 'file' ? t('Download') : t('Download as zip')}
             </Button>
-            {hasWorkspace(role) && !showDeleted && (
-              <Button size="sm" variant="outline" onClick={() => setAlbumPicker(true)}><Images className="size-4" />{t('Add to album')}</Button>
+            {hasWorkspace(role) && !showDeleted && chosen.length === 1 && chosen[0].kind === 'device' && chosen[0].writable && chosen[0].device_kind === 'local' && (
+              <Button size="sm" variant="outline" onClick={() => setRenaming(chosen[0].device)}><Pencil className="size-4" />{t('Rename folder')}</Button>
             )}
             {hasWorkspace(role) && !showDeleted && chosen.length === 1 && chosen[0].kind === 'dir' && (
-              <Button size="sm" variant="outline" disabled={asAlbum.isPending} onClick={() => asAlbum.mutate({ device: chosen[0].device, path: chosen[0].path })}>
-                <Images className="size-4" />{t('Use folder as album')}
+              <Button size="sm" variant="outline" onClick={() => setAlbumOf({ device: chosen[0].device, path: chosen[0].path })}>
+                <Images className="size-4" />{t('Show as album')}
               </Button>
             )}
             {hasWorkspace(role) && canUpload && !showDeleted && chosen.length === 1 && chosen[0].kind !== 'device' && (
@@ -353,13 +303,9 @@ export default function Files() {
 
       <DetailsSheet device={device} path={openFile} onClose={() => go({ file: null }, true)} onDeleted={() => { go({ file: null }, true); void client.invalidateQueries({ queryKey: ['files'] }) }} />
       {moving && <MoveDialog device={moving.device} path={moving.path} onClose={() => setMoving(null)} onMoved={() => { setMoving(null); setSelected(new Set()) }} />}
-      <AlbumPicker
-        open={albumPicker}
-        items={chosen.map((e) => ({ device: e.device, path: e.kind === 'device' ? '' : e.path }))}
-        onClose={() => setAlbumPicker(false)}
-        onDone={() => setSelected(new Set())}
-      />
-      <NewFolder open={newFolder} onClose={() => setNewFolder(false)} onCreated={(name) => { setNewFolder(false); go({ device: name, path: null }) }} />
+      <FolderAlbum folder={albumOf} onClose={() => setAlbumOf(null)} />
+      <RenameFolder folder={renaming} onClose={() => setRenaming(null)} onRenamed={(folder) => { setRenaming(null); setSelected(new Set()); if (device) go({ device: folder, path: null }) }} />
+      <NewFolder open={newFolder} onClose={() => setNewFolder(false)} onCreated={(folder) => { setNewFolder(false); go({ device: folder, path: null }) }} />
       <Confirm
         open={confirmDelete}
         title={t('Delete {items}?', { items: plural(chosen.length, 'item') })}

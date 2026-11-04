@@ -10,7 +10,7 @@
  * module shares React, the language and the look of the app instead of bringing its own.
  */
 import { useMemo, useSyncExternalStore, type ComponentType } from 'react'
-import { addStrings, type T } from '@/lib/i18n'
+import type { T } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
 
 /** A file as the app shows it to a module: the same for a photo of the library and a file of the file browser. */
@@ -44,7 +44,7 @@ export interface ViewerProps {
 export interface SourceKind<S = unknown> {
   /** The `kind` the master stores and the module reads; the module's capability is `fetch.<id>`. */
   id: string
-  /** The name in the list of services (an English text, translated with the module's `strings`). */
+  /** The name in the list of services (an English text, translated with the module's `strings.<lang>.json`). */
   label: string
   /** One sentence for the top of the dialog. */
   intro: string
@@ -52,6 +52,9 @@ export interface SourceKind<S = unknown> {
   initial: S
   form: ComponentType<{ value: S; onChange: (next: S) => void }>
   body: (value: S) => unknown
+  /** The form's value from the settings the master gives back (secrets are empty there: the form shows them as unchanged). Without
+   * it the source's settings cannot be edited, only its name, place and schedule. */
+  load?: (config: Record<string, unknown>) => S
   /** Why the value cannot be used yet, or null. */
   problem: (value: S, t: T) => string | null
 }
@@ -66,8 +69,6 @@ export interface FrontendModule {
   queue?: ComponentType<{ report: unknown }>
   /** The kinds of source the module reads; the Sources page offers them while the module is up. */
   sources?: SourceKind[]
-  /** Translations of the texts the module shows: language -> English text -> translation. */
-  strings?: Record<string, Record<string, string>>
 }
 
 /** A module the app has loaded; its id is the one the master has it under. */
@@ -81,7 +82,6 @@ const listeners = new Set<() => void>()
 
 /** Called by the loader when a module's script has arrived. */
 export function registerModule(module: LoadedModule) {
-  if (module.strings) addStrings(module.strings)
   registered.set(module.id, module)
   snapshot = [...registered.values()]
   listeners.forEach((listen) => listen())

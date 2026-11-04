@@ -62,10 +62,12 @@ export function translate(lang: Lang, text: string, vars?: Vars): string {
 export interface I18n {
   lang: Lang
   setLang: (lang: Lang) => void
+  /** Counts the times strings were added after the first draw (a module's translations), so that what is shown is drawn again. */
+  revision: number
   t: T
 }
 
-export const Context = createContext<I18n>({ lang: 'en', setLang: () => {}, t: (text, vars) => translate('en', text, vars) })
+export const Context = createContext<I18n>({ lang: 'en', setLang: () => {}, revision: 0, t: (text, vars) => translate('en', text, vars) })
 
 /** The `t` function of the current language, and the language itself. */
 export function useI18n() {
@@ -81,13 +83,26 @@ export function useT(): T {
  * stay as they are: a module can add texts but not change the ones the app uses. Languages the app does not have are ignored.
  */
 export function addStrings(strings: Record<string, Record<string, string>>) {
+  let added = false
   for (const [lang, entries] of Object.entries(strings)) {
     if (!isLang(lang)) continue
     const own = LANGUAGES[lang].strings
     for (const [text, translated] of Object.entries(entries)) {
-      if (typeof translated === 'string' && !(text in own)) own[text] = translated
+      if (typeof translated === 'string' && !(text in own)) {
+        own[text] = translated
+        added = true
+      }
     }
   }
+  if (added) stringListeners.forEach((listen) => listen())
+}
+
+const stringListeners = new Set<() => void>()
+
+/** Calls `listen` when strings were added (a module's translations arrived), so that what is shown can be translated again. */
+export function onStringsAdded(listen: () => void) {
+  stringListeners.add(listen)
+  return () => { stringListeners.delete(listen) }
 }
 
 /** Marks a string in data (outside a component) for translation; show it with `t(text)`. */

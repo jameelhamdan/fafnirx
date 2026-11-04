@@ -4,10 +4,11 @@ use crate::monitoring::api::{recent, Recent};
 use crate::platform::db;
 use crate::repo::{alerts, devices, settings};
 use crate::web::access::Access;
+use crate::web::input;
 use crate::web::{act, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
-use fafnirx_common::{unix_now, valid_device_name};
+use fafnirx_common::unix_now;
 use fafnirx_db::queries as sql;
 use postgres::Client;
 use serde::{Deserialize, Serialize};
@@ -105,8 +106,8 @@ pub async fn list(State(state): State<Shared>, Extension(who): Extension<Access>
 pub struct DeviceDetail {
     device: DeviceSummary,
     events: Vec<Recent>,
-    /// The shared folders attached to the computer, as it last said (empty for anything but a client).
-    shared: Vec<devices::SharedState>,
+    /// The folders attached to the computer, as it last said (empty for anything but a client).
+    folders: Vec<devices::FolderState>,
     /// Only when a token was just made: shown once.
     token: Option<String>,
 }
@@ -114,13 +115,13 @@ pub struct DeviceDetail {
 fn detail_of(c: &mut Client, who: &Access, folder: &str, token: Option<String>) -> anyhow::Result<DeviceDetail> {
     let device = device_summaries(c, who, Some(folder))?
         .into_iter()
-        .find(|d| d.kind != "source")
+        .next()
         .ok_or_else(|| ApiError::not_found("No such device"))?;
-    let shared = match devices::by_folder(c, folder)? {
-        Some((id, _)) => devices::shared_state_of_device(c, id)?,
+    let folders = match devices::by_folder(c, folder)? {
+        Some((id, _)) => devices::folder_states_of_device(c, id)?,
         None => Vec::new(),
     };
-    Ok(DeviceDetail { device, events: recent(c, who, 50, Some(folder))?, shared, token })
+    Ok(DeviceDetail { device, events: recent(c, who, 50, Some(folder))?, folders, token })
 }
 
 /// A device is named by its folder (`<user>/<name>`) in the address, with the slash encoded.
@@ -131,26 +132,15 @@ pub async fn detail(State(state): State<Shared>, Extension(who): Extension<Acces
 #[derive(Deserialize)]
 pub struct NewDevice {
     name: String,
-    /// `device` for a client that gets a token, `local` for a folder of files uploaded in the browser.
-    #[serde(default)]
-    kind: Option<String>,
     /// The user the device is for; only an administrator can name another than themselves.
     #[serde(default)]
     user: Option<String>,
 }
 
-pub const NAME_RULE: &str = "Name: 1-63 characters, lowercase letters, digits, '.', '_' or '-'; not a reserved Windows name";
-
+/// Adds a computer (a client that gets a token). Folders are made in `folders`.
 pub async fn create(State(state): State<Shared>, Extension(who): Extension<Access>, Json(body): Json<NewDevice>) -> Res<DeviceDetail> {
     who.require_workspace()?;
-    let name = body.name.trim().to_lowercase();
-    let kind = body.kind.unwrap_or_else(|| "device".into());
-    if !valid_device_name(&name) {
-        return Err(ApiError::bad(NAME_RULE));
-    }
-    if kind != "device" && kind != "local" {
-        return Err(ApiError::bad("kind must be device or local"));
-    }
+    let name = input::device_name(&body.name)?;
     let owner = body.user.map(|u| u.trim().to_lowercase()).filter(|u| *u != who.name);
     if owner.is_some() {
         who.require_admin()?;
@@ -162,7 +152,7 @@ pub async fn create(State(state): State<Shared>, Extension(who): Extension<Acces
         if role == "readonly" {
             return Err(ApiError::bad(format!("{owner} can only read the master files and cannot have devices")).into());
         }
-        add_device(c, &who, user_id, &name, &kind)
+        add_device(c, &who, user_id, &name)
     })
     .await?;
     // The folder exists from the start so that a network share shows it.
@@ -170,15 +160,14 @@ pub async fn create(State(state): State<Shared>, Extension(who): Extension<Acces
     Ok(Json(out))
 }
 
-/// Adds a device to a user (who must have a workspace) and tells whoever is looking.
-fn add_device(c: &mut Client, who: &Access, user_id: i64, name: &str, kind: &str) -> anyhow::Result<DeviceDetail> {
-    let token = (kind == "device").then(db::new_token);
-    let hash = token.as_deref().map_or_else(|| "!".to_string(), db::hash_token);
-    let Some(folder) = devices::insert(c, user_id, name, kind, &hash, unix_now())? else {
-        return Err(ApiError::conflict(format!("There is already a device named {name} for this user")).into());
+/// Adds a computer to a user (who must have a workspace), with a token that is shown once, and tells whoever is looking.
+fn add_device(c: &mut Client, who: &Access, user_id: i64, name: &str) -> anyhow::Result<DeviceDetail> {
+    let token = db::new_token();
+    let Some(folder) = devices::insert(c, user_id, name, "device", &db::hash_token(&token), unix_now())? else {
+        return Err(ApiError::conflict(format!("There is already a device or folder named {name} for this user")).into());
     };
     db::notify(c, "devices", &folder)?;
-    detail_of(c, who, &folder, token)
+    detail_of(c, who, &folder, Some(token))
 }
 
 pub async fn rotate_token(State(state): State<Shared>, Extension(who): Extension<Access>, Path(folder): Path<String>) -> Res<DeviceDetail> {
@@ -283,4 +272,23 @@ pub async fn save_settings(State(state): State<Shared>, Extension(who): Extensio
     })
     .await?;
     Ok(Json(saved))
+}
+
+#[derive(Deserialize)]
+pub struct Rename {
+    name: String,
+}
+
+#[derive(Serialize)]
+pub struct Renamed {
+    /// The folder under its new name.
+    folder: String,
+}
+
+/// Renames a folder of the user (a local or shared one). Its files, albums, sources and members stay with it.
+pub async fn rename(State(state): State<Shared>, Extension(who): Extension<Access>, Path(folder): Path<String>, Json(body): Json<Rename>) -> Res<Renamed> {
+    who.require_workspace()?;
+    let store = state.store.clone();
+    let folder = run(&state, move |c| super::rename::rename(c, &store, &who, &folder, &body.name)).await?;
+    Ok(Json(Renamed { folder }))
 }

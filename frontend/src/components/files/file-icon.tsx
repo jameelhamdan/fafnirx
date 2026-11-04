@@ -1,13 +1,11 @@
-import { Cloud, File, FileArchive, FileAudio, FileImage, FileText, FileVideo, Folder, FolderSync, HardDrive, Monitor, Server } from 'lucide-react'
+import { File, FileArchive, FileAudio, FileImage, FileText, FileVideo, Folder, HardDrive, Monitor, Server } from 'lucide-react'
 import type { Entry } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-/** The icon of a device entry says what it is: the master files, a computer that sends, a local folder or a source. */
+/** The icon of a device entry says what it is: the master files, a computer that sends, or a folder of a user. */
 function DeviceIcon({ kind, className }: { kind: Entry['device_kind']; className: string }) {
   if (kind === 'master') return <Server className={cn(className, 'text-primary')} />
   if (kind === 'local') return <HardDrive className={cn(className, 'text-warning')} />
-  if (kind === 'shared') return <FolderSync className={cn(className, 'text-primary')} />
-  if (kind === 'source') return <Cloud className={cn(className, 'text-muted-foreground')} />
   return <Monitor className={cn(className, 'text-success')} />
 }
 

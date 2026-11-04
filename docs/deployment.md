@@ -100,15 +100,16 @@ docker compose exec -T db psql -U fafnirx fafnirx < fafnirx.sql      # into an e
 
 ## Upgrades
 
-`docker compose pull && docker compose up -d`. Missing migrations run on start (in order, one transaction, advisory lock); a
-newer database is refused. Back up first; migration 10 gave files, albums, tags, jobs and alerts new UUID ids and cannot be rolled back. A PostgreSQL
+`docker compose pull && docker compose up -d`. The master brings the database up to date when it starts, in one
+transaction, and refuses a database newer than itself. **Back up first.** A database made by the 3.x releases is upgraded in place
+by 4.0.0 with its data kept; a manually picked album (not a folder's) is removed, since albums are folders now. A PostgreSQL
 major upgrade needs dump and restore. Clients update themselves from GitHub within about six hours.
 
 ## Security checklist
 
 - Strong `FAFNIRX_ADMIN_PASSWORD` and `FAFNIRX_DB_PASSWORD`; `.env` readable only by you; PostgreSQL port unpublished.
 - `8080` and `7443` off the internet unless behind TLS.
-- Device tokens are shown once and stored as SHA-256 hashes; revoke lost devices. A device adds data to its own device; it reads and writes only its user's shared folders.
+- Device tokens are shown once and stored as SHA-256 hashes; revoke lost devices. A device adds data to its own device; it reads and writes only the folders of its user, those shared with them and the master folders.
 - Source and mirror credentials, and the encryption key of backup mirrors, are plain text in the database and `rclone.conf`: protect backups and the config folder. Keep a copy of each backup key away from the master.
 - The [fetch module](fetch.md) reaches any address your server can reach: give it only `data/tmp` (compose does), keep its port unpublished, only let people you trust add sources, and read its [legal notes](fetch.md#legal).
 - A [plugin](plugins.md) is a container with write access to `data/tmp`: run only what you trust. Don't publish its port; it has no login, only the shared token.

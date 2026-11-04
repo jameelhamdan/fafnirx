@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
-import { useState, type FormEvent } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ActivityView, Empty, ErrorNote, KindBadge, PageHeader, StatusDot } from '@/components/common'
 import { EnrollDialog } from '@/components/enroll-dialog'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { FormDialog } from '@/components/form-dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -15,6 +15,7 @@ import { api } from '@/lib/api'
 import { ago, bytes, count } from '@/lib/format'
 import type { DeviceDetail, DeviceSummary } from '@/lib/types'
 import { useT } from '@/lib/i18n'
+import { filesLink } from '@/lib/links'
 import { deviceAddress, useSession } from '@/lib/session'
 import type { UserInfo } from '@/lib/types'
 
@@ -29,7 +30,7 @@ export function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail)
   // An administrator can add a device for any user who can have one.
   const users = useQuery({ queryKey: ['users'], queryFn: () => api.get<UserInfo[]>('/api/users'), enabled: isAdmin && open })
   const create = useMutation({
-    mutationFn: () => api.post<DeviceDetail>('/api/devices', { name, kind: 'device', user: owner || undefined }),
+    mutationFn: () => api.post<DeviceDetail>('/api/devices', { name, user: owner || undefined }),
     onSuccess: (made) => {
       setOpen(false)
       setName('')
@@ -37,44 +38,35 @@ export function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail)
       onCreated(made)
     },
   })
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    create.mutate()
-  }
+
   return (
-    <Dialog open={open} onOpenChange={(o) => { setOpen(o); create.reset() }}>
-      <DialogTrigger asChild>
-        <Button><Plus className="size-4" />{t('Add device')}</Button>
-      </DialogTrigger>
-      <DialogContent>
-        <form onSubmit={submit} className="space-y-4">
-          <DialogHeader>
-            <DialogTitle>{t('Add a device')}</DialogTitle>
-            <DialogDescription>
-              {t("The name is the device's folder on the master (files/<user>/<name>/) and cannot change later.")}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="device-name">{t('Name')}</Label>
-            <Input id="device-name" autoFocus placeholder="laptop" value={name} onChange={(e) => setName(e.target.value)} />
-            <p className="text-xs text-muted-foreground">{t('Lowercase letters, digits, dot, underscore and dash; up to 63 characters.')}</p>
-            {isAdmin && users.data && (
-              <div className="space-y-2 pt-2">
-                <Label htmlFor="device-owner">{t('For user')}</Label>
-                <select id="device-owner" className="h-9 w-full rounded-md border bg-background px-2 text-sm" value={owner} onChange={(e) => setOwner(e.target.value)}>
-                  <option value="">{t('Me ({name})', { name: session?.user?.name ?? '' })}</option>
-                  {users.data.filter((u) => !u.disabled && u.role !== 'readonly' && u.name !== session?.user?.name).map((u) => <option key={u.name} value={u.name}>{u.name}</option>)}
-                </select>
-              </div>
-            )}
-            {create.error && <p role="alert" className="text-sm text-destructive">{create.error.message}</p>}
+    <FormDialog
+      open={open}
+      onOpenChange={(o) => { setOpen(o); create.reset() }}
+      trigger={<Button><Plus className="size-4" />{t('Add device')}</Button>}
+      title={t('Add a device')}
+      description={t("The name is the device's folder on the master (files/<user>/<name>/) and cannot change later.")}
+      onSubmit={() => create.mutate()}
+      submit={t('Create')}
+      disabled={!name.trim()}
+      pending={create.isPending}
+      error={create.error?.message}
+    >
+      <div className="space-y-2">
+        <Label htmlFor="device-name">{t('Name')}</Label>
+        <Input id="device-name" autoFocus placeholder="laptop" value={name} onChange={(e) => setName(e.target.value)} />
+        <p className="text-xs text-muted-foreground">{t('Lowercase letters, digits, dot, underscore and dash; up to 63 characters.')}</p>
+        {isAdmin && users.data && (
+          <div className="space-y-2 pt-2">
+            <Label htmlFor="device-owner">{t('For user')}</Label>
+            <select id="device-owner" className="h-9 w-full rounded-md border bg-background px-2 text-sm" value={owner} onChange={(e) => setOwner(e.target.value)}>
+              <option value="">{t('Me ({name})', { name: session?.user?.name ?? '' })}</option>
+              {users.data.filter((u) => !u.disabled && u.role !== 'readonly' && u.name !== session?.user?.name).map((u) => <option key={u.name} value={u.name}>{u.name}</option>)}
+            </select>
           </div>
-          <DialogFooter>
-            <Button type="submit" disabled={!name.trim() || create.isPending}>{t('Create')}</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+        )}
+      </div>
+    </FormDialog>
   )
 }
 
@@ -84,7 +76,7 @@ function Row({ d, now, showUser }: { d: DeviceSummary; now: number; showUser: bo
     <TableRow>
       <TableCell>
         <div className="flex items-center gap-2">
-          <Link to={d.kind === 'device' ? `/devices/${deviceAddress(d.folder)}` : `/files?device=${encodeURIComponent(d.folder)}`} className="font-medium hover:underline">{showUser ? d.folder : d.name}</Link>
+          <Link to={d.kind === 'device' ? `/devices/${deviceAddress(d.folder)}` : filesLink(d.folder)} className="font-medium hover:underline">{showUser ? d.folder : d.name}</Link>
           <KindBadge kind={d.kind} />
         </div>
         {d.activity && <div className="mt-2 max-w-sm"><ActivityView activity={d.activity} /></div>}
@@ -109,7 +101,6 @@ export default function Devices() {
   const now = useNow()
   const [made, setMade] = useState<DeviceDetail | null>(null)
   const { data, error } = useQuery({ queryKey: ['devices'], queryFn: () => api.get<DeviceSummary[]>('/api/devices') })
-  const shown = data?.filter((d) => d.kind !== 'source')
   // An administrator sees the devices of every user, so a device is named with its user.
   const showUser = useSession()?.user?.role === 'admin'
 
@@ -120,9 +111,9 @@ export default function Devices() {
         description={t('Computers and phones that send their folders here, and local folders that live on the master itself.')}
         actions={<AddDeviceDialog onCreated={setMade} />}
       />
-      {error ? <ErrorNote error={error} /> : !shown ? (
+      {error ? <ErrorNote error={error} /> : !data ? (
         <Skeleton className="h-48" />
-      ) : shown.length === 0 ? (
+      ) : data.length === 0 ? (
         <Empty title={t('No devices yet')}>{t('Add a device to get a token and the command that connects it.')}</Empty>
       ) : (
         <div className="rounded-lg border bg-card">
@@ -137,7 +128,7 @@ export default function Devices() {
                 <TableHead className="hidden sm:table-cell">{t('Last seen')}</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>{shown.map((d) => <Row key={d.folder} d={d} now={now} showUser={showUser} />)}</TableBody>
+            <TableBody>{data.map((d) => <Row key={d.folder} d={d} now={now} showUser={showUser} />)}</TableBody>
           </Table>
         </div>
       )}

@@ -17,49 +17,43 @@ flowchart TB
 
 | Component | Role |
 |---|---|
-| Client `fafnirx` (`crates/client`) | Watch, hash in chunks, upload, offline queue, shared-folder sync, tray, self-update from GitHub releases |
+| Client `fafnirx` (`crates/client`) | Watch, hash in chunks, upload, offline queue, folder sync, tray, self-update from GitHub releases |
 | Master `fafnirx-master` (`crates/master`) | Device API, web API, file store, ingest, retention, alerts, sources, mirrors, metadata |
-| Web app (`frontend`) | React, built into the master. A module's part is `src/modules/<id>`, built apart and loaded by the browser from the module while it is up (`src/sdk`, `src/lib/module-loader.ts`) |
-| Modules (`modules/<id>/service`) | Optional add-on containers that announce themselves to the master; only the master talks to them ([modules](modules.md)). Today: `fafnirx-video`, HLS streaming and video details ([video](video.md)), `fafnirx-fetch`, which reads web sources and writes the files for the master to commit ([fetch](fetch.md)); further kinds of source are plugins of the same shape ([plugins](plugins.md)) |
-| `crates/module-api` | The contract between the master and a module: manifest, capabilities, version |
-| `crates/fetch-api` | What the master and a module that reads sources say to each other (`/fetch/list`, `/fetch/get`) |
-| `crates/module-kit` | What every module that reads sources shares: its environment, the service for the contract (`Fetcher`), the list of tasks, a scratch folder, and small tools (run a program, read settings, feeds, names, HTTP) |
-| `fafnirx-sign` (`crates/sign`) | Optional: signed client builds |
-| `crates/common` | gRPC types, chunking, hashing, path rules, reading dates and places from metadata text |
+| Web app (`frontend`) | React, built into the master. A module's part is built apart and loaded by the browser from the module while it is up |
+| Modules (`modules/<id>/service`) | Optional add-on containers that announce themselves to the master; only the master talks to them ([modules](modules.md)). Today: `fafnirx-video` ([video](video.md)) and `fafnirx-fetch`, which reads web sources ([fetch](fetch.md)); more kinds of source are plugins of the same shape ([plugins](plugins.md)) |
+| `crates/module-api`, `fetch-api`, `module-kit` | The contract between master and module, what a module that reads sources says to the master, and the plumbing every such module shares |
+| `crates/sign` | Optional: signed client builds |
+| `crates/common` | gRPC types, chunking, hashing, path rules |
 
 ## Design decisions
 
 - **Two APIs, two trust levels.** The device gRPC API (`proto/fafnirx.proto`) has no call that reads, lists or deletes the
-  files of a device; `Negotiate` only reports which chunks of the caller's own file are missing. The one exception is
-  [shared folders](#shared-folders), which a device reads and writes for its own user. Everything else that reads or deletes is
-  in the web API, behind a login and role checks. Different ports, no shared authentication.
-- **Plain files.** A path's current version is stored whole in `files/users/<user>/<device>/<path>` (`files/<path>` for master
-  files). A replaced or deleted version moves to `versions/<version id>/<user>/<device>/<path>`. Chunks exist only on the wire
-  and in `tmp/`; there is no cross-file deduplication.
-- **Users own devices; the name is the folder.** `devices.name` is an immutable slug (1-63 of `a-z 0-9 . _ -`, no reserved
-  Windows names), unique per user; `devices.folder` (`<user>/<name>`, set by trigger) names a device in the store, mirrors and
-  API. Master files are one internal device (kind `master`, id 0, folder `_master`, no owner). Local folders (`local`),
-  sources (`source`) and shared folders (`shared`) are devices too.
-- **IDs.** Files, albums, tags, jobs and alerts have random v4 UUID keys, shown as 22-char URL-safe Base64 without padding
-  (`platform/id.rs`, `Id`; the hyphenated form is accepted). Devices, users, sources, mirrors are addressed by slug. Versions
-  (named in `versions/`), events (ordered) and sessions keep numeric keys; jobs add `seq` for queue order.
+  files of a device. The one exception is [folders](#folders), which a device reads and writes for its own user. Everything
+  else that reads or deletes is in the web API, behind a login and role checks. Different ports, no shared authentication.
+- **Plain files.** The current version of a path is stored whole in `files/users/<user>/<device>/<path>` (`files/<path>` for
+  master files). A replaced or deleted version moves to `versions/<version id>/...`. Chunks exist only on the wire and in
+  `tmp/`; there is no cross-file deduplication.
+- **Users own devices; the name is the folder.** A device name is a slug, unique per user, and `<user>/<name>` names it in the
+  store, mirrors and API. There are three kinds: a computer (`device`, bound to a token), a folder of a user (`local`, no token)
+  and the master files (`master`, id 0, `_master`, no owner). A folder can be renamed: its directory, versions and every row
+  keyed by the name move in one transaction; everything else points at the device id, so albums and sources follow. A
+  `public_id` is the address clients keep, so a rename does not detach them.
+- **IDs.** Files, albums, tags, jobs and alerts have random UUIDs, shown as 22-character URL-safe Base64. Devices, users,
+  sources and mirrors are addressed by slug. Versions, events and sessions keep numeric keys.
 - **One process.** Locks, live events and queued work go through PostgreSQL. Only browser uploads in progress and the login
   rate limit live in memory.
-- **A client knows its master.** Each database has a random `settings.master_id`, asked at the start of every cycle
-  (`Identify`); a different id makes the client drop its record and resend everything.
+- **A client knows its master.** Each database has a random id, asked at the start of every cycle; a different id makes the
+  client drop its record and resend everything.
 - **Metadata is separate from data.** Losing PostgreSQL loses versions and history, not the files; losing the data directory
   loses the data. Back up both.
 - **No TLS in the master.** Trust comes from the network or a TLS proxy. Tokens are hashed, passwords use argon2.
   `FAFNIRX_TRUSTED_PROXY` names the proxies whose `X-Forwarded-For` is believed.
-- **Library data sits beside the file.** `file_meta` is per content (root hash); `file_state` per file and user; albums, tags
-  and states go with their file (`ON DELETE CASCADE`).
-- **Albums** are picked files (`album_files`), a folder (`folder_device_id` + `folder_prefix`: every live photo and video under
-  the prefix), or both; one folder album per user and folder. The cover is decided in `library/albums.rs` (chosen, poster,
-  first video, newest). `repo::albums::follow_folder_move` changes the prefix (and an auto-name) in the rename's transaction
-  when the last file leaves a folder to a sibling of the same parent.
-- **Artwork is looked up, not stored.** `library/artwork.rs` picks a video's picture (own, else the poster of its folder or
-  the two above) and `.nfo` from `repo::files::neighbours`; `thumb` and the on-demand picture use the same lookup, cached by
-  the image's content hash.
+- **Library data sits beside the file.** Extracted metadata is per content (root hash); ratings and tags per file and user.
+  Both go with their file.
+- **Albums** are shortcuts to a folder: every live photo and video under it, one album per user and folder, no files of
+  their own. They follow the folder when it is renamed or moved.
+- **Artwork is looked up, not stored.** A video's picture and `.nfo` come from the file, else its folder or the two above,
+  and are cached by content hash.
 
 ## What a file operation means
 
@@ -69,9 +63,9 @@ One operation, one event, one transaction under the path's lock.
 |---|---|---|---|
 | First write of a path | created, version current | `add` | no |
 | New content for a live path | new version current, old archived | `update` | no |
-| Rename by a client or source (`commit_version`), a move noticed in a local folder (`adopt_live`), or Move in the web app (`move_path`; local folders, shared folders and master files only, the file is moved not copied) | new path written; old path vacated: `deleted_at` set, `deleted_by='rename'` | one `rename` on the new path, detail = old path | **no**: hidden from Trash, listings, deleted counts; retention removes it |
-| Delete (device, source, web app, file gone from the store) | `deleted_at` set (`deleted_by='web'` in the web app) | `delete` | yes |
-| Brought back (file returns, version restored) | `deleted_at`, `deleted_by` cleared | `add`/`update` | leaves |
+| Rename (client, source, a move noticed in a folder, or Move in the web app) | new path written; old path vacated | one `rename` on the new path, detail = old path | **no**: hidden from Trash and listings; retention removes it |
+| Delete | marked deleted (`web` when done in the web app) | `delete` | yes |
+| Brought back | deletion cleared | `add`/`update` | leaves |
 
 Retention, jobs and sign-ins write no events. Per-day activity counts `add`, `update`, `rename`, `delete`.
 
@@ -98,84 +92,73 @@ sequenceDiagram
     M-->>C: version id
 ```
 
-Every call carries the token and `x-fafnirx-instance`. If anything fails after files moved, the moves are undone before the
-error returns.
+Every call carries the token and an instance name. If anything fails after files moved, the moves are undone before the error
+returns.
 
 **Locking.** Every change to a path (commit, delete, web upload or move, watcher) first takes a PostgreSQL advisory
-transaction lock on `(device id, path)`; a rename takes both paths in a fixed order. File moves happen inside the lock, so
+transaction lock on `(device, path)`; a rename takes both paths in a fixed order. File moves happen inside the lock, so
 paths never interleave and the watcher never sees a half-done commit.
 
-**Watcher.** `files/livetree.rs` watches `files/`. A path quiet for 5 s is compared with the database: new or changed files
-become versions (`adopt_live`), vanished ones are marked deleted (`forget_absent`), a vanished file matched by a new file of
-the same size and mtime is a rename, a new `files/users/<user>/<name>` becomes a `local` device. The whole tree is also compared
-every 5 minutes or on `POST /api/files/rescan`. A missing device folder deletes nothing.
+**Watcher.** The master watches `files/`. A path quiet for 5 s is compared with the database: new or changed files become
+versions, vanished ones are marked deleted, a vanished file matched by a new file of the same size and mtime is a rename, and a
+new `files/users/<user>/<name>` becomes a folder. The whole tree is also compared every 5 minutes or on request. A missing
+device folder deletes nothing.
 
-**Live updates.** `db::notify(topic, key)` runs `pg_notify` in the changing transaction, so it arrives on commit. One
-`LISTEN` connection feeds browsers over SSE (`GET /api/events`); the web app maps topics (`files`, `library`, `activity`,
-`devices`, `alerts`, `jobs`) to stale queries and refetches once per burst. A slow stream gets `resync`.
+**Live updates.** Changes `NOTIFY` inside their transaction, so it arrives on commit. One `LISTEN` connection feeds browsers
+over SSE; the web app maps topics to stale queries and refetches once per burst. A slow stream is told to resync.
 
-## Shared folders
+## Folders
 
-A shared folder is a `devices` row of kind `shared`: owned by a user, no token, folder `<owner>/<name>`. Versions, trash,
-retention, mirrors, the watcher and the web file browser treat it like a local folder. `shared_members` lists the other users
-the owner added, each read-write or read-only; a member leaves with `POST /api/shared/leave`. The web app and the clients
-name it `<owner>/<name>`. Clients reach it like this:
+A folder is a `local` device owned by a user. It is shared when the owner adds other users to it, each read-write or
+read-only; a member can leave. Versions, trash, retention, mirrors, the watcher and the web file browser treat every folder
+alike. A **master folder** is a named subfolder of the master files (never the whole of them) that computers can sync both
+ways; administrators make and remove them, every user can use them, read-only users read. The web app and the clients name a
+folder `<owner>/<name>` or `master:<path>`, and one query gives every folder a user can use.
 
-- **Writes.** `Negotiate`, `UploadChunks`, `Commit` and `MarkDeleted` act on the shared folder instead of the calling device
-  when the call has `x-fafnirx-shared: <owner>/<name>` (the owner may use the bare name). The caller still authenticates as its
-  own device and keeps its lease. `acting()` in `devices/grpc.rs` resolves the header among the folders the device's user owns
-  or was added to, and refuses writes from a read-only member. Without the header a call is a plain upload, unchanged.
-- **Reads.** `ListShared`, `ListChanges(shared, since)` and `DownloadShared(shared, path)`; `CreateShared` makes one.
-  `ListChanges(shared, since)` keeps no log: paths written or deleted at or after `since`, as they are now
-  (`files::changes_since`), plus a cursor (server time - 2 s). A deletion stays listed while the trash holds the row, and
-  carries `from_web` (`deleted_by = 'web'`): the client applies those without the delete guard.
-  `settings.deletions_known_from` (retention and Delete forever, forward only) is how far back all deletions are known; a caller with an older
-  cursor, or none, gets every live path with `complete` set, and the client treats in-step paths not listed as deleted.
-- **Wake-up.** `WatchShared(names)`: one message per folder per change burst (`WATCH_SETTLE`), fed by the `NOTIFY` broadcast
-  of SSE (`state.events`). The client keeps one open; 60 s poll is the fallback.
-- **Names.** `ingest::check_names` (commits, moves into the folder) refuses: names Windows cannot hold
-  (`common::not_portable`), a path differing only in case from a live one (`files::case_clash`), a folder above it that does
-  (`files::folder_spellings`). Lookups use the `files_folded` index; `common::fold_path` is the client-side equivalent.
-  Updating an existing path is allowed; a rename's source does not count (case-only renames work). Client:
-  `respell_folders` renames the folder on a received case rename (case-folding file systems keep the old spelling);
-  `exists_spelled` deletes only a path spelled as it was. `local` and `master` folders (SMB-visible) get `check_names` only
-  with `from_web`; watcher, adoption and device backups are taken as is.
-- **Web access.** `Access::shared_with_me` (loaded with the session) gives members visibility, write if allowed. File
-  queries call SQL `visible(device, user, everything)`: master files, own devices, shared folders added to.
-  `purge_shared_folder` needs all files deleted first, then removes trash, versions, log, stored copies.
-- **Client sync.** `client/src/shared.rs`: one `Attached` per `[[shared]]` entry, each with its own state DB. Receive, then
-  send through the upload `Engine` (`Engine::group = at_the_top`: the folder is the path root). A local file matching its
-  recorded (size, mtime) is unchanged, so the master's change applies; otherwise hash: equal = in step, different = conflict,
-  settled by `Shared.conflict` in `Attached::settle` (the one place; `Master::{Deleted,Live}`, `Settled::{Receive,Leave}`):
-  `theirs` parks the local file in `.fafnirx-conflicts/` (excluded from scan and receive), `mine` drops the `synced` record
-  so the push sends it, `both` renames it `name (conflict <computer> <date>).ext`, `ask` stores the master's side in the
-  `pending` table of the state DB. Pending paths are skipped by pull and push (`Engine::skip`); answers (`shared resolve`,
-  or the tray through `Request::Resolve`) are applied at the start of the next pull (`apply_answers`), as `both` after
-  `ask_timeout_hours`. The tray shows `SharedStatus.conflicts` with `rfd` dialogs. There is no compare-and-swap on the master's
-  commit, so a push can still overwrite a version that another computer committed after this one's pull. Receive writes `.fafnirx-part-*`, verifies the root hash,
-  renames. `Spellings` reads each directory once per pull for case-clash lookups.
-- **Client state.** The state DB is keyed to the folder name and the local path (`adopt_folder`); another path starts empty.
-  `status` reads only `state::State` (synced paths, holds, last cycle and problem), so it works with the client stopped.
-- **Held deletions.** A large deletion by another computer (not `from_web`) is held in `pull_hold`, without expiry.
-  `release_deletes` applies it; `keep_deletes` drops the files from the in-step records so they are re-sent, and the cursor
-  moves past. The heartbeat carries per-folder state; the master raises `deletions_held` per computer
-  (`alert_held_deletions`), expired by the minute job after 15 min without renewal.
+A computer reaches a folder like this:
+
+- **Writes.** `Negotiate`, `UploadChunks`, `Commit` and `MarkDeleted` act on the folder instead of the calling device when
+  the call has `x-fafnirx-folder` (a name, `master:<path>` or the stable id). The caller still authenticates as its own device.
+  Read-only members are refused. Without the header a call is a plain upload.
+- **Reads.** `ListFolders`, `ListChanges` and `DownloadFolder`; `CreateFolder` makes one. `ListChanges` keeps no log: it
+  lists the paths written or deleted since a cursor, as they are now. A deletion stays listed while the trash holds it and says
+  whether the web app made it. Deletions are only known back to a point (set by retention); a caller with an older cursor gets
+  every live path and treats paths it has that are not listed as deleted.
+- **Wake-up.** `WatchFolder` tells a client when a folder changed, once per burst of changes. Polling every 60 s is the
+  fallback.
+- **Names.** Commits and moves into a folder refuse names Windows cannot hold and paths that differ only in case from a live
+  one, so folders stay portable. Updating an existing path is allowed, and so are case-only renames. Folders that are visible
+  over SMB get this check only for web changes; the watcher and device backups are taken as they are.
+- **Web access.** Members see a shared folder in their listings and may write if allowed. Deleting a folder needs all its
+  files deleted first, then removes trash, versions, log and stored copies.
+
+**Client sync.** Each `[[synced]]` folder has its own state database. A cycle receives, then sends with the same upload
+engine. A local file that still matches its recorded size and mtime is unchanged, so the master's change applies; otherwise it
+is hashed: equal means in step, different is a conflict. The folder's mode settles conflicts: the master's version wins and the
+local one is parked in `.fafnirx-conflicts/`, or the local one wins and is sent, or both are kept (the local one is renamed),
+or the user is asked (answered with `folder resolve` or from the tray, and kept as both after a timeout). There is no
+compare-and-swap on the master, so a push can overwrite a version another computer committed after this one's receive. Received
+files are written to a temporary name, verified and renamed. `status` reads only the state database, so it works with the
+client stopped.
+
+**Held deletions.** A large deletion by another computer is held, without expiry, until `release-deletes` applies it or
+`folder keep` keeps the files (they are sent again). The heartbeat carries each folder's state; the master raises a
+`deletions_held` alert per computer and expires it after 15 minutes without renewal.
 
 ## Background work
 
 | Work | Where | Notes |
 |---|---|---|
-| Offline and disk alerts, upload-error and held-deletion expiry | `monitoring/jobs.rs`, every minute | |
-| Retention, version pruning, stale uploads, cache cleaning | `monitoring/jobs.rs`, hourly | Removes files with their records |
-| Sources, mirrors | `integrations/` | `FOR UPDATE SKIP LOCKED`. Mirrors and rclone sources one at a time; sources a module reads (`fetch_source.rs`, any kind a module lists as `fetch.<kind>`) two at a time, each on its own task. A run fetches at most `max_per_run` files and asks for another (`run_requested`) while more wait |
-| `meta` (videos then `artwork`) | `library/meta.rs`, table `jobs` | 3 attempts; videos are probed by a module (`modules/`, capability `probe.video`); a job returns a note shown in Processing |
-| `thumb` (on request) | `library/meta.rs`, `files/transfer.rs` | Queued by the first request for a picture, answered `202`; done → `thumbs` event (key: file id). Workers: cores, 2–6; newest request first. Result in `cache/thumbs/`, kept |
-| Segments, subtitles | `modules/video/service` | On request; in memory, `GET /status` |
-| Listing and fetching a source | `modules/fetch/service` | When the master asks (`/fetch/list`, `/fetch/get`); in memory, `GET /status` |
+| Offline and disk alerts, expiry of upload-error and held-deletion alerts | master, every minute | |
+| Retention, version pruning, stale uploads, cache cleaning | master, hourly | Removes files with their records |
+| Sources, mirrors | master | Claimed with `FOR UPDATE SKIP LOCKED`. Mirrors and rclone sources run one at a time; sources a module reads, two at a time. A run fetches at most `max_per_run` files and asks for another while more wait |
+| Metadata (`meta`, then `artwork`) | master, table `jobs` | 3 attempts; videos are probed by a module; a job can leave a note shown in Processing |
+| Thumbnails (`thumb`) | master | Queued by the first request for a picture, answered `202`, announced when done. Workers scale with cores; newest request first. Kept in `cache/thumbs/` |
+| Segments, subtitles | video module | On request; in memory |
+| Listing and fetching a source | fetch module | When the master asks; in memory |
 
-`done` jobs stay a day; queueing the same `(kind, payload)` while one is queued or running is a no-op; setting `jobs_paused`
-makes workers wait. A file counts as unread while it has no `file_meta` row: that is the API's `processing` flag; `work`
-(`waiting`, `running`, `failed`) comes from its unfinished jobs.
+Finished jobs stay a day; queueing the same job while one is queued or running does nothing; pausing jobs makes workers wait.
+A file counts as unread while it has no metadata row; its `work` state comes from its unfinished jobs.
 
 ## Database
 
@@ -189,7 +172,6 @@ erDiagram
     devices ||--o{ events : logs
     files ||--o{ versions : has
     files ||--o| file_state : "what people say"
-    files }o--o{ albums : album_files
     files }o--o{ tags : file_tags
     versions }o--o| file_meta : "same root hash"
     files {
@@ -219,41 +201,39 @@ erDiagram
     }
 ```
 
-Other tables: `users`, `sessions`, `devices`, `shared_members`, `device_shared_state` (what each computer says about its shared
-folders, replaced with every heartbeat), `versions`, `file_meta`, `file_state`, `tags`, `alerts` (uuid),
-`settings`, `device_activity`, `sources`, `source_items`, `mirrors`, `mirror_items`, `schema_migrations`. The migrations in
-`crates/master/migrations/` are the source of truth. `events` are kept 90 days.
+Other tables: `sessions`, `shared_members`, `master_folders`, `device_folder_state` (what each computer says about its
+folders, replaced with every heartbeat), `device_activity`, `alerts`, `settings`, `sources`, `source_items`, `mirrors`,
+`mirror_items`, `schema_migrations`. The schema is `crates/master/migrations/0001_schema.sql`; the master applies migrations it
+has not applied when it starts, once, under a lock, and refuses a database newer than itself. Events are kept 90 days.
 
-**Indexes** (migrations `0001`, `0002`, re-made in `0010`): `files (device_id, path)` unique, `(device_id, path
-text_pattern_ops)` for folders, `path` trigram (`pg_trgm`) for search, `current_version_id`, `deleted_at` where deleted, `id`
-where live and `media` set; `versions (file_id, id)`, `root_hash`; `events (device_id, id)`, `(device_id, path, id DESC)`,
-`ts`; `devices.token_hash` unique, `folder` unique; `jobs (kind='proxy', seq)` where queued, `(status, kind)`; `alerts
-(kind, key)` unique where open; both directions of each link table. `files.media` is a column computed from the file name
-(a test keeps it equal to `library/meta.rs`).
+Indexes serve the lookups that matter: a path within a device (unique, also by prefix and by trigram for search), a file's
+versions, a device's events, unique token hashes and folder names, queued jobs by order, one open alert per kind and key. The
+`media` column of a file is computed from its name and must agree with the metadata code (a test checks it).
 
-**Device totals** (`file_count`, `total_bytes`, `deleted_files`, renamed-away rows excluded) are kept on the device row,
-marked stale by writes and recomputed when the device finishes syncing (or within a minute for devices that do not report).
+Device totals (files, bytes, deleted) are kept on the device row, marked stale by writes and recomputed when the device
+finishes syncing, or within a minute for devices that do not report.
 
 ## Web API
 
 JSON under `/api` behind the login cookie (random token, hash stored, `SameSite=Strict`, `HttpOnly`). Changing calls need
-`x-requested-with`. Ids are the 22-character form.
+`x-requested-with`.
 
 | Area | Endpoints |
 |---|---|
 | Session, users | `POST /api/login`, `/logout`, `GET /api/session`, `POST /api/me/password`; admin: `GET/POST /api/users`, `PATCH /api/users/:name` |
 | Overview | `GET /api/dashboard`, `POST /api/alerts/:id/dismiss`, `GET /api/events` (SSE) |
-| Devices | `GET/POST /api/devices`, `GET /api/devices/:folder` (slash as `%2F`), `POST .../token`, `.../release`, `.../revoke` |
-| Shared folders | `GET/POST /api/shared`, `DELETE /api/shared/:name` (409 while it has files; then removes the rest), `POST /api/shared/:name/members` (`{user, can_write}`), `DELETE .../members/:user`; only the owner manages a folder. Members use it through `/api/files` like any folder |
-| Files | `GET /api/files` (entries carry `id`, `processing`), `GET /api/files/info` (carries `work`), `POST /api/files/delete`, `/restore`, `/move` (`{device, from, to}`; local folders, shared folders and master files, 409 otherwise), `/rescan` (admin) |
-| Transfers | `GET /api/files/download` (ranges, versions), `/thumb`, `POST /api/files/zip`, `POST /api/uploads`, `PUT/GET/DELETE /api/uploads/:id`, `POST /api/uploads/:id/finish` |
-| Library | `GET /api/timeline/buckets`, `/timeline?month=`, `/library?ids=`, `GET/PATCH /api/library/:id` (carries `work`), `GET /api/library/:id/folder`, `POST /api/library/bulk`, `GET /api/tags`, `DELETE /api/tags/:id`, `GET /api/trash`, `POST /api/trash/purge` (`{ids}`: removes files from the Trash for good). Assets carry `processing` |
-| Pictures | `GET /api/media/:id/{thumb,preview,original,download}` (`?v=<hash>` caches for good) |
-| Albums | `GET/POST /api/albums` (a `folder` body makes or returns the folder's album), `GET/PATCH/DELETE /api/albums/:id`, `POST .../files` and `.../files/remove` (by `ids` or `items` of `{device, path}`) |
-| Modules | `GET /api/m/:module/:id/*rest` asks the module for `/files/<rest>` about the file (login and right to the file first); video: `hls/{master.m3u8,<quality>/index.m3u8,<quality>/seg<n>.ts,subtitles.json,subtitles/<n>.vtt}`. `GET /api/m/:module/ui/:file` their web part. `GET /api/session` lists the modules that are up, `GET /api/queue` carries their reports |
-| Plugins (admin) | `GET /api/plugins` (connected modules and the ones `FAFNIRX_PLUGINS` requires but are missing, with state; read only) and `POST /api/plugins/register` (a module announces itself: no login, the shared `FAFNIRX_PLUGIN_SECRET` as bearer token) |
+| Devices | `GET/POST /api/devices`, `GET /api/devices/:folder` (slash as `%2F`), `POST .../token`, `.../release`, `.../revoke`, `.../rename` |
+| Folders | `GET/POST /api/folders` (yours, shared with you and master folders, one list), `DELETE /api/folders/:name`, `POST .../members`, `DELETE .../members/:user`, `POST /api/folders/leave`, `GET /api/folders/people`; only the owner manages a folder |
+| Master folders | admin: `POST /api/master-folders`, `POST /api/master-folders/:public_id/rename`, `DELETE /api/master-folders/:public_id` (the files stay) |
+| Files | `GET /api/files`, `/files/info`, `POST /api/files/delete`, `/restore`, `/move`, `/rescan` (admin) |
+| Transfers | `GET /api/files/download` (ranges, versions), `/thumb`, `POST /api/files/zip`, chunked `POST/PUT/GET/DELETE /api/uploads` |
+| Library | `GET /api/timeline/*`, `/library`, `PATCH /api/library/:id`, `POST /api/library/bulk`, `GET /api/tags`, `GET /api/trash`, `POST /api/trash/purge` |
+| Pictures | `GET /api/media/:id/{thumb,preview,original,download}` |
+| Albums | `GET/POST /api/albums` (a `folder` body makes or returns the folder's album), `GET/PATCH/DELETE /api/albums/:id` |
+| Modules | `GET /api/m/:module/:id/*rest` asks a module about a file (login and right to the file first); `GET /api/m/:module/ui/:file` serves its web part |
+| Plugins (admin) | `GET /api/plugins` (connected modules and required ones that are missing); `POST /api/plugins/register` (a module announces itself, with the shared `FAFNIRX_PLUGIN_SECRET` as bearer token) |
 | Processing | `GET /api/queue`; admin: `POST /api/queue/pause`, `/retry`, `/cancel`, `/rebuild` |
-| Integrations | `GET/POST /api/sources` (`kind` `rclone`, the default: any rclone storage; or the kind of a module that lists `fetch.<kind>`, with `config`, checked by that module), `/:user/:name`, `/run`, `/toggle`; admin: `GET/POST /api/mirrors` (`kind` replica or backup) + `/:name`, `/run`, `/toggle`, `/resync`, `GET /api/mirrors/:name/restore-kit` (backups), `GET /api/mirrors/scope?path=` (folders to pick from) |
+| Integrations | `GET/POST /api/sources`, `PATCH/DELETE /api/sources/:user/:name`, `/run`, `/toggle`; admin: `GET/POST /api/mirrors` and the same per mirror, `/resync`, `/restore-kit`, `/scope` |
 | Settings | `GET/PUT /api/settings` |
 
 Browser uploads are chunked: pieces are `PUT` at an offset (409 with the expected offset if misaligned); `finish` verifies the
@@ -263,10 +243,10 @@ hash and commits through the device path.
 
 | Threat | Mitigation |
 |---|---|
-| Stolen device token | Adds data to its own device, and reads and writes the shared folders of its user (replaced files stay as versions); revoke it. A second computer is refused while the first is connected, and the owner is alerted |
-| Compromised device | Cannot read, list or delete anything but the shared folders of its user and those shared with them |
+| Stolen device token | Adds data to its own device, and reads and writes the folders of its user (replaced files stay as versions); revoke it. A second computer is refused while the first is connected, and the owner is alerted |
+| Compromised device | Cannot read, list or delete anything but the folders of its user, those shared with them and the master folders |
 | Stolen password | Guesses rate-limited per address and user; sessions end on disable, new password, logout. Add Access or a VPN |
-| A user reaching another's files | Queries and downloads are limited to the role's devices (`web/access.rs`); others' devices answer 404. Ids are random but never trusted: access is checked on every call |
+| A user reaching another's files | Queries and downloads are limited to the role's devices; others' devices answer 404. Ids are random but never trusted: access is checked on every call |
 | Compromised master | Cannot ship a client update: GitHub, or builds signed with a key not on the master |
 | Path tricks | Validated on arrival and again when mapped to disk |
 | Stored HTML/SVG opened in a browser | Always a download with `nosniff` |

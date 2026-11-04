@@ -28,7 +28,7 @@ SELECT EXISTS (SELECT 1 FROM file_meta WHERE root_hash = :root) AS known;
 
 --! live_path_with_root
 SELECT f.path FROM files f JOIN versions v ON v.id = f.current_version_id
-WHERE f.device_id = :device_id AND f.deleted_at IS NULL AND v.root_hash = :root
+WHERE f.device_id = :device_id AND f.deleted_at IS NULL AND v.root_hash = :root AND starts_with(f.path, :prefix)
 ORDER BY f.path = :prefer DESC, f.id LIMIT 1;
 
 --! case_clash
@@ -66,8 +66,10 @@ UPDATE files SET deleted_at = :ts, deleted_by = 'rename' WHERE device_id = :devi
 RETURNING current_version_id;
 
 --! keep_source_item_deleted
-UPDATE source_items SET removed_in_web_app = TRUE
-WHERE path = :path AND source_id IN (SELECT id FROM sources WHERE device_id = :device_id);
+-- A source's items are named below its folder (`folder_prefix`), the file by its path in the device.
+UPDATE source_items i SET removed_in_web_app = TRUE FROM sources s
+WHERE s.id = i.source_id AND s.device_id = :device_id AND starts_with(:path::text, s.folder_prefix)
+  AND i.path = substr(:path::text, length(s.folder_prefix) + 1);
 
 --! touch_device
 UPDATE devices SET last_seen = :now, totals_stale = TRUE WHERE id = :id;
@@ -127,6 +129,7 @@ SELECT f.path, f.deleted_at, f.deleted_by, v.root_hash, v.size, v.mtime, v.mode
 FROM files f LEFT JOIN versions v ON v.id = f.current_version_id
 WHERE f.device_id = :device_id
   AND ((f.deleted_at IS NOT NULL AND f.deleted_at >= :since) OR (f.deleted_at IS NULL AND v.created_at >= :since))
+  AND starts_with(f.path, :prefix)
 ORDER BY f.path;
 
 --! live_files_below

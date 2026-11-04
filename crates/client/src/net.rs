@@ -11,7 +11,7 @@ use tonic::{Request, Status};
 type Value = MetadataValue<tonic::metadata::Ascii>;
 
 /// The token (which device), the instance (which installation of the client is using it) and, for a client that
-/// works on a shared folder, which one: the uploads and deletes it makes then go to that folder, not to the device.
+/// works on a synced folder, which one: the uploads and deletes it makes then go to that folder, not to the device.
 #[derive(Clone)]
 pub struct Auth(Value, Value, Option<Value>);
 
@@ -19,8 +19,8 @@ impl tonic::service::Interceptor for Auth {
     fn call(&mut self, mut req: Request<()>) -> Result<Request<()>, Status> {
         req.metadata_mut().insert("authorization", self.0.clone());
         req.metadata_mut().insert("x-fafnirx-instance", self.1.clone());
-        if let Some(shared) = &self.2 {
-            req.metadata_mut().insert("x-fafnirx-shared", shared.clone());
+        if let Some(synced) = &self.2 {
+            req.metadata_mut().insert("x-fafnirx-folder", synced.clone());
         }
         Ok(req)
     }
@@ -34,12 +34,12 @@ pub fn client(cfg: &Config, token: &str, instance: &str) -> Result<Client> {
     build(cfg, token, instance, None)
 }
 
-/// The same, for a client whose uploads and deletes act on the shared folder `shared` (`<owner>/<name>`).
-pub fn shared_client(cfg: &Config, token: &str, instance: &str, shared: &str) -> Result<Client> {
-    build(cfg, token, instance, Some(shared))
+/// The same, for a client whose uploads and deletes act on the synced folder `synced` (`<owner>/<name>`).
+pub fn synced_client(cfg: &Config, token: &str, instance: &str, synced: &str) -> Result<Client> {
+    build(cfg, token, instance, Some(synced))
 }
 
-fn build(cfg: &Config, token: &str, instance: &str, shared: Option<&str>) -> Result<Client> {
+fn build(cfg: &Config, token: &str, instance: &str, synced: Option<&str>) -> Result<Client> {
     let mut endpoint = Endpoint::from_shared(cfg.server.clone()).context("invalid server URL")?;
     if cfg.server.starts_with("https://") {
         // Behind a TLS proxy (a Cloudflare tunnel, a reverse proxy) the certificate is a public one.
@@ -53,8 +53,10 @@ fn build(cfg: &Config, token: &str, instance: &str, shared: Option<&str>) -> Res
         .connect_lazy();
     let value = format!("Bearer {token}").parse().context("token contains invalid characters")?;
     let instance = instance.parse().context("instance id contains invalid characters")?;
-    let shared = shared.map(|s| s.parse().context("shared folder name contains invalid characters")).transpose()?;
-    Ok(CollectorClient::with_interceptor(channel, Auth(value, instance, shared))
+    let synced = synced
+        .map(|s| fafnirx_common::header_encode(s).parse().context("synced folder name contains invalid characters"))
+        .transpose()?;
+    Ok(CollectorClient::with_interceptor(channel, Auth(value, instance, synced))
         .max_decoding_message_size(MAX_MESSAGE)
         .max_encoding_message_size(MAX_MESSAGE))
 }

@@ -33,7 +33,7 @@ pub struct Scan {
 /// Fails when the folder itself cannot be read; callers must then not treat
 /// its files as deleted.
 /// `exclude` is the client's own state folder: if a collected folder contains it, it is not collected.
-/// A folder with no name is a shared folder, which every kind of computer must be able to hold: names Windows cannot keep
+/// A folder with no name is a synced folder, which every kind of computer must be able to hold: names Windows cannot keep
 /// are skipped.
 pub fn scan_folder(folder: &Folder, exclude: Option<&Path>) -> Result<Scan> {
     let root = &folder.path;
@@ -49,14 +49,14 @@ pub fn scan_folder(folder: &Folder, exclude: Option<&Path>) -> Result<Scan> {
     let mut complete = true;
 
     let skip = exclude.map(Path::to_path_buf);
-    let shared = top.is_empty();
+    let synced = top.is_empty();
     let walker = ignore::WalkBuilder::new(root)
         .standard_filters(false)
         .follow_links(false)
         .add_custom_ignore_filename(IGNORE_FILE)
         .filter_entry(move |e| {
-            // What a shared folder put aside (see `shared::CONFLICT_DIR`) is this computer's own.
-            let aside = shared && e.depth() == 1 && e.file_name() == crate::shared::CONFLICT_DIR;
+            // What a synced folder put aside (see `synced::CONFLICT_DIR`) is this computer's own.
+            let aside = synced && e.depth() == 1 && e.file_name() == crate::synced::CONFLICT_DIR;
             !aside && skip.as_deref().is_none_or(|s| !e.path().starts_with(s))
         })
         .build();
@@ -82,8 +82,8 @@ pub fn scan_folder(folder: &Folder, exclude: Option<&Path>) -> Result<Scan> {
             skipped.push(format!("{}: not a regular file", path.display()));
             continue;
         }
-        // A file of a shared folder that is being received.
-        if top.is_empty() && path.file_name().is_some_and(|n| n.to_string_lossy().starts_with(crate::shared::PART_PREFIX)) {
+        // A file of a synced folder that is being received.
+        if top.is_empty() && path.file_name().is_some_and(|n| n.to_string_lossy().starts_with(crate::synced::PART_PREFIX)) {
             continue;
         }
         let Some(remote) = remote_path(&top, root, path) else {
@@ -131,7 +131,7 @@ fn drop_case_conflicts(entries: &mut Vec<Entry>, skipped: &mut Vec<String>) {
 
 fn remote_path(top: &str, root: &Path, path: &Path) -> Option<String> {
     let rel = path.strip_prefix(root).ok()?;
-    // A shared folder has no name of its own in its paths: its files are at the top.
+    // A synced folder has no name of its own in its paths: its files are at the top.
     let mut parts = if top.is_empty() { Vec::new() } else { vec![top.to_string()] };
     for c in rel.components() {
         parts.push(c.as_os_str().to_str()?.nfc().collect::<String>());
@@ -182,7 +182,7 @@ mod tests {
     /// Such names exist only on Linux and macOS, so only there can they be made for the test.
     #[cfg(unix)]
     #[test]
-    fn a_shared_folder_skips_the_names_windows_cannot_keep_and_a_backup_does_not() {
+    fn a_synced_folder_skips_the_names_windows_cannot_keep_and_a_backup_does_not() {
         let d = tempfile::tempdir().unwrap();
         for name in ["fine.txt", "a:b.txt", "CON.txt"] {
             fs::write(d.path().join(name), "x").unwrap();
@@ -196,7 +196,7 @@ mod tests {
             ["docs/CON.txt", "docs/a:b.txt", "docs/fine.txt"],
             "a backup keeps everything the computer has"
         );
-        assert_eq!(names(""), ["fine.txt"], "a shared folder only what every kind of computer can hold");
+        assert_eq!(names(""), ["fine.txt"], "a synced folder only what every kind of computer can hold");
     }
 
     #[test]

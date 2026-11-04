@@ -5,7 +5,7 @@
 //!   tmp/                                         uploads and downloads that are not complete yet
 
 use anyhow::{bail, Context, Result};
-use fafnirx_common::{ChunkHasher, CHUNK_SIZE, HASH_LEN};
+use fafnirx_common::{file_has_root, hash_path, CHUNK_SIZE, HASH_LEN};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -99,6 +99,26 @@ impl Store {
         self.files.join(USERS_DIR).join(user)
     }
 
+    /// Moves a device folder to its new name: its live folder and what its versions kept of it. Folders that are not there
+    /// (nothing was ever stored, or a version kept no file of this device) are skipped. Undone by calling it the other way.
+    pub fn rename_folder(&self, old: &str, new: &str, versions: &[i64]) -> Result<()> {
+        let (from, to) = (Self::folder_in(&self.files, old, true)?, Self::folder_in(&self.files, new, true)?);
+        if from.is_dir() {
+            if to.exists() {
+                bail!("{} exists already", to.display());
+            }
+            fs::rename(&from, &to).with_context(|| format!("move {} to {}", from.display(), to.display()))?;
+        }
+        for id in versions {
+            let base = self.versions.join(id.to_string());
+            let (from, to) = (Self::folder_in(&base, old, false)?, Self::folder_in(&base, new, false)?);
+            if from.is_dir() {
+                move_file(&from, &to)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn live_path(&self, device: &str, path: &str) -> Result<PathBuf> {
         Self::resolve(&self.files, true, device, path)
     }
@@ -163,8 +183,7 @@ impl Store {
         if actual != size {
             bail!("uploaded file is {actual} bytes, expected {size}");
         }
-        let (got, _) = hash_file(&path)?;
-        if got != *root {
+        if !file_has_root(&path, root) {
             bail!("uploaded file does not match its hash");
         }
         Ok(path)
@@ -178,7 +197,7 @@ impl Store {
         let from = self.live_path(device, path)?;
         let to = self.temp_path();
         fs::copy(&from, &to).with_context(|| format!("copy {}", from.display()))?;
-        if hash_file(&to).map(|(got, _)| got != *root).unwrap_or(true) {
+        if !file_has_root(&to, root) {
             let _ = fs::remove_file(&to);
             bail!("{path} changed since it was recorded");
         }
@@ -262,16 +281,8 @@ pub fn link_or_copy(from: &Path, to: &Path) -> Result<bool> {
 
 /// (root hash, size) of a file's content.
 pub fn hash_file(path: &Path) -> Result<([u8; HASH_LEN], u64)> {
-    let mut f = fs::File::open(path).with_context(|| format!("read {}", path.display()))?;
-    let mut h = ChunkHasher::default();
-    let mut buf = vec![0u8; 1 << 20];
-    loop {
-        let n = f.read(&mut buf)?;
-        if n == 0 {
-            return Ok(h.finish());
-        }
-        h.update(&buf[..n]);
-    }
+    let h = hash_path(path).with_context(|| format!("read {}", path.display()))?;
+    Ok((h.root, h.size))
 }
 
 /// Reads until `buf` is full or the file ends; returns the number of bytes read.

@@ -12,7 +12,7 @@ import { ago } from '@/lib/format'
 import { msg, useT } from '@/lib/i18n'
 import type { FileLimits } from './fetch-limits'
 
-/** What a module that reads sources says of its work (its `GET /status`). */
+/** What a module says of its work (its `GET /status`). */
 interface Report {
   slots: number
   made: number
@@ -20,41 +20,72 @@ interface Report {
   failed: { kind: string; path: string; error: string; at: number }[]
 }
 
-const KIND: Record<string, string> = {
-  list: msg('Listing a source'),
-  fetch: msg('Fetching a file'),
-}
-
-/** The module's section of the Processing page: sources being listed and files being fetched. `children` add lines under the summary. */
-export function FetchQueueCard({ report, children }: { report: unknown; children?: ReactNode }) {
+/**
+ * A module's section of the Processing page: a sentence about the work, then what is being made and what failed. `kinds` names the
+ * kinds of task the module reports (a kind it does not name is shown as it is); `children` add lines under the sentence.
+ */
+export function TaskCard({
+  title,
+  summary,
+  nothing,
+  kinds,
+  report,
+  children,
+}: {
+  title: string
+  summary: (slots: number, made: number) => string
+  nothing: string
+  kinds: Record<string, string>
+  report: unknown
+  children?: ReactNode
+}) {
   const t = useT()
   const now = useNow()
   const { slots, made, active, failed } = report as Report
   return (
     <Card>
-      <CardHeader><CardTitle>{t('Downloads')}</CardTitle></CardHeader>
+      <CardHeader><CardTitle>{title}</CardTitle></CardHeader>
       <CardContent className="space-y-3">
-        <p className="text-sm text-muted-foreground">
-          {t('Fetched as sources run, {slots} at a time. {made} finished since it started.', { slots, made })}
-        </p>
+        <p className="text-sm text-muted-foreground">{summary(slots, made)}</p>
         {children}
-        {active.length === 0 && failed.length === 0 && <p className="text-sm text-muted-foreground">{t('Nothing is being fetched now.')}</p>}
+        {active.length === 0 && failed.length === 0 && <p className="text-sm text-muted-foreground">{nothing}</p>}
         <ul className="divide-y text-sm">
           {active.map((a, i) => (
             <li key={i} className="flex items-center justify-between gap-3 py-1.5">
-              <span className="min-w-0 truncate"><Badge variant="secondary" className="mr-2">{t(KIND[a.kind] ?? a.kind)}</Badge>{a.path}</span>
+              <span className="min-w-0 truncate"><Badge variant="secondary" className="mr-2">{t(kinds[a.kind] ?? a.kind)}</Badge>{a.path}</span>
               <span className="shrink-0 text-muted-foreground">{a.running ? t('Running') : t('Waiting')} · {ago(a.since, now)}</span>
             </li>
           ))}
           {failed.map((f, i) => (
             <li key={`f${i}`} className="py-1.5 text-destructive">
-              <span className="mr-2 font-medium">{t(KIND[f.kind] ?? f.kind)}</span>{f.path}
+              <span className="mr-2 font-medium">{t(kinds[f.kind] ?? f.kind)}</span>{f.path}
               <span className="block truncate text-xs" title={f.error}>{f.error} · {ago(f.at, now)}</span>
             </li>
           ))}
         </ul>
       </CardContent>
     </Card>
+  )
+}
+
+const KIND: Record<string, string> = {
+  list: msg('Listing a source'),
+  fetch: msg('Fetching a file'),
+}
+
+/** The section of the Processing page of a module that reads sources: sources being listed and files being fetched. */
+export function FetchQueueCard({ report, children }: { report: unknown; children?: ReactNode }) {
+  const t = useT()
+  return (
+    <TaskCard
+      title={t('Downloads')}
+      summary={(slots, made) => t('Fetched as sources run, {slots} at a time. {made} finished since it started.', { slots, made })}
+      nothing={t('Nothing is being fetched now.')}
+      kinds={KIND}
+      report={report}
+    >
+      {children}
+    </TaskCard>
   )
 }
 
@@ -100,5 +131,17 @@ export function AcknowledgeField({ checked, onChange, children }: { checked: boo
       <input type="checkbox" className="mt-0.5 size-4" checked={checked} onChange={(e) => onChange(e.target.checked)} />
       <span>{children}</span>
     </label>
+  )
+}
+
+/** A template for the name of a file a source makes, with the tokens the module offers (`{title}`). Empty means the module's own default. */
+export function NameRuleField({ id, value, onChange, tokens, fallback }: { id: string; value: string; onChange: (value: string) => void; tokens: string[]; fallback: string }) {
+  const t = useT()
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={id}>{t('File name')}</Label>
+      <Input id={id} autoComplete="off" placeholder={fallback} value={value} onChange={(e) => onChange(e.target.value)} />
+      <p className="text-xs text-muted-foreground">{t('Written with {tokens}. Leave empty for {fallback}.', { tokens: tokens.map((x) => `{${x}}`).join(' '), fallback })}</p>
+    </div>
   )
 }

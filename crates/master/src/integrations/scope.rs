@@ -27,7 +27,7 @@ pub struct Place {
 #[derive(serde::Serialize, Debug, PartialEq)]
 pub struct Choice {
     pub name: String,
-    /// `user`, `master`, a device kind (`device`, `local`, `source`, `shared`) or `folder`.
+    /// `user`, `master`, a device kind (`device`, `local`) or `folder`.
     pub kind: String,
 }
 
@@ -92,7 +92,7 @@ mod tests {
         vec![
             place(0, "_master", "master"),
             place(1, "ana/laptop", "device"),
-            place(2, "ana/family", "shared"),
+            place(2, "ana/family", "local"),
             place(3, "bo/phone", "device"),
         ]
     }
@@ -122,9 +122,9 @@ mod tests {
     }
 
     #[test]
-    fn a_user_offers_the_devices_and_shared_folders() {
+    fn a_user_offers_the_devices_and_folders() {
         let inside = choices(&places(), "ana", |_, _| unreachable!());
-        assert_eq!(inside, [choice("family", "shared"), choice("laptop", "device")]);
+        assert_eq!(inside, [choice("family", "local"), choice("laptop", "device")]);
     }
 
     #[test]

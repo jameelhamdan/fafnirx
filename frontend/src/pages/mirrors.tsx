@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BookOpen, Check, Copy, Download, FolderOpen, KeyRound, Lock, Plus, RefreshCw, RotateCcw } from 'lucide-react'
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { ErrorNote, PageHeader, SELECT } from '@/components/common'
+import { ErrorNote, PageHeader } from '@/components/common'
 import { Confirm } from '@/components/confirm'
 import { JobList } from '@/components/job-list'
 import { ScopePicker } from '@/components/scope-picker'
@@ -10,7 +10,7 @@ import { StorageForm } from '@/components/storage-form'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { FormDialog } from '@/components/form-dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -19,7 +19,7 @@ import { NO_STORAGE, storageBody, storageProblem } from '@/lib/storage'
 import { bytes, count } from '@/lib/format'
 import { useT } from '@/lib/i18n'
 import { docs } from '@/lib/links'
-import { SCHEDULES } from '@/lib/mirror-presets'
+import { ScheduleField } from '@/components/schedule-field'
 import type { JobState } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -153,70 +153,61 @@ function AddMirror() {
       void client.invalidateQueries({ queryKey: ['mirrors'] })
     },
   })
-  const submit = (e: FormEvent) => { e.preventDefault(); if (!blocked) create.mutate() }
   return (
-    <Dialog open={open} onOpenChange={(o) => { setOpen(o); create.reset() }}>
-      <DialogTrigger asChild><Button><Plus className="size-4" />{t('Add mirror')}</Button></DialogTrigger>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
-        <form onSubmit={submit} className="space-y-6">
-          <DialogHeader>
-            <DialogTitle>{t('Add a mirror')}</DialogTitle>
-            <DialogDescription>{t('A mirror copies your files to storage somewhere else, then keeps it up to date.')}</DialogDescription>
-          </DialogHeader>
+    <FormDialog
+      open={open}
+      onOpenChange={(o) => { setOpen(o); create.reset() }}
+      trigger={<Button><Plus className="size-4" />{t('Add mirror')}</Button>}
+      className="max-h-[90vh] overflow-y-auto sm:max-w-2xl"
+      title={t('Add a mirror')}
+      description={t('A mirror copies your files to storage somewhere else, then keeps it up to date.')}
+      onSubmit={() => create.mutate()}
+      submit={create.isPending ? t('Adding…') : t('Add mirror')}
+      disabled={blocked !== null}
+      pending={create.isPending}
+      error={create.error?.message}
+      footer={<p className={cn('text-xs', blocked ? 'text-muted-foreground' : 'text-success')}>{blocked ?? t('Ready to add.')}</p>}
+    >
+      <Step n={1} title={t('What kind of copy?')}>
+        <div role="radiogroup" aria-label={t('Kind of mirror')} className="grid gap-2 sm:grid-cols-2">
+          <Choice selected={form.kind === 'backup'} onSelect={() => set({ kind: 'backup' })} icon={<Lock className="size-4" />} title={t('Backup')}>
+            {t('Compressed and encrypted with your key. Smallest and safe on storage you do not control. Restored with rclone.')}
+          </Choice>
+          <Choice selected={form.kind === 'replica'} onSelect={() => set({ kind: 'replica' })} icon={<FolderOpen className="size-4" />} title={t('Replica')}>
+            {t('Your files exactly as they are. Browse them, share them or copy them back with any tool.')}
+          </Choice>
+        </div>
+      </Step>
 
-          <Step n={1} title={t('What kind of copy?')}>
-            <div role="radiogroup" aria-label={t('Kind of mirror')} className="grid gap-2 sm:grid-cols-2">
-              <Choice selected={form.kind === 'backup'} onSelect={() => set({ kind: 'backup' })} icon={<Lock className="size-4" />} title={t('Backup')}>
-                {t('Compressed and encrypted with your key. Smallest and safe on storage you do not control. Restored with rclone.')}
-              </Choice>
-              <Choice selected={form.kind === 'replica'} onSelect={() => set({ kind: 'replica' })} icon={<FolderOpen className="size-4" />} title={t('Replica')}>
-                {t('Your files exactly as they are. Browse them, share them or copy them back with any tool.')}
-              </Choice>
-            </div>
-          </Step>
+      <Step n={2} title={t('What to copy')}>
+        <ScopePicker value={form.scope} onChange={(scope) => set({ scope })} />
+      </Step>
 
-          <Step n={2} title={t('What to copy')}>
-            <ScopePicker value={form.scope} onChange={(scope) => set({ scope })} />
-          </Step>
+      <Step n={3} title={t('Where to put it')}>
+        <div className="space-y-1.5">
+          <Label htmlFor="m-name">{t('Name')}</Label>
+          <Input id="m-name" placeholder={form.kind === 'backup' ? 'offsite-backup' : 'nas-replica'} value={form.name} onChange={(e) => set({ name: e.target.value })} />
+        </div>
+        <StorageForm value={form.storage} onChange={(storage) => set({ storage })} />
+      </Step>
 
-          <Step n={3} title={t('Where to put it')}>
-            <div className="space-y-1.5">
-              <Label htmlFor="m-name">{t('Name')}</Label>
-              <Input id="m-name" placeholder={form.kind === 'backup' ? 'offsite-backup' : 'nas-replica'} value={form.name} onChange={(e) => set({ name: e.target.value })} />
-            </div>
-            <StorageForm value={form.storage} onChange={(storage) => set({ storage })} />
-          </Step>
+      {form.kind === 'backup' && (
+        <Step n={4} title={t('Encryption key')}>
+          <KeyField form={form} set={set} />
+        </Step>
+      )}
 
-          {form.kind === 'backup' && (
-            <Step n={4} title={t('Encryption key')}>
-              <KeyField form={form} set={set} />
-            </Step>
-          )}
-
-          <Step n={form.kind === 'backup' ? 5 : 4} title={t('Schedule')}>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="m-hours">{t('How often')}</Label>
-                <select id="m-hours" className={cn(SELECT, 'w-full')} value={form.interval_hours} onChange={(e) => set({ interval_hours: e.target.value })}>
-                  {SCHEDULES.map(([hours, label]) => <option key={hours} value={hours}>{t(label)}</option>)}
-                </select>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="m-keep">{t('Runs of history kept')}</Label>
-                <Input id="m-keep" type="number" min="1" max="100" value={form.keep_runs} onChange={(e) => set({ keep_runs: e.target.value })} />
-              </div>
-            </div>
-            <p className="text-xs text-muted-foreground">{t('Only what changed is sent. Files you replace or delete stay in the history for the runs kept, then go.')}</p>
-          </Step>
-
-          {create.error && <p role="alert" className="text-sm text-destructive">{create.error.message}</p>}
-          <DialogFooter className="items-center gap-3 sm:justify-between">
-            <p className={cn('text-xs', blocked ? 'text-muted-foreground' : 'text-success')}>{blocked ?? t('Ready to add.')}</p>
-            <Button type="submit" disabled={create.isPending || blocked !== null}>{create.isPending ? t('Adding…') : t('Add mirror')}</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+      <Step n={form.kind === 'backup' ? 5 : 4} title={t('Schedule')}>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <ScheduleField id="m-hours" hours={form.interval_hours} onChange={(interval_hours) => set({ interval_hours })} />
+          <div className="space-y-1.5">
+            <Label htmlFor="m-keep">{t('Runs of history kept')}</Label>
+            <Input id="m-keep" type="number" min="1" max="100" value={form.keep_runs} onChange={(e) => set({ keep_runs: e.target.value })} />
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">{t('Only what changed is sent. Files you replace or delete stay in the history for the runs kept, then go.')}</p>
+      </Step>
+    </FormDialog>
   )
 }
 

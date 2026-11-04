@@ -18,59 +18,70 @@ pub struct Folder {
     pub name: String,
 }
 
-/// A local folder attached to a shared folder of the user on the master: changes go both ways. It is not also uploaded
-/// to this device. Absent from a config written before shared folders existed, which then loads unchanged.
+/// A local folder attached to a folder on the master that is not this computer's own namespace: a synced folder, one of the
+/// user's folders, or a master folder (`master:<path>`). Changes go both ways unless the mode says otherwise. It is not also
+/// uploaded to this device.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Shared {
-    /// The shared folder on the master.
+pub struct SyncedFolder {
+    /// The folder on the master: the name of a synced folder of the user, `<owner>/<name>`, or `master:<path>`.
     pub name: String,
     pub path: PathBuf,
-    /// What happens to a file changed here and on the master (or changed here and deleted there).
+    /// The stable address of that folder, which keeps working when it is renamed on the master. Set when attaching.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Which way it goes, and what happens to a file changed here and on the master (or changed here and deleted there).
     #[serde(default, skip_serializing_if = "is_default")]
-    pub conflict: Conflict,
+    pub mode: Mode,
     /// With `ask`: how long a file waits for an answer; after that both versions are kept. 0: for ever.
     #[serde(default = "default_ask_timeout", skip_serializing_if = "is_default_ask_timeout")]
     pub ask_timeout_hours: u64,
 }
 
-fn is_default_ask_timeout(hours: &u64) -> bool {
-    *hours == default_ask_timeout()
+impl SyncedFolder {
+    /// What the master is asked for: the stable id when there is one, else the name.
+    pub fn key(&self) -> &str {
+        self.id.as_deref().unwrap_or(&self.name)
+    }
 }
 
-fn is_default<T: Default + PartialEq>(v: &T) -> bool {
-    *v == T::default()
-}
-
-/// How a computer settles a file changed here and on the master. The master's version is the one that is kept in the
-/// folder, as in Google Drive and OneDrive; the choices are about what becomes of this computer's version.
+/// Which way a folder on the master is synced, and who wins when a file changed here and on the master. One setting: the default
+/// is what most people want, and the others are for the few who do not.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Conflict {
-    /// The master's version is received. This computer's is put aside in `.fafnirx-conflicts` and never sent.
+pub enum Mode {
+    /// Both ways. A file changed on both sides becomes the master's; this computer's goes aside in `.fafnirx-conflicts`, unsent.
     #[default]
-    Theirs,
-    /// This computer's version is sent and becomes the current one (the master keeps the old one in its history).
-    Mine,
-    /// Both are kept, this computer's under `name (conflict <computer> <date>).ext`, and both are sent.
     Both,
-    /// A person is asked (native dialog from the tray); until then nothing changes on either side.
+    /// What changes here goes to the master; nothing comes back, and nothing is deleted here.
+    Up,
+    /// Both ways. A file changed on both sides stays this computer's, and is sent (the master keeps the old one in its history).
+    Mine,
+    /// Both ways. A file changed on both sides is kept in both versions, this computer's under `name (conflict <computer> <date>).ext`.
+    Keep,
+    /// Both ways. A person is asked about a file changed on both sides (a question on screen); until then nothing changes.
     Ask,
 }
 
-impl Conflict {
-    pub const ALL: [Conflict; 4] = [Conflict::Theirs, Conflict::Mine, Conflict::Both, Conflict::Ask];
+impl Mode {
+    pub const ALL: [Mode; 5] = [Mode::Both, Mode::Up, Mode::Mine, Mode::Keep, Mode::Ask];
 
     pub fn name(self) -> &'static str {
         match self {
-            Conflict::Theirs => "theirs",
-            Conflict::Mine => "mine",
-            Conflict::Both => "both",
-            Conflict::Ask => "ask",
+            Mode::Both => "both",
+            Mode::Up => "up",
+            Mode::Mine => "mine",
+            Mode::Keep => "keep",
+            Mode::Ask => "ask",
         }
     }
 
-    /// Whether this build can show the question at all (it has the tray). The service uses this: it runs without a display.
+    /// Whether the master's changes are received.
+    pub fn pulls(self) -> bool {
+        self != Mode::Up
+    }
+
+    /// Whether this build can show the question of `ask` at all (it has the tray). The service uses this: it runs without a display.
     pub fn ask_possible() -> bool {
         cfg!(any(target_os = "windows", target_os = "macos", feature = "tray"))
     }
@@ -82,21 +93,29 @@ impl Conflict {
 
     /// Refuses `ask` where it cannot be answered.
     pub fn check_available(self) -> Result<()> {
-        if self == Conflict::Ask && !Self::ask_available() {
+        if self == Mode::Ask && !Self::ask_available() {
             bail!("\"ask\" needs a screen to show the question on: it is not available on a computer without one");
         }
         Ok(())
     }
 }
 
-impl std::str::FromStr for Conflict {
+impl std::str::FromStr for Mode {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self> {
-        Conflict::ALL
+        Mode::ALL
             .into_iter()
-            .find(|c| c.name() == s.to_ascii_lowercase())
-            .with_context(|| format!("\"{s}\" is not one of theirs, mine, both, ask"))
+            .find(|m| m.name() == s.to_ascii_lowercase())
+            .with_context(|| format!("\"{s}\" is not one of {}", Mode::ALL.map(Mode::name).join(", ")))
     }
+}
+
+fn is_default_ask_timeout(hours: &u64) -> bool {
+    *hours == default_ask_timeout()
+}
+
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,8 +152,8 @@ pub struct Config {
     pub web_url: Option<String>,
     #[serde(default, rename = "folders")]
     pub folders: Vec<Folder>,
-    #[serde(default, rename = "shared", skip_serializing_if = "Vec::is_empty")]
-    pub shared: Vec<Shared>,
+    #[serde(default, rename = "synced", skip_serializing_if = "Vec::is_empty")]
+    pub synced: Vec<SyncedFolder>,
 }
 
 fn yes() -> bool {
@@ -165,7 +184,7 @@ impl Config {
             state_dir: None,
             web_url: None,
             folders: Vec::new(),
-            shared: Vec::new(),
+            synced: Vec::new(),
         }
     }
 
@@ -201,16 +220,22 @@ impl Config {
                 );
             }
         }
-        let mut shared = std::collections::HashSet::new();
-        for s in &self.shared {
-            // The name of one's own folder, or `<owner>/<name>` for one another user shared.
-            let (owner, name) = s.name.split_once('/').unwrap_or(("a", &s.name));
-            if !fafnirx_common::valid_device_name(owner) || !fafnirx_common::valid_device_name(name) {
-                bail!("shared folder name {:?} must be lowercase letters, digits, '.', '_' and '-'", s.name);
+        let mut synced = std::collections::HashSet::new();
+        for s in &self.synced {
+            if let Some(path) = s.name.strip_prefix(MASTER_KEY) {
+                if fafnirx_common::clean_remote_path(path).is_err() {
+                    bail!("master folder name {:?} must be `master:` and a path in the master files", s.name);
+                }
+            } else {
+                // The name of one's own folder, or `<owner>/<name>` for one another user synced.
+                let (owner, name) = s.name.split_once('/').unwrap_or(("a", &s.name));
+                if !fafnirx_common::valid_device_name(owner) || !fafnirx_common::valid_device_name(name) {
+                    bail!("synced folder name {:?} must be lowercase letters, digits, '.', '_' and '-'", s.name);
+                }
             }
-            if !shared.insert(s.name.as_str()) {
+            if !synced.insert(s.name.as_str()) {
                 bail!(
-                    "the shared folder {:?} is attached twice; a shared folder is attached to one folder of a computer",
+                    "the synced folder {:?} is attached twice; a synced folder is attached to one folder of a computer",
                     s.name
                 );
             }
@@ -223,7 +248,7 @@ impl Config {
         self.folders
             .iter()
             .map(|f| (f.name.as_str(), f.path.as_path()))
-            .chain(self.shared.iter().map(|s| (s.name.as_str(), s.path.as_path())))
+            .chain(self.synced.iter().map(|s| (s.name.as_str(), s.path.as_path())))
     }
 
     /// The host of the server URL, if it is an http(s) URL.
@@ -290,7 +315,10 @@ fn tables<'a>(doc: &'a mut toml_edit::DocumentMut, key: &str) -> Result<&'a mut 
         .with_context(|| format!("`{key}` in the config must be a list of [[{key}]] tables"))
 }
 
-/// Whether a `[[folders]]` or `[[shared]]` table is the one called `name`.
+/// The start of the name of a master folder: a subfolder of the master files.
+pub const MASTER_KEY: &str = "master:";
+
+/// Whether a `[[folders]]` or `[[synced]]` table is the one called `name`.
 fn is_named(table: &toml_edit::Table, name: &str) -> bool {
     table.get("name").and_then(|n| n.as_str()) == Some(name)
 }
@@ -359,44 +387,49 @@ fn free_directory(cfg: &Config, dir: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Attaches a local folder to the shared folder `name`, keeping everything else in the file as it is. The folder is made if
+/// Attaches a local folder to the synced folder `name`, keeping everything else in the file as it is. The folder is made if
 /// it is not there yet: the usual way to set up another computer is to attach a new, empty folder and let it fill.
-pub fn attach_shared_to_file(config_path: &Path, name: &str, dir: &Path, conflict: Conflict) -> Result<Shared> {
+pub fn attach_synced_to_file(config_path: &Path, name: &str, id: Option<&str>, dir: &Path, mode: Mode) -> Result<SyncedFolder> {
     let cfg = Config::load(config_path).context("run `fafnirx enroll` first")?;
     std::fs::create_dir_all(dir).with_context(|| format!("cannot make {}", dir.display()))?;
-    let shared = Shared {
+    let synced = SyncedFolder {
         name: name.to_string(),
         path: free_directory(&cfg, dir)?,
-        conflict,
+        id: id.map(str::to_string),
+        mode,
         ask_timeout_hours: default_ask_timeout(),
     };
     let mut check = cfg;
-    check.shared.push(shared.clone());
+    check.synced.push(synced.clone());
     check.validate()?;
 
     edit_file(config_path, |doc| {
         let mut table = toml_edit::Table::new();
-        table["name"] = toml_edit::value(shared.name.clone());
-        table["path"] = toml_edit::value(shared.path.to_string_lossy().into_owned());
-        if conflict != Conflict::default() {
-            table["conflict"] = toml_edit::value(conflict.name());
+        table["name"] = toml_edit::value(synced.name.clone());
+        table["path"] = toml_edit::value(synced.path.to_string_lossy().into_owned());
+        if let Some(id) = &synced.id {
+            table["id"] = toml_edit::value(id.clone());
         }
-        tables(doc, "shared")?.push(table);
+        if mode != Mode::default() {
+            table["mode"] = toml_edit::value(mode.name());
+        }
+        tables(doc, "synced")?.push(table);
         Ok(())
     })?;
-    Ok(shared)
+    Ok(synced)
 }
 
-/// Sets what a shared folder does with a file changed here and on the master. Returns the name of the folder in full.
-pub fn set_shared_conflict_in_file(config_path: &Path, name: &str, conflict: Conflict, ask_timeout_hours: Option<u64>) -> Result<String> {
-    let full = Config::load(config_path)?.shared_named(name)?.name.clone();
+/// Sets the mode of a folder on the master (which way it goes, and what happens to a file changed on both sides), and with `Ask` how
+/// long a file waits for an answer. Returns the name of the folder in full.
+pub fn set_synced_mode_in_file(config_path: &Path, name: &str, mode: Mode, ask_timeout_hours: Option<u64>) -> Result<String> {
+    let full = Config::load(config_path)?.synced_named(name)?.name.clone();
     edit_file(config_path, |doc| {
-        let Some(list) = doc.get_mut("shared").and_then(|s| s.as_array_of_tables_mut()) else { return Ok(()) };
+        let Some(list) = doc.get_mut("synced").and_then(|s| s.as_array_of_tables_mut()) else { return Ok(()) };
         for table in list.iter_mut().filter(|t| is_named(t, &full)) {
-            if conflict == Conflict::default() {
-                table.remove("conflict");
+            if mode == Mode::default() {
+                table.remove("mode");
             } else {
-                table["conflict"] = toml_edit::value(conflict.name());
+                table["mode"] = toml_edit::value(mode.name());
             }
             match ask_timeout_hours {
                 Some(h) if h != default_ask_timeout() => table["ask_timeout_hours"] = toml_edit::value(h as i64),
@@ -411,18 +444,47 @@ pub fn set_shared_conflict_in_file(config_path: &Path, name: &str, conflict: Con
     Ok(full)
 }
 
-/// Whether `name`, as a person types it, means the shared folder `full` (`<owner>/<name>`): in full, or by its name alone.
-pub fn names_shared(full: &str, name: &str) -> bool {
-    full == name || (!name.contains('/') && full.rsplit('/').next() == Some(name))
+/// Brings the names in the config up to date with the master: a folder attached by its id that was renamed there is called by its
+/// new name here too (the state and the connection follow the id, so nothing is lost). `listed` is (name, id) as the master says.
+/// Returns the (old, new) names that changed.
+pub fn follow_renames_in_file(config_path: &Path, listed: &[(String, String)]) -> Result<Vec<(String, String)>> {
+    let cfg = Config::load(config_path)?;
+    let changes: Vec<(String, String)> = cfg
+        .synced
+        .iter()
+        .filter_map(|s| {
+            let id = s.id.as_deref()?;
+            let (name, _) = listed.iter().find(|(_, listed_id)| listed_id == id)?;
+            (*name != s.name).then(|| (s.name.clone(), name.clone()))
+        })
+        .collect();
+    if changes.is_empty() {
+        return Ok(changes);
+    }
+    edit_file(config_path, |doc| {
+        let Some(list) = doc.get_mut("synced").and_then(|s| s.as_array_of_tables_mut()) else { return Ok(()) };
+        for (old, new) in &changes {
+            for table in list.iter_mut().filter(|t| is_named(t, old)) {
+                table["name"] = toml_edit::value(new.clone());
+            }
+        }
+        Ok(())
+    })?;
+    Ok(changes)
+}
+
+/// Whether `name`, as a person types it, means the synced folder `full` (`<owner>/<name>`): in full, or by its name alone.
+pub fn names_synced(full: &str, name: &str) -> bool {
+    full == name || (!name.contains('/') && !full.starts_with(MASTER_KEY) && full.rsplit('/').next() == Some(name))
 }
 
 impl Config {
-    /// The shared folder a person means by `name`: in full, or by its name alone when only one has it.
-    pub fn shared_named(&self, name: &str) -> Result<&Shared> {
-        let found: Vec<&Shared> = self.shared.iter().filter(|s| names_shared(&s.name, name)).collect();
+    /// The synced folder a person means by `name`: in full, or by its name alone when only one has it.
+    pub fn synced_named(&self, name: &str) -> Result<&SyncedFolder> {
+        let found: Vec<&SyncedFolder> = self.synced.iter().filter(|s| names_synced(&s.name, name)).collect();
         match found.as_slice() {
             [one] => Ok(one),
-            [] => bail!("no shared folder named \"{name}\" is attached"),
+            [] => bail!("no synced folder named \"{name}\" is attached"),
             many => bail!(
                 "\"{name}\" could be any of {}: name one in full",
                 many.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
@@ -431,15 +493,15 @@ impl Config {
     }
 }
 
-/// Detaches a shared folder from this computer. The files stay in the local folder and on the master. It can be named in full
+/// Detaches a synced folder from this computer. The files stay in the local folder and on the master. It can be named in full
 /// (`<owner>/<name>`) or, when that is not ambiguous, by its name alone. Returns the name in full.
-pub fn detach_shared_from_file(config_path: &Path, name: &str) -> Result<String> {
-    let full = Config::load(config_path)?.shared_named(name)?.name.clone();
+pub fn detach_synced_from_file(config_path: &Path, name: &str) -> Result<String> {
+    let full = Config::load(config_path)?.synced_named(name)?.name.clone();
     edit_file(config_path, |doc| {
-        if let Some(list) = doc.get_mut("shared").and_then(|s| s.as_array_of_tables_mut()) {
+        if let Some(list) = doc.get_mut("synced").and_then(|s| s.as_array_of_tables_mut()) {
             list.retain(|t| !is_named(t, &full));
             if list.is_empty() {
-                doc.remove("shared");
+                doc.remove("synced");
             }
         }
         Ok(())
@@ -600,78 +662,140 @@ watch = false
     }
 
     #[test]
-    fn each_shared_folder_has_its_own_conflict_policy() {
+    fn each_synced_folder_has_its_own_mode() {
         let dir = tempfile::tempdir().unwrap();
-        let cfg = dir.path().join("config.toml");
+        let cfg = dir.path().join("fafnirx.toml");
         std::fs::write(
             &cfg,
             "server = \"http://x:7443\"
 ",
         )
         .unwrap();
-        attach_shared_to_file(&cfg, "plain", &dir.path().join("a"), Conflict::default()).unwrap();
-        attach_shared_to_file(&cfg, "mine", &dir.path().join("b"), Conflict::Mine).unwrap();
+        for d in ["a", "b"] {
+            std::fs::create_dir_all(dir.path().join(d)).unwrap();
+        }
+        attach_synced_to_file(&cfg, "plain", None, &dir.path().join("a"), Mode::Both).unwrap();
+        attach_synced_to_file(&cfg, "mine", None, &dir.path().join("b"), Mode::Mine).unwrap();
         let text = std::fs::read_to_string(&cfg).unwrap();
-        assert_eq!(text.matches("conflict").count(), 1, "only a choice that is not the default is written: {text}");
-        let policy = |name: &str| Config::load(&cfg).unwrap().shared_named(name).unwrap().conflict;
-        assert_eq!((policy("plain"), policy("mine")), (Conflict::Theirs, Conflict::Mine));
+        assert_eq!(text.matches("mode").count(), 1, "only a choice that is not the default is written: {text}");
+        let mode = |name: &str| Config::load(&cfg).unwrap().synced_named(name).unwrap().mode;
+        assert_eq!((mode("plain"), mode("mine")), (Mode::Both, Mode::Mine));
 
-        set_shared_conflict_in_file(&cfg, "plain", Conflict::Both, Some(0)).unwrap();
-        set_shared_conflict_in_file(&cfg, "mine", Conflict::Theirs, None).unwrap();
+        set_synced_mode_in_file(&cfg, "plain", Mode::Keep, Some(0)).unwrap();
+        set_synced_mode_in_file(&cfg, "mine", Mode::Both, None).unwrap();
         let loaded = Config::load(&cfg).unwrap();
-        let (plain, mine) = (loaded.shared_named("plain").unwrap(), loaded.shared_named("mine").unwrap());
-        assert_eq!((plain.conflict, plain.ask_timeout_hours), (Conflict::Both, 0));
-        assert_eq!((mine.conflict, mine.ask_timeout_hours), (Conflict::Theirs, 24), "back to the defaults");
-        assert!(
-            !std::fs::read_to_string(&cfg).unwrap().contains(
-                "mine\"
-conflict"
-            ),
-            "and not written"
-        );
-        assert!("ASK".parse::<Conflict>().is_ok() && "keep".parse::<Conflict>().is_err());
+        let (plain, mine) = (loaded.synced_named("plain").unwrap(), loaded.synced_named("mine").unwrap());
+        assert_eq!((plain.mode, plain.ask_timeout_hours), (Mode::Keep, 0));
+        assert_eq!((mine.mode, mine.ask_timeout_hours), (Mode::Both, 24), "back to the defaults");
+        assert!(Mode::Both.pulls() && Mode::Mine.pulls() && !Mode::Up.pulls());
+        assert!("ASK".parse::<Mode>().is_ok() && "theirs".parse::<Mode>().is_err());
     }
 
     #[test]
-    fn shared_folders_are_attached_and_detached_in_place() {
+    fn a_master_folder_can_be_synced_up_only_and_is_addressed_by_its_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("fafnirx.toml");
+        std::fs::write(&cfg, "server = \"http://x:7443\"\n").unwrap();
+        let id = "2f1b6a52-6d0e-4c0c-9a54-1f0b7f3e9a11";
+        let up = attach_synced_to_file(&cfg, "master:Música/Rock", Some(id), &dir.path().join("a"), Mode::Up).unwrap();
+        assert_eq!((up.key(), up.mode), (id, Mode::Up));
+        attach_synced_to_file(&cfg, "master:Photos", None, &dir.path().join("b"), Mode::Both).unwrap();
+        let loaded = Config::load(&cfg).unwrap();
+        assert_eq!(loaded.synced[0], up, "what is written is read back");
+        assert_eq!(
+            (loaded.synced[1].key(), loaded.synced[1].mode),
+            ("master:Photos", Mode::Both),
+            "without an id the name is the key"
+        );
+
+        // A master folder is named in full: a bare name never means one.
+        assert!(loaded.synced_named("Photos").is_err() && loaded.synced_named("master:Photos").is_ok());
+        let bad = attach_synced_to_file(&cfg, "master:../x", None, &dir.path().join("c"), Mode::Both);
+        assert!(format!("{:#}", bad.unwrap_err()).contains("master folder"));
+
+        assert_eq!(set_synced_mode_in_file(&cfg, "master:Photos", Mode::Up, None).unwrap(), "master:Photos");
+        assert_eq!(Config::load(&cfg).unwrap().synced[1].mode, Mode::Up);
+        set_synced_mode_in_file(&cfg, "master:Photos", Mode::Both, None).unwrap();
+        assert!(
+            !std::fs::read_to_string(&cfg).unwrap().contains("master:Photos\"\nmode"),
+            "the default is not written"
+        );
+        assert!("UP".parse::<Mode>().is_ok() && "down".parse::<Mode>().is_err());
+    }
+
+    #[test]
+    fn a_folder_renamed_on_the_master_is_renamed_in_the_config_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("fafnirx.toml");
+        std::fs::write(
+            &cfg,
+            "server = \"http://x:7443\"
+",
+        )
+        .unwrap();
+        attach_synced_to_file(&cfg, "family", Some("id-1"), &dir.path().join("a"), Mode::Both).unwrap();
+        attach_synced_to_file(&cfg, "master:Music", Some("id-2"), &dir.path().join("b"), Mode::Up).unwrap();
+        attach_synced_to_file(&cfg, "old", None, &dir.path().join("c"), Mode::Both).unwrap();
+        let listed = [
+            ("ana/home".to_string(), "id-1".to_string()),
+            ("master:Music".to_string(), "id-2".to_string()),
+            ("old".to_string(), "id-9".to_string()),
+        ];
+        let changed = follow_renames_in_file(&cfg, &listed).unwrap();
+        assert_eq!(
+            changed,
+            [("family".to_string(), "ana/home".to_string())],
+            "only a folder with an id, and only when the name differs"
+        );
+        let loaded = Config::load(&cfg).unwrap();
+        assert_eq!(
+            loaded.synced.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            ["ana/home", "master:Music", "old"]
+        );
+        assert_eq!((loaded.synced[0].key(), loaded.synced[1].mode), ("id-1", Mode::Up), "the id and the rest stay");
+        assert!(follow_renames_in_file(&cfg, &listed).unwrap().is_empty(), "nothing more to do");
+    }
+
+    #[test]
+    fn synced_folders_are_attached_and_detached_in_place() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path().join("config.toml");
         std::fs::write(&cfg, "# notes\nserver = \"http://x:7443\"\n").unwrap();
         for d in ["a", "b", "a/inner", "c"] {
             std::fs::create_dir_all(dir.path().join(d)).unwrap();
         }
-        assert!(Config::load(&cfg).unwrap().shared.is_empty(), "a config without the table has none attached");
-        let new = attach_shared_to_file(&cfg, "fresh", &dir.path().join("not/there/yet"), Conflict::default()).unwrap();
+        assert!(Config::load(&cfg).unwrap().synced.is_empty(), "a config without the table has none attached");
+        let new = attach_synced_to_file(&cfg, "fresh", None, &dir.path().join("not/there/yet"), Mode::Both).unwrap();
         assert!(new.path.is_dir(), "a folder that does not exist is made");
-        assert_eq!(detach_shared_from_file(&cfg, "fresh").unwrap(), "fresh", "it says which folder it detached");
+        assert_eq!(detach_synced_from_file(&cfg, "fresh").unwrap(), "fresh", "it says which folder it detached");
         add_folder_to_file(&cfg, &dir.path().join("c"), None).unwrap();
-        attach_shared_to_file(&cfg, "family", &dir.path().join("a"), Conflict::default()).unwrap();
-        attach_shared_to_file(&cfg, "work", &dir.path().join("b"), Conflict::default()).unwrap();
+        attach_synced_to_file(&cfg, "family", None, &dir.path().join("a"), Mode::Both).unwrap();
+        attach_synced_to_file(&cfg, "work", None, &dir.path().join("b"), Mode::Both).unwrap();
         let loaded = Config::load(&cfg).unwrap();
-        assert_eq!(loaded.shared.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["family", "work"]);
+        assert_eq!(loaded.synced.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["family", "work"]);
         assert_eq!(loaded.folders.len(), 1, "the backup folders are not touched");
         assert!(std::fs::read_to_string(&cfg).unwrap().contains("# notes"), "comments survive");
 
-        let err = |r: Result<Shared>| format!("{:#}", r.unwrap_err());
-        assert!(err(attach_shared_to_file(&cfg, "family", &dir.path().join("a"), Conflict::default())).contains("already collected"));
-        assert!(err(attach_shared_to_file(&cfg, "other", &dir.path().join("a/inner"), Conflict::default())).contains("overlaps"));
+        let err = |r: Result<SyncedFolder>| format!("{:#}", r.unwrap_err());
+        assert!(err(attach_synced_to_file(&cfg, "family", None, &dir.path().join("a"), Mode::Both)).contains("already collected"));
+        assert!(err(attach_synced_to_file(&cfg, "other", None, &dir.path().join("a/inner"), Mode::Both)).contains("overlaps"));
         assert!(
-            err(attach_shared_to_file(&cfg, "other", &dir.path().join("c"), Conflict::default())).contains("already collected"),
+            err(attach_synced_to_file(&cfg, "other", None, &dir.path().join("c"), Mode::Both)).contains("already collected"),
             "not a folder that is backed up either"
         );
         std::fs::create_dir_all(dir.path().join("d")).unwrap();
-        assert!(err(attach_shared_to_file(&cfg, "family", &dir.path().join("d"), Conflict::default())).contains("attached twice"));
-        assert!(err(attach_shared_to_file(&cfg, "Bad Name", &dir.path().join("d"), Conflict::default())).contains("lowercase"));
+        assert!(err(attach_synced_to_file(&cfg, "family", None, &dir.path().join("d"), Mode::Both)).contains("attached twice"));
+        assert!(err(attach_synced_to_file(&cfg, "Bad Name", None, &dir.path().join("d"), Mode::Both)).contains("lowercase"));
 
         // Folders of two owners with one name: the short name is ambiguous, the full one is not.
-        attach_shared_to_file(&cfg, "bob/work", &dir.path().join("d"), Conflict::default()).unwrap();
-        let ambiguous = format!("{:#}", detach_shared_from_file(&cfg, "work").unwrap_err());
+        attach_synced_to_file(&cfg, "bob/work", None, &dir.path().join("d"), Mode::Both).unwrap();
+        let ambiguous = format!("{:#}", detach_synced_from_file(&cfg, "work").unwrap_err());
         assert!(ambiguous.contains("work, bob/work"), "{ambiguous}");
-        detach_shared_from_file(&cfg, "bob/work").unwrap();
-        detach_shared_from_file(&cfg, "family").unwrap();
-        assert_eq!(Config::load(&cfg).unwrap().shared.len(), 1);
-        detach_shared_from_file(&cfg, "work").unwrap();
-        assert!(!std::fs::read_to_string(&cfg).unwrap().contains("shared"), "the empty table is removed");
-        assert!(detach_shared_from_file(&cfg, "work").is_err());
+        detach_synced_from_file(&cfg, "bob/work").unwrap();
+        detach_synced_from_file(&cfg, "family").unwrap();
+        assert_eq!(Config::load(&cfg).unwrap().synced.len(), 1);
+        detach_synced_from_file(&cfg, "work").unwrap();
+        assert!(!std::fs::read_to_string(&cfg).unwrap().contains("synced"), "the empty table is removed");
+        assert!(detach_synced_from_file(&cfg, "work").is_err());
     }
 }

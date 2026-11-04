@@ -9,12 +9,31 @@ use std::path::Path;
 const ENTRY: &str = "index.js";
 const STYLE: &str = "style.css";
 
+/// The languages of the `strings.<lang>.json` files in `dir`, sorted.
+fn languages(dir: &Path) -> Vec<String> {
+    let mut found: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let lang = name.strip_prefix("strings.")?.strip_suffix(".json")?;
+            (!lang.is_empty() && lang.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')).then(|| lang.to_string())
+        })
+        .collect();
+    found.sort();
+    found
+}
+
 /// What the manifest says of the module's screens: nothing when there is no built script to serve.
 pub fn describe(dir: Option<&Path>) -> Option<Ui> {
     let dir = dir?;
-    dir.join(ENTRY)
-        .is_file()
-        .then(|| Ui { entry: ENTRY.into(), css: dir.join(STYLE).is_file().then(|| STYLE.into()), sdk: WEB_SDK })
+    dir.join(ENTRY).is_file().then(|| Ui {
+        entry: ENTRY.into(),
+        css: dir.join(STYLE).is_file().then(|| STYLE.into()),
+        sdk: WEB_SDK,
+        strings: languages(dir),
+    })
 }
 
 fn content_type(name: &str) -> &'static str {
@@ -72,6 +91,11 @@ mod tests {
         std::fs::write(dir.path().join("style.css"), "").unwrap();
         let ui = describe(Some(dir.path())).unwrap();
         assert_eq!((ui.entry.as_str(), ui.css.as_deref(), ui.sdk), ("index.js", Some("style.css"), WEB_SDK));
+        assert!(ui.strings.is_empty());
+        for name in ["strings.es.json", "strings.zh.json", "strings..json", "strings.x y.json", "other.json"] {
+            std::fs::write(dir.path().join(name), "{}").unwrap();
+        }
+        assert_eq!(describe(Some(dir.path())).unwrap().strings, ["es", "zh"], "the languages that have a file");
     }
 
     #[tokio::test]

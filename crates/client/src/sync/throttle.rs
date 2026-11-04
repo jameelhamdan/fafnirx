@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
-/// Shared upload rate limiter: every sender reserves a slot for its bytes.
+/// Synced upload rate limiter: every sender reserves a slot for its bytes.
 pub struct Limiter {
     kib_per_sec: AtomicU64,
     next: Mutex<Instant>,

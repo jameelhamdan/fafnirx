@@ -50,12 +50,15 @@ impl std::fmt::Display for Table {
     }
 }
 
-/// A source that is due. Its device carries the folder (`<user>/source-<name>`), which names it in logs and alerts.
+/// A source that is due. Its device is the folder it writes into, `prefix` the subfolder of it (empty, or a path and a slash),
+/// and `key` (`<owner>/<name>`) names it in logs, alerts and live events.
 pub struct SourceRow {
     pub id: i64,
     pub kind: String,
     pub config: String,
     pub device: Device,
+    pub prefix: String,
+    pub key: String,
 }
 
 pub struct MirrorRow {
@@ -183,8 +186,16 @@ fn claim_source(db: &Db) -> Option<SourceRow> {
         .opt()
         .map_err(|e| tracing::error!("claim from sources: {e}"))
         .ok()??;
-    let _ = db::notify(&mut *conn, "jobs", &s.folder);
-    Some(SourceRow { id: s.id, kind: s.kind, config: s.config, device: Device { id: s.device_id, name: s.folder } })
+    let key = s.key;
+    let _ = db::notify(&mut *conn, "jobs", &key);
+    Some(SourceRow {
+        id: s.id,
+        kind: s.kind,
+        config: s.config,
+        device: Device { id: s.device_id, name: s.folder },
+        prefix: s.folder_prefix,
+        key,
+    })
 }
 
 fn claim_mirror(db: &Db) -> Option<MirrorRow> {
@@ -240,7 +251,7 @@ fn finish(conn: &mut impl GenericClient, table: Table, alert_kind: &str, id: i64
 }
 
 async fn run_source(db: &Db, store: &Arc<Store>, src: SourceRow) {
-    let (id, name) = (src.id, src.device.name.clone());
+    let (id, name) = (src.id, src.key.clone());
     tracing::info!("source {name}: starting");
     let result = match src.kind.as_str() {
         "rclone" => crate::integrations::rclone_source::run(db.clone(), store.clone(), src).await.map(|o| o.report()),
@@ -289,13 +300,13 @@ mod tests {
         let db = testing::db();
         let mut c = db.get().unwrap();
         c.execute(
-            "INSERT INTO devices (name, kind, token_hash, created_at, user_id) VALUES ('source-d', 'source', '!', 0, 1)",
+            "INSERT INTO devices (name, kind, token_hash, created_at, user_id) VALUES ('source-d', 'local', '!', 0, 1)",
             &[],
         )
         .unwrap();
         c.execute(
-            "INSERT INTO sources (name, kind, config, device_id, created_at, interval_secs)
-             VALUES ('d', 'rclone', '{}', (SELECT id FROM devices WHERE kind = 'source'), 0, 3600)",
+            "INSERT INTO sources (name, kind, config, device_id, user_id, created_at, interval_secs)
+             VALUES ('d', 'rclone', '{}', (SELECT id FROM devices WHERE name = 'source-d'), 1, 0, 3600)",
             &[],
         )
         .unwrap();
@@ -308,7 +319,11 @@ mod tests {
         let db = db();
         let sql = |q: &str, p: &[&(dyn postgres::types::ToSql + Sync)]| db.get().unwrap().execute(q, p).unwrap();
         let first = claim_source(&db).expect("never run: due immediately");
-        assert_eq!(first.device.name, "admin/source-d", "named by its folder");
+        assert_eq!(
+            (first.device.name.as_str(), first.key.as_str()),
+            ("admin/source-d", "admin/d"),
+            "writes in its folder, named by its owner"
+        );
         assert!(claim_source(&db).is_none(), "now running");
         sql("UPDATE sources SET last_status = 'ok'", &[]);
         assert!(claim_source(&db).is_none(), "ran just now, interval not over");

@@ -4,16 +4,16 @@
 //! are write-only: they are never sent back to the browser (the encryption key of a backup mirror, in its restore kit,
 //! is the one exception).
 
-use crate::devices::api::NAME_RULE;
-use crate::files::browse::expand;
+use crate::files::browse::{editable_kind, find_device_to_change};
 use crate::files::ingest;
 use crate::integrations::spec::{normalize_storage, MirrorSpec};
 use crate::integrations::Table;
 use crate::integrations::{fetch_source, scope};
 use crate::platform::db;
 use crate::platform::store::Store;
-use crate::repo::{alerts, mirrors, sources};
+use crate::repo::{alerts, devices, files, mirrors, sources};
 use crate::web::access::Access;
+use crate::web::input;
 use crate::web::{act, run, ApiError, Done, Res, Shared};
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
@@ -85,6 +85,8 @@ fn source_states(c: &mut Client, who: &Access) -> Result<Vec<JobState>, postgres
                 "kind": r.kind,
                 "remote": storage_label(&r.kind, &config),
                 "device": r.folder,
+                "folder": { "device": r.folder, "path": r.folder_prefix.trim_end_matches('/') },
+                "config": shown_config(&r.kind, &config),
             });
             let key = format!("{}/{}", r.owner, r.name);
             state_of(
@@ -145,6 +147,41 @@ fn mirror_states(c: &mut Client) -> Result<Vec<JobState>, postgres::Error> {
 pub fn job_states(c: &mut Client, who: &Access) -> Result<(Vec<JobState>, Vec<JobState>), postgres::Error> {
     let mirrors = if who.is_admin() { mirror_states(c)? } else { vec![] };
     Ok((source_states(c, who)?, mirrors))
+}
+
+/// What the edit form is given of the settings of a source: a module kind's settings without the values that look like secrets
+/// (the form shows those as unchanged), an rclone source's remote and path (its options and passwords stay on the master).
+fn shown_config(kind: &str, config: &Value) -> Value {
+    if kind == "rclone" {
+        return json!({
+            "remote": config["remote"],
+            "remote_type": config["remote_type"],
+            "remote_path": config["remote_path"],
+            "option_keys": config["options"].as_str().and_then(|o| serde_json::from_str::<serde_json::Map<String, Value>>(o).ok()).map_or_else(Vec::new, |o| {
+                let mut keys: Vec<String> = o.keys().cloned().collect();
+                keys.sort();
+                keys
+            }),
+        });
+    }
+    let mut out = config.clone();
+    if let Some(map) = out.as_object_mut() {
+        // What the master keeps for itself is not the form's.
+        map.remove("acknowledged_at");
+        map.remove("label");
+        for (key, value) in map.iter_mut() {
+            if is_secret(key) && value.as_str().is_some_and(|v| !v.is_empty()) {
+                *value = Value::String(String::new());
+            }
+        }
+    }
+    out
+}
+
+/// Whether a setting of a module's source is one that is only ever written (a password, a token, cookies).
+fn is_secret(key: &str) -> bool {
+    let key = key.to_lowercase();
+    ["password", "secret", "token", "cookie", "key"].iter().any(|w| key.contains(w))
 }
 
 /// The id and the device folder of the source `name` of `user`, unless it is missing or `who` may not manage it (an
@@ -225,14 +262,6 @@ pub(crate) fn hours_to_secs(hours: f64) -> Result<i64, ApiError> {
     Ok((hours * 3600.0).round() as i64)
 }
 
-fn slug(name: &str) -> Result<String, ApiError> {
-    let name = name.trim().to_lowercase();
-    if !valid_device_name(&name) {
-        return Err(ApiError::bad(NAME_RULE));
-    }
-    Ok(name)
-}
-
 fn day() -> f64 {
     24.0
 }
@@ -265,12 +294,45 @@ pub struct NewSource {
     remote_path: String,
     #[serde(default = "day")]
     interval_hours: f64,
+    /// Where it writes. Left out: a new local folder of its own, called `source-<name>`.
+    #[serde(default)]
+    folder: Option<Place>,
+}
+
+/// A folder of a device, and a subfolder of it (empty for the folder itself).
+#[derive(Deserialize, Clone)]
+pub struct Place {
+    device: String,
+    #[serde(default)]
+    path: String,
+}
+
+/// The folder `place` as a source writes into it: a folder `who` may change and the web app edits in place, and the subfolder
+/// as a prefix of the paths (empty, or the path and a slash). The master files may not be written under `users/`.
+fn destination(c: &mut Client, who: &Access, place: &Place) -> anyhow::Result<sources::Destination> {
+    let device = find_device_to_change(c, who, &place.device)?;
+    if !editable_kind(&devices::kind_of(c, device.id)?) {
+        return Err(ApiError::bad("A source can write into your own folders, shared folders and the master files").into());
+    }
+    let prefix = input::folder_prefix(&place.path)?;
+    ingest::check_master_path(&device, &prefix)?;
+    Ok(sources::Destination { device_id: device.id, folder: device.name, prefix })
+}
+
+/// The settings of an rclone source as they are stored.
+fn rclone_config(remote: String, remote_type: String, remote_path: String, options: std::collections::BTreeMap<String, Value>) -> Value {
+    json!({
+        "remote": remote,
+        "remote_type": remote_type,
+        "remote_path": remote_path,
+        "options": Value::Object(options.into_iter().collect()).to_string(),
+    })
 }
 
 /// Adds a source that copies a folder of any storage rclone supports.
 pub async fn create_source(State(state): State<Shared>, Extension(who): Extension<Access>, Json(b): Json<NewSource>) -> Res<Done> {
     who.require_workspace()?;
-    let name = slug(&b.name)?;
+    let name = input::device_name(&b.name)?;
     let device = format!("{SOURCE_PREFIX}{name}");
     if !valid_device_name(&device) {
         return Err(ApiError::bad("Name: too long for a source"));
@@ -281,42 +343,223 @@ pub async fn create_source(State(state): State<Shared>, Extension(who): Extensio
         let (mut remote, mut remote_type, mut remote_path) = (b.remote, b.remote_type, b.remote_path);
         let mut options: std::collections::BTreeMap<String, Value> = options.into_iter().collect();
         normalize_storage(&mut remote, &mut remote_type, &mut remote_path, &mut options).map_err(|e| ApiError::bad(format!("{e:#}")))?;
-        json!({
-            "remote": remote,
-            "remote_type": remote_type,
-            "remote_path": remote_path,
-            "options": Value::Object(options.into_iter().collect()).to_string(),
-        })
+        rclone_config(remote, remote_type, remote_path, options)
     } else if fetch_source::is_kind(&b.kind) {
         fetch_source::validate(&b.kind, &b.config).await.map_err(|e| ApiError::bad(format!("{e:#}")))?
     } else {
         unreachable!("every kind but rclone is read by a module")
     };
-    let (store, kind) = (state.store.clone(), b.kind);
+    let (store, kind, place) = (state.store.clone(), b.kind, b.folder);
     act(&state, move |c| {
+        let chosen = place.as_ref().map(|place| destination(c, &who, place)).transpose()?;
         let mut tx = c.transaction()?;
-        // The source owns a device row (in the workspace of the user who added it), so its files use the
-        // same tables as a device's. '!' can never equal a SHA-256 hex digest, so nothing can authenticate as a source.
-        let (device_id, folder) = sources::insert_device(&mut tx, who.user_id, &device, unix_now())?.ok_or_else(|| ApiError::conflict(format!("You already have a source named {name}")))?;
-        sources::insert(&mut tx, device_id, &name, &kind, &config.to_string(), secs, unix_now())?;
-        db::notify(&mut tx, "jobs", &folder)?;
+        if sources::name_taken(&mut tx, who.user_id, &name, 0)? {
+            return Err(ApiError::conflict(format!("You already have a source named {name}")).into());
+        }
+        let (dest, own) = match chosen {
+            Some(dest) => (dest, false),
+            None => {
+                // A folder of its own in the workspace of the user, for a source that was given none. '!' can never equal a
+                // SHA-256 hex digest, so nothing can authenticate as it.
+                let (device_id, folder) = sources::insert_device(&mut tx, who.user_id, &device, unix_now())?.ok_or_else(|| ApiError::conflict(format!("You have a device or folder called {device} already")))?;
+                (sources::Destination { device_id, folder, prefix: String::new() }, true)
+            }
+        };
+        let new = sources::New {
+            user_id: who.user_id,
+            name: &name,
+            kind: &kind,
+            config: &config.to_string(),
+            interval_secs: secs,
+            device_id: dest.device_id,
+            prefix: &dest.prefix,
+        };
+        sources::insert(&mut tx, &new, unix_now())?;
+        db::notify(&mut tx, "jobs", &format!("{}/{name}", who.name))?;
         tx.commit()?;
-        let _ = std::fs::create_dir_all(store.live_dir(&folder));
+        if own {
+            let _ = std::fs::create_dir_all(store.live_dir(&dest.folder));
+        }
+        Ok(())
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+pub struct SourceEdit {
+    name: Option<String>,
+    interval_hours: Option<f64>,
+    /// Where it writes. Files it collected before stay where they are; it collects everything again into the new place.
+    folder: Option<Place>,
+    /// A module kind's settings, in full.
+    config: Option<Value>,
+    /// An rclone source's remote or backend and path; what is left out stays as it was.
+    remote: Option<String>,
+    remote_type: Option<String>,
+    remote_path: Option<String>,
+    /// All the options of the backend, replacing the stored ones.
+    options: Option<String>,
+    #[serde(default)]
+    secrets: std::collections::BTreeMap<String, String>,
+}
+
+/// The settings of a module's source after an edit: the new ones, but a secret left empty keeps its stored value.
+fn merge_secrets(stored: &Value, mut new: Value) -> Value {
+    if let (Some(new), Some(old)) = (new.as_object_mut(), stored.as_object()) {
+        for (key, value) in new.iter_mut() {
+            if is_secret(key) && value.as_str() == Some("") {
+                if let Some(kept) = old.get(key) {
+                    *value = kept.clone();
+                }
+            }
+        }
+    }
+    new
+}
+
+/// A source gets a new place to write: what it collected goes with it. In the same folder the files are moved (and stay what the
+/// source remembers); into another folder they are put in the Trash there, and the source collects everything again where it now
+/// writes (the caller forgets what it remembered). Nothing is moved if a file is in the way; a failure puts back what was moved.
+/// Returns whether the source has to collect everything again.
+fn carry_collected(c: &mut Client, store: &Store, id: i64, from: &sources::Destination, to: &sources::Destination) -> anyhow::Result<bool> {
+    let device = db::Device { id: from.device_id, name: from.folder.clone() };
+    let mut live = Vec::new();
+    for (_, path, _) in sources::items(c, id)? {
+        let old = format!("{}{path}", from.prefix);
+        if files::live_content(c, device.id, &old)?.is_some() {
+            live.push((old, format!("{}{path}", to.prefix)));
+        }
+    }
+    if from.device_id != to.device_id {
+        for (old, _) in &live {
+            ingest::mark_deleted(c, store, &device, old, false)?;
+        }
+        return Ok(true);
+    }
+    if let Some((_, new)) = live.iter().find(|(_, new)| files::live_content(c, device.id, new).ok().flatten().is_some()) {
+        return Err(ApiError::conflict(format!("{new} exists already; the files the source collected cannot move there")).into());
+    }
+    let mut moved: Vec<&(String, String)> = Vec::new();
+    for pair in &live {
+        if let Err(e) = ingest::move_path(c, store, &device, &pair.0, &pair.1) {
+            for (old, new) in moved.iter().rev().map(|p| (&p.0, &p.1)) {
+                let _ = ingest::move_path(c, store, &device, new, old);
+            }
+            return Err(e);
+        }
+        moved.push(pair);
+    }
+    Ok(false)
+}
+
+/// Changes a source: its name, where it writes, how often it runs and what it reads. Credentials left out keep their value.
+pub async fn edit_source(State(state): State<Shared>, Extension(who): Extension<Access>, Path((user, name)): Path<(String, String)>, Json(b): Json<SourceEdit>) -> Res<Done> {
+    who.require_workspace()?;
+    let new_name = b.name.as_deref().map(input::device_name).transpose()?;
+    let secs = b.interval_hours.map(hours_to_secs).transpose()?;
+    let (stored_id, _) = {
+        let (who, user, name) = (who.clone(), user.clone(), name.clone());
+        run(&state, move |c| find_source(c, &who, &user, &name)).await?
+    };
+    let stored = run(&state, move |c| Ok(sources::for_edit(c, stored_id)?))
+        .await?
+        .ok_or_else(|| ApiError::not_found("No such source"))?;
+    let old: Value = serde_json::from_str(&stored.config).unwrap_or(Value::Null);
+    let config = if stored.kind == "rclone" {
+        if b.remote.is_some() || b.remote_type.is_some() || b.remote_path.is_some() || b.options.is_some() || !b.secrets.is_empty() {
+            let mut options: std::collections::BTreeMap<String, Value> = match &b.options {
+                Some(text) => backend_options(text, &b.secrets).await?.into_iter().collect(),
+                None => {
+                    let mut kept: std::collections::BTreeMap<String, Value> = old["options"]
+                        .as_str()
+                        .and_then(|o| serde_json::from_str::<serde_json::Map<String, Value>>(o).ok())
+                        .map(|o| o.into_iter().collect())
+                        .unwrap_or_default();
+                    kept.extend(backend_options("", &b.secrets).await?);
+                    kept
+                }
+            };
+            let text = |new: &Option<String>, key: &str| new.clone().unwrap_or_else(|| old[key].as_str().unwrap_or_default().to_string());
+            let (mut remote, mut remote_type, mut remote_path) = (text(&b.remote, "remote"), text(&b.remote_type, "remote_type"), text(&b.remote_path, "remote_path"));
+            normalize_storage(&mut remote, &mut remote_type, &mut remote_path, &mut options).map_err(|e| ApiError::bad(format!("{e:#}")))?;
+            rclone_config(remote, remote_type, remote_path, options)
+        } else {
+            old.clone()
+        }
+    } else if let Some(mut config) = b.config.clone() {
+        // The confirmation of the right to copy was given when the source was added.
+        if config["acknowledged"].is_null() && old["acknowledged_at"].is_number() {
+            config["acknowledged"] = Value::Bool(true);
+        }
+        fetch_source::validate(&stored.kind, &merge_secrets(&old, config))
+            .await
+            .map_err(|e| ApiError::bad(format!("{e:#}")))?
+    } else {
+        old.clone()
+    };
+    let place = b.folder.clone();
+    let key = format!("{user}/{name}");
+    let store = state.store.clone();
+    act(&state, move |c| {
+        let chosen = place.as_ref().map(|place| destination(c, &who, place)).transpose()?;
+        // What it collected goes to the new place before the source says it writes there.
+        let mut recollect = false;
+        if let Some(to) = chosen.as_ref() {
+            let from = sources::destination_of(c, stored_id)?.ok_or_else(|| ApiError::not_found("No such source"))?;
+            if (from.device_id, from.prefix.as_str()) != (to.device_id, to.prefix.as_str()) {
+                if sources::for_edit(c, stored_id)?.is_some_and(|s| s.running) {
+                    return Err(ApiError::conflict("The source is running. Try again when it has finished").into());
+                }
+                recollect = carry_collected(c, &store, stored_id, &from, to)?;
+            }
+        }
+        let mut tx = c.transaction()?;
+        let mut s = sources::for_edit(&mut tx, stored_id)?.ok_or_else(|| ApiError::not_found("No such source"))?;
+        if s.running {
+            return Err(ApiError::conflict("The source is running. Try again when it has finished").into());
+        }
+        if let Some(dest) = chosen {
+            (s.device_id, s.prefix) = (dest.device_id, dest.prefix);
+        }
+        if let Some(new_name) = &new_name {
+            if *new_name != s.name && sources::name_taken(&mut tx, s.user_id, new_name, stored_id)? {
+                return Err(ApiError::conflict(format!("You already have a source named {new_name}")).into());
+            }
+            s.name = new_name.clone();
+        }
+        if let Some(secs) = secs {
+            s.interval_secs = secs;
+        }
+        s.config = config.to_string();
+        sources::update(&mut tx, stored_id, &s)?;
+        if recollect {
+            // What it remembered is about the old folder: it collects everything again into the new one.
+            sources::forget_items(&mut tx, stored_id)?;
+        }
+        let renamed = format!("{user}/{}", s.name);
+        if renamed != key {
+            // The failure alert of the old name would never be closed.
+            alerts::resolve(&mut tx, "source_failed", &key)?;
+        }
+        db::notify(&mut tx, "jobs", &key)?;
+        db::notify(&mut tx, "jobs", &renamed)?;
+        tx.commit()?;
         Ok(())
     })
     .await
 }
 
 /// Removes a source. Its collected files follow the normal delete rule: kept for the retention period, then removed.
-pub fn remove_source(c: &mut Client, store: &Store, id: i64) -> anyhow::Result<()> {
-    let (device_id, folder) = sources::device_of(c, id)?.ok_or_else(|| ApiError::not_found("No such source"))?;
-    let device = db::Device { id: device_id, name: folder };
-    for path in expand(c, &device, "", false)? {
-        ingest::mark_deleted(c, store, &device, &path, true)?;
+/// Only what the source collected is deleted, not what else is in the folder it wrote into.
+pub fn remove_source(c: &mut Client, store: &Store, id: i64, key: &str) -> anyhow::Result<()> {
+    let dest = sources::destination_of(c, id)?.ok_or_else(|| ApiError::not_found("No such source"))?;
+    let device = db::Device { id: dest.device_id, name: dest.folder };
+    for (_, path, _) in sources::items(c, id)? {
+        ingest::mark_deleted(c, store, &device, &format!("{}{path}", dest.prefix), true)?;
     }
     sources::delete(c, id)?;
-    alerts::resolve(c, "source_failed", &device.name)?;
-    db::notify(c, "jobs", &device.name)?;
+    alerts::resolve(c, "source_failed", key)?;
+    db::notify(c, "jobs", key)?;
     Ok(())
 }
 
@@ -325,7 +568,7 @@ pub async fn delete_source(State(state): State<Shared>, Extension(who): Extensio
     let store = state.store.clone();
     act(&state, move |c| {
         let (id, _) = find_source(c, &who, &user, &name)?;
-        remove_source(c, &store, id)
+        remove_source(c, &store, id, &format!("{user}/{name}"))
     })
     .await
 }
@@ -337,7 +580,7 @@ enum Touch {
     ToggleEnabled,
 }
 
-/// Flips or requests something on a row of a source or a mirror. `key` tells who to announce it to: the device folder of
+/// Flips or requests something on a row of a source or a mirror. `key` tells who to announce it to: `<owner>/<name>` of
 /// a source, `mirrors` for a mirror.
 fn touch(c: &mut Client, table: Table, id: i64, key: &str, what: Touch) -> anyhow::Result<()> {
     match (table, what) {
@@ -354,8 +597,8 @@ fn touch(c: &mut Client, table: Table, id: i64, key: &str, what: Touch) -> anyho
 async fn touch_source(state: &Shared, who: Access, user: String, name: String, what: Touch) -> Res<Done> {
     who.require_workspace()?;
     act(state, move |c| {
-        let (id, folder) = find_source(c, &who, &user, &name)?;
-        touch(c, Table::Sources, id, &folder, what)
+        let (id, _) = find_source(c, &who, &user, &name)?;
+        touch(c, Table::Sources, id, &format!("{user}/{name}"), what)
     })
     .await
 }
@@ -431,7 +674,7 @@ pub async fn create_mirror(State(state): State<Shared>, Extension(who): Extensio
     who.require_admin()?;
     let options = backend_options(&b.options, &b.secrets).await?;
     let mut mirror = MirrorSpec {
-        name: slug(&b.name)?,
+        name: input::device_name(&b.name)?,
         kind: b.kind,
         crypt_password: b.crypt_password,
         crypt_salt: b.crypt_salt,

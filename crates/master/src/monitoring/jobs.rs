@@ -241,11 +241,11 @@ mod tests {
     }
 
     #[test]
-    fn sources_and_local_folders_are_never_offline() {
+    fn local_folders_are_never_offline() {
         let db = testing::db_with_device();
         let mut c = db.get().unwrap();
         let c = &mut *c;
-        c.execute("UPDATE devices SET kind = 'source', last_seen = $1 WHERE id = 1", &[&(unix_now() - 600)])
+        c.execute("UPDATE devices SET kind = 'local', last_seen = $1 WHERE id = 1", &[&(unix_now() - 600)])
             .unwrap();
         offline_alerts(c).unwrap();
         assert_eq!(testing::open_alerts(c), 0, "only clients send heartbeats");

@@ -126,7 +126,7 @@ try {
   fs.mkdirSync(path.join(docs, 'deep'), { recursive: true })
   fs.writeFileSync(path.join(docs, 'x.txt'), 'from a device')
   fs.writeFileSync(path.join(docs, 'deep', 'y.txt'), 'deeper')
-  c('add-folder', docs, '--name', 'docs')
+  c('folder', 'add', docs, '--name', 'docs')
   c('sync')
 
   // --- mirror ----------------------------------------------------------------------------------------------------------------------------------

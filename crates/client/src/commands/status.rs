@@ -1,7 +1,7 @@
 //! What the client is doing, and the deletions it holds back.
 
 use super::wake_client;
-use crate::config::{self, Config, Shared};
+use crate::config::{self, Config, SyncedFolder};
 use crate::daemon;
 use crate::sync::state;
 use anyhow::Result;
@@ -14,39 +14,39 @@ fn databases_are_ours(config_path: &Path) -> bool {
     !config::is_system_config(config_path) || crate::service::elevate::is_admin()
 }
 
-/// What each shared folder is doing, from its own state database: it is all kept there, so this is true with the client stopped.
-fn shared_statuses(config_path: &Path, cfg: &Config, dir: &Path) -> Vec<daemon::SharedStatus> {
+/// What each synced folder is doing, from its own state database: it is all kept there, so this is true with the client stopped.
+fn synced_statuses(config_path: &Path, cfg: &Config, dir: &Path) -> Vec<daemon::SyncedStatus> {
     if !databases_are_ours(config_path) {
-        return daemon::read_status(dir).map(|s| s.shared).unwrap_or_default();
+        return daemon::read_status(dir).map(|s| s.synced).unwrap_or_default();
     }
     states_of(cfg, dir)
         .into_iter()
-        .filter_map(|(shared, state)| Some(crate::shared::status_of(shared?, &state)))
+        .filter_map(|(synced, state)| Some(crate::synced::status_of(synced?, &state)))
         .collect()
 }
 
-fn print_shared(shared: &[daemon::SharedStatus]) {
-    if !shared.is_empty() {
-        println!("shared folders:");
-        for f in shared {
+fn print_synced(synced: &[daemon::SyncedStatus]) {
+    if !synced.is_empty() {
+        println!("synced folders:");
+        for f in synced {
             println!("  {} ({}): {}", f.name, f.path, f.summary(unix_now()));
         }
     }
 }
 
 /// What the client is doing: for people, or with `json` for scripts and monitoring (the status the client keeps, whether it
-/// is running, whether it is paused, and the shared folders).
+/// is running, whether it is paused, and the synced folders).
 pub fn status(config_path: &Path, json: bool) -> Result<()> {
     let cfg = Config::load(config_path)?;
     let dir = cfg.state_dir(config_path);
-    let shared = shared_statuses(config_path, &cfg, &dir);
+    let synced = synced_statuses(config_path, &cfg, &dir);
     if json {
         let status = daemon::read_status(&dir);
         let running = status.as_ref().is_some_and(|s| s.fatal.is_empty() && unix_now() - s.updated <= 120);
         let paused = daemon::paused_marker(&dir).exists();
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({ "running": running, "paused": paused, "status": status, "shared": shared }))?
+            serde_json::to_string_pretty(&serde_json::json!({ "running": running, "paused": paused, "status": status, "synced": synced }))?
         );
         return Ok(());
     }
@@ -58,11 +58,11 @@ pub fn status(config_path: &Path, json: bool) -> Result<()> {
     }
     let version = print_daemon(&dir);
     let access = daemon::read_status(&dir).and_then(|s| s.full_disk_access);
-    let folders = cfg.folders.iter().map(|f| f.path.as_path()).chain(cfg.shared.iter().map(|s| s.path.as_path()));
+    let folders = cfg.folders.iter().map(|f| f.path.as_path()).chain(cfg.synced.iter().map(|s| s.path.as_path()));
     if let Some(blocked) = crate::service::disk_access::first_blocked(access, folders) {
         println!("ATTENTION: {}", crate::service::disk_access::blocked_text(blocked));
     }
-    print_shared(&shared);
+    print_synced(&synced);
     if let Some(version) = version {
         println!("version {version}");
     }
@@ -98,14 +98,14 @@ fn print_daemon(dir: &Path) -> Option<String> {
     Some(s.version)
 }
 
-/// The state databases of this client: its own, and one for each shared folder attached.
-fn states_of<'a>(cfg: &'a Config, dir: &Path) -> Vec<(Option<&'a Shared>, state::State)> {
+/// The state databases of this client: its own, and one for each synced folder attached.
+fn states_of<'a>(cfg: &'a Config, dir: &Path) -> Vec<(Option<&'a SyncedFolder>, state::State)> {
     let mut states = Vec::new();
     if let Ok(own) = state::State::open(&dir.join("state.db")) {
         states.push((None, own));
     }
-    for s in &cfg.shared {
-        if let Ok(state) = state::State::open(&crate::shared::state_file(dir, &s.name)) {
+    for s in &cfg.synced {
+        if let Ok(state) = state::State::open(&crate::synced::state_file(dir, s.key())) {
             states.push((Some(s), state));
         }
     }
@@ -115,12 +115,12 @@ fn states_of<'a>(cfg: &'a Config, dir: &Path) -> Vec<(Option<&'a Shared>, state:
 /// What `status` says about deletions held back: sent ones, one line per folder, and the master's that are held here.
 fn held_lines(dir: &Path, cfg: &Config) -> Vec<String> {
     let mut lines = Vec::new();
-    for (shared, state) in states_of(cfg, dir) {
+    for (synced, state) in states_of(cfg, dir) {
         let mut held: Vec<_> = state.holds().unwrap_or_default().into_iter().collect();
         held.sort();
         for (folder, (files, since)) in held {
-            // The files of a shared folder are all at its top: its holds have no folder name of their own.
-            let label = shared.map_or(folder, |s| s.name.clone());
+            // The files of a synced folder are all at its top: its holds have no folder name of their own.
+            let label = synced.map_or(folder, |s| s.name.clone());
             let left = (since + (cfg.delete_hold_hours * 3600) as i64 - unix_now()).max(0);
             lines.push(format!(
                 "holding the deletion of {files} files of \"{label}\" for {}h {}m more (fafnirx release-deletes sends it now)",
@@ -128,10 +128,10 @@ fn held_lines(dir: &Path, cfg: &Config) -> Vec<String> {
                 left % 3600 / 60
             ));
         }
-        if let (Some(Shared { name, .. }), Ok(Some((files, since)))) = (shared, state.pull_hold()) {
+        if let (Some(SyncedFolder { name, .. }), Ok(Some((files, since)))) = (synced, state.pull_hold()) {
             lines.push(format!(
                 "holding {files} files of \"{name}\" that were deleted on the master, since {} ago: fafnirx release-deletes \
-                 deletes them here, fafnirx shared keep {name} keeps them",
+                 deletes them here, fafnirx folder keep {name} keeps them",
                 crate::daemon::age(unix_now() - since)
             ));
         }

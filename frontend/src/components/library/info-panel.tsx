@@ -3,7 +3,7 @@ import { Calendar, FolderOpen, MapPin, RotateCcw, Star, X } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { Button } from '../ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog'
+import { FormDialog } from '../form-dialog'
 import { Input } from '../ui/input'
 import { Skeleton } from '../ui/skeleton'
 import { Textarea } from '../ui/textarea'
@@ -127,31 +127,32 @@ function DateDialog({ detail, onClose }: { detail: AssetDetail; onClose: () => v
   const { edit } = useLibraryActions()
   const [value, setValue] = useState(toInputValue(detail.when))
   const parsed = fromInputValue(value)
-  const save = (e: FormEvent) => {
-    e.preventDefault()
-    if (parsed !== null) edit.mutate({ id: detail.id, taken_at: parsed }, { onSuccess: onClose })
-  }
+
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <form onSubmit={save} className="space-y-4">
-          <DialogHeader>
-            <DialogTitle>{t('Change the date')}</DialogTitle>
-            <DialogDescription>
-              {t('The timeline uses this date. The file itself is not changed.')}{' '}
-              {detail.camera_when ? t('The camera said {when}.', { when: whenText(detail.camera_when) }) : t('The file has no date from the camera; its own modification date is used.')}
-            </DialogDescription>
-          </DialogHeader>
-          <Input type="datetime-local" step={1} value={value} onChange={(e) => setValue(e.target.value)} aria-label={t('Date and time')} required />
-          <DialogFooter className="sm:justify-between">
-            {detail.when_edited ? (
-              <Button type="button" variant="ghost" onClick={() => edit.mutate({ id: detail.id, taken_at: null }, { onSuccess: onClose })}><RotateCcw className="size-4" />{t('Use the original date')}</Button>
-            ) : <span />}
-            <Button type="submit" disabled={parsed === null || edit.isPending}>{t('Save')}</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={t('Change the date')}
+      description={
+        <>
+          {t('The timeline uses this date. The file itself is not changed.')}{' '}
+          {detail.camera_when ? t('The camera said {when}.', { when: whenText(detail.camera_when) }) : t('The file has no date from the camera; its own modification date is used.')}
+        </>
+      }
+      onSubmit={() => parsed !== null && edit.mutate({ id: detail.id, taken_at: parsed }, { onSuccess: onClose })}
+      submit={t('Save')}
+      disabled={parsed === null}
+      pending={edit.isPending}
+      footer={
+        detail.when_edited ? (
+          <Button type="button" variant="ghost" onClick={() => edit.mutate({ id: detail.id, taken_at: null }, { onSuccess: onClose })}><RotateCcw className="size-4" />{t('Use the original date')}</Button>
+        ) : (
+          <span />
+        )
+      }
+    >
+      <Input type="datetime-local" step={1} value={value} onChange={(e) => setValue(e.target.value)} aria-label={t('Date and time')} required />
+    </FormDialog>
   )
 }
 
@@ -168,31 +169,30 @@ function PlaceDialog({ detail, onClose }: { detail: AssetDetail; onClose: () => 
   const [lat, setLat] = useState(detail.lat === null ? '' : String(detail.lat))
   const [lon, setLon] = useState(detail.lon === null ? '' : String(detail.lon))
   const place = placeOf(lat, lon)
-  const save = (e: FormEvent) => {
-    e.preventDefault()
-    if (place) edit.mutate({ id: detail.id, location: place }, { onSuccess: onClose })
-  }
+
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <form onSubmit={save} className="space-y-4">
-          <DialogHeader>
-            <DialogTitle>{t('Change the place')}</DialogTitle>
-            <DialogDescription>{t('Enter the latitude and longitude. The file itself is not changed.')}</DialogDescription>
-          </DialogHeader>
-          <div className="grid grid-cols-2 gap-2">
-            <Input value={lat} onChange={(e) => setLat(e.target.value)} inputMode="decimal" placeholder={t('Latitude')} aria-label={t('Latitude')} />
-            <Input value={lon} onChange={(e) => setLon(e.target.value)} inputMode="decimal" placeholder={t('Longitude')} aria-label={t('Longitude')} />
-          </div>
-          <DialogFooter className="sm:justify-between">
-            {detail.place_edited ? (
-              <Button type="button" variant="ghost" onClick={() => edit.mutate({ id: detail.id, location: null }, { onSuccess: onClose })}><RotateCcw className="size-4" />{t('Use the original place')}</Button>
-            ) : <span />}
-            <Button type="submit" disabled={!place || edit.isPending}>{t('Save')}</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={t('Change the place')}
+      description={t('Enter the latitude and longitude. The file itself is not changed.')}
+      onSubmit={() => place && edit.mutate({ id: detail.id, location: place }, { onSuccess: onClose })}
+      submit={t('Save')}
+      disabled={!place}
+      pending={edit.isPending}
+      footer={
+        detail.place_edited ? (
+          <Button type="button" variant="ghost" onClick={() => edit.mutate({ id: detail.id, location: null }, { onSuccess: onClose })}><RotateCcw className="size-4" />{t('Use the original place')}</Button>
+        ) : (
+          <span />
+        )
+      }
+    >
+      <div className="grid grid-cols-2 gap-2">
+        <Input value={lat} onChange={(e) => setLat(e.target.value)} inputMode="decimal" placeholder={t('Latitude')} aria-label={t('Latitude')} />
+        <Input value={lon} onChange={(e) => setLon(e.target.value)} inputMode="decimal" placeholder={t('Longitude')} aria-label={t('Longitude')} />
+      </div>
+    </FormDialog>
   )
 }
 

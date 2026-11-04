@@ -1,12 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
-import { ChevronRight, Folder, FolderSync, HardDrive, Laptop, User } from 'lucide-react'
+import { ChevronRight, Folder, HardDrive, Laptop, User } from 'lucide-react'
 import { Fragment } from 'react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { useT } from '@/lib/i18n'
 import type { ScopeChoice } from '@/lib/types'
 
-const ICON: Record<string, typeof Folder> = { master: HardDrive, user: User, device: Laptop, shared: FolderSync, local: Folder, source: Folder, folder: Folder }
+const ICON: Record<string, typeof Folder> = { master: HardDrive, user: User, device: Laptop, local: Folder, folder: Folder }
 
 /**
  * Picks what a mirror holds: everything, or one folder found by going down the tree the way the files are stored

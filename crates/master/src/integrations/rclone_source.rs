@@ -4,7 +4,7 @@
 //! file is known by its path: a rename downloads the file again. A file counts as changed when its size or its
 //! modification time differs from the last run.
 
-use crate::integrations::syncsource::{self, Download, Item, Listing, Rules};
+use crate::integrations::syncsource::{self, Download, Item, Listing, Rules, Target};
 use crate::integrations::{mirror, Outcome, SourceRow};
 use crate::platform::db::Db;
 use crate::platform::store::Store;
@@ -56,7 +56,7 @@ fn items_of(listing: &str) -> Result<(Vec<Item>, usize)> {
             continue;
         };
         let mtime_ns = parse_time_ns(&l.mod_time);
-        items.push(Item { marker: format!("{}:{mtime_ns}", l.size), path, size: l.size as u64, mtime_ns });
+        items.push(Item { marker: format!("{}:{mtime_ns}", l.size), path, key: None, size: l.size as u64, mtime_ns });
     }
     Ok((items, skipped))
 }
@@ -84,27 +84,35 @@ pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
     let (items, skipped) = items_of(&listing)?;
     let (rc, base) = (&rc, &base);
     let fetch_store = store.clone();
-    syncsource::apply(db, store, src.id, src.device, Listing { items, skipped }, Rules::ALL, |item| {
-        let store = fetch_store.clone();
-        async move {
-            let path = store.temp_path();
-            let received = async {
-                let from = mirror::join(base, &item.path);
-                rc.run(&["copyto", &from, &path.to_string_lossy(), "--stats", "0", "--retries", "3"], &[]).await?;
-                let target = path.clone();
-                let (root, size) = tokio::task::spawn_blocking(move || crate::platform::store::hash_file(&target)).await??;
-                if size != item.size {
-                    bail!("received {size} bytes, the remote lists {}", item.size);
+    syncsource::apply(
+        db,
+        store,
+        src.id,
+        Target { device: src.device, prefix: src.prefix },
+        Listing { items, skipped },
+        Rules::ALL,
+        |item| {
+            let store = fetch_store.clone();
+            async move {
+                let path = store.temp_path();
+                let received = async {
+                    let from = mirror::join(base, &item.path);
+                    rc.run(&["copyto", &from, &path.to_string_lossy(), "--stats", "0", "--retries", "3"], &[]).await?;
+                    let target = path.clone();
+                    let (root, size) = tokio::task::spawn_blocking(move || crate::platform::store::hash_file(&target)).await??;
+                    if size != item.size {
+                        bail!("received {size} bytes, the remote lists {}", item.size);
+                    }
+                    Ok(Download { path: path.clone(), root, size })
                 }
-                Ok(Download { path: path.clone(), root, size })
+                .await;
+                if received.is_err() {
+                    let _ = tokio::fs::remove_file(&path).await;
+                }
+                received
             }
-            .await;
-            if received.is_err() {
-                let _ = tokio::fs::remove_file(&path).await;
-            }
-            received
-        }
-    })
+        },
+    )
     .await
 }
 

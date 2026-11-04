@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
-import { useState, type FormEvent } from 'react'
+import { useState } from 'react'
 import { toast } from 'sonner'
 import { Empty, ErrorNote, PageHeader, SELECT } from '@/components/common'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { FormDialog } from '@/components/form-dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -47,36 +47,36 @@ function AddUser() {
       void client.invalidateQueries({ queryKey: ['users'] })
     },
   })
-  const submit = (e: FormEvent) => { e.preventDefault(); create.mutate() }
+
   return (
-    <Dialog open={open} onOpenChange={(o) => { setOpen(o); create.reset() }}>
-      <DialogTrigger asChild><Button><Plus className="size-4" />{t('Add user')}</Button></DialogTrigger>
-      <DialogContent>
-        <form onSubmit={submit} className="space-y-4">
-          <DialogHeader>
-            <DialogTitle>{t('Add a user')}</DialogTitle>
-            <DialogDescription>{t("The name is the user's folder on the master (files/<name>/) and cannot change later.")}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="user-name">{t('Name')}</Label>
-            <Input id="user-name" autoFocus placeholder="alice" value={name} onChange={(e) => setName(e.target.value)} />
-            <p className="text-xs text-muted-foreground">{t('Lowercase letters, digits, dot, underscore and dash; up to 63 characters.')}</p>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="user-role">{t('Role')}</Label>
-            <RoleSelect id="user-role" value={role} onChange={setRole} />
-            <p className="text-xs text-muted-foreground">{t(ROLES.find((r) => r[0] === role)?.[2] ?? '')}</p>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="user-password">{t('Password')}</Label>
-            <Input id="user-password" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
-            <p className="text-xs text-muted-foreground">{t('At least 8 characters.')}</p>
-            {create.error && <p role="alert" className="text-sm text-destructive">{create.error.message}</p>}
-          </div>
-          <DialogFooter><Button type="submit" disabled={!name.trim() || password.length < 8 || create.isPending}>{t('Create')}</Button></DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      open={open}
+      onOpenChange={(o) => { setOpen(o); create.reset() }}
+      trigger={<Button><Plus className="size-4" />{t('Add user')}</Button>}
+      title={t('Add a user')}
+      description={t("The name is the user's folder on the master (files/<name>/) and cannot change later.")}
+      onSubmit={() => create.mutate()}
+      submit={t('Create')}
+      disabled={!name.trim() || password.length < 8}
+      pending={create.isPending}
+      error={create.error?.message}
+    >
+      <div className="space-y-2">
+        <Label htmlFor="user-name">{t('Name')}</Label>
+        <Input id="user-name" autoFocus placeholder="alice" value={name} onChange={(e) => setName(e.target.value)} />
+        <p className="text-xs text-muted-foreground">{t('Lowercase letters, digits, dot, underscore and dash; up to 63 characters.')}</p>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="user-role">{t('Role')}</Label>
+        <RoleSelect id="user-role" value={role} onChange={setRole} />
+        <p className="text-xs text-muted-foreground">{t(ROLES.find((r) => r[0] === role)?.[2] ?? '')}</p>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="user-password">{t('Password')}</Label>
+        <Input id="user-password" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+        <p className="text-xs text-muted-foreground">{t('At least 8 characters.')}</p>
+      </div>
+    </FormDialog>
   )
 }
 
@@ -92,23 +92,25 @@ function ResetPassword({ user }: { user: UserInfo }) {
       setPassword('')
     },
   })
-  const submit = (e: FormEvent) => { e.preventDefault(); reset.mutate() }
+
   return (
-    <Dialog open={open} onOpenChange={(o) => { setOpen(o); reset.reset() }}>
-      <DialogTrigger asChild><Button size="sm" variant="outline">{t('New password')}</Button></DialogTrigger>
-      <DialogContent>
-        <form onSubmit={submit} className="space-y-4">
-          <DialogHeader><DialogTitle>{t('New password for {name}', { name: user.name })}</DialogTitle></DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="reset-password">{t('Password')}</Label>
-            <Input id="reset-password" type="password" autoComplete="new-password" autoFocus value={password} onChange={(e) => setPassword(e.target.value)} />
-            <p className="text-xs text-muted-foreground">{t('At least 8 characters.')}</p>
-            {reset.error && <p role="alert" className="text-sm text-destructive">{reset.error.message}</p>}
-          </div>
-          <DialogFooter><Button type="submit" disabled={password.length < 8 || reset.isPending}>{t('Set password')}</Button></DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      open={open}
+      onOpenChange={(o) => { setOpen(o); reset.reset() }}
+      trigger={<Button size="sm" variant="outline">{t('New password')}</Button>}
+      title={t('New password for {name}', { name: user.name })}
+      onSubmit={() => reset.mutate()}
+      submit={t('Set password')}
+      disabled={password.length < 8}
+      pending={reset.isPending}
+      error={reset.error?.message}
+    >
+      <div className="space-y-2">
+        <Label htmlFor="reset-password">{t('Password')}</Label>
+        <Input id="reset-password" type="password" autoComplete="new-password" autoFocus value={password} onChange={(e) => setPassword(e.target.value)} />
+        <p className="text-xs text-muted-foreground">{t('At least 8 characters.')}</p>
+      </div>
+    </FormDialog>
   )
 }
 

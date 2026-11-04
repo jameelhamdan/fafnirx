@@ -68,11 +68,20 @@ fn watch(root: &Path) -> (Option<notify::RecommendedWatcher>, mpsc::Receiver<Tar
 /// Set while a comparison of the whole tree is running, so that the periodic one and one asked for by hand never overlap.
 static SCANNING: AtomicBool = AtomicBool::new(false);
 
+/// Held while the folders of the live tree are looked at and while one is renamed, so that the watcher never sees a folder
+/// under its new name before the database knows it (it would adopt it as a new device) or under its old one after.
+pub static LAYOUT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub fn layout() -> std::sync::MutexGuard<'static, ()> {
+    LAYOUT.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Runs [`scan`] unless one is already running. Returns whether it ran.
 fn scan_once(db: &Db, store: &Store) -> bool {
     if SCANNING.swap(true, Ordering::AcqRel) {
         return false;
     }
+    let _layout = layout();
     if let Err(e) = scan(db, store, SCAN_SETTLE) {
         tracing::error!("comparison of the file store failed: {e:#}");
     }
@@ -165,6 +174,7 @@ fn resolve(conn: &mut Client, store: &Store, rel: &str) -> Result<Option<(Device
 }
 
 fn work(db: &Db, store: &Store, targets: &[Target]) {
+    let _layout = layout();
     let mut conn = match db.get() {
         Ok(c) => c,
         Err(e) => return tracing::error!("file store: no database connection: {e}"),
@@ -194,7 +204,7 @@ fn device_for_folder(conn: &mut Client, store: &Store, folder: &str) -> Result<O
     // Only a local or shared folder is written to in place. What a device or a source sends is a copy of theirs and is not
     // changed from here: edits made inside such a folder are not recorded.
     if let Some((id, kind)) = devices::id_and_kind(conn, folder)? {
-        return Ok(matches!(kind.as_str(), "local" | "shared").then(|| Device { id, name: folder.to_string() }));
+        return Ok((kind == "local").then(|| Device { id, name: folder.to_string() }));
     }
     let Some((user, name)) = folder.split_once('/') else { return Ok(None) };
     if !valid_device_name(name) || !store.live_dir(folder).is_dir() {
@@ -515,7 +525,7 @@ mod tests {
         let (dev, none) = (testing::device(), Duration::ZERO);
         put(&store, "Show/a.txt", b"episode one");
         assert_eq!(sync_subtree(&mut c, &store, &dev, "", none).unwrap(), (1, 0));
-        let album = crate::repo::albums::insert(&mut *c, 1, "Show", "", Some((1, "Show/")), 0).unwrap();
+        let album = crate::repo::albums::insert(&mut *c, 1, "Show", "", (1, "Show/"), 0).unwrap();
 
         let from = store.live_path("admin/d", "Show/a.txt").unwrap();
         let to = store.live_path("admin/d", "Show 2/a.txt").unwrap();

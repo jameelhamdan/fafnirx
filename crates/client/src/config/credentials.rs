@@ -41,9 +41,6 @@ pub fn store(server: &str, config_path: &Path, token: &str) -> Result<&'static s
     // `mode` only applies to a file that is created: a token file made earlier may be more open.
     #[cfg(unix)]
     std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
-    // On Windows the folder decides who can read it, and the config folder is readable by every user: closed before the
-    // token is written.
-    crate::service::keep_private(&path)?;
     std::io::Write::write_all(&mut file, token.as_bytes())?;
     Ok("token file")
 }

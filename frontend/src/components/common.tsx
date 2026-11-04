@@ -79,11 +79,11 @@ export function StatusDot({ status, label }: { status: string; label?: string })
   )
 }
 
-const KIND: Record<string, string> = { device: msg('Device'), local: msg('Local folder'), shared: msg('Shared folder') }
+const KIND: Record<string, string> = { device: msg('Device'), local: msg('Local folder'), master: msg('Master files') }
 
 export function KindBadge({ kind }: { kind: string }) {
   const t = useT()
-  return <Badge variant="secondary">{t(KIND[kind] ?? msg('Source'))}</Badge>
+  return <Badge variant="secondary">{t(KIND[kind] ?? kind)}</Badge>
 }
 
 /** What a device is doing right now: phase, file, a progress bar, speed and time left. */

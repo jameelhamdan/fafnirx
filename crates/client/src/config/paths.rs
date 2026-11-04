@@ -14,18 +14,16 @@ fn home() -> PathBuf {
 /// nothing it needs is in a user's profile: `config.toml` and the token (the config folder), the databases (`state`, private to
 /// the service) and the files that the tray and the commands of any user share with it (`control`).
 pub fn system_data_dir() -> PathBuf {
-    if cfg!(windows) {
-        env_dir("ProgramData").unwrap_or_else(|| PathBuf::from(r"C:\ProgramData")).join("fafnirx")
-    } else if cfg!(target_os = "macos") {
+    if cfg!(target_os = "macos") {
         PathBuf::from("/Library/Application Support/fafnirx")
     } else {
         PathBuf::from("/var/lib/fafnirx")
     }
 }
 
-/// The config folder of a system-wide install; on Linux it is `/etc/fafnirx`, as usual there.
+/// The config of a system-wide install (Linux and macOS: the client of a Windows user keeps its own); on Linux it is `/etc/fafnirx`, as usual there.
 pub fn system_config_path() -> PathBuf {
-    if cfg!(windows) || cfg!(target_os = "macos") {
+    if cfg!(target_os = "macos") {
         system_data_dir().join("config.toml")
     } else {
         PathBuf::from("/etc/fafnirx/config.toml")
@@ -38,7 +36,7 @@ pub fn system_state_dir() -> PathBuf {
 
 /// Whether this config is the system-wide one, which has no user to keep a token in a keychain for.
 pub fn is_system_config(config_path: &Path) -> bool {
-    super::same_path(config_path, &system_config_path())
+    cfg!(unix) && super::same_path(config_path, &system_config_path())
 }
 
 /// Where the client and the programs that talk to it meet: the markers (pause, sync now, stop, update, restart), the folder
@@ -51,11 +49,10 @@ pub fn control_dir(state_dir: &Path) -> PathBuf {
     }
 }
 
-/// The config of this computer: the system-wide one where it was installed (on Windows only by an older version) and for root
-/// on Linux and macOS, who installs it, else the one of the current user. A Windows client belongs to the user, so that nothing
-/// in it needs administrator rights.
+/// The config of this computer: the system-wide one where it was installed and for root on Linux and macOS, who installs it,
+/// else the one of the current user. A Windows client belongs to the user, so that nothing in it needs administrator rights.
 pub fn default_config_path() -> PathBuf {
-    if system_config_path().exists() || (cfg!(unix) && crate::service::elevate::is_admin()) {
+    if cfg!(unix) && (system_config_path().exists() || crate::service::elevate::is_admin()) {
         return system_config_path();
     }
     let dir = if cfg!(windows) {

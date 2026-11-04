@@ -15,7 +15,7 @@ The kind is chosen when the mirror is added and cannot be changed: add another m
 ## What a mirror holds
 
 ```text
-files/users/<user>/<device>/...  current tree per device, local folder, source, shared folder
+files/users/<user>/<device>/...  current tree per device or folder (shared or not)
 files/<path>                     master files
 versions/<UTC time>/...          what that run replaced or removed
 meta/stats.json                  run stats
@@ -27,8 +27,9 @@ A backup has the same tree below the encryption: every name above, `files/` and 
 storage. `meta/library.json` is left out when the mirror holds one folder (it names files of the whole tree).
 
 **What to copy:** everything, or one folder picked by going down the tree: `_master` or `_master/<folder>`, `<user>`,
-`<user>/<device>` or `<user>/<shared folder>`, then any folder inside. Files keep their place below `files/`. It cannot be
-changed later.
+`<user>/<device>` or `<user>/<folder>`, then any folder inside. Files keep their place below `files/`. The choice cannot be
+changed later. Renaming a folder in Files updates the scope of a mirror that holds it; the next run copies it under the new name,
+and the copy under the old name stays on the storage until you delete it there.
 
 ## How a run works
 

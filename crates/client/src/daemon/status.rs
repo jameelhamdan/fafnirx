@@ -32,10 +32,10 @@ pub struct Activity {
     pub speed_bps: u64,
 }
 
-/// What one shared folder attached to this computer is doing, for `status`, the tray and the master.
+/// What one synced folder attached to this computer is doing, for `status`, the tray and the master.
 #[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
 #[serde(default)]
-pub struct SharedStatus {
+pub struct SyncedStatus {
     /// `<owner>/<name>`.
     pub name: String,
     pub path: String,
@@ -67,7 +67,7 @@ pub struct ConflictInfo {
     pub local_mtime: i64,
 }
 
-impl SharedStatus {
+impl SyncedStatus {
     /// One line for `status` and the tray: whether it is in step, how much, how long ago, and what needs attention.
     pub fn summary(&self, now: i64) -> String {
         let mut parts = Vec::new();
@@ -144,10 +144,10 @@ pub struct Status {
     pub initial_sync: bool,
     /// Whether the client has Full Disk Access (macOS only, `None` elsewhere): without it the folders macOS protects fail.
     pub full_disk_access: Option<bool>,
-    /// The shared folders attached here.
-    pub shared: Vec<SharedStatus>,
-    /// The shared folders the user can use on the master, with whether each is their own: what the tray offers to attach.
-    pub shared_on_master: Vec<(String, bool)>,
+    /// The synced folders attached here.
+    pub synced: Vec<SyncedStatus>,
+    /// The synced folders the user can use on the master, with whether each is their own: what the tray offers to attach.
+    pub synced_on_master: Vec<(String, bool)>,
     pub updated: i64,
 }
 

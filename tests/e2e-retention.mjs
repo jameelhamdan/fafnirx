@@ -29,7 +29,7 @@ try {
   const { c } = await enrollDevice(h, admin)
   const src = path.join(tmp, 'docs')
   fs.mkdirSync(src)
-  c('add-folder', src)
+  c('folder', 'add', src)
 
   const original = randomBytes(5000)
   fs.writeFileSync(path.join(src, 'gone.txt'), original)

@@ -94,14 +94,14 @@ pub fn check_master_path(device: &Device, path: &str) -> Result<()> {
 }
 
 /// Rules of the most limited computer: no name Windows cannot keep, no two paths (or folders above them) differing only in
-/// case. Always for shared folders; for local folders and master files (SMB-visible) only with `from_web`. The watcher and
-/// computer backups bypass it. An existing path can always be updated; a rename's source does not count (case-only renames work).
-pub fn check_names(conn: &mut impl GenericClient, device: &Device, path: &str, renamed_from: Option<&str>, from_web: bool) -> Result<()> {
+/// case. They apply to what people add in the web app and to what computers sync into a folder (`strict`), in a folder or the
+/// master files. The watcher and computer backups bypass them. An existing path can always be updated; a rename's source does not
+/// count (case-only renames work).
+pub fn check_names(conn: &mut impl GenericClient, device: &Device, path: &str, renamed_from: Option<&str>, strict: bool) -> Result<()> {
     let kind = devices::kind_of(conn, device.id)?;
     let in_ = match kind.as_str() {
-        "shared" => "this shared folder",
-        "master" if from_web => "the master files",
-        "local" if from_web => "this folder",
+        "master" if strict => "the master files",
+        "local" if strict => "this folder",
         _ => return Ok(()),
     };
     let conflict = |what: String| -> Result<()> { Err(crate::web::ApiError::conflict(what).into()) };
@@ -323,7 +323,7 @@ fn delete_locked(tx: &mut postgres::Transaction, store: &Store, device: &Device,
     let deleted = delete_path(tx, device, path, ts, in_web_app)?;
     if in_web_app && deleted.is_some() {
         // A file a source collected stays deleted until it changes at the source, whatever the retention period does.
-        sql::files::keep_source_item_deleted().bind(tx, &path, &device.id).map(drop)?;
+        sql::files::keep_source_item_deleted().bind(tx, &device.id, &path).map(drop)?;
     }
     devices::touch(tx, device.id, ts)?;
     db::notify(tx, "devices", &device.name)?;
@@ -414,6 +414,12 @@ mod tests {
     use fafnirx_common::{chunk_hash, root_hash};
 
     /// Writes `data` to a temporary file and commits it as `path`.
+    /// What a computer syncing into a folder does: the names are checked first.
+    fn synced(c: &mut Client, store: &Store, path: &str, data: &[u8], renamed_from: Option<&str>) -> Result<u64> {
+        check_names(c, &testing::device(), path, renamed_from, true)?;
+        commit(c, store, path, data, renamed_from)
+    }
+
     fn commit(c: &mut Client, store: &Store, path: &str, data: &[u8], renamed_from: Option<&str>) -> Result<u64> {
         let staged = store.temp_path();
         std::fs::write(&staged, data).unwrap();
@@ -443,7 +449,7 @@ mod tests {
         for (path, data) in [("Show/S1/a.mkv", b"a"), ("Show/S1/b.mkv", b"b")] {
             commit(&mut c, &store, path, data, None).unwrap();
         }
-        let album = albums::insert(&mut *c, 1, "Show", "", Some((1, "Show/")), 0).unwrap();
+        let album = albums::insert(&mut *c, 1, "Show", "", (1, "Show/"), 0).unwrap();
         let follows = |c: &mut Client| -> (String, String) {
             let r = c.query_one("SELECT folder_prefix, name FROM albums WHERE id = $1", &[&album]).unwrap();
             (r.get(0), r.get(1))
@@ -471,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn a_shared_folder_refuses_paths_that_not_every_kind_of_computer_can_hold() {
+    fn a_synced_folder_refuses_paths_that_not_every_kind_of_computer_can_hold() {
         let db = testing::db_with_device();
         let mut c = db.get().unwrap();
         let dir = tempfile::tempdir().unwrap();
@@ -482,34 +488,34 @@ mod tests {
         commit(&mut c, &store, "Notes.txt", b"one", None).unwrap();
         commit(&mut c, &store, "notes.txt", b"two", None).unwrap();
 
-        c.execute("UPDATE devices SET kind = 'shared' WHERE id = 1", &[]).unwrap();
-        let clash = refusal(commit(&mut c, &store, "NOTES.TXT", b"x", None));
+        c.execute("UPDATE devices SET kind = 'local' WHERE id = 1", &[]).unwrap();
+        let clash = refusal(synced(&mut c, &store, "NOTES.TXT", b"x", None));
         assert_eq!(clash.0, axum::http::StatusCode::CONFLICT, "{}", clash.1);
-        let windows = refusal(commit(&mut c, &store, "what?.txt", b"x", None));
+        let windows = refusal(synced(&mut c, &store, "what?.txt", b"x", None));
         assert_eq!(windows.0, axum::http::StatusCode::BAD_REQUEST, "{}", windows.1);
-        commit(&mut c, &store, "fine.txt", b"x", None).unwrap();
+        synced(&mut c, &store, "fine.txt", b"x", None).unwrap();
         // A path that is in the folder can be updated even though a twin of it is there too.
-        commit(&mut c, &store, "Notes.txt", b"updated", None).unwrap();
+        synced(&mut c, &store, "Notes.txt", b"updated", None).unwrap();
         assert_eq!(live(&store, "Notes.txt").unwrap(), b"updated");
 
         // A file can be renamed to another case; what it is renamed from does not count as a clash.
-        commit(&mut c, &store, "Readme.md", b"r", None).unwrap();
-        commit(&mut c, &store, "readme.md", b"r", Some("Readme.md")).unwrap();
-        assert_eq!(refusal(commit(&mut c, &store, "README.md", b"x", None)).0, axum::http::StatusCode::CONFLICT);
+        synced(&mut c, &store, "Readme.md", b"r", None).unwrap();
+        synced(&mut c, &store, "readme.md", b"r", Some("Readme.md")).unwrap();
+        assert_eq!(refusal(synced(&mut c, &store, "README.md", b"x", None)).0, axum::http::StatusCode::CONFLICT);
 
         // The same goes for the folders above a path: one spelling at a time, and a folder is renamed file by file.
-        commit(&mut c, &store, "Docs/a.txt", b"a", None).unwrap();
-        commit(&mut c, &store, "Docs/b.txt", b"b", None).unwrap();
-        let folder = refusal(commit(&mut c, &store, "docs/new.txt", b"x", None));
+        synced(&mut c, &store, "Docs/a.txt", b"a", None).unwrap();
+        synced(&mut c, &store, "Docs/b.txt", b"b", None).unwrap();
+        let folder = refusal(synced(&mut c, &store, "docs/new.txt", b"x", None));
         assert_eq!(folder.0, axum::http::StatusCode::CONFLICT, "{}", folder.1);
         assert!(folder.1.contains("folder Docs"), "{}", folder.1);
-        commit(&mut c, &store, "docs/a.txt", b"a", Some("Docs/a.txt")).unwrap();
-        commit(&mut c, &store, "docs/b.txt", b"b", Some("Docs/b.txt")).unwrap();
-        commit(&mut c, &store, "docs/new.txt", b"x", None).expect("nothing is left under the old spelling");
-        assert_eq!(refusal(commit(&mut c, &store, "DOCS/other.txt", b"x", None)).0, axum::http::StatusCode::CONFLICT);
+        synced(&mut c, &store, "docs/a.txt", b"a", Some("Docs/a.txt")).unwrap();
+        synced(&mut c, &store, "docs/b.txt", b"b", Some("Docs/b.txt")).unwrap();
+        synced(&mut c, &store, "docs/new.txt", b"x", None).expect("nothing is left under the old spelling");
+        assert_eq!(refusal(synced(&mut c, &store, "DOCS/other.txt", b"x", None)).0, axum::http::StatusCode::CONFLICT);
         // Deeper folders too.
-        commit(&mut c, &store, "docs/Sub/x.txt", b"x", None).unwrap();
-        assert_eq!(refusal(commit(&mut c, &store, "docs/sub/y.txt", b"y", None)).0, axum::http::StatusCode::CONFLICT);
+        synced(&mut c, &store, "docs/Sub/x.txt", b"x", None).unwrap();
+        assert_eq!(refusal(synced(&mut c, &store, "docs/sub/y.txt", b"y", None)).0, axum::http::StatusCode::CONFLICT);
     }
 
     #[test]
@@ -564,11 +570,11 @@ mod tests {
         );
 
         let root = root_hash(&[chunk_hash(b"two")], 3);
-        assert_eq!(live_path_with_root(&mut *c, 1, &root, None).unwrap().as_deref(), Some("a"));
+        assert_eq!(live_path_with_root(&mut *c, 1, "", &root, None).unwrap().as_deref(), Some("a"));
         commit(&mut c, &store, "b", b"two", Some("a")).unwrap();
         assert!(live(&store, "a").is_none(), "the old path of a rename leaves the live tree");
         assert_eq!(live(&store, "b").unwrap(), b"two");
-        assert_eq!(live_path_with_root(&mut *c, 1, &root, Some("a")).unwrap().as_deref(), Some("b"));
+        assert_eq!(live_path_with_root(&mut *c, 1, "", &root, Some("a")).unwrap().as_deref(), Some("b"));
 
         assert!(mark_deleted(&mut c, &store, &device, "b", false).unwrap());
         assert!(live(&store, "b").is_none());
@@ -605,7 +611,7 @@ mod tests {
 
         // A file that a source collected is remembered as removed in the web app in the source's own record.
         c.execute(
-            "INSERT INTO sources (name, kind, config, device_id, created_at) VALUES ('s', 'rclone', '{}', 1, 0)",
+            "INSERT INTO sources (name, kind, config, device_id, user_id, created_at) VALUES ('s', 'rclone', '{}', 1, 1, 0)",
             &[],
         )
         .unwrap();

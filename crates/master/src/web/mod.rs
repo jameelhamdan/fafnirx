@@ -9,6 +9,7 @@ pub mod access;
 mod assets;
 pub mod auth;
 mod events;
+pub mod input;
 mod plugins;
 pub mod users;
 
@@ -181,13 +182,17 @@ fn light() -> Router<Shared> {
         .route("/api/devices/:name", get(devices::api::detail))
         .route("/api/devices/:name/token", post(devices::api::rotate_token))
         .route("/api/devices/:name/release", post(devices::api::release))
+        .route("/api/devices/:name/rename", post(devices::api::rename))
         .route("/api/devices/:name/revoke", post(devices::api::revoke))
-        .route("/api/shared", get(devices::shared::list).post(devices::shared::create))
-        .route("/api/shared/leave", post(devices::shared::leave))
-        .route("/api/shared/people", get(devices::shared::people))
-        .route("/api/shared/:name", delete(devices::shared::delete))
-        .route("/api/shared/:name/members", post(devices::shared::add_member))
-        .route("/api/shared/:name/members/:user", delete(devices::shared::remove_member))
+        .route("/api/master-folders", post(devices::master_folders::create))
+        .route("/api/master-folders/:id", delete(devices::master_folders::delete))
+        .route("/api/master-folders/:id/rename", post(devices::master_folders::rename))
+        .route("/api/folders", get(devices::folders::list).post(devices::folders::create))
+        .route("/api/folders/leave", post(devices::folders::leave))
+        .route("/api/folders/people", get(devices::folders::people))
+        .route("/api/folders/:name", delete(devices::folders::delete))
+        .route("/api/folders/:name/members", post(devices::folders::add_member))
+        .route("/api/folders/:name/members/:user", delete(devices::folders::remove_member))
         .route("/api/files", get(files::browse::list))
         .route("/api/files/info", get(files::browse::info))
         .route("/api/files/delete", post(files::browse::remove))
@@ -209,10 +214,11 @@ fn light() -> Router<Shared> {
             "/api/albums/:id",
             get(library::albums::detail).patch(library::albums::edit).delete(library::albums::delete),
         )
-        .route("/api/albums/:id/files", post(library::albums::add))
-        .route("/api/albums/:id/files/remove", post(library::albums::remove))
         .route("/api/sources", get(integrations::api::sources).post(integrations::api::create_source))
-        .route("/api/sources/:user/:name", delete(integrations::api::delete_source))
+        .route(
+            "/api/sources/:user/:name",
+            delete(integrations::api::delete_source).patch(integrations::api::edit_source),
+        )
         .route("/api/sources/:user/:name/run", post(integrations::api::run_source))
         .route("/api/sources/:user/:name/toggle", post(integrations::api::toggle_source))
         .route("/api/mirrors", get(integrations::api::mirrors).post(integrations::api::create_mirror))

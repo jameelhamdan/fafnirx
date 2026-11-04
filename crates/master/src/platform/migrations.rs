@@ -2,7 +2,7 @@
 //! The master applies the ones it has not applied yet when it starts, in order and in one transaction
 //! behind an advisory lock, and records each in `schema_migrations` with a checksum.
 //!
-//! To change the schema, add a migration at the end of [`ALL`]. A migration that has been released is never edited:
+//! To change the schema, add a migration at the end of [`ALL`]. A migration that has been applied is never edited:
 //! the checksum would no longer match and the master refuses to start. A database that is newer than this master
 //! is refused too, so an old binary never runs against a schema it does not know.
 
@@ -18,51 +18,12 @@ pub struct Migration {
     pub sql: &'static str,
 }
 
-pub const ALL: &[Migration] = &[
-    Migration { version: 1, name: "initial", sql: include_str!("../../migrations/0001_initial.sql") },
-    Migration { version: 2, name: "indexes", sql: include_str!("../../migrations/0002_indexes.sql") },
-    Migration { version: 3, name: "device_totals", sql: include_str!("../../migrations/0003_device_totals.sql") },
-    Migration { version: 4, name: "mirror_remote", sql: include_str!("../../migrations/0004_mirror_remote.sql") },
-    Migration {
-        version: 5,
-        name: "source_item_removed",
-        sql: include_str!("../../migrations/0005_source_item_removed.sql"),
-    },
-    Migration { version: 6, name: "users", sql: include_str!("../../migrations/0006_users.sql") },
-    Migration { version: 7, name: "device_instance", sql: include_str!("../../migrations/0007_device_instance.sql") },
-    Migration { version: 8, name: "folder_albums", sql: include_str!("../../migrations/0008_folder_albums.sql") },
-    Migration { version: 9, name: "job_visibility", sql: include_str!("../../migrations/0009_job_visibility.sql") },
-    Migration { version: 10, name: "uuid_ids", sql: include_str!("../../migrations/0010_uuid_ids.sql") },
-    Migration {
-        version: 11,
-        name: "job_notes_and_rename_cleanup",
-        sql: include_str!("../../migrations/0011_job_notes_and_rename_cleanup.sql"),
-    },
-    Migration { version: 12, name: "embedded_text", sql: include_str!("../../migrations/0012_embedded_text.sql") },
-    Migration { version: 13, name: "shared_folders", sql: include_str!("../../migrations/0013_shared_folders.sql") },
-    Migration { version: 14, name: "mirror_scope", sql: include_str!("../../migrations/0014_mirror_scope.sql") },
-    Migration { version: 15, name: "mirror_kind", sql: include_str!("../../migrations/0015_mirror_kind.sql") },
-    Migration {
-        version: 16,
-        name: "retire_playable_copies",
-        sql: include_str!("../../migrations/0016_retire_playable_copies.sql"),
-    },
-    Migration {
-        version: 17,
-        name: "retire_drive_sources",
-        sql: include_str!("../../migrations/0017_retire_drive_sources.sql"),
-    },
-    Migration {
-        version: 18,
-        name: "video_poster_frame",
-        sql: include_str!("../../migrations/0018_video_poster_frame.sql"),
-    },
-    Migration {
-        version: 19,
-        name: "pictures_on_demand",
-        sql: include_str!("../../migrations/0019_pictures_on_demand.sql"),
-    },
-];
+pub const ALL: &[Migration] = &[Migration { version: 1, name: "schema", sql: include_str!("../../migrations/0001_schema.sql") }];
+
+/// The 3.x releases recorded 19 migrations; this is the way from there to `ALL` (see the file). Remove it with the file.
+const RELEASED_VERSION: i64 = 19;
+const RELEASED_LAST: &str = "pictures_on_demand";
+const UPGRADE_FROM_3: &str = include_str!("../../migrations/upgrade_from_3.sql");
 
 const TRACKING: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (
     version    BIGINT PRIMARY KEY,
@@ -80,6 +41,19 @@ pub fn apply(conn: &mut Client, lock: i64, migrations: &[Migration]) -> Result<(
     let mut tx = conn.transaction()?;
     tx.execute("SELECT pg_advisory_xact_lock($1)", &[&lock])?;
     tx.batch_execute(TRACKING)?;
+    let released = tx.query("SELECT name FROM schema_migrations WHERE version = $1", &[&RELEASED_VERSION])?;
+    let at_release = released.first().is_some_and(|r| r.get::<_, String>(0) == RELEASED_LAST) && tx.query_one("SELECT MAX(version) FROM schema_migrations", &[])?.get::<_, Option<i64>>(0) == Some(RELEASED_VERSION);
+    if at_release {
+        if let Some(first) = migrations.first() {
+            tx.batch_execute(UPGRADE_FROM_3).context("upgrading the database of a 3.x release")?;
+            tx.execute("DELETE FROM schema_migrations", &[])?;
+            tx.execute(
+                "INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES ($1, $2, $3, $4)",
+                &[&first.version, &first.name, &checksum(first.sql), &unix_now()],
+            )?;
+            tracing::info!("database of a 3.x release upgraded");
+        }
+    }
     let applied: HashMap<i64, String> = tx
         .query("SELECT version, checksum FROM schema_migrations", &[])?
         .iter()
@@ -178,14 +152,6 @@ mod tests {
     }
 
     #[test]
-    fn a_database_made_before_migrations_were_recorded_is_adopted() {
-        let mut db = Scratch::new();
-        db.conn.batch_execute(ALL[0].sql).unwrap();
-        apply(&mut db.conn, LOCK, ALL).unwrap();
-        assert_eq!(db.versions(), (1..=ALL.len() as i64).collect::<Vec<_>>());
-    }
-
-    #[test]
     fn only_the_missing_migrations_run_and_data_survives() {
         let mut db = Scratch::new();
         let first = step(1, "CREATE TABLE t (a BIGINT)");
@@ -196,98 +162,6 @@ mod tests {
         assert_eq!(db.versions(), [1, 2]);
         let row = db.conn.query_one("SELECT a, b FROM t", &[]).unwrap();
         assert_eq!((row.get::<_, i64>(0), row.get::<_, i64>(1)), (7, 5));
-    }
-
-    #[test]
-    fn ids_become_uuids_and_every_link_follows() {
-        let mut db = Scratch::new();
-        apply(&mut db.conn, LOCK, &ALL[..9]).unwrap();
-        db.conn
-            .batch_execute(
-                "INSERT INTO devices (name, kind, token_hash, created_at, user_id) VALUES ('d', 'local', '!', 0, 1);
-                 INSERT INTO files (device_id, path) VALUES (1, 'a.jpg'), (1, 'b.jpg');
-                 INSERT INTO versions (file_id, root_hash, size, mtime, created_at) VALUES (1, decode('00', 'hex'), 1, 0, 0), (2, decode('01', 'hex'), 1, 0, 0);
-                 UPDATE files SET current_version_id = id;
-                 INSERT INTO file_state (file_id, user_id, updated_at, favorite) VALUES (2, 1, 0, TRUE);
-                 INSERT INTO tags (name, user_id) VALUES ('t', 1);
-                 INSERT INTO file_tags VALUES (2, 1);
-                 INSERT INTO albums (name, created_at, updated_at, user_id, cover_file_id) VALUES ('al', 0, 0, 1, 2);
-                 INSERT INTO album_files VALUES (1, 2, 0);
-                 INSERT INTO jobs (kind, payload, created_at) VALUES ('meta', '{}', 1), ('meta', '{\"n\":2}', 2);
-                 INSERT INTO alerts (kind, message, created_at) VALUES ('disk_usage', 'm', 0);",
-            )
-            .unwrap();
-        apply(&mut db.conn, LOCK, ALL).unwrap();
-
-        let one = |c: &mut Client, sql: &str| -> String { c.query_one(sql, &[]).unwrap().get::<_, String>(0) };
-        let c = &mut db.conn;
-        assert_eq!(
-            one(
-                c,
-                "SELECT data_type FROM information_schema.columns WHERE table_name = 'files' AND column_name = 'id' AND table_schema = current_schema()"
-            ),
-            "uuid"
-        );
-        assert_eq!(one(c, "SELECT f.path FROM files f JOIN file_state s ON s.file_id = f.id WHERE s.favorite"), "b.jpg");
-        assert_eq!(
-            one(
-                c,
-                "SELECT f.path FROM files f JOIN versions v ON v.file_id = f.id AND v.id = f.current_version_id ORDER BY f.path LIMIT 1"
-            ),
-            "a.jpg"
-        );
-        assert_eq!(
-            one(
-                c,
-                "SELECT f.path FROM files f JOIN file_tags ft ON ft.file_id = f.id JOIN tags t ON t.id = ft.tag_id"
-            ),
-            "b.jpg"
-        );
-        assert_eq!(
-            one(
-                c,
-                "SELECT f.path FROM files f JOIN albums a ON a.cover_file_id = f.id JOIN album_files af ON af.album_id = a.id AND af.file_id = f.id"
-            ),
-            "b.jpg"
-        );
-        assert_eq!(
-            one(c, "SELECT string_agg(payload, ',' ORDER BY seq) FROM jobs WHERE payload IN ('{}', '{\"n\":2}')"),
-            "{},{\"n\":2}",
-            "jobs keep their order"
-        );
-        assert_eq!(one(c, "SELECT message FROM alerts"), "m");
-        c.execute("DELETE FROM files WHERE path = 'b.jpg'", &[]).unwrap_err(); // still referenced by its versions
-    }
-
-    #[test]
-    fn old_renames_are_no_longer_deletes() {
-        let mut db = Scratch::new();
-        apply(&mut db.conn, LOCK, &ALL[..10]).unwrap();
-        db.conn
-            .batch_execute(
-                "INSERT INTO devices (name, kind, token_hash, created_at, user_id) VALUES ('d', 'local', '!', 0, 1);
-                 INSERT INTO files (device_id, path, deleted_at) VALUES (1, 'old', 5), (1, 'gone', 5);
-                 INSERT INTO events (device_id, path, action, ts, detail) VALUES
-                   (1, 'new', 'rename', 5, 'old'), (1, 'old', 'delete', 5, 'renamed to new'), (1, 'gone', 'delete', 5, NULL);",
-            )
-            .unwrap();
-        apply(&mut db.conn, LOCK, ALL).unwrap();
-        let by: Vec<(String, Option<String>)> = db
-            .conn
-            .query("SELECT path, deleted_by FROM files ORDER BY path", &[])
-            .unwrap()
-            .iter()
-            .map(|r| (r.get(0), r.get(1)))
-            .collect();
-        assert_eq!(by, [("gone".to_string(), None), ("old".to_string(), Some("rename".to_string()))]);
-        let actions: Vec<String> = db
-            .conn
-            .query("SELECT action FROM events ORDER BY id", &[])
-            .unwrap()
-            .iter()
-            .map(|r| r.get(0))
-            .collect();
-        assert_eq!(actions, ["rename", "delete"], "only the delete of the rename is gone");
     }
 
     #[test]

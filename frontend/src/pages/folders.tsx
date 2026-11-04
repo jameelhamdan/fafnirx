@@ -1,14 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Copy, FolderOpen, FolderSync, LogOut, MoreHorizontal, Plus, Trash2, UserPlus, X } from 'lucide-react'
+import { Check, Copy, FolderOpen, FolderSync, LogOut, MoreHorizontal, Pencil, Plus, Server, Trash2, UserPlus, X } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Confirm } from '@/components/confirm'
-import { SharedStateList } from '@/components/shared-state'
+import { RenameFolder } from '@/components/files/rename-folder'
+import { AddMasterFolder } from '@/components/master-folders'
+import { NewFolder } from '@/components/new-folder'
+import { FolderStateList } from '@/components/folder-state'
 import { Empty, ErrorNote, PageHeader, SELECT } from '@/components/common'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -18,18 +20,21 @@ import { useNow } from '@/hooks/use-now'
 import { api } from '@/lib/api'
 import { ago, bytes, count } from '@/lib/format'
 import { useT } from '@/lib/i18n'
-import { useSession } from '@/lib/session'
+import { folderLink } from '@/lib/links'
+import { useRole, useSession } from '@/lib/session'
 import { cn } from '@/lib/utils'
-import type { SharedFolder } from '@/lib/types'
+import type { Folder } from '@/lib/types'
 
-type Show = 'all' | 'mine' | 'others'
+type Show = 'all' | 'mine' | 'others' | 'master'
 type Person = { name: string; can_write: boolean }
 
-/** Refetches the shared folders after a change. */
-function useRefreshShared() {
+/** Refetches the folders after a change. */
+function useRefreshFolders() {
   const client = useQueryClient()
-  return () => void client.invalidateQueries({ queryKey: ['shared'] })
+  return () => void client.invalidateQueries({ queryKey: ['folders'] })
 }
+
+
 
 function AccessSelect({ canWrite, onChange, label }: { canWrite: boolean; onChange: (canWrite: boolean) => void; label: string }) {
   const t = useT()
@@ -51,7 +56,7 @@ function Avatar({ name, className }: { name: string; className?: string }) {
 }
 
 /** How the computers that have the folder are doing, in one word. */
-function syncBadge(folder: SharedFolder, t: ReturnType<typeof useT>) {
+function syncBadge(folder: Folder, t: ReturnType<typeof useT>) {
   const rows = folder.computers
   if (rows.length === 0) return <Badge variant="outline">{t('Not attached')}</Badge>
   if (rows.some((r) => r.last_error !== '' || r.failing > 0)) return <Badge variant="destructive">{t('Needs attention')}</Badge>
@@ -59,57 +64,27 @@ function syncBadge(folder: SharedFolder, t: ReturnType<typeof useT>) {
   return <Badge variant="secondary">{t('In step')}</Badge>
 }
 
-function AddShared({ onMade }: { onMade: (folder: string) => void }) {
+/** The button that makes a folder; the next step, sharing it and attaching it to a computer, is in the panel that opens. */
+function AddFolder({ onMade }: { onMade: (folder: string) => void }) {
   const t = useT()
-  const me = useSession()?.user?.name
-  const refresh = useRefreshShared()
   const [open, setOpen] = useState(false)
-  const [name, setName] = useState('')
-  const create = useMutation({
-    mutationFn: () => api.post('/api/shared', { name }),
-    onSuccess: () => {
-      const made = `${me ?? ''}/${name.trim().toLowerCase()}`
-      setOpen(false)
-      setName('')
-      refresh()
-      onMade(made) // the next step, sharing it and attaching it to a computer, is in the panel that opens
-    },
-  })
-  const submit = (e: FormEvent) => { e.preventDefault(); create.mutate() }
   return (
-    <Dialog open={open} onOpenChange={(o) => { setOpen(o); create.reset() }}>
-      <DialogTrigger asChild><Button><Plus className="size-4" />{t('New shared folder')}</Button></DialogTrigger>
-      <DialogContent>
-        <form onSubmit={submit} className="space-y-4">
-          <DialogHeader>
-            <DialogTitle>{t('New shared folder')}</DialogTitle>
-            <DialogDescription>{t('A folder of yours that all your computers can keep in step. It is empty until a computer attaches a folder to it.')}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="shared-name">{t('Name')}</Label>
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">{me}/</span>
-              <Input id="shared-name" autoFocus placeholder="family" value={name} onChange={(e) => setName(e.target.value)} />
-            </div>
-            <p className="text-xs text-muted-foreground">{t('Lowercase letters, digits, dot, underscore and dash; up to 63 characters.')}</p>
-            {create.error && <p role="alert" className="text-sm text-destructive">{create.error.message}</p>}
-          </div>
-          <DialogFooter><Button type="submit" disabled={!name.trim() || create.isPending}>{t('Create')}</Button></DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <>
+      <Button onClick={() => setOpen(true)}><Plus className="size-4" />{t('New folder')}</Button>
+      <NewFolder open={open} onClose={() => setOpen(false)} onCreated={(folder) => { setOpen(false); onMade(folder) }} />
+    </>
   )
 }
 
 /** The people a folder is shared with, and the way to add more: the part of the panel only its owner sees. */
-function People({ folder }: { folder: SharedFolder }) {
+function People({ folder }: { folder: Folder }) {
   const t = useT()
   const me = useSession()?.user?.name ?? ''
-  const refresh = useRefreshShared()
+  const refresh = useRefreshFolders()
   const [names, setNames] = useState('')
   const [canWrite, setCanWrite] = useState(true)
-  const members = `/api/shared/${encodeURIComponent(folder.name)}/members`
-  const people = useQuery({ queryKey: ['shared', 'people'], queryFn: () => api.get<Person[]>('/api/shared/people'), staleTime: 60_000 })
+  const members = `/api/folders/${encodeURIComponent(folder.name)}/members`
+  const people = useQuery({ queryKey: ['folders', 'people'], queryFn: () => api.get<Person[]>('/api/folders/people'), staleTime: 60_000 })
   const suggestions = (people.data ?? []).filter((p) => !folder.members.some((m) => m.user === p.name))
   // Adding a user and changing what they may do are the same request.
   const save = useMutation({ mutationFn: (m: { user: string; can_write: boolean }) => api.post(members, m), onSuccess: refresh, onError: (e) => toast.error(e.message) })
@@ -193,10 +168,10 @@ function People({ folder }: { folder: SharedFolder }) {
 }
 
 /** The command that syncs a folder of a computer with this shared folder, to copy. */
-function AttachHint({ folder }: { folder: SharedFolder }) {
+function AttachHint({ folder }: { folder: Folder }) {
   const t = useT()
   const [copied, setCopied] = useState(false)
-  const command = `fafnirx shared attach ${folder.folder} <folder>`
+  const command = `fafnirx folder add <folder> --target ${folder.folder}`
   const copy = () => {
     void navigator.clipboard?.writeText(command).then(() => {
       setCopied(true)
@@ -205,7 +180,7 @@ function AttachHint({ folder }: { folder: SharedFolder }) {
   }
   return (
     <div className="space-y-1">
-      <p className="text-sm text-muted-foreground">{t('Not attached to any computer yet. From its tray menu (Shared folders), or with this command:')}</p>
+      <p className="text-sm text-muted-foreground">{t('Not attached to any computer yet. From the tray menu of a computer, or with this command:')}</p>
       <div className="flex items-center gap-2">
         <code className="min-w-0 flex-1 break-all rounded bg-muted px-2 py-1 text-xs">{command}</code>
         <Button size="icon" variant="ghost" aria-label={t('Copy the command')} onClick={copy}>
@@ -217,14 +192,20 @@ function AttachHint({ folder }: { folder: SharedFolder }) {
 }
 
 /** Everything about one folder: who has it, which computers keep it, and the ways to end it. */
-function FolderPanel({ folder, onClose }: { folder: SharedFolder | undefined; onClose: () => void }) {
+function FolderPanel({ folder, onClose }: { folder: Folder | undefined; onClose: () => void }) {
   const t = useT()
-  const refresh = useRefreshShared()
+  const refresh = useRefreshFolders()
+  const admin = useRole() === 'admin'
   const [asking, setAsking] = useState<'delete' | 'leave' | null>(null)
+  const [renaming, setRenaming] = useState(false)
   const ended = () => { setAsking(null); onClose(); refresh() }
   const failed = (e: Error) => { setAsking(null); toast.error(e.message) }
-  const remove = useMutation({ mutationFn: () => api.delete(`/api/shared/${encodeURIComponent(folder?.name ?? '')}`), onSuccess: ended, onError: failed })
-  const leave = useMutation({ mutationFn: () => api.post('/api/shared/leave', { folder: folder?.folder }), onSuccess: ended, onError: failed })
+  const remove = useMutation({
+    mutationFn: () => (folder?.master ? api.delete(`/api/master-folders/${folder.public_id}`) : api.delete(`/api/folders/${encodeURIComponent(folder?.name ?? '')}`)),
+    onSuccess: ended,
+    onError: failed,
+  })
+  const leave = useMutation({ mutationFn: () => api.post('/api/folders/leave', { folder: folder?.folder }), onSuccess: ended, onError: failed })
   return (
     <Sheet open={folder !== undefined} onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="w-full gap-0 overflow-y-auto sm:max-w-lg">
@@ -233,35 +214,51 @@ function FolderPanel({ folder, onClose }: { folder: SharedFolder | undefined; on
             <SheetHeader>
               <SheetTitle className="break-all">{folder.folder}</SheetTitle>
               <SheetDescription>
-                {folder.mine ? t('Yours') : t('Shared by {owner}', { owner: folder.owner })}
+                {folder.master ? t('Master files') : folder.mine ? t('Yours') : t('Shared by {owner}', { owner: folder.owner })}
                 {!folder.mine && <> · {folder.can_write ? t('Read and change') : t('Read only')}</>}
               </SheetDescription>
             </SheetHeader>
             <div className="space-y-6 px-4 pb-6">
               <div className="flex flex-wrap items-center gap-2">
                 <Button size="sm" variant="outline" asChild>
-                  <Link to={`/files?device=${encodeURIComponent(folder.folder)}`}><FolderOpen className="size-4" />{t('Browse files')}</Link>
+                  <Link to={folderLink(folder.folder)}><FolderOpen className="size-4" />{t('Browse files')}</Link>
                 </Button>
                 <span className="text-sm text-muted-foreground"><Summary folder={folder} /></span>
               </div>
               {folder.mine && <People folder={folder} />}
               <section className="space-y-2">
-                <h3 className="text-sm font-medium">{folder.mine ? t('Computers it is attached to') : t('Your computers that have it')}</h3>
-                {folder.computers.length > 0 ? <SharedStateList rows={folder.computers} /> : <AttachHint folder={folder} />}
+                <h3 className="text-sm font-medium">{folder.mine || (folder.master && admin) ? t('Computers it is attached to') : t('Your computers that have it')}</h3>
+                {folder.computers.length > 0 ? <FolderStateList rows={folder.computers} /> : <AttachHint folder={folder} />}
               </section>
-              <section className="border-t pt-4">
-                {folder.mine ? (
-                  <Button variant="outline" onClick={() => setAsking('delete')}><Trash2 className="size-4" />{t('Delete')}</Button>
+              <section className="flex flex-wrap gap-2 border-t pt-4">
+                {folder.master ? (
+                  admin && (
+                    <>
+                      <Button variant="outline" onClick={() => setRenaming(true)}><Pencil className="size-4" />{t('Rename folder')}</Button>
+                      <Button variant="outline" onClick={() => setAsking('delete')}><Trash2 className="size-4" />{t('Remove')}</Button>
+                    </>
+                  )
+                ) : folder.mine ? (
+                  <>
+                    <Button variant="outline" onClick={() => setRenaming(true)}><Pencil className="size-4" />{t('Rename folder')}</Button>
+                    <Button variant="outline" onClick={() => setAsking('delete')}><Trash2 className="size-4" />{t('Delete')}</Button>
+                  </>
                 ) : (
                   <Button variant="outline" onClick={() => setAsking('leave')}><LogOut className="size-4" />{t('Leave')}</Button>
                 )}
               </section>
+              <RenameFolder
+                folder={renaming ? (folder.master ? folder.name : folder.folder) : null}
+                masterId={folder.master ? folder.public_id : undefined}
+                onClose={() => setRenaming(false)}
+                onRenamed={() => { setRenaming(false); onClose(); refresh() }}
+              />
             </div>
             <Confirm
               open={asking === 'delete'}
-              title={t('Delete {name}?', { name: folder.folder })}
-              description={t('This removes the folder for good, with its trash and the history of its files. It can only be deleted once all its files are deleted.')}
-              action={t('Delete')}
+              title={folder.master ? t('Remove {name}?', { name: folder.name }) : t('Delete {name}?', { name: folder.folder })}
+              description={folder.master ? t('Computers stop syncing it. The files stay in the master files.') : t('This removes the folder for good, with its trash and the history of its files. It can only be deleted once all its files are deleted.')}
+              action={folder.master ? t('Remove') : t('Delete')}
               destructive
               onConfirm={() => remove.mutate()}
               onCancel={() => setAsking(null)}
@@ -283,7 +280,7 @@ function FolderPanel({ folder, onClose }: { folder: SharedFolder | undefined; on
 }
 
 /** Size and last change of a folder, in a line. */
-function Summary({ folder }: { folder: SharedFolder }) {
+function Summary({ folder }: { folder: Folder }) {
   const t = useT()
   const now = useNow()
   return (
@@ -294,22 +291,26 @@ function Summary({ folder }: { folder: SharedFolder }) {
   )
 }
 
-function Row({ folder, onOpen }: { folder: SharedFolder; onOpen: () => void }) {
+function Row({ folder, onOpen }: { folder: Folder; onOpen: () => void }) {
   const t = useT()
   const shown = folder.members.slice(0, 3)
   return (
     <li className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 hover:bg-accent/40">
-      <FolderSync className="size-5 shrink-0 text-muted-foreground" />
+      {folder.master ? <Server className="size-5 shrink-0 text-muted-foreground" /> : <FolderSync className="size-5 shrink-0 text-muted-foreground" />}
       <button type="button" onClick={onOpen} className="min-w-0 flex-1 basis-48 text-start">
         <span className="flex flex-wrap items-center gap-2">
-          <span className="break-all font-medium"><span className="text-muted-foreground">{folder.owner}/</span>{folder.name}</span>
-          {!folder.mine && <Badge variant="secondary">{t('Shared with you')}</Badge>}
+          <span className="break-all font-medium">{folder.master || folder.mine ? folder.name : <><span className="text-muted-foreground">{folder.owner}/</span>{folder.name}</>}</span>
+          {folder.master && <Badge variant="secondary">{t('Master files')}</Badge>}
+          {!folder.mine && !folder.master && <Badge variant="secondary">{t('Shared with you')}</Badge>}
           {!folder.mine && !folder.can_write && <Badge variant="outline">{t('Read only')}</Badge>}
+          {folder.mine && folder.shared && <Badge variant="outline">{t('Shared')}</Badge>}
         </span>
         <span className="block text-xs text-muted-foreground"><Summary folder={folder} /></span>
       </button>
       <div className="flex items-center gap-1.5 text-sm text-muted-foreground" title={folder.members.map((m) => m.user).join(', ')}>
-        {folder.mine ? (
+        {folder.master ? (
+          t('Everyone')
+        ) : folder.mine ? (
           folder.members.length === 0 ? (
             t('Only you')
           ) : (
@@ -324,11 +325,11 @@ function Row({ folder, onOpen }: { folder: SharedFolder; onOpen: () => void }) {
       </div>
       <div className="w-32">{syncBadge(folder, t)}</div>
       <div className="flex items-center gap-1">
-        <Button size="sm" variant="outline" onClick={onOpen}>{folder.mine ? t('Share') : t('Details')}</Button>
+        <Button size="sm" variant="outline" onClick={onOpen}>{folder.mine && !folder.master ? t('Share') : t('Details')}</Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild><Button size="icon" variant="ghost" aria-label={t('More')}><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem asChild><Link to={`/files?device=${encodeURIComponent(folder.folder)}`}><FolderOpen className="size-4" />{t('Browse files')}</Link></DropdownMenuItem>
+            <DropdownMenuItem asChild><Link to={folderLink(folder.folder)}><FolderOpen className="size-4" />{t('Browse files')}</Link></DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -336,43 +337,47 @@ function Row({ folder, onOpen }: { folder: SharedFolder; onOpen: () => void }) {
   )
 }
 
-export default function Shared() {
+export default function Folders() {
   const t = useT()
   const [show, setShow] = useState<Show>('all')
   const [search, setSearch] = useState('')
   const [opened, setOpened] = useState<string | null>(null)
-  const { data, error } = useQuery({ queryKey: ['shared'], queryFn: () => api.get<SharedFolder[]>('/api/shared') })
+  const admin = useRole() === 'admin'
+  const { data, error } = useQuery({ queryKey: ['folders'], queryFn: () => api.get<Folder[]>('/api/folders') })
   const shown = useMemo(() => {
     const word = search.trim().toLowerCase()
-    return (data ?? []).filter((f) => (show === 'all' || (show === 'mine') === f.mine) && (word === '' || f.folder.includes(word)))
+    const wanted = (f: Folder) => show === 'all' || (show === 'master' ? f.master : show === 'mine' ? f.mine : !f.mine && !f.master)
+    return (data ?? []).filter((f) => wanted(f) && (word === '' || f.folder.toLowerCase().includes(word)))
   }, [data, show, search])
   const mine = data?.filter((f) => f.mine).length ?? 0
+  const master = data?.filter((f) => f.master).length ?? 0
   const filters: { id: Show; label: string }[] = [
     { id: 'all', label: t('All ({count})', { count: data?.length ?? 0 }) },
     { id: 'mine', label: t('Yours ({count})', { count: mine }) },
-    { id: 'others', label: t('Shared with you ({count})', { count: (data?.length ?? 0) - mine }) },
+    { id: 'others', label: t('Shared with you ({count})', { count: (data?.length ?? 0) - mine - master }) },
+    { id: 'master', label: t('Master files ({count})', { count: master }) },
   ]
   return (
     <div>
       <PageHeader
-        title={t('Shared folders')}
-        description={t('Folders that belong to you, not to one computer. Attach one to a folder from the tray menu of each computer and it stays the same on all of them. Other users can use one only when you add them here.')}
-        actions={<AddShared onMade={setOpened} />}
+        title={t('Folders')}
+        description={t('Folders that belong to you, or to the master files, not to one computer. Attach one to a folder of each computer and it stays the same on all of them. Other users can use one of yours only when you add them here.')}
+        actions={<div className="flex flex-wrap gap-2">{admin && <AddMasterFolder />}<AddFolder onMade={setOpened} /></div>}
       />
       {error ? <ErrorNote error={error} /> : !data ? (
         <Skeleton className="h-48" />
       ) : data.length === 0 ? (
-        <Empty title={t('No shared folders')}>{t('Make one, then attach a folder of each computer to it from the tray menu.')}</Empty>
+        <Empty title={t('No folders')}>{t('Make one, then attach a folder of each computer to it.')}</Empty>
       ) : (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-2">
-            <Input className="w-full sm:w-56" type="search" aria-label={t('Search shared folders')} placeholder={t('Search')} value={search} onChange={(e) => setSearch(e.target.value)} />
+            <Input className="w-full sm:w-56" type="search" aria-label={t('Search folders')} placeholder={t('Search')} value={search} onChange={(e) => setSearch(e.target.value)} />
             {filters.map((f) => (
               <Button key={f.id} size="sm" variant={show === f.id ? 'secondary' : 'ghost'} onClick={() => setShow(f.id)}>{f.label}</Button>
             ))}
           </div>
           {shown.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{t('No shared folder matches.')}</p>
+            <p className="text-sm text-muted-foreground">{t('No folder matches.')}</p>
           ) : (
             <ul className="divide-y rounded-lg border bg-card">
               {shown.map((f) => <Row key={f.folder} folder={f} onOpen={() => setOpened(f.folder)} />)}

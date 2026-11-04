@@ -41,7 +41,7 @@ const NAV: { title: string; items: { to: string; label: string; icon: typeof Ima
       { to: '/', label: msg('Dashboard'), icon: LayoutDashboard, end: true, for: 'all' },
       { to: '/files', label: msg('Files'), icon: FolderOpen, for: 'all' },
       { to: '/devices', label: msg('Devices'), icon: Monitor, for: 'workspace' },
-      { to: '/shared', label: msg('Shared folders'), icon: FolderSync, for: 'workspace' },
+      { to: '/folders', label: msg('Folders'), icon: FolderSync, for: 'workspace' },
       { to: '/sources', label: msg('Sources'), icon: UploadCloud, for: 'workspace' },
       { to: '/queue', label: msg('Processing'), icon: Cog, for: 'all' },
       { to: '/mirrors', label: msg('Mirrors'), icon: HardDrive, for: 'admin' },

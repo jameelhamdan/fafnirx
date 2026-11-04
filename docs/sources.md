@@ -1,11 +1,17 @@
 # Sources
 
-A source is storage the master reads on a schedule. Its files land in their own folder and appear under **Files** like a
-device's: read-only (browse, download, hide), with versions and retention. A source never writes back.
+A source is storage the master reads on a schedule. Its files are written into a folder you choose and appear under
+**Files** there like any other file, with versions and retention. A source never writes back.
 
-A source belongs to its user (`<user>/<name>`). Its files are at `files/users/<user>/source-<name>/<path>`, the same
-layout as every other device, so [mirrors](mirrors.md) and the network drive treat them alike. Credentials are never shown
-again.
+A source belongs to its user (`<user>/<name>`). **Where the files go** is one of: a folder of its own (`<user>/source-<name>`,
+a normal local folder, which you can rename), or any subfolder of one of your folders, a folder shared with you that you may change, or the
+master files (not `users/`). The subfolder is made on the first run. Files are named below that place, so [mirrors](mirrors.md)
+and the network drive treat them like any others. Credentials are never shown again.
+
+**Edit** (pencil on the Sources page) changes the name, the place, the schedule and what it reads; a password or cookie field left
+empty keeps what is stored. Moving or renaming the folder in Files, or its parent, keeps the source attached. Changing the place
+takes what it collected along: within the same folder the files are moved (nothing else in the folder is touched, and nothing moves if a name is in the way); into another folder they go to the Trash and it collects everything again there. It cannot be changed while it runs. **Deleting** a source removes
+only the files it collected, not the rest of the folder.
 
 Sources read any storage [rclone](https://rclone.org) supports: Google Drive, OneDrive, Dropbox, Nextcloud/WebDAV, SFTP,
 S3-compatible, a local folder.
@@ -16,8 +22,9 @@ folder, a remote from `rclone.conf`; the same choices and fields as for a mirror
 name and a schedule.
 
 - Each run lists the folder recursively and downloads files that are new or whose size or modification time changed.
-- The remote layout is kept: `Photos/2024/a.jpg` on the storage is `source-<name>/Photos/2024/a.jpg`.
+- The remote layout is kept: `Photos/2024/a.jpg` on the storage is `Photos/2024/a.jpg` below the place the source writes to.
 - The storage has no stable file ids, so a **rename or move downloads the file again** and the old path is marked deleted.
+  (A kind that gives its files keys, see [Plugins](plugins.md), moves them instead.)
 - Files gone from the storage are marked deleted (kept for the retention period). If listing fails nothing is deleted and
   the run fails with an alert.
 - Names rclone lists that cannot be a path (`..`, empty parts) and files of unknown size are skipped and counted.

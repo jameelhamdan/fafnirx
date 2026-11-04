@@ -206,7 +206,7 @@ impl State {
         Ok(self.conn.execute("DELETE FROM meta WHERE key = ?1", [key])? > 0)
     }
 
-    /// Deletions of the master that are held back here (a shared folder): how many, and since when. They are kept until a
+    /// Deletions of the master that are held back here (a synced folder): how many, and since when. They are kept until a
     /// person decides (`release_deletes` applies them, `keep` keeps the files), so this is what `status` shows when the client
     /// is not running.
     pub fn pull_hold(&self) -> Result<Option<(usize, i64)>> {
@@ -234,7 +234,7 @@ impl State {
         Ok(())
     }
 
-    /// Asks that the files whose deletion is held back are kept (`fafnirx shared keep`).
+    /// Asks that the files whose deletion is held back are kept (`fafnirx folder keep`).
     pub fn request_keep(&self) -> Result<()> {
         self.set_meta("keep_deletes", "1")
     }
@@ -244,7 +244,7 @@ impl State {
         self.delete_meta("keep_deletes")
     }
 
-    /// How the last cycle of a shared folder ended: when, and the last problem (empty if it went well).
+    /// How the last cycle of a synced folder ended: when, and the last problem (empty if it went well).
     pub fn set_outcome(&self, last_cycle: i64, error: &str) -> Result<()> {
         self.set_meta("last_cycle", &last_cycle.to_string())?;
         self.set_meta("last_error", error)
@@ -262,7 +262,7 @@ impl State {
         self.adopt("master_id", master_id)
     }
 
-    /// What the records belong to besides the master: a shared folder's records are about one local folder, so another one
+    /// What the records belong to besides the master: a synced folder's records are about one local folder, so another one
     /// starts from nothing (the old ones would make every file of the new folder look deleted).
     pub fn adopt_folder(&mut self, path: &str) -> Result<usize> {
         self.adopt("folder", path)
@@ -279,7 +279,7 @@ impl State {
         tx.execute("DELETE FROM held", [])?;
         tx.execute("DELETE FROM pending", [])?;
         tx.execute(
-            "DELETE FROM meta WHERE key IN ('initial_sync_done', 'release_deletes', 'shared_cursor', 'pull_held', 'keep_deletes')",
+            "DELETE FROM meta WHERE key IN ('initial_sync_done', 'release_deletes', 'synced_cursor', 'pull_held', 'keep_deletes')",
             [],
         )?;
         tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", [key, value])?;
@@ -417,10 +417,10 @@ mod tests {
         let mut st = State::open(&dir.path().join("s.db")).unwrap();
         assert_eq!(st.adopt_folder("/home/a/Family").unwrap(), 0);
         st.set_synced(&Synced { path: "a".into(), size: 1, mtime_ns: 2, root_hash: vec![0; 32] }).unwrap();
-        st.set_meta("shared_cursor", "100").unwrap();
+        st.set_meta("synced_cursor", "100").unwrap();
         assert_eq!(st.adopt_folder("/home/a/Family").unwrap(), 0, "the same folder: kept");
         assert!(st.synced("a").unwrap().is_some());
         assert_eq!(st.adopt_folder("/home/a/Family2").unwrap(), 1, "another folder: nothing carries over");
-        assert!(st.synced("a").unwrap().is_none() && st.meta("shared_cursor").unwrap().is_none());
+        assert!(st.synced("a").unwrap().is_none() && st.meta("synced_cursor").unwrap().is_none());
     }
 }

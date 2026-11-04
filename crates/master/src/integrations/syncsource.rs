@@ -18,9 +18,18 @@ use std::sync::Arc;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {
     pub path: String,
+    /// What the file is, when that is not its path (see `FetchEntry::key`).
+    pub key: Option<String>,
     pub marker: String,
     pub size: u64,
     pub mtime_ns: i64,
+}
+
+impl Item {
+    /// What the source remembers it by.
+    fn id(&self) -> &str {
+        self.key.as_deref().unwrap_or(&self.path)
+    }
 }
 
 /// A complete file in a temporary location.
@@ -34,37 +43,72 @@ pub struct Download {
 #[derive(Default)]
 struct Plan<'a> {
     unchanged: usize,
-    /// New or changed content: (item, whether the path already existed).
-    fetch: Vec<(&'a Item, bool)>,
-    /// Paths that left the source.
-    removals: Vec<String>,
+    /// New or changed content: (item, whether the path already existed, the path it leaves when the file is made again
+    /// somewhere else).
+    fetch: Vec<(&'a Item, bool, Option<String>)>,
+    /// The same content under another name: (item, the path it had). Moved, not fetched.
+    renames: Vec<(&'a Item, String)>,
+    /// Remembered files that left the source: (what it is remembered by, path).
+    removals: Vec<(String, String)>,
 }
 
-/// Path -> version marker of everything imported so far.
-type Known = HashMap<String, String>;
+/// One file imported before.
+#[derive(Clone, Debug, PartialEq)]
+struct Entry {
+    id: String,
+    path: String,
+    marker: String,
+}
+
+/// Everything imported so far, by what the source remembers it by (its key, else its path).
+type Known = HashMap<String, Entry>;
+
+fn known_of(rows: impl IntoIterator<Item = (String, String, String)>) -> Known {
+    rows.into_iter().map(|(id, path, marker)| (id.clone(), Entry { id, path, marker })).collect()
+}
 
 /// Pure: compares the listing with the database. `live` holds the paths that are currently not deleted, `removed` those
 /// deleted in the web app: they stay deleted until the file changes on the remote.
 fn plan<'a>(items: &'a [Item], known: &Known, live: &HashSet<String>, removed: &HashSet<String>) -> Plan<'a> {
     let mut plan = Plan::default();
+    let mut matched = HashSet::new();
     for item in items {
-        let previous = known.get(&item.path);
-        match previous {
-            Some(marker) if *marker == item.marker && (removed.contains(&item.path) || live.contains(&item.path)) => {
-                plan.unchanged += 1;
-            }
-            _ => plan.fetch.push((item, previous.is_some() || live.contains(&item.path))),
+        let Some(before) = known.get(item.id()) else {
+            plan.fetch.push((item, live.contains(&item.path), None));
+            continue;
+        };
+        matched.insert(before.id.clone());
+        let kept = removed.contains(&item.path) || live.contains(&item.path);
+        if before.marker == item.marker && before.path == item.path && kept {
+            plan.unchanged += 1;
+        } else if before.marker == item.marker && removed.contains(&before.path) && !live.contains(&item.path) {
+            // Deleted in the web app under its old name: it stays deleted under the new one.
+            plan.unchanged += 1;
+        } else if before.marker == item.marker && before.path != item.path && live.contains(&before.path) && !live.contains(&item.path) {
+            plan.renames.push((item, before.path.clone()));
+        } else {
+            let leaves = (before.path != item.path).then(|| before.path.clone());
+            plan.fetch.push((item, true, leaves));
         }
     }
-    let listed: HashSet<&str> = items.iter().map(|i| i.path.as_str()).collect();
-    plan.removals = known.keys().filter(|path| !listed.contains(path.as_str())).cloned().collect();
+    plan.removals = known
+        .values()
+        .filter(|e| !matched.contains(&e.id))
+        .map(|e| (e.id.clone(), e.path.clone()))
+        .collect();
     plan
 }
 
-fn commit(conn: &mut postgres::Client, store: &Store, source_id: i64, device: &Device, item: &Item, content: Download) -> Result<()> {
+/// The path in the device of a file the source names `path`: below the subfolder the source writes into.
+fn placed(prefix: &str, path: &str) -> String {
+    format!("{prefix}{path}")
+}
+
+fn commit(conn: &mut postgres::Client, store: &Store, source_id: i64, device: &Device, prefix: &str, item: &Item, content: Download) -> Result<()> {
+    let placed = placed(prefix, &item.path);
     let version = NewVersion {
         device,
-        path: &item.path,
+        path: &placed,
         root: content.root,
         size: content.size,
         mtime: item.mtime_ns,
@@ -72,7 +116,7 @@ fn commit(conn: &mut postgres::Client, store: &Store, source_id: i64, device: &D
         renamed_from: None,
     };
     ingest::commit_version(conn, store, &content.path, &version)?;
-    sources::remember_item(conn, source_id, &item.path, &item.path, &item.marker)?;
+    sources::remember_item(conn, source_id, item.id(), &item.path, &item.marker)?;
     Ok(())
 }
 
@@ -97,19 +141,27 @@ impl Rules {
     pub const ALL: Rules = Rules { limit: usize::MAX, removals: true };
 }
 
+/// Where a source puts its files: a device, and below `prefix` (empty, or a path and a slash) in it.
+pub struct Target {
+    pub device: Device,
+    pub prefix: String,
+}
+
 /// Applies a listing: `fetch` downloads one file of it to a temporary place.
-pub async fn apply<F, Fut>(db: Db, store: Arc<Store>, source_id: i64, device: Device, listing: Listing, rules: Rules, fetch: F) -> Result<Outcome>
+pub async fn apply<F, Fut>(db: Db, store: Arc<Store>, source_id: i64, target: Target, listing: Listing, rules: Rules, fetch: F) -> Result<Outcome>
 where
     F: Fn(Item) -> Fut,
     Fut: Future<Output = Result<Download>>,
 {
+    let Target { device, prefix } = target;
     let device_id = device.id;
+    let below = prefix.clone();
     let (known, live, removed): (Known, HashSet<String>, HashSet<String>) = db::with(&db, move |c| {
-        let known = sources::items(c, source_id)?.into_iter().map(|(_, path, version)| (path, version)).collect();
-        let live = sql::sources::live_paths().bind(c, &device_id).all()?.into_iter().collect();
+        let known = known_of(sources::items(c, source_id)?);
+        let live = sql::sources::live_paths().bind(c, &below, &device_id).all()?.into_iter().collect();
         // Deleted in the web app: still in the trash, or already removed by the retention job (then only the
         // source's own record remembers it).
-        let removed = sources::removed_in_web_app(c, device_id, source_id)?.into_iter().collect();
+        let removed = sources::removed_in_web_app(c, device_id, source_id, &below)?.into_iter().collect();
         Ok((known, live, removed))
     })
     .await?;
@@ -125,12 +177,12 @@ where
     };
 
     // Removals go first so that a path is free before a new file takes it over.
-    for path in plan.removals {
+    for (id, path) in plan.removals {
         let shown = path.clone();
-        let (store, device) = (store.clone(), device.clone());
+        let (store, device, prefix) = (store.clone(), device.clone(), prefix.clone());
         let deleted = db::with(&db, move |c| {
-            let changed = ingest::mark_deleted(c, &store, &device, &path, false)?;
-            sql::sources::delete_source_item().bind(c, &source_id, &path).map(drop)?;
+            let changed = ingest::mark_deleted(c, &store, &device, &placed(&prefix, &path), false)?;
+            sql::sources::delete_source_item().bind(c, &source_id, &id).map(drop)?;
             Ok(changed)
         })
         .await;
@@ -141,16 +193,39 @@ where
         }
     }
 
+    // A file that only got another name is moved, not made again.
+    for (item, from) in plan.renames {
+        let (stored, store, device, prefix, from) = (item.clone(), store.clone(), device.clone(), prefix.clone(), from);
+        let moved = db::with(&db, move |c| {
+            ingest::move_path(c, &store, &device, &placed(&prefix, &from), &placed(&prefix, &stored.path))?;
+            sources::remember_item(c, source_id, stored.id(), &stored.path, &stored.marker)?;
+            Ok(())
+        })
+        .await;
+        match moved {
+            Ok(()) => out.updated += 1,
+            Err(e) => failed(&item.path, e),
+        }
+    }
+
     let wanted = plan.fetch.len();
-    for (n, (item, is_update)) in plan.fetch.into_iter().enumerate() {
+    for (n, (item, is_update, leaves)) in plan.fetch.into_iter().enumerate() {
         if n >= rules.limit {
             out.deferred = wanted - n;
             break;
         }
         let fetched = async {
             let content = fetch(item.clone()).await?;
-            let (stored, store, device) = (item.clone(), store.clone(), device.clone());
-            db::with(&db, move |c| commit(c, &store, source_id, &device, &stored, content)).await
+            let (stored, store, device, prefix) = (item.clone(), store.clone(), device.clone(), prefix.clone());
+            db::with(&db, move |c| {
+                commit(c, &store, source_id, &device, &prefix, &stored, content)?;
+                // Made again under another name (another format): the file it replaces goes.
+                if let Some(old) = leaves {
+                    ingest::mark_deleted(c, &store, &device, &placed(&prefix, &old), false)?;
+                }
+                Ok(())
+            })
+            .await
         }
         .await;
         match fetched {
@@ -167,11 +242,16 @@ mod tests {
     use super::*;
 
     fn item(path: &str, marker: &str) -> Item {
-        Item { path: path.into(), marker: marker.into(), size: 0, mtime_ns: 0 }
+        Item { path: path.into(), key: None, marker: marker.into(), size: 0, mtime_ns: 0 }
     }
 
+    fn keyed(key: &str, path: &str, marker: &str) -> Item {
+        Item { key: Some(key.into()), ..item(path, marker) }
+    }
+
+    /// What was imported, by path (a file without a key is remembered by its path).
     fn known(rows: &[(&str, &str)]) -> Known {
-        rows.iter().map(|(path, marker)| (path.to_string(), marker.to_string())).collect()
+        known_of(rows.iter().map(|(path, marker)| (path.to_string(), path.to_string(), marker.to_string())))
     }
 
     fn live(paths: &[&str]) -> HashSet<String> {
@@ -186,9 +266,35 @@ mod tests {
         let p = plan(&items, &known, &live, &HashSet::new());
 
         assert_eq!(p.unchanged, 1);
-        let fetch: Vec<_> = p.fetch.iter().map(|(i, update)| (i.path.as_str(), *update)).collect();
+        let fetch: Vec<_> = p.fetch.iter().map(|(i, update, _)| (i.path.as_str(), *update)).collect();
         assert_eq!(fetch, [("d/edited.txt", true), ("d/new.txt", false)]);
-        assert_eq!(p.removals, ["d/gone.txt"]);
+        assert_eq!(p.removals, [("d/gone.txt".to_string(), "d/gone.txt".to_string())]);
+    }
+
+    #[test]
+    fn a_file_with_a_key_is_the_same_file_under_another_name_or_format() {
+        let before = known_of([("id1".to_string(), "d/Old name.mp4".to_string(), "mp4".to_string())]);
+        let here = live(&["d/Old name.mp4"]);
+
+        // Only the name changed: moved, nothing fetched.
+        let renamed = [keyed("id1", "d/New name.mp4", "mp4")];
+        let p = plan(&renamed, &before, &here, &HashSet::new());
+        assert_eq!((p.fetch.len(), p.removals.len(), p.renames.len()), (0, 0, 1));
+        assert_eq!((p.renames[0].0.path.as_str(), p.renames[0].1.as_str()), ("d/New name.mp4", "d/Old name.mp4"));
+
+        // The format changed: made again at the new path, and the old one goes once that worked.
+        let other = [keyed("id1", "d/Old name.mkv", "mkv")];
+        let p = plan(&other, &before, &here, &HashSet::new());
+        assert_eq!((p.fetch.len(), p.removals.len(), p.renames.len()), (1, 0, 0));
+        assert_eq!(p.fetch[0].2.as_deref(), Some("d/Old name.mp4"));
+
+        // Deleted in the web app, then renamed at the source: it stays deleted.
+        let p = plan(&renamed, &before, &live(&[]), &live(&["d/Old name.mp4"]));
+        assert_eq!((p.unchanged, p.fetch.len(), p.renames.len()), (1, 0, 0));
+
+        // A key that is no longer listed is a file that left the source.
+        let p = plan(&[], &before, &here, &HashSet::new());
+        assert_eq!(p.removals, [("id1".to_string(), "d/Old name.mp4".to_string())]);
     }
 
     #[test]

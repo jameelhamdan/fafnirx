@@ -65,7 +65,7 @@ try {
   fs.writeFileSync(path.join(src, 'skip.tmp'), 'ignored')
   fs.writeFileSync(path.join(src, '.fafnirxignore'), '*.tmp\n')
   fs.writeFileSync(path.join(src, 'empty.txt'), '')
-  c('add-folder', src, '--name', 'docs')
+  c('folder', 'add', src, '--name', 'docs')
   const first = c('sync').stdout
   check(first.includes('5 uploaded'), `first sync uploads 5 files (${first.trim()})`)
 
@@ -143,12 +143,12 @@ try {
   const held = path.join(tmp, 'held')
   fs.mkdirSync(held)
   fs.writeFileSync(path.join(held, 'keep.txt'), 'keep me')
-  c('add-folder', held, '--name', 'held')
+  c('folder', 'add', held, '--name', 'held')
   c('sync')
   fs.rmSync(held, { recursive: true })
   c.try('sync')
   check((await stored('admin/laptop', 'held/keep.txt'))?.toString() === 'keep me' && (await schema.rows("SELECT 1 FROM files WHERE path = 'held/keep.txt' AND deleted_at IS NULL")).length === 1, 'files of a collected folder that disappeared stay on the master')
-  c('remove-folder', 'held')
+  c('folder', 'remove', 'held')
 
   // --- deleted in the web app: hidden on the master, not sent again, and the device's file is left alone ----------
   const mine = path.join(src, 'web-deleted.txt')
@@ -214,7 +214,7 @@ try {
   const twinSrc = path.join(tmp, 'twin-docs')
   fs.mkdirSync(twinSrc, { recursive: true })
   fs.writeFileSync(path.join(twinSrc, 'twin-only.txt'), 'must never arrive')
-  twin.c('add-folder', twinSrc, '--name', 'twin')
+  twin.c('folder', 'add', twinSrc, '--name', 'twin')
   const twinDaemon = spawn(CLIENT, ['--config', twin.cfg, 'run'], { env: ENV, stdio: 'ignore' })
   check(await until(() => twin.c('status').stdout.includes('not sending'), 40), 'the second computer waits and says it is not sending')
   await new Promise((r) => setTimeout(r, 3000))
@@ -231,7 +231,7 @@ try {
   const late = path.join(tmp, 'late')
   fs.mkdirSync(path.join(late, 'inner'), { recursive: true })
   fs.writeFileSync(path.join(late, 'inner', 'first.txt'), 'a folder added while the client runs')
-  c('add-folder', late, '--name', 'late')
+  c('folder', 'add', late, '--name', 'late')
   check(await until(() => known('late/inner/first.txt'), 30), 'a folder added while the client runs is collected at once, not at the next scan')
   fs.writeFileSync(path.join(src, 'watched.txt'), 'picked up by the watcher')
   check(await until(() => known('docs/watched.txt'), 30), 'the file watcher uploads a new file')
@@ -261,7 +261,7 @@ try {
   check(!(await known('docs/after-revoke.txt')), 'nothing was stored for the revoked device')
 
   // --- a local folder: upload in the browser's chunks, then files dropped straight into it ------------------------------------------------
-  check((await admin2.post('/api/devices', { name: 'photos', kind: 'local' })).status === 200, 'a local folder is created')
+  check((await admin2.post('/api/folders', { name: 'photos' })).status === 200, 'a local folder is created')
   const photo = randomBytes(300_000)
   const upload = (await admin2.post('/api/uploads', { device: 'admin/photos', path: '2024/p.jpg', size: photo.length })).json
   for (let at = 0; at < photo.length; at += 100_000) {

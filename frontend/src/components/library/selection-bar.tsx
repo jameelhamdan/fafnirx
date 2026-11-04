@@ -1,25 +1,22 @@
-import { Archive, ArchiveRestore, Download, FolderMinus, FolderPlus, Heart, MoreHorizontal, Tag, Trash2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, Download, Heart, MoreHorizontal, Tag, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
-import { toast } from 'sonner'
 import { Button } from '../ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/dropdown-menu'
 import { Confirm } from '../confirm'
-import { api, downloadZip } from '@/lib/api'
+import { downloadZip } from '@/lib/api'
 import { plural } from '@/lib/format'
-import { useLibraryActions, useRefreshLibrary } from '@/lib/library'
+import { useLibraryActions } from '@/lib/library'
 import { hasWorkspace, useRole } from '@/lib/session'
 import type { Asset } from '@/lib/types'
-import { AlbumPicker } from './album-picker'
 import { TagDialog } from './tag-dialog'
 import { useT } from '@/lib/i18n'
 
 /** What can be done to the selected photos and videos. Sticks to the top while you scroll. */
-export function SelectionBar({ selected, onClear, albumId }: { selected: Asset[]; onClear: () => void; albumId?: string }) {
+export function SelectionBar({ selected, onClear }: { selected: Asset[]; onClear: () => void }) {
   const mine = hasWorkspace(useRole())
   const { bulk, remove } = useLibraryActions()
   const t = useT()
-  const refresh = useRefreshLibrary()
-  const [dialog, setDialog] = useState<'album' | 'tags' | 'delete' | null>(null)
+  const [dialog, setDialog] = useState<'tags' | 'delete' | null>(null)
   if (selected.length === 0) return null
   const ids = selected.map((a) => a.id)
   const allFavorite = selected.every((a) => a.favorite)
@@ -27,17 +24,6 @@ export function SelectionBar({ selected, onClear, albumId }: { selected: Asset[]
   const finish = () => {
     setDialog(null)
     onClear()
-  }
-
-  const leaveAlbum = async () => {
-    try {
-      await api.post(`/api/albums/${albumId}/files/remove`, { ids })
-      toast.success(t('Removed {files} from the album', { files: plural(ids.length, 'file') }))
-      onClear()
-      void refresh()
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : t('Could not remove them'))
-    }
   }
 
   return (
@@ -49,8 +35,6 @@ export function SelectionBar({ selected, onClear, albumId }: { selected: Asset[]
           <Heart className={allFavorite ? 'size-4 fill-current' : 'size-4'} /><span className="max-sm:sr-only">{allFavorite ? t('Unfavorite') : t('Favorite')}</span>
         </Button>
       )}
-      {mine && <Button variant="ghost" size="sm" onClick={() => setDialog('album')}><FolderPlus className="size-4" /><span className="max-sm:sr-only">{t('Add to album')}</span></Button>}
-      {albumId !== undefined && <Button variant="ghost" size="sm" onClick={() => void leaveAlbum()}><FolderMinus className="size-4" /><span className="max-sm:sr-only">{t('Remove from album')}</span></Button>}
       <DropdownMenu>
         <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="size-8" aria-label={t('More actions')}><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
         <DropdownMenuContent align="end">
@@ -68,7 +52,6 @@ export function SelectionBar({ selected, onClear, albumId }: { selected: Asset[]
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <AlbumPicker open={dialog === 'album'} ids={ids} onClose={() => setDialog(null)} onDone={finish} />
       <TagDialog open={dialog === 'tags'} ids={ids} onClose={() => setDialog(null)} onDone={finish} />
       <Confirm
         open={dialog === 'delete'}

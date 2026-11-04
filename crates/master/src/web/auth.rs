@@ -101,10 +101,10 @@ pub fn user_of_session(conn: &mut impl GenericClient, headers: &HeaderMap) -> an
         return Ok(None);
     };
     let Some(role) = Role::parse(&role) else { return Ok(None) };
-    let shared_with_me = devices::shared_folders(conn, user_id)?
+    let shared_with_me = devices::folders(conn, user_id)?
         .into_iter()
-        .filter(|s| !s.mine)
-        .map(|s| (s.folder, s.can_write))
+        .filter(|f| !f.mine && !f.master)
+        .map(|f| (f.folder, f.can_write))
         .collect();
     Ok(Some(Access { user_id, name, role, shared_with_me }))
 }

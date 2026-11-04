@@ -7,7 +7,7 @@ first: replaced and deleted files stay as versions until retention ends.
 ```mermaid
 flowchart LR
     D["Devices<br/>(client)"] -->|"upload<br/>gRPC :7443"| M["Master"]
-    M -.->|"shared folders"| D
+    M -.->|"synced folders"| D
     G["Other storage"] -->|"collected by the master"| M
     A["Browser"] <-->|"web app and API :8080"| M
     M --- PG[("PostgreSQL<br/>metadata")]
@@ -29,19 +29,19 @@ flowchart LR
 ## Rules that do not change
 
 - **Backups are one way.** The client only reads the folders it collects. Nothing is sent back to them; restoring is a
-  download. The exception is a [shared folder](usage.md#shared-folders-sync-both-ways), which the user chooses to sync both ways.
+  download. The exception is a [folder](usage.md#folders-sync-both-ways) that the user chooses to sync both ways.
 - **The device is the source of truth.** A change, rename or delete on a device is applied on the master (a rename without
   re-sending; a delete as "marked deleted", recoverable until retention ends). A mass deletion is held back by the
   client for hours ([delete guard](usage.md#the-delete-guard)).
 - **The master changes only its own files**, never a file on a device. Files a device or source sent cannot be edited or
-  renamed on the master; only local folders, shared folders and master files can.
+  renamed on the master; only folders and master files can.
 - **Deleting in the web app hides first.** The file goes to the Trash; the device is not asked for it again. In a
-  shared folder, computers delete it too. It is erased when retention ends, or when you choose **Delete forever** in the Trash.
+  synced folder, computers delete it too. It is erased when retention ends, or when you choose **Delete forever** in the Trash.
 - **Roles.** Administrator: everything. Normal: master files and own folders, read and write. Read only: reads master files.
 
 ## Not in scope
 
-- Not a general sync tool: only shared folders sync both ways.
+- Not a general sync tool: only folders you choose sync both ways.
 - Not encryption of the master's disk: use an encrypted disk. Backup mirrors are encrypted with your key.
 - Not enterprise access control: three roles and a workspace per user.
 
