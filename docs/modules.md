@@ -15,15 +15,13 @@ FAFNIRX_PLUGIN_SECRET=<openssl rand -hex 24>    # once: the secret the master an
 COMPOSE_PROFILES=video,fetch                    # which add-on containers to start
 ```
 
-That is all. A starting add-on tells the master where it is (`POST /api/plugins/register`, with the secret) and keeps telling it every
-30 s; the master asks it for its manifest, uses it while the id and contract match and the master is at least the version it asks for (`core`), and lists it under Settings → Plugins
-(administrators; read only). `GET /api/session` lists the add-ons that are up, and the web app shows an add-on's parts only for those.
-**Required add-ons.** An add-on announces itself, so the master cannot tell "not wanted" from "failed to start". `FAFNIRX_PLUGINS` (comma
-separated ids) says which ones should be there: any of them that is not connected, not reachable or not set up shows administrators a red
-warning on every page and a "Required" mark under Settings → Plugins (`expected` and state `missing` in `GET /api/plugins`). Add-ons not listed
-still work. With the compose file, `FAFNIRX_PLUGINS` defaults to `COMPOSE_PROFILES`, so the add-ons you start are the ones required; set it
-only to differ (for example an add-on run on another host). Empty: nothing is required and nothing is reported. Turn one off by stopping its container (and taking it out of `FAFNIRX_PLUGINS` / `COMPOSE_PROFILES`, or administrators are warned): the master forgets an add-on that has been silent for 90 s. Its cache and what the master has
-already read stay. An add-on has no login and publishes no port: only the master reaches it, so keep it that way.
+That is all. A starting add-on announces itself to the master with the secret and keeps doing so every 30 s; the master uses it
+while its id and contract match, lists it under Settings → Plugins, and forgets it after 90 s of silence. The web app shows an
+add-on's parts only while it is up. An add-on has no login and publishes no port: only the master reaches it.
+
+**Required add-ons.** `FAFNIRX_PLUGINS` (comma separated ids) says which add-ons should be there; one that is missing or not
+working shows administrators a warning. The compose file defaults it to `COMPOSE_PROFILES`, so the add-ons you start are the ones
+required. To turn one off, stop its container and take it out of both settings.
 
 Images: `fafnirx-video` and `fafnirx-fetch` come from the same release as the master. An add-on from somewhere else connects the same
 way: its container gets `FAFNIRX_PLUGIN_SECRET`, `FAFNIRX_MASTER_URL` (the master's web address, `http://master:8080`) and

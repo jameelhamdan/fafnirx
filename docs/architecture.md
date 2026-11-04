@@ -206,35 +206,15 @@ folders, replaced with every heartbeat), `device_activity`, `alerts`, `settings`
 `mirror_items`, `schema_migrations`. The schema is `crates/master/migrations/0001_schema.sql`; the master applies migrations it
 has not applied when it starts, once, under a lock, and refuses a database newer than itself. Events are kept 90 days.
 
-Indexes serve the lookups that matter: a path within a device (unique, also by prefix and by trigram for search), a file's
-versions, a device's events, unique token hashes and folder names, queued jobs by order, one open alert per kind and key. The
-`media` column of a file is computed from its name and must agree with the metadata code (a test checks it).
-
 Device totals (files, bytes, deleted) are kept on the device row, marked stale by writes and recomputed when the device
 finishes syncing, or within a minute for devices that do not report.
 
 ## Web API
 
-JSON under `/api` behind the login cookie (random token, hash stored, `SameSite=Strict`, `HttpOnly`). Changing calls need
-`x-requested-with`.
-
-| Area | Endpoints |
-|---|---|
-| Session, users | `POST /api/login`, `/logout`, `GET /api/session`, `POST /api/me/password`; admin: `GET/POST /api/users`, `PATCH /api/users/:name` |
-| Overview | `GET /api/dashboard`, `POST /api/alerts/:id/dismiss`, `GET /api/events` (SSE) |
-| Devices | `GET/POST /api/devices`, `GET /api/devices/:folder` (slash as `%2F`), `POST .../token`, `.../release`, `.../revoke`, `.../rename` |
-| Folders | `GET/POST /api/folders` (yours, shared with you and master folders, one list), `DELETE /api/folders/:name`, `POST .../members`, `DELETE .../members/:user`, `POST /api/folders/leave`, `GET /api/folders/people`; only the owner manages a folder |
-| Master folders | admin: `POST /api/master-folders`, `POST /api/master-folders/:public_id/rename`, `DELETE /api/master-folders/:public_id` (the files stay) |
-| Files | `GET /api/files`, `/files/info`, `POST /api/files/delete`, `/restore`, `/move`, `/rescan` (admin) |
-| Transfers | `GET /api/files/download` (ranges, versions), `/thumb`, `POST /api/files/zip`, chunked `POST/PUT/GET/DELETE /api/uploads` |
-| Library | `GET /api/timeline/*`, `/library`, `PATCH /api/library/:id`, `POST /api/library/bulk`, `GET /api/tags`, `GET /api/trash`, `POST /api/trash/purge` |
-| Pictures | `GET /api/media/:id/{thumb,preview,original,download}` |
-| Albums | `GET/POST /api/albums` (a `folder` body makes or returns the folder's album), `GET/PATCH/DELETE /api/albums/:id` |
-| Modules | `GET /api/m/:module/:id/*rest` asks a module about a file (login and right to the file first); `GET /api/m/:module/ui/:file` serves its web part |
-| Plugins (admin) | `GET /api/plugins` (connected modules and required ones that are missing); `POST /api/plugins/register` (a module announces itself, with the shared `FAFNIRX_PLUGIN_SECRET` as bearer token) |
-| Processing | `GET /api/queue`; admin: `POST /api/queue/pause`, `/retry`, `/cancel`, `/rebuild` |
-| Integrations | `GET/POST /api/sources`, `PATCH/DELETE /api/sources/:user/:name`, `/run`, `/toggle`; admin: `GET/POST /api/mirrors` and the same per mirror, `/resync`, `/restore-kit`, `/scope` |
-| Settings | `GET/PUT /api/settings` |
+JSON under `/api` behind the login cookie (random token, hash stored, `SameSite=Strict`, `HttpOnly`); changing calls need
+`x-requested-with`. Every route and the role it needs is listed in `crates/master/src/web/mod.rs` and pinned by `web/tests/routes.rs`.
+Files, folders, library, albums, sources, mirrors, queue, settings and module routes each live with their app (see
+[Development](development.md#code-layout)).
 
 Browser uploads are chunked: pieces are `PUT` at an offset (409 with the expected offset if misaligned); `finish` verifies the
 hash and commits through the device path.

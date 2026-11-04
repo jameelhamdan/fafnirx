@@ -332,7 +332,7 @@ try {
 
   // --- update from the project's releases ---------------------------------------------------------------------------------------------
   // A stand-in for GitHub: the API answer, the executable and its checksum, on a local port (FAFNIRX_UPDATE_URL points the client at it).
-  const newBinary = fs.readFileSync(MASTER)
+  const newBinary = fs.readFileSync(SIGN)
   const name = `fafnirx-99.0.0-${platform}${EXE}`
   const sum = createHash('sha256').update(newBinary).digest('hex')
   let wrongSum = true
@@ -354,6 +354,7 @@ try {
     const child = spawn(copy, ['--config', cfg, ...args], { env: { ...ENV, ...extra } })
     let stdout = ''
     child.stdout.on('data', (d) => (stdout += d))
+    child.stderr.on('data', (d) => (stdout += d))
     child.on('close', (code) => done({ code, stdout }))
   })
   // The tray's "Check for updates" only looks; "Update to <version>" then installs.

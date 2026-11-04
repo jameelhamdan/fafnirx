@@ -52,7 +52,7 @@ mkdir video-cache && chown 1000:1000 video-cache       # FAFNIRX_VIDEO_CACHE_DIR
 docker compose up -d
 ```
 
-Settings of the module (`FAFNIRX_VIDEO_*`, below) go in the `video` service's `environment:`.
+The shared settings (secret, master address) are in [Modules](modules.md); the module's own (`FAFNIRX_VIDEO_*`, below) go in the `video` service's `environment:`.
 
 **Watch out:** the cache dir must be writable by uid 1000 (`FAFNIRX_UID`). Otherwise the service starts, then logs `cache: Permission denied`
 and nothing plays. Fix: `chown -R 1000:1000` the dir (ZFS/NFS ACLs: check `acltype`), or use a named volume (`video-cache:/cache`; Docker sets the owner).
@@ -64,11 +64,6 @@ Files that arrived before the module: **Processing → Process missing** reads t
 
 | Variable | Default | Where | Meaning |
 |---|---|---|---|
-| `FAFNIRX_PLUGIN_SECRET` | none | master, service | The shared secret, 16+ characters: the module joins the master with it (compose passes it to both) |
-| `FAFNIRX_MASTER_URL`, `FAFNIRX_PLUGIN_URL` | none | service | Where the master's web API is, and where the master reaches the module (compose sets them) |
-| `FAFNIRX_PLUGIN_UI` | none (`/usr/share/fafnirx-video/ui`) | service | The built web part the service serves |
-| `FAFNIRX_DATA` | `data` (`/data`) | service | The master's data directory |
-| `FAFNIRX_PLUGIN_LISTEN` | `0.0.0.0:8090` | service | Listen address |
 | `FAFNIRX_VIDEO_CACHE` | `<data>/cache/video-module` (`/cache`) | service | Probes and segments |
 | `FAFNIRX_VIDEO_KEEP_DAYS` | `7` | service | Days segments stay |
 | `FAFNIRX_VIDEO_JOBS` | `2` | service | Files worked on at once |

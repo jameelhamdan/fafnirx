@@ -69,24 +69,12 @@ It gets only `data/tmp` of the data folder, **at the same path as the master** (
 
 | Variable | Default | |
 |---|---|---|
-| `FAFNIRX_PLUGIN_SECRET` | | required, 16+ characters (the master's `FAFNIRX_PLUGIN_SECRET`) |
-| `FAFNIRX_MASTER_URL`, `FAFNIRX_PLUGIN_URL` | | where the master's web API is, and where the master reaches this module (compose sets them) |
-| `FAFNIRX_PLUGIN_LISTEN` | `0.0.0.0:8091` | |
-| `FAFNIRX_DATA` | `data` | the master's data folder; files are written to `tmp/` in it |
 | `FAFNIRX_FETCH_JOBS` | `2` | files made at the same time |
 | `FAFNIRX_FETCH_IDLE_SECS` | `600` | give up on a download that receives nothing for this long |
 
 ## API
 
-Contract: `crates/fetch-api` on top of `crates/module-api`; the whole of it, with examples, is in [Plugins](plugins.md#the-contract).
-
-| Request | Answer |
-|---|---|
-| `GET /manifest` | capabilities `fetch.web` and `status` |
-| `POST /fetch/check` `{kind: "web", config}` | `{config, label}`: the settings reduced to what the module reads, and the label for the Sources page; `400` with a sentence for the user |
-| `POST /fetch/list` `{kind, config}` | `{items: [{path, marker, size, mtime_ns, reference}], skipped, complete}` |
-| `POST /fetch/get` `{kind, config, entry, dest}` | writes the file of `entry` to `dest` and answers `{size}`; `400` if `dest` is not a file directly in `<data>/tmp` |
-| `GET /status` | `active`, `failed` tasks, `made`, `slots` |
+The module speaks the fetch contract in [Plugins](plugins.md#the-contract), with kind `web` (capabilities `fetch.web`, `status`).
 
 ## Legal
 

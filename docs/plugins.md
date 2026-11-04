@@ -116,17 +116,6 @@ take hours (24 h at most); a service should give up by itself when nothing arriv
 Be **stateless**: no database, nothing that must survive between calls except caches you can rebuild. The master sends the settings with
 every call and may call `list` and `get` of different sources at the same time; limit your own concurrency (`FAFNIRX_<ID>_JOBS`).
 
-**Try it by hand**
-
-```sh
-T=<the token>; B=http://127.0.0.1:8095
-curl -s -H "Authorization: Bearer $T" $B/manifest
-curl -s -H "Authorization: Bearer $T" -H 'content-type: application/json' \
-  -d '{"kind":"ftp","config":{"url":"ftp://host/dir"}}' $B/fetch/check
-curl -s -H "Authorization: Bearer $T" -H 'content-type: application/json' \
-  -d '{"kind":"ftp","config":{"url":"ftp://host/dir"}}' $B/fetch/list
-```
-
 **A service in Rust** uses the module kit (`crates/module-kit`, `fafnirx-module-kit`), which is all of the above except what the plugin
 knows: the token guard, the manifest, `/status`, the web part's files, the `dest` check, the list of what is being done, a scratch folder
 and the settings every plugin reads from the environment (`FAFNIRX_PLUGIN_SECRET`, `FAFNIRX_PLUGIN_LISTEN`, `FAFNIRX_PLUGIN_UI`,
@@ -156,7 +145,7 @@ export default {
       problem: (value, t) => (value.url ? null : t('Give an address.')), // why it cannot be added yet, or null
     }),
   ],
-  queue: FetchQueueCard,                        // optional: a card on the Processing page, given GET /status
+  queue: FetchQueueCard,                        // optional: your part of the Downloads card on the Processing page, given GET /status
 } satisfies FrontendModule
 ```
 
@@ -164,8 +153,8 @@ export default {
   The build serves them beside the script as `strings.<lang>.json` and the manifest lists the languages (`ui.strings`). The app fetches the
   file of the language in use when it is needed and merges it with its own strings; it never lets a plugin replace one of its strings, and a
   text without a translation shows in English.
-- **Shared pieces:** the SDK has what every kind of source needs, so the plugin writes only what is its own: `FetchQueueCard` (the card above;
-  `children` add lines to it), and for the form `FileLimitsFields` (include and exclude patterns, sizes, files per run), `PerRunField`, `TextField`
+- **Shared pieces:** the SDK has what every kind of source needs, so the plugin writes only what is its own: `FetchQueueCard` (your part of the
+  one Downloads card, under a badge with the module's name; `children` add lines to it), and for the form `FileLimitsFields` (include and exclude patterns, sizes, files per run), `PerRunField`, `TextField`
   and `AcknowledgeField` (the confirmation to copy), with their body and checks (`limitsBody`, `limitsProblem`, `perRunProblem`,
   `acknowledgedProblem`, `splitLines`, `isWebAddress`). Their texts are the app's and are already translated.
 - **Imports:** a plugin imports `react`, `@/sdk` and `@/components/ui/*` (buttons, inputs, cards…) and nothing else of the app; at run
@@ -179,7 +168,7 @@ export default {
 ## Test it
 
 1. Unit-test `check`, the listing and `get` against a small server of your own, as `modules/fetch/service` does.
-2. Start the service by hand with a token and use the `curl` calls above; check `401` without the token and `400` for bad settings.
+2. Start the service by hand and call it with `curl` and the bearer token; check `401` without the token and `400` for bad settings.
 3. Start a throwaway master with your container connected (above): *Settings → Plugins* shows it *up*, the
    Sources page offers your kind, adding a source calls `/fetch/check`, the first run lists and fetches, and the files appear under
    Files. `.github/scripts/smoke-image.sh <master image> connect <your image> <id>` does the first half of this (for the ids it knows).

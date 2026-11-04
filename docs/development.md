@@ -57,17 +57,17 @@ Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targ
 
 `crates/master/src`, one folder per app, handlers next to logic:
 
-| App | Owns | Files |
-|---|---|---|
-| `platform` | What apps build on | `db.rs` (pool, locks, `NOTIFY`), `migrations.rs`, `store.rs`, `id.rs` (UUID ↔ short id), `proxy.rs` |
-| `repo` | Storage; what is more than one plain query | One module per aggregate, and `listing.rs` (the one query built at run time) |
-| `devices` | Clients, tokens, folders | `grpc.rs` (device API), `api.rs`, `folders.rs`, `master_folders.rs`, `rename.rs`, `totals.rs` |
-| `web` | HTTP shell, logins, roles | `mod.rs` (state, errors, routes), `auth.rs`, `access.rs`, `users.rs`, `events.rs`, `assets.rs`, `tests/` |
-| `files` | Content in and out | `ingest.rs` (commit, delete, rename, move), `livetree.rs`, `browse.rs`, `transfer.rs`, `zip.rs` |
-| `library` | Photos and videos | `meta.rs` (jobs, pictures), `artwork.rs`, `photos.rs`, `albums.rs` |
-| `modules` | The optional [modules](modules.md): announced by the modules, asked for capabilities, proxied for the web app | `mod.rs` (registry, `probe_video`, `poster`), `proxy.rs` |
-| `integrations` | Sources, mirrors | `mod.rs`, `rclone_source.rs`, `syncsource.rs`, `mirror.rs`, `scope.rs`, `spec.rs`, `api.rs` |
-| `monitoring` | Dashboard, schedules, queue | `api.rs`, `jobs.rs`, `queue.rs` |
+| App | Owns |
+|---|---|
+| `platform` | What apps build on: database pool, locks and `NOTIFY`, migrations, the file store, ids |
+| `repo` | Storage: one module per aggregate, and the one query built at run time (the file listing) |
+| `devices` | Clients, tokens, folders and master folders, renames, the device gRPC API |
+| `web` | HTTP shell, logins, roles, routes and their tests |
+| `files` | Content in and out: ingest (commit, delete, rename, move), the watcher, browsing, downloads, zips |
+| `library` | Photos and videos: metadata jobs, pictures, artwork, albums |
+| `modules` | The optional [modules](modules.md): registry, capabilities, proxy to the web app |
+| `integrations` | Sources and mirrors |
+| `monitoring` | Dashboard, schedules, the job queue |
 
 New endpoints go in the app's `api.rs` and are registered in `web/mod.rs`. Apps use `platform` and each other's public
 functions; `platform` knows no app. SQL lives only in `queries/*.sql` (typed, generated); no ORM.

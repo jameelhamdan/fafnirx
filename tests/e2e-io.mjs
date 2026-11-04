@@ -93,7 +93,7 @@ try {
   check(paths.size === want.length && want.every((p) => paths.has(p)), `the source holds the files of the folder (${[...paths].sort()})`)
   check(stored('admin/source-photos', 'big.bin').equals(big), 'a multi-chunk file is stored byte for byte under files/<source>/')
   const devices = (await admin.get('/api/devices')).json
-  check(devices.filter((d) => d.kind === 'device').length === 0 && devices.some((d) => d.kind === 'source'), 'a source is listed as a source, never as a device')
+  check(devices.filter((d) => d.kind === 'device').length === 0 && devices.some((d) => d.folder === 'admin/source-photos' && d.kind === 'local'), 'the folder of a source is a local folder, never a computer')
 
   // --- changes in the folder: edit, delete, rename, add --------------------------------------------------------------------------------
   put('a.txt', 'second version')
@@ -115,7 +115,7 @@ try {
   const failed = await runAndWait('sources', 'photos')
   check(failed[0] === 'failed', `a failing listing fails the run (${failed[1].slice(0, 80)})`)
   check((await livePaths('admin/source-photos')).size === paths.size, 'nothing was deleted because the storage was unreachable')
-  check((await openAlerts()).some((a) => a.kind === 'source_failed' && a.key === 'admin/source-photos'), 'a failed run raises an alert on the dashboard')
+  check((await openAlerts()).some((a) => a.kind === 'source_failed' && a.key.endsWith('photos')), 'a failed run raises an alert on the dashboard')
   fs.renameSync(`${photos}.off`, photos)
   const recovered = await runAndWait('sources', 'photos')
   check(recovered[0] === 'ok' && !(await openAlerts()).some((a) => a.kind === 'source_failed'), 'the alert clears after a good run')

@@ -32,7 +32,7 @@ chown 1000:1000 /tank/fafnirx/pgdata /tank/fafnirx/data
 outside `files/users/`) are writable over SMB; `files/users/`, which holds every user's folder, is read-only there (share logins
 are not fafnirx users, and a device's files are only changed by the device). Never share `versions/`, `tmp/` or `cache/`.
 `deploy/samba/` has a ready Samba container: one writable share with `files/users` mounted read-only on top of it, one line
-whatever the users. A server that has the older layout (`files/<user>/`) needs the folders moved into `files/users/` once, by hand (`mv`).
+whatever the users.
 
 ```sh
 cd deploy/samba && cp .env.example .env     # set SAMBA_PASSWORD and SAMBA_INTERFACE
@@ -138,7 +138,6 @@ What limits it, first to last:
    photo, so size it by RAM too.
 3. **DB pool.** 2 connections cut timeline reads from 316 to 197 req/s; 32 was no faster than 8 and doubled PostgreSQL's memory.
    About twice the cores is right.
-4. **Importing small files** levels off at about 350 files/s from 2 cores up. The cause is not found yet.
 
 `FAFNIRX_WORKER_THREADS` rarely needs changing: one thread served reads as fast as four. Requests queue for the database without
 a limit, so with 256 clients at once the slowest 1% waited 2-4 s, though none failed.
@@ -147,10 +146,9 @@ a limit, so with 256 clients at once the slowest 1% waited 2-4 s, though none fa
 fsynced writes/s against 821 on the VM's disk, and PostgreSQL reads were 18% slower. Leave `fsync` on: turning it off gained 23%
 write throughput, at the cost of safety. SD cards, which are slower at fsync, were not tested.
 
-**Bigger servers.** Not measured; the tests stop at 4 cores. Reads grew about linearly, roughly 80 timeline req/s per core, so
-24 cores might reach on the order of 1,500 req/s if PostgreSQL keeps up. Give PostgreSQL most of the cores, set
-`FAFNIRX_DB_POOL` to about twice the cores, and raise `FAFNIRX_JOB_WORKERS` (default cap 6) and `FAFNIRX_STREAMS` (default 32) as
-RAM and downloads need. Measure with your own library.
+**Bigger servers.** Not measured beyond 4 cores. Reads grew roughly linearly (about 80 timeline req/s per core). Give
+PostgreSQL most of the cores, set `FAFNIRX_DB_POOL` to about twice the cores, and raise `FAFNIRX_JOB_WORKERS` (default cap 6) and
+`FAFNIRX_STREAMS` (default 32) as RAM and downloads need.
 
 ## Operations
 

@@ -129,6 +129,9 @@ try {
   write(dirL, 'Notes.txt', 'one')
   laptop.c('sync')
   check((await api.alice.upload('alice/family', 'NOTES.TXT', 'two')) === 409, 'the master refuses a path that differs only by case from one in the folder')
+  // A file put on the disk by hand (a share, a restored copy) is taken as it is, so the folder then holds both spellings.
+  fs.writeFileSync(path.join(data, 'files', 'users', 'alice', 'family', 'NOTES.TXT'), 'two')
+  check(await until(async () => (await live('alice/family')).includes('NOTES.TXT'), 40), 'a file put there by hand is recorded as it is')
   check((await api.alice.upload('alice/family', 'what?.txt', 'x')) === 400, 'and a name Windows cannot keep')
   check((await api.alice.upload('alice/family', 'from-the-web.txt', 'web')) === 200, 'while an ordinary upload through the web app is a file like any other')
   laptop.c('sync')

@@ -49,33 +49,8 @@ fafnirx folder add ~/Documents
 
 ## Performance
 
-Measured in Docker on an Apple M2, with the master and PostgreSQL on the same cores, 5,150 photos and 16 clients at once.
-Scripts: `tests/bench_docker.py`, `tests/bench-disk.sh`.
-
-| | 1 core | 2 cores | 4 cores |
-| --- | --- | --- | --- |
-| Timeline months | 94 req/s | 185 req/s | 316 req/s |
-| Dashboard | 366 req/s | 671 req/s | 857 req/s |
-| File list | 186 req/s | 371 req/s | 541 req/s |
-| Thumbnails | 14/s | 28/s | 61/s |
-| Import of small photos | 242 files/s | 265 files/s | 355 files/s |
-| Upload, one 256 MiB file | 109 MiB/s | 100 MiB/s | 112 MiB/s |
-| Upload, small files (4 at once) | 216 files/s | 329 files/s | 405 files/s |
-| Download, one 256 MiB file | 267 MiB/s | 226 MiB/s | 252 MiB/s |
-
-Memory stays small: the master peaked at 120-200 MiB and PostgreSQL at 60-80 MiB, and a 1-core machine with 512 MB for the whole
-stack ran without being killed. Not measured: a real Raspberry Pi, more than 4 cores, many users at once.
-Details and tuning: [Sizing and tuning](docs/deployment.md#sizing-and-tuning).
-
-Minimum and recommended hardware: [Installation](docs/installation.md#1-the-master-docker).
-
-Stated requirements of similar projects (they do more, so this is for scale only):
-
-| | RAM and CPU |
-| --- | --- |
-| [Nextcloud](https://docs.nextcloud.com/server/stable/admin_manual/installation/system_requirements.html) | 128 MB minimum per PHP process, 512 MB recommended |
-| [Immich](https://docs.immich.app/install/requirements) | 6 GB minimum, 8 GB recommended; 2 cores, 4 recommended |
-| [Jellyfin](https://jellyfin.org/docs/general/administration/hardware-selection/) | 8 GB; an i5-11400 or N100 class CPU for transcoding |
+A 1-core machine with 512 MB for the whole stack runs it; 2 cores and 1 GB is comfortable. Measurements and tuning:
+[Deployment](docs/deployment.md#sizing-and-tuning).
 
 ## Documentation
 
@@ -98,13 +73,11 @@ Stated requirements of similar projects (they do more, so this is for scale only
 
 | Path | What |
 | --- | --- |
-| `crates/master` | `fafnirx-master`, split into apps (`devices`, `files`, `library`, `integrations`, `monitoring`, `web`, `platform`, `repo`) and its `migrations` |
+| `crates/master` | `fafnirx-master`: device API, web API, file store, background work |
 | `crates/client` | `fafnirx`: client, tray, self-update |
 | `crates/db` | Typed queries, generated at build time from `queries/*.sql` |
 | `crates/common` | Hashing, chunking, path rules, gRPC types |
-| `crates/module-api` | The contract between the master and its modules |
-| `crates/fetch-api` | The part of it for modules that read sources |
-| `crates/module-kit` | What modules that read sources share: environment, service, tasks, scratch folder |
+| `crates/module-api`, `fetch-api`, `module-kit` | The contract between the master and its modules, and what modules share |
 | `modules` | Optional features as services: `video/service` is `fafnirx-video` (HLS, details, poster frames), `fetch/service` is `fafnirx-fetch` (web sources) |
 | `crates/sign` | `fafnirx-sign`: signed client builds (optional) |
 | `frontend` | Web app (React, shadcn/ui), built into the master |
