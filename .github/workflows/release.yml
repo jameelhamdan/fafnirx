@@ -204,7 +204,12 @@ jobs:
           Copy-Item target\client\fafnirx.exe "out\fafnirx-$env:VERSION-windows-x86_64.exe"
 
       - name: Checksums
-        run: cd out && for f in *; do sha256sum "$f" > "$f.sha256"; done
+        # macOS has shasum but not sha256sum; both write the same "hash  name" line.
+        run: |
+          cd out
+          for f in *; do
+            if command -v sha256sum >/dev/null; then sha256sum "$f"; else shasum -a 256 "$f"; fi > "$f.sha256"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
