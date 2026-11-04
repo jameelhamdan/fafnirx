@@ -11,7 +11,7 @@ import { useNow } from '@/hooks/use-now'
 import { api } from '@/lib/api'
 import { ago, dateTime } from '@/lib/format'
 import { msg, useT } from '@/lib/i18n'
-import { useQueueSections } from '@/sdk'
+import { DownloadsProvider, useQueueSections } from '@/sdk'
 import type { QueueJob, QueueState } from '@/lib/types'
 
 /** What each kind of work is, in words a person knows. */
@@ -161,7 +161,9 @@ export default function Queue() {
             </Table>
           )}
           <Suspense fallback={null}>
-            {moduleSections.map(({ id, Section, report }) => <Section key={id} report={report} />)}
+            <DownloadsProvider>
+              {moduleSections.map(({ id, Section, report }) => <Section key={id} report={report} module={id} />)}
+            </DownloadsProvider>
           </Suspense>
         </>
       )}

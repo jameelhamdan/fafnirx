@@ -17,6 +17,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { NO_STORAGE, storageBody, storageProblem } from '@/lib/storage'
 import { bytes, count } from '@/lib/format'
+import { copyText } from '@/lib/clipboard'
 import { useT } from '@/lib/i18n'
 import { docs } from '@/lib/links'
 import { ScheduleField } from '@/components/schedule-field'
@@ -91,7 +92,7 @@ function KeyField({ form, set }: { form: typeof BLANK; set: (patch: Partial<type
         </Button>
         {filled && (
           <>
-            <Button type="button" variant="outline" size="sm" onClick={() => { void navigator.clipboard.writeText(text); toast.success(t('Key copied')) }}><Copy className="size-4" />{t('Copy')}</Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => { void copyText(text).then((ok) => (ok ? toast.success(t('Key copied')) : toast.error(t('Could not copy: select the text and copy it by hand.')))) }}><Copy className="size-4" />{t('Copy')}</Button>
             <Button type="button" variant="outline" size="sm" onClick={() => saveText(`${form.name || 'fafnirx'}-backup-key.txt`, text)}><Download className="size-4" />{t('Save as file')}</Button>
           </>
         )}

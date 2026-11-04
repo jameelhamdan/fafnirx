@@ -21,7 +21,7 @@ fn upload_browse_download_history_and_delete() {
 
         let (_, before) = api.get("/api/files").await;
         assert!(
-            before["entries"].as_array().unwrap().iter().any(|e| e["name"] == "photos" && e["files"] == 0),
+            before["entries"].as_array().unwrap().iter().any(|e| e["name"] == "admin/photos" && e["files"] == 0),
             "the totals of a device are not live"
         );
         api.catch_up_totals().await;
@@ -30,7 +30,7 @@ fn upload_browse_download_history_and_delete() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|e| e["kind"] == "device" && e["name"] == "photos" && e["files"] == 3));
+            .any(|e| e["kind"] == "device" && e["name"] == "admin/photos" && e["files"] == 3));
         let (_, top) = api.get("/api/files?device=admin/photos").await;
         let kinds: Vec<_> = top["entries"]
             .as_array()

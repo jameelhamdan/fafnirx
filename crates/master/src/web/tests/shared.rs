@@ -163,11 +163,10 @@ fn a_shared_folder_is_named_with_its_owner_and_a_member_can_leave_it() {
         assert_eq!((listed[0]["owner"].clone(), listed[0]["name"].clone()), (json!("bob"), json!("family")));
         assert!(listed[0]["files"].is_number() && listed[0]["bytes"].is_number(), "what is in it is listed");
         assert!(listed[0].get("changed_at").is_some());
-        // Its owner finds it by its name, like any folder of theirs.
+        // Its owner finds it by its location, like any folder of theirs.
         let (_, top) = api.get("/api/files").await;
         let names: Vec<_> = top["entries"].as_array().unwrap().iter().map(|e| e["name"].clone()).collect();
-        assert!(names.contains(&json!("family")), "{names:?}");
-        assert!(!names.contains(&json!("bob/family")), "{names:?}");
+        assert!(names.contains(&json!("bob/family")), "{names:?}");
 
         // Only a member leaves; the owner deletes. A folder that is not shared with the user is not there for them.
         let leave = json!({"folder": "bob/family"});

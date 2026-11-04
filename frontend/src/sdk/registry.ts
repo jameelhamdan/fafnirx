@@ -65,8 +65,8 @@ export const defineSourceKind = <S,>(kind: SourceKind<S>): SourceKind => kind as
 export interface FrontendModule {
   /** Shows files in the viewer and in the details of a file. The first module whose `match` says yes is used. */
   viewer?: { match: (file: ModuleFile) => boolean; component: ComponentType<ViewerProps> }
-  /** A part of the queue page, given what the module reports (its `GET /status`). */
-  queue?: ComponentType<{ report: unknown }>
+  /** A part of the queue page, given what the module reports (its `GET /status`) and its id. */
+  queue?: ComponentType<{ report: unknown; module: string }>
   /** The kinds of source the module reads; the Sources page offers them while the module is up. */
   sources?: SourceKind[]
 }

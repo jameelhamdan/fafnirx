@@ -15,6 +15,7 @@ import { fileOfAsset } from '@/lib/module-file'
 import { hasWorkspace, useRole } from '@/lib/session'
 import type { Asset } from '@/lib/types'
 import { ModuleViewer, useHasViewer } from '@/sdk'
+import { copyText } from '@/lib/clipboard'
 import { useT } from '@/lib/i18n'
 
 const InfoPanel = lazy(() => import('./info-panel'))
@@ -186,8 +187,7 @@ export function Viewer({
   const copyLink = () => {
     if (!asset) return
     const link = `${window.location.origin}/watch/${asset.id}`
-    if (navigator.clipboard) navigator.clipboard.writeText(link).then(() => toast.success(t('Link copied')), () => toast(link))
-    else toast(link)
+    void copyText(link).then((ok) => (ok ? toast.success(t('Link copied')) : toast(link)))
   }
   /** After deleting or archiving: carry on with a neighbour, or leave when nothing is left. */
   const moveOn = () => {

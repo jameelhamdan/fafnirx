@@ -4,6 +4,8 @@ import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
+import { toast } from 'sonner'
+import { copyText } from '@/lib/clipboard'
 import { useT } from '@/lib/i18n'
 
 /** Where devices reach the master: the gRPC port on this host, or this host itself behind an https proxy. */
@@ -24,7 +26,8 @@ function CopyBox({ text }: { text: string }) {
         className="absolute top-1.5 right-1.5 size-8"
         aria-label={t('Copy')}
         onClick={() => {
-          void navigator.clipboard.writeText(text).then(() => {
+          void copyText(text).then((ok) => {
+            if (!ok) return toast.error(t('Could not copy: select the text and copy it by hand.'))
             setCopied(true)
             window.setTimeout(() => setCopied(false), 1500)
           })

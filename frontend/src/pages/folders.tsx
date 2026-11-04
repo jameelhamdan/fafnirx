@@ -19,6 +19,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useNow } from '@/hooks/use-now'
 import { api } from '@/lib/api'
 import { ago, bytes, count } from '@/lib/format'
+import { copyText } from '@/lib/clipboard'
 import { useT } from '@/lib/i18n'
 import { folderLink } from '@/lib/links'
 import { useRole, useSession } from '@/lib/session'
@@ -173,7 +174,8 @@ function AttachHint({ folder }: { folder: Folder }) {
   const [copied, setCopied] = useState(false)
   const command = `fafnirx folder add <folder> --target ${folder.folder}`
   const copy = () => {
-    void navigator.clipboard?.writeText(command).then(() => {
+    void copyText(command).then((ok) => {
+      if (!ok) return toast.error(t('Could not copy: select the text and copy it by hand.'))
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     })

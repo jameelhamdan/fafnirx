@@ -51,6 +51,9 @@ const SORTS = [
   ['type', msg('Type')],
 ] as const
 
+/** The last part of a path or `user/folder`: what a download is called (a slash cannot be in a file name). */
+const lastPart = (name: string) => name.split('/').filter(Boolean).pop() ?? ''
+
 export default function Files() {
   const t = useT()
   const [params, setParams] = useSearchParams()
@@ -193,7 +196,7 @@ export default function Files() {
                     <Button variant="outline" disabled={!canUpload} onClick={() => folderInput.current?.click()}>{t('Upload folder')}</Button>
                   </span>
                 </TooltipTrigger>
-                {!canUpload && <TooltipContent>{t('Uploads go to local and shared folders. Devices and sources are filled by their own sending.')}</TooltipContent>}
+                {!canUpload && <TooltipContent>{t('Uploads go to your folders and the master files. A computer’s files come from the computer itself.')}</TooltipContent>}
               </Tooltip>
             )}
           </>
@@ -251,7 +254,7 @@ export default function Files() {
           <Button variant="ghost" size="icon" className="size-8" aria-label={t('Clear selection')} onClick={() => setSelected(new Set())}><X className="size-4" /></Button>
           <span className="text-sm font-medium">{t('{count} selected', { count: chosen.length })}</span>
           <div className="ml-auto flex gap-2">
-            <Button size="sm" variant="outline" onClick={() => downloadZip(chosen.map((e) => ({ device: e.device, path: e.kind === 'device' ? '' : e.path })), chosen.length === 1 ? chosen[0].name : device || 'fafnirx')}>
+            <Button size="sm" variant="outline" onClick={() => downloadZip(chosen.map((e) => ({ device: e.device, path: e.kind === 'device' ? '' : e.path })), lastPart(chosen.length === 1 ? chosen[0].name : device) || 'fafnirx')}>
               <Download className="size-4" />{chosen.length === 1 && chosen[0].kind === 'file' ? t('Download') : t('Download as zip')}
             </Button>
             {hasWorkspace(role) && !showDeleted && chosen.length === 1 && chosen[0].kind === 'device' && chosen[0].writable && chosen[0].device_kind === 'local' && (
