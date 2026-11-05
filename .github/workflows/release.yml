@@ -207,11 +207,12 @@ jobs:
           Copy-Item dist\fafnirx-setup-*.exe out\
           # The setup installs the files without a server, and its uninstaller takes everything away.
           $setup = (Get-ChildItem out\fafnirx-setup-*.exe).FullName
-          & $setup /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+          # A GUI program is not waited for by the call operator.
+          Start-Process $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
           $installed = "$env:LOCALAPPDATA\Programs\fafnirx"
           if (-not (Test-Path "$installed\fafnirx.exe")) { throw 'the setup did not install the program' }
           & "$installed\fafnirx.exe" --version
-          & "$installed\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+          Start-Process "$installed\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
           Start-Sleep 5
           if (Test-Path "$installed\fafnirx.exe") { throw 'the uninstaller left the program behind' }
 
