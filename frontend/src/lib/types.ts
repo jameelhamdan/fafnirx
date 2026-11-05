@@ -1,229 +1,36 @@
-// Shapes of the master's web API (`web`, `devices`, `files`, ... in crates/master/src).
+// Shapes of the master's web API. The responses that are Rust structs in crates/master are generated from them into ./generated
+// (`cargo test -p fafnirx-master` writes them; see .cargo/config.toml) and only re-exported here, so they cannot drift. What
+// is written by hand below is what the master does not have as a struct: plugin and module descriptions, and the small unions.
+import type { Session as GeneratedSession } from './generated/Session'
+
+export type { Activity } from './generated/Activity'
+export type { AlbumInfo } from './generated/AlbumInfo'
+export type { Asset } from './generated/Asset'
+export type { AssetDetail } from './generated/AssetDetail'
+export type { Buckets } from './generated/Buckets'
+export type { Dashboard } from './generated/Dashboard'
+export type { DeviceDetail } from './generated/DeviceDetail'
+export type { DeviceSummary } from './generated/DeviceSummary'
+export type { Entry } from './generated/Entry'
+export type { FileInfo } from './generated/FileInfo'
+export type { Folder } from './generated/Folder'
+export type { FolderState } from './generated/FolderState'
+export type { JobState } from './generated/JobState'
+export type { Listing } from './generated/Listing'
+export type { QueueJob } from './generated/QueueJob'
+export type { QueueState } from './generated/QueueState'
+export type { Recent } from './generated/Recent'
+export type { Settings } from './generated/Settings'
+export type { TagInfo } from './generated/TagInfo'
+export type { Trash } from './generated/Trash'
+export type { TrashEntry } from './generated/TrashEntry'
+export type { UserInfo } from './generated/UserInfo'
 
 export type DeviceKind = 'device' | 'local' | 'master'
 
-export interface Activity {
-  phase: string
-  file: string
-  files_done: number
-  files_total: number
-  bytes_done: number
-  bytes_total: number
-  speed_bps: number
-}
-
-export interface DeviceSummary {
-  /** The name of the device; unique among the devices of its user. */
-  name: string
-  /** The user the device belongs to. */
-  user: string
-  /** `<user>/<name>`: how the files, the library and the live updates name the device. */
-  folder: string
-  kind: DeviceKind
-  online: boolean
-  revoked: boolean
-  created_at: number
-  hostname: string | null
-  os: string | null
-  ip: string | null
-  client_version: string | null
-  disk_total: number | null
-  disk_free: number | null
-  last_seen: number | null
-  last_collected: number | null
-  bytes: number
-  files: number
-  activity: Activity | null
-}
-
-export interface Recent {
-  id: number
-  ts: number
-  action: string
-  path: string
-  detail: string | null
-  device: string
-}
-
-/** What a computer says about one folder attached to it (`name` is the folder, or on a folder's page the computer). */
-export interface FolderState {
-  name: string
-  files: number
-  bytes: number
-  /** Unix seconds; 0 before the first cycle. */
-  last_cycle: number
-  last_error: string
-  held: number
-  failing: number
-  updated_at: number
-}
-
-export interface DeviceDetail {
-  device: DeviceSummary
-  events: Recent[]
-  /** The folders attached to the computer. */
-  folders: FolderState[]
-  token: string | null
-}
-
-export interface JobState {
-  name: string
-  /** What the API calls it, and what is shown: user/name for a source, the name for a mirror. */
-  key: string
-  status: string
-  running: boolean
-  enabled: boolean
-  interval_secs: number
-  last_run_at: number | null
-  last_ok_at: number | null
-  message: string
-  detail: Record<string, unknown>
-}
-
-export interface Alert {
-  id: string
-  kind: string
-  key: string
-  message: string
-  created_at: number
-  updated_at: number | null
-}
-
-export interface Dashboard {
-  devices: DeviceSummary[]
-  online: number
-  totals: { files: number; bytes: number; marked_deleted: number }
-  activity: { day: number; added: number; updated: number; renamed: number; deleted: number }[]
-  recent: Recent[]
-  sources: JobState[]
-  mirrors: JobState[]
-  alerts: Alert[]
-  disk: { total: number; used: number; free: number; percent: number } | null
-}
-
-export interface Entry {
-  /** A photo or video whose details are not read yet: it is still being processed. */
-  processing: boolean
-  kind: 'device' | 'dir' | 'file'
-  /** For a file: its id in the library (the address of its viewer). */
-  id: string | null
-  name: string
-  device: string
-  path: string
-  size: number | null
-  mtime: number | null
-  changed: number | null
-  files: number | null
-  versions: number | null
-  deleted_at: number | null
-  purge_at: number | null
-  mime: string | null
-  preview: boolean
-  width: number | null
-  height: number | null
-  taken_at: number | null
-  /** For a device entry: what it is. */
-  device_kind: DeviceKind | "master" | null
-  /** For a device entry: whether the web app may add, change or delete files there. */
-  writable: boolean
-}
-
-export interface Listing {
-  device: string | null
-  /** What the device is and whether the web app may change its files; null at the top level. */
-  device_kind: DeviceKind | "master" | null
-  writable: boolean
-  path: string
-  entries: Entry[]
-  total: number
-  searching: boolean
-  retention_days: number
-}
-
-export interface VersionInfo {
-  id: number
-  created_at: number
-  size: number
-  mtime: number
-  hash: string
-  current: boolean
-  pruned_at: number | null
-  available: boolean
-}
-
-export interface FileInfo {
-  /** Work still to do on a photo or video: waiting, running or failed. */
-  work: 'waiting' | 'running' | 'failed' | null
-  /** The id of the file, also its address for streaming. */
-  id: string
-  device: string
-  path: string
-  name: string
-  deleted_at: number | null
-  purge_at: number | null
-  size: number
-  mtime: number
-  changed: number
-  hash: string
-  mime: string
-  preview: boolean
-  width: number | null
-  height: number | null
-  taken_at: number | null
-  exif: Record<string, string> | null
-  versions: VersionInfo[]
-  events: Recent[]
-}
-
-export interface Settings {
-  version_count: number
-  retention_days: number
-  thumbnails: boolean
-  photos: boolean
-}
-
 export type Role = 'admin' | 'normal' | 'readonly'
 
-export interface UserInfo {
-  name: string
-  role: Role
-  disabled: boolean
-  created_at: number
-  devices: number
-}
-
-/** A folder a mirror can be told to hold, inside the one being looked at. */
-export interface ScopeChoice {
-  name: string
-  /** `user`, `master`, a device kind or `folder`. */
-  kind: string
-}
-
-/** A folder that belongs to a user, not to a computer, and that their computers keep in step. */
-export interface Folder {
-  /** The stable address of the folder: it stays when the folder is renamed. */
-  public_id: string
-  /** `<owner>/<name>`, or `master:<path>` for a master folder: how the clients name it. */
-  folder: string
-  name: string
-  /** The user it belongs to; empty for a master folder. */
-  owner: string
-  mine: boolean
-  can_write: boolean
-  /** Other users use it (a master folder: all of them do). */
-  shared: boolean
-  /** A folder of the master files, made by an administrator. */
-  master: boolean
-  created_at: number
-  files: number
-  bytes: number
-  /** When a file in it last changed. */
-  changed_at: number | null
-  /** The other users who use it (only for its owner). */
-  members: { user: string; can_write: boolean }[]
-  /** The computers that have it attached: all for its owner, the user's own otherwise. */
-  computers: FolderState[]
-}
+export type Scope = 'timeline' | 'favorites' | 'archive'
 
 /** A plugin as the administrator's page shows it. */
 export interface PluginState {
@@ -245,138 +52,5 @@ export interface ModuleInfo {
   ui?: { entry: string; css?: string; sdk: number; strings?: string[] }
 }
 
-export interface Session {
-  /** Who is logged in; null when nobody is. */
-  user: { name: string; role: Role } | null
-  /** Master version; only sent to a logged-in user. */
-  version?: string
-  /** The modules that are up on the master, by id (see `sdk`); only sent to a logged-in user. */
-  modules?: Record<string, ModuleInfo>
-  /** Whether the photo pages are offered (administrator setting); only sent to a logged-in user. Missing: on. */
-  photos?: boolean
-}
-
-/** A photo or video of the library. */
-export interface Asset {
-  /** Its details are not read yet (see Processing). */
-  processing: boolean
-  id: string
-  device: string
-  path: string
-  name: string
-  kind: 'image' | 'video'
-  size: number
-  /** Start of the content hash: part of picture links so that they never go stale. */
-  hash: string
-  width: number | null
-  height: number | null
-  duration_ms: number | null
-  /** Unix seconds; the camera's date, a corrected one, or the file's own. Read as UTC. */
-  when: number
-  favorite: boolean
-  archived: boolean
-  rating: number | null
-  lat: number | null
-  lon: number | null
-}
-
-export type Scope = 'timeline' | 'favorites' | 'archive'
-
-export interface Buckets {
-  /** `days` is how many files each day holds, newest day first. */
-  months: { month: string; count: number; days: number[] }[]
-  total: number
-}
-
-export interface AssetDetail extends Asset {
-  work: 'waiting' | 'running' | 'failed' | null
-  mime: string
-  description: string
-  file_description: string | null
-  file_tags: string[]
-  camera_when: number | null
-  camera_lat: number | null
-  camera_lon: number | null
-  when_edited: boolean
-  place_edited: boolean
-  exif: Record<string, string> | null
-  codec: string | null
-  tags: { id: string; name: string }[]
-  albums: { id: string; name: string }[]
-  changed: number
-  preview: boolean
-  /** What the .nfo next to a video says (Kodi/Jellyfin naming). */
-  described: Described | null
-}
-
-export interface Described {
-  title: string | null
-  show: string | null
-  season: number | null
-  episode: number | null
-  plot: string | null
-  aired: string | null
-}
-
-export interface QueueJob {
-  /** What a finished job found, such as the picture a lookup chose. */
-  note: string | null
-  id: string
-  kind: string
-  status: 'queued' | 'running' | 'failed' | 'done'
-  device: string
-  path: string
-  attempts: number
-  error: string | null
-  created_at: number
-  started_at: number | null
-  finished_at: number | null
-  retry_at: number | null
-}
-
-export interface QueueState {
-  paused: boolean
-  can_control: boolean
-  summary: { kind: string; queued: number; running: number; failed: number; done: number }[]
-  jobs: QueueJob[]
-  /** What each module that reports its work is doing, by module id; the shape is the module's own (see `sdk`). */
-  modules: Record<string, unknown>
-}
-
-export interface TagInfo {
-  id: string
-  name: string
-  count: number
-}
-
-export interface AlbumInfo {
-  id: string
-  name: string
-  description: string
-  created_at: number
-  updated_at: number
-  count: number
-  bytes: number
-  cover: string | null
-  /** The folder the album is a shortcut to: what is in the folder is in the album. */
-  folder: { device: string; path: string }
-}
-
-export interface TrashEntry {
-  id: string
-  device: string
-  path: string
-  name: string
-  size: number
-  deleted_at: number
-  purge_at: number
-  version: number
-  kind: 'image' | 'video' | null
-  hash: string
-}
-
-export interface Trash {
-  entries: TrashEntry[]
-  total: number
-  retention_days: number
-}
+/** The session, with the manifests of the modules that are up typed. */
+export type Session = Omit<GeneratedSession, 'modules'> & { modules?: Record<string, ModuleInfo> }

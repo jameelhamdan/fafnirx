@@ -24,6 +24,8 @@ function staleKeys(change: Change): string[][] {
       return [['dashboard']]
     case 'jobs':
       return [['sources'], ['mirrors'], ['dashboard']]
+    case 'users':
+      return [['users']]
     default:
       return [[]] // resync: everything
   }

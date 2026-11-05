@@ -15,13 +15,13 @@ menu (top right), which also logs you out. Pages update live.
 
 ## Users and roles
 
-| Role | Own devices and folders | Master files | Others' files | Users, settings, mirrors |
+| Role | Own devices and folders | Master folders | Others' files | Users, settings, mirrors |
 |---|---|---|---|---|
 | Administrator | read, write | read, write | read, write | yes |
 | Normal | read, write | read, write | no | no |
 | Read only | none | read | no | no |
 
-- Master files belong to nobody; everyone sees them.
+- Master folders belong to nobody; everyone sees them.
 - Users cannot be deleted or renamed (the name is a folder). Disabling one ends their logins. One administrator always remains.
 - A device belongs to the user who adds it; names are unique per user (`bob/laptop`, `alice/laptop`).
 - Favorites, ratings, tags, albums, corrected dates and places are per user.
@@ -32,17 +32,17 @@ video in the viewer (send it to anyone who can see the file); `/albums/<id>` an 
 
 ## Files
 
-The top level lists devices, local folders and the master files, each named by its location (`user/name`). A badge shows
-**Changeable** (master files and local folders, if your role may write) or **Read-only** (computers).
+The top level lists devices, local folders and the master folders, each named by its location (`user/name`, `master:name`). A badge shows
+**Changeable** (master folders and local folders, if your role may write) or **Read-only** (computers).
 
 - **Search** (current folder and below), type filter, sort, deleted files, list or grid.
 - **Select** to download (zip for several), show as album, move or rename, delete.
 - **Details** show preview, EXIF and the **history**: every version can be downloaded or restored (restoring adds a new
   version and loses nothing). Photos and videos also have the library data (favorite, rating, tags, date, place).
-- **Move or rename** works in local folders and master files. A folder moves with its contents, and albums and sources that point
+- **Move or rename** works in local folders and master folders. A folder moves with its contents, and albums and sources that point
   into it follow. Nothing moves if a name is in the way. Files a computer sent cannot be moved (409).
 - **Rename folder** (a top-level folder you own) changes its name everywhere at once; computers that sync it keep working.
-- **Upload** into a local folder or the master files by drag and drop (resumable).
+- **Upload** into a local folder or a master folder by drag and drop (resumable).
 - **Delete** moves a file to the Trash; data stays until retention ends or you choose **Delete forever**, which frees the disk.
   Files from a computer or source are not re-fetched. In a synced folder the deletion reaches every computer.
 
@@ -73,12 +73,11 @@ The queue of background work for **photos and videos only**; other files are nev
 | Job | Does |
 |---|---|
 | `meta` | Reads details: EXIF for photos; duration, codec, date and place for videos (needs the [video module](video.md)) |
-| `artwork` | Looks for the picture and `.nfo` beside a video |
 | `thumb` | Makes a thumbnail (320 px) or preview (1600 px) the first time one is needed; kept in `cache/thumbs/` |
 
-`meta` and `artwork` run when a file arrives. A job is tried 3 times, then fails; done jobs stay a day. Users see the jobs of
+`meta` runs when a file arrives. A job is tried 3 times, then fails; done jobs stay a day. Users see the jobs of
 devices they can see. Administrators can **Pause**, **Retry** or **Clear** failed jobs, **Cancel** waiting ones, and **Process
-missing**. Each module adds its own section (downloads, streaming). **Settings → Thumbnails and previews** off: none are made.
+missing**. Runs of sources and mirrors and what modules are doing (files being fetched, segments being cut) are in the same list, each with the module that does it. **Settings → Thumbnails and previews** off: none are made.
 
 ## The change log
 
@@ -97,7 +96,7 @@ gets an alert. After 90 s of silence it may take over; Release or Rotate does it
 ## The client
 
 ```sh
-fafnirx enroll --server http://nas.lan:7443     # asks for the token; installs the service
+fafnirx install --server nas.lan                # copies the program, asks for the token, installs the service (see Installation)
 fafnirx folder add ~/Documents --name documents # collect a folder (see Folders below for other targets)
 fafnirx folder list | remove <name>             # remove stops syncing; the master keeps its data
 fafnirx pause | resume
@@ -106,7 +105,8 @@ fafnirx sync                                    # one cycle in the foreground
 fafnirx release-deletes                         # apply held-back deletions now
 fafnirx update [--check]                        # install the newest release, or only look
 fafnirx restart                                 # restart the client and the tray
-fafnirx install-service | uninstall-service | tray
+fafnirx uninstall [--purge]                     # remove the service, the program, and with --purge the config
+fafnirx tray
 ```
 
 The config is a TOML file made by `enroll` (`--config` selects another): `%LocalAppData%\fafnirx\config.toml` on Windows, `/etc/fafnirx/config.toml` on Linux,
@@ -123,7 +123,8 @@ auto_update = true              # check GitHub releases every 6 hours
 web_url = "http://nas.lan:8080" # the tray's link to the web app
 ```
 
-`[[folders]]` and `[[synced]]` tables are written by `folder add`.
+`[[folders]]` tables are written by `folder add`: each has a `path`, a `name` and a `target` (`computer`, the default, or `folder`,
+a folder of the master) and, for the second, a `mode`.
 
 **Service.** On Windows the client belongs to your user: it and the tray start when you log in. On Linux and macOS it is a
 service of the computer (systemd, launchd) that runs as root, starts at boot, is restarted on failure, and reads every user's
@@ -145,20 +146,21 @@ deletions are sent, or send them now with `fafnirx release-deletes`.
 ### The tray
 
 Green is online, red an error, amber paused, grey not running. The menu shows what is happening and has pause/resume, sync now,
-**Check for updates**, **Collected folders** (backed up from this computer), **Synced folders**, and links to the config, log,
+**Check for updates**, **Folders** (those of this computer, and the folders of the master you can sync), and links to the config, log,
 client data folder and web app. On macOS and Linux the folder entries need no password: the tray leaves a request and the
 service applies it, only for folders owned by the user who asked.
 
 ## Folders: sync both ways
 
-Folders added with the default target are backup: up only. A **folder** (made in Files or **Folders**) belongs to a user, or to
-the master files, not to a computer. Any computer of that user attaches a local folder to it, and changes reach the others.
+Every folder of a computer goes to a **target**, and its mode says which way. The default target, `computer`, is a backup: up
+only, the same as the mode `up`. A **folder** (made in Files or **Folders**) belongs to a user, or to
+a master folder, not to a computer. Any computer of that user attaches a local folder to it, and changes reach the others.
 Sharing it with other users is a matter of who may use it.
 
 | Target | What it is |
 |---|---|
 | `computer` (default) | This computer's own space on the master. Up only |
-| `master:<folder>` | A subfolder of the master files that an administrator made under **Folders**. Everyone can sync it; read-only users only read |
+| `master:<folder>` | A master folder, made by an administrator under **Folders** (or by a new folder in `files/`). Everyone can sync it; read-only users only read |
 | `<owner>/<name>` | A folder of yours, or one shared with you. Both ways |
 
 ```sh
@@ -166,13 +168,13 @@ fafnirx folder add ~/Music --target master:Music           # a master folder
 fafnirx folder add ~/Camera --target ana/photos --mode up  # a folder of yours, send only
 fafnirx folder add ~/Family --target ana/family --create   # make the folder first
 fafnirx folder list [--available]            # --available: what the master offers
-fafnirx folder mode ana/family up|both|mine|keep|ask
+fafnirx folder mode ana/family up|both|keep|ask
 fafnirx folder remove ana/family             # stops syncing here; keeps the files
 fafnirx folder keep ana/family               # keep files whose deletion is held back
 fafnirx folder resolve ana/family theirs     # answer files waiting under "ask"
 ```
 
-The tray does the same from **Synced folders**. A folder is named `<owner>/<name>` (or `master:<folder>`) everywhere; the short
+The tray does the same from **Folders**. A folder is named `<owner>/<name>` (or `master:<folder>`) everywhere; the short
 name works when it is unambiguous. Files the client creates in an attached folder belong to the folder's owner.
 
 - **Cycle.** Receive, then send. The master tells running clients about changes (within seconds); a poll every minute is the
@@ -183,7 +185,6 @@ name works when it is unambiguous. Files the client creates in an attached folde
   or `folder mode`; per folder and computer):
   - `both` (default): both ways; the master's version wins and yours goes to `.fafnirx-conflicts/` (never synced).
   - `up`: send only; nothing of the master's is received or deleted here.
-  - `mine`: both ways; yours wins and becomes current everywhere (the master keeps the old one in history).
   - `keep`: both ways; yours is kept as `name (conflict <computer> <date>).ext` next to the master's.
   - `ask`: needs a screen. The tray shows a dialog with both versions; closing it decides later. After `ask_timeout_hours`
     (default 24) both are kept.
@@ -212,12 +213,12 @@ A large file that changes often takes about *versions kept* times its size.
 
 ## Local folders and the network drive
 
-`data/files/` is a plain tree: `files/users/<user>/<device>/<path>`, master files in `files/<path>`. Share it over SMB/NFS
+`data/files/` is a plain tree: `files/users/<user>/<device>/<path>`, master folders in `files/<name>/<path>`. Share it over SMB/NFS
 ([Deployment](deployment.md#storage)).
 
 - Write as `FAFNIRX_UID`. A new `files/users/<user>/<name>` becomes a local folder of that user; a new folder directly under
   `files/` is a master folder.
-- Only local folders and master files are written in place. Share device and source folders read-only: writes there are not recorded.
+- Only local folders and master folders are written in place. Share device and source folders read-only: writes there are not recorded.
 - Changes are noticed within seconds, or every 5 minutes on mounts without events. Administrators can press **Scan now**
   (Files, Settings → File store).
 - A moved file is recorded as a `rename` if it keeps its size and mtime; otherwise as `delete` and `add`.
@@ -252,9 +253,6 @@ own file and restarts. Config, token and state stay, so nothing is sent again. `
 - **CLI:** `fafnirx update --check` prints `available <version>` or `current <version>`; `fafnirx update` installs and waits
   until the client runs again. `fafnirx restart` restarts the client and the tray.
 - A `.deb` install (under `/usr`) is updated through `dpkg` (`sudo` or `pkexec` asks); the background check only reports.
-- Only one version stays on a computer: older copies of `fafnirx` in the usual places and on the `PATH` are stopped and removed.
+- An install stops and removes older copies of `fafnirx` in the usual places and on the `PATH`, so one version stays.
 
-Releases are checked by checksum, which guards against bad downloads, not against someone who can publish releases. For your own
-signed builds, create a key with `fafnirx-sign keygen`, put the public key in each client's config as `update_public_key`, and
-publish builds with `fafnirx-sign publish` into the master's `data/updates`. Such a client takes updates only from the master,
-only with a valid signature and a higher version.
+Releases are checked by checksum, which guards against bad downloads, not against someone who can publish releases.

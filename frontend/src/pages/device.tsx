@@ -1,9 +1,8 @@
 import { EventList } from '@/components/event-list'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { FolderOpen, KeyRound, Ban, Unplug } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { toast } from 'sonner'
 import { ActivityView, ErrorNote, Fact, KindBadge, PageHeader, StatusDot } from '@/components/common'
 import { EnrollDialog } from '@/components/enroll-dialog'
 import { FolderStateList } from '@/components/folder-state'
@@ -18,32 +17,22 @@ import type { DeviceDetail } from '@/lib/types'
 import { useT } from '@/lib/i18n'
 import { filesLink } from '@/lib/links'
 import { deviceAddress } from '@/lib/session'
+import { useApiMutation } from '@/lib/mutation'
 
 export default function DeviceDetailPage() {
   const t = useT()
   const { name = '' } = useParams()
-  const client = useQueryClient()
   const now = useNow()
   const [token, setToken] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<'revoke' | 'rotate' | 'release' | null>(null)
   const { data, error } = useQuery({ queryKey: ['device', name], queryFn: () => api.get<DeviceDetail>(`/api/devices/${deviceAddress(name)}`) })
-  const refresh = () => client.invalidateQueries({ queryKey: ['device', name] })
-
-  const rotate = useMutation({
-    mutationFn: () => api.post<DeviceDetail>(`/api/devices/${deviceAddress(name)}/token`),
-    onSuccess: (made) => { setToken(made.token); void refresh() },
-    onError: (e) => toast.error(e.message),
+  const here = { invalidate: [['device', name]], toastError: true }
+  const rotate = useApiMutation(() => api.post<DeviceDetail>(`/api/devices/${deviceAddress(name)}/token`), { ...here, onSuccess: (made) => setToken(made.token) })
+  const release = useApiMutation(() => api.post(`/api/devices/${deviceAddress(name)}/release`), {
+    ...here,
+    success: t('{name} released. The next computer that connects with its token takes it over.', { name }),
   })
-  const release = useMutation({
-    mutationFn: () => api.post(`/api/devices/${deviceAddress(name)}/release`),
-    onSuccess: () => { toast.success(t('{name} released. The next computer that connects with its token takes it over.', { name })); void refresh() },
-    onError: (e) => toast.error(e.message),
-  })
-  const revoke = useMutation({
-    mutationFn: () => api.post(`/api/devices/${deviceAddress(name)}/revoke`),
-    onSuccess: () => { toast.success(t('{name} revoked. Its data is kept.', { name })); void refresh() },
-    onError: (e) => toast.error(e.message),
-  })
+  const revoke = useApiMutation(() => api.post(`/api/devices/${deviceAddress(name)}/revoke`), { ...here, success: t('{name} revoked. Its data is kept.', { name }) })
 
   if (error) return <ErrorNote error={error} />
   if (!data) return <Skeleton className="h-64" />

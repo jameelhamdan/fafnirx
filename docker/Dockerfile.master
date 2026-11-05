@@ -24,7 +24,7 @@ RUN service postgresql start \
     && until pg_isready -h localhost -q; do sleep 1; done \
     && su postgres -c "psql -qc \"ALTER USER postgres PASSWORD 'build'\"" \
     && FAFNIRX_CODEGEN_DATABASE_URL=postgresql://postgres:build@localhost:5432 \
-       cargo build --release -p fafnirx-master -p fafnirx-sign \
+       cargo build --release -p fafnirx-master \
     && service postgresql stop
 
 FROM debian:bookworm-slim
@@ -36,7 +36,6 @@ RUN apt-get update \
     && useradd --uid 1000 --create-home fafnirx \
     && mkdir /data /config && chown fafnirx /data /config
 COPY --from=build /src/target/release/fafnirx-master /usr/local/bin/fafnirx-master
-COPY --from=build /src/target/release/fafnirx-sign /usr/local/bin/fafnirx-sign
 # /config holds rclone.conf, if you use one for mirrors. Map a host folder onto it.
 ENV FAFNIRX_DATA=/data FAFNIRX_RCLONE_CONFIG=/config/rclone.conf FAFNIRX_HTTP=0.0.0.0:8080
 VOLUME /data /config

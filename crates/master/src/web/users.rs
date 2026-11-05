@@ -14,8 +14,10 @@ use fafnirx_db::queries as sql;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct UserInfo {
     name: String,
+    #[cfg_attr(test, ts(type = "'admin' | 'normal' | 'readonly'"))]
     role: String,
     disabled: bool,
     created_at: i64,
@@ -84,7 +86,7 @@ pub async fn create(State(state): State<Shared>, Extension(who): Extension<Acces
     act(&state, move |c| {
         let hash = auth::hash_password(&password)?;
         add_user(c, &root, &name, role, &hash)?;
-        db::notify(c, "users", &name)?;
+        db::notify(c, db::Topic::Users, &name)?;
         Ok(())
     })
     .await
@@ -136,7 +138,7 @@ pub async fn update(State(state): State<Shared>, Extension(who): Extension<Acces
         if role.is_some() || body.disabled == Some(true) {
             sql::sessions::delete_user_sessions().bind(&mut tx, &id).map(drop)?;
         }
-        db::notify(&mut tx, "users", &name)?;
+        db::notify(&mut tx, db::Topic::Users, &name)?;
         tx.commit()?;
         Ok(())
     })

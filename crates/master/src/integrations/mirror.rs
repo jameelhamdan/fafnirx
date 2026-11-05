@@ -6,9 +6,9 @@
 //!   meta/*.json                             statistics and a file list per namespace
 //!   meta/library.json                       albums, tags, favorites and corrected dates and places
 //!
-//! A mirror holds the whole tree or, with a `scope`, one folder of it at the same place below `files/`.
-//! A `replica` writes these to the storage as they are. A `backup` writes them through two rclone layers, compression
-//! over encryption of the names and the contents with the mirror's own key, so only rclone with that key reads them.
+//! A mirror holds the whole tree or, with a folder, that folder at the same place below `files/`.
+//! A `replica` writes these to the storage as they are. A `backup` writes them through an rclone crypt layer, encrypting the
+//! names and the contents with the mirror's own key, so only rclone with that key reads them.
 //!
 //! Each run uploads only files whose content changed since the last successful run. A file that is new under the
 //! content of a vanished path is moved on the remote instead. Changed files are
@@ -59,7 +59,7 @@ impl MirrorOutcome {
 
 struct LiveFile {
     device_id: i64,
-    /// The device's folder (`<user>/<device>`, or `_master`): where its files are on the master and on the mirror.
+    /// The device's folder (`<user>/<device>`, or `master:<name>`): where its files are on the master and on the mirror.
     ns: String,
     path: String,
     root: [u8; HASH_LEN],
@@ -74,14 +74,10 @@ impl LiveFile {
     }
 }
 
-/// Path relative to the `files/` directory, which is the same on the master and on the mirror: the master files are
-/// at its root, the files of a device below `users/<user>/<device>`.
+/// Path relative to the `files/` directory, which is the same on the master and on the mirror: the files of a master folder
+/// are at its root, the files of a device below `users/<user>/<device>`.
 fn relative(folder: &str, path: &str) -> String {
-    if folder == crate::platform::store::MASTER_FOLDER {
-        path.to_string()
-    } else {
-        format!("{}/{folder}/{path}", crate::platform::store::USERS_DIR)
-    }
+    crate::platform::store::tree_path(folder, path)
 }
 
 /// Sortable UTC timestamp used for version directories.
@@ -149,23 +145,22 @@ pub fn backend_env(remote: &str, remote_type: &str, options: &str, empty_config:
     Ok(env)
 }
 
-/// Names of the two layers that make a backup: encryption over the storage, compression over that.
+/// The name of the encryption layer of a backup, over the storage.
 const CRYPT: &str = "FXMIRRORCRYPT";
-const PRESS: &str = "FXMIRRORZ";
 
 pub const BACKUP: &str = "backup";
 
-/// The rclone remote a mirror writes to: the storage itself for a replica, the compression layer for a backup.
+/// The rclone remote a mirror writes to: the storage itself for a replica, the encryption layer for a backup.
 fn top_of(m: &MirrorRow) -> String {
     if m.kind == BACKUP {
-        format!("{PRESS}:")
+        format!("{CRYPT}:")
     } else {
         base_of(m)
     }
 }
 
-/// The environment that stacks compression over encryption over the storage `base`. The two passwords are in the form
-/// rclone stores them (`rclone obscure`). Names of files and folders are encrypted too.
+/// The environment that stacks encryption over the storage `base`. The two passwords are in the form rclone stores them
+/// (`rclone obscure`). Names of files and folders are encrypted too.
 pub fn backup_env(base: &str, password: &str, salt: &str) -> Vec<(String, String)> {
     let var = |layer: &str, key: &str, value: &str| (format!("RCLONE_CONFIG_{layer}_{key}"), value.to_string());
     vec![
@@ -175,11 +170,6 @@ pub fn backup_env(base: &str, password: &str, salt: &str) -> Vec<(String, String
         var(CRYPT, "PASSWORD2", salt),
         var(CRYPT, "FILENAME_ENCRYPTION", "standard"),
         var(CRYPT, "DIRECTORY_NAME_ENCRYPTION", "true"),
-        var(PRESS, "TYPE", "compress"),
-        var(PRESS, "REMOTE", &format!("{CRYPT}:")),
-        var(PRESS, "MODE", "gzip"),
-        // Without a level rclone stores the data uncompressed. Above 6 the gain is small and the CPU time is not.
-        var(PRESS, "LEVEL", "6"),
     ]
 }
 
@@ -200,9 +190,14 @@ pub fn restore_config(m: &crate::repo::mirrors::Key, password: &str, salt: &str)
         m.remote.trim_end_matches('/').to_string()
     };
     out.push_str(&format!(
-        "[fafnirx-crypt]\ntype = crypt\nremote = {target}\npassword = {password}\npassword2 = {salt}\n\
-         filename_encryption = standard\ndirectory_name_encryption = true\n\
-         [fafnirx-backup]\ntype = compress\nremote = fafnirx-crypt:\nmode = gzip\n"
+        "[fafnirx-backup]
+type = crypt
+remote = {target}
+password = {password}
+password2 = {salt}
+         filename_encryption = standard
+directory_name_encryption = true
+"
     ));
     out
 }
@@ -316,8 +311,8 @@ fn stage_file(store: &Store, dest: &Path, f: &LiveFile) -> Result<()> {
     Ok(())
 }
 
-fn load_live(conn: &mut Client, scope: &str) -> Result<Vec<LiveFile>> {
-    Ok(mirrors::live_files(conn, scope)?
+fn load_live(conn: &mut Client, folder_id: Option<i64>) -> Result<Vec<LiveFile>> {
+    Ok(mirrors::live_files(conn, folder_id)?
         .into_iter()
         .map(|f| LiveFile {
             device_id: f.device_id,
@@ -369,30 +364,20 @@ fn diff<'a>(live: &'a [LiveFile], mirrored: &Mirrored) -> Diff<'a> {
         .collect();
     removed.sort();
     // A path that is new and has the content of a vanished one is a rename or move; equal content is interchangeable.
-    let mut vanished: HashMap<&[u8], Vec<usize>> = HashMap::new();
-    for (i, (_, _, root)) in removed.iter().enumerate().rev() {
-        vanished.entry(root.as_slice()).or_default().push(i);
-    }
-    let (mut changed, mut renamed, mut taken) = (Vec::new(), Vec::new(), HashSet::new());
+    let mut vanished = fafnirx_common::Vanished::new(removed.into_iter().map(|(device, path, root)| (root.clone(), (device, path))));
+    let (mut changed, mut renamed) = (Vec::new(), Vec::new());
     for f in live {
         match on_mirror(f) {
             Some(root) if root[..] == f.root[..] => {}
             Some(_) => changed.push(f),
-            None => match vanished.get_mut(&f.root[..]).and_then(Vec::pop) {
-                Some(i) => {
-                    taken.insert(i);
-                    renamed.push(Rename { from: (removed[i].0, removed[i].1.clone()), to: f });
-                }
+            None => match vanished.take(&f.root.to_vec()) {
+                Some(from) => renamed.push(Rename { from, to: f }),
                 None => changed.push(f),
             },
         }
     }
-    let removed = removed
-        .into_iter()
-        .enumerate()
-        .filter(|(i, _)| !taken.contains(i))
-        .map(|(_, (d, p, _))| (d, p))
-        .collect();
+    let mut removed = vanished.into_remaining();
+    removed.sort();
     Diff { changed, removed, renamed }
 }
 
@@ -434,7 +419,7 @@ fn metadata(m: &MirrorRow, live: &[LiveFile], stamp: &str, run: &MirrorOutcome) 
         "stats.json".into(),
         serde_json::json!({
             "mirror": m.name,
-            "scope": m.scope,
+            "folder": m.folder,
             "run": stamp,
             "generated_at_unix": unix_now(),
             "files": live.len(),
@@ -468,7 +453,7 @@ pub async fn run(db: Db, store: Arc<Store>, data_dir: PathBuf, m: MirrorRow) -> 
     let result = job.run().await;
     if let Ok(o) = &result {
         let (id, files, bytes) = (job.m.id, o.total_files as i64, o.bytes as i64);
-        let _ = db::with(&job.db, move |c| Ok(mirrors::set_totals(c, id, files, bytes)?)).await;
+        let _ = db::with(&job.db, move |c| Ok(crate::repo::links::set_totals(c, id, files, bytes)?)).await;
     }
     result
 }
@@ -498,8 +483,8 @@ impl Job {
         // Fail early, before touching any data, if the remote is unusable.
         self.rc.run(&["mkdir", &self.remotes.root], &[]).await.context("cannot reach the mirror")?;
 
-        let (mirror_id, scope) = (self.m.id, self.m.scope.clone());
-        let (live, mirrored) = db::with(&self.db, move |c| Ok((load_live(c, &scope)?, load_mirrored(c, mirror_id)?))).await?;
+        let (mirror_id, folder_id) = (self.m.id, self.m.folder_id);
+        let (live, mirrored) = db::with(&self.db, move |c| Ok((load_live(c, folder_id)?, load_mirrored(c, mirror_id)?))).await?;
         let Diff { mut changed, mut removed, renamed } = diff(&live, &mirrored);
         let mut out = MirrorOutcome { total_files: live.len(), ..Default::default() };
 
@@ -650,7 +635,7 @@ impl Job {
         }
         // Albums, tags, favorites and corrected dates live in the database only: keep a readable copy. It names files all
         // over the tree, so a mirror of one folder leaves it out.
-        if self.m.scope.is_empty() {
+        if self.m.folder_id.is_none() {
             let library = db::with(&self.db, crate::library::photos::snapshot).await?;
             std::fs::write(dir.join("library.json"), serde_json::to_vec_pretty(&library)?)?;
         }
@@ -698,7 +683,8 @@ mod tests {
             remote_type: "s3".into(),
             options: options.into(),
             remote_path: "bucket/prefix/".into(),
-            scope: String::new(),
+            folder_id: None,
+            folder: String::new(),
             remote: String::new(),
             keep_runs: 3,
         }
@@ -764,19 +750,14 @@ type = local
     }
 
     #[test]
-    fn a_backup_stacks_compression_over_encryption_over_the_storage() {
+    fn a_backup_stacks_encryption_over_the_storage() {
         let mut m = row("{}");
         assert_eq!(top_of(&m), "FXMIRROR:bucket/prefix", "a replica writes to the storage itself");
         m.kind = BACKUP.into();
-        assert_eq!(top_of(&m), "FXMIRRORZ:");
+        assert_eq!(top_of(&m), "FXMIRRORCRYPT:");
         let env = backup_env(&base_of(&m), "pw", "salt");
         assert!(env.contains(&("RCLONE_CONFIG_FXMIRRORCRYPT_REMOTE".into(), "FXMIRROR:bucket/prefix".into())));
-        assert!(env.contains(&("RCLONE_CONFIG_FXMIRRORZ_REMOTE".into(), "FXMIRRORCRYPT:".into())));
         assert!(env.contains(&("RCLONE_CONFIG_FXMIRRORCRYPT_PASSWORD2".into(), "salt".into())));
-        assert!(
-            env.contains(&("RCLONE_CONFIG_FXMIRRORZ_LEVEL".into(), "6".into())),
-            "compression must be switched on"
-        );
     }
 
     #[test]

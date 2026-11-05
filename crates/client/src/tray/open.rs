@@ -78,7 +78,7 @@ fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
 }
 
-/// Whether the job installed by `fafnirx install-service` / the install script exists for this label.
+/// Whether the job installed by `fafnirx install` exists for this label.
 fn launch_agent(label: &str) -> bool {
     let file = format!("{label}.plist");
     cfg!(target_os = "macos") && (std::path::Path::new("/Library/LaunchAgents").join(&file).is_file() || home().join("Library/LaunchAgents").join(file).is_file())

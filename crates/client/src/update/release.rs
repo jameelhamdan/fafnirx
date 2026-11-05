@@ -3,8 +3,7 @@
 //! beside it, and the client takes the newest one it does not have yet.
 //!
 //! The download is checked against that checksum, so a damaged one is never installed. The checksum comes from the same
-//! release, so this protects against a bad download, not against someone who can publish releases of the project; for that
-//! sign your own builds and set `update_public_key` (see `update`).
+//! release, so this protects against a bad download, not against someone who can publish releases of the project.
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
@@ -21,11 +20,6 @@ fn api_url() -> String {
     let repo = env!("CARGO_PKG_REPOSITORY").trim_end_matches('/');
     let path = repo.strip_prefix("https://github.com/").unwrap_or(repo);
     format!("https://api.github.com/repos/{path}/releases/latest")
-}
-
-/// The page of the project's newest release, where the installers and the plain executables are (the tray links to it).
-pub fn releases_page() -> String {
-    format!("{}/releases/latest", env!("CARGO_PKG_REPOSITORY").trim_end_matches('/'))
 }
 
 /// The most that is downloaded, whatever the release says it weighs.

@@ -29,7 +29,7 @@ const idOf = (url: string) => /^\/api\/media\/([^/]+)\//.exec(url)?.[1] ?? null
 /** In case the news was missed (the event stream was down for a moment), a waiting picture is asked for now and then. */
 const RECHECK_MS = 15_000
 
-export type PictureState = 'ok' | 'pending' | 'none'
+type PictureState = 'ok' | 'pending' | 'none'
 
 /**
  * What an `<img>` that shows a picture needs: give it `key={attempt}`, `onLoad` and `onError`. While `state` is `pending` the

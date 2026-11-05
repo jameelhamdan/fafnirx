@@ -5,10 +5,9 @@ use crate::files::ingest::{self, NewVersion};
 use crate::integrations::Outcome;
 use crate::platform::db::{self, Db, Device};
 use crate::platform::store::Store;
-use crate::repo::sources;
+use crate::repo::{links, sources};
 use anyhow::Result;
 use fafnirx_common::HASH_LEN;
-use fafnirx_db::queries as sql;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
@@ -99,16 +98,10 @@ fn plan<'a>(items: &'a [Item], known: &Known, live: &HashSet<String>, removed: &
     plan
 }
 
-/// The path in the device of a file the source names `path`: below the subfolder the source writes into.
-fn placed(prefix: &str, path: &str) -> String {
-    format!("{prefix}{path}")
-}
-
-fn commit(conn: &mut postgres::Client, store: &Store, source_id: i64, device: &Device, prefix: &str, item: &Item, content: Download) -> Result<()> {
-    let placed = placed(prefix, &item.path);
+fn commit(conn: &mut postgres::Client, store: &Store, source_id: i64, device: &Device, item: &Item, content: Download) -> Result<()> {
     let version = NewVersion {
         device,
-        path: &placed,
+        path: &item.path,
         root: content.root,
         size: content.size,
         mtime: item.mtime_ns,
@@ -116,7 +109,7 @@ fn commit(conn: &mut postgres::Client, store: &Store, source_id: i64, device: &D
         renamed_from: None,
     };
     ingest::commit_version(conn, store, &content.path, &version)?;
-    sources::remember_item(conn, source_id, item.id(), &item.path, &item.marker)?;
+    links::remember_remote(conn, source_id, device.id, &item.path, item.id(), &item.marker)?;
     Ok(())
 }
 
@@ -141,27 +134,19 @@ impl Rules {
     pub const ALL: Rules = Rules { limit: usize::MAX, removals: true };
 }
 
-/// Where a source puts its files: a device, and below `prefix` (empty, or a path and a slash) in it.
-pub struct Target {
-    pub device: Device,
-    pub prefix: String,
-}
-
 /// Applies a listing: `fetch` downloads one file of it to a temporary place.
-pub async fn apply<F, Fut>(db: Db, store: Arc<Store>, source_id: i64, target: Target, listing: Listing, rules: Rules, fetch: F) -> Result<Outcome>
+pub async fn apply<F, Fut>(db: Db, store: Arc<Store>, source_id: i64, device: Device, listing: Listing, rules: Rules, fetch: F) -> Result<Outcome>
 where
     F: Fn(Item) -> Fut,
     Fut: Future<Output = Result<Download>>,
 {
-    let Target { device, prefix } = target;
     let device_id = device.id;
-    let below = prefix.clone();
     let (known, live, removed): (Known, HashSet<String>, HashSet<String>) = db::with(&db, move |c| {
-        let known = known_of(sources::items(c, source_id)?);
-        let live = sql::sources::live_paths().bind(c, &below, &device_id).all()?.into_iter().collect();
+        let known = known_of(links::items(c, source_id)?.into_iter().map(|i| (i.remote_id, i.path, i.version)));
+        let live = sources::live_paths(c, device_id)?.into_iter().collect();
         // Deleted in the web app: still in the trash, or already removed by the retention job (then only the
         // source's own record remembers it).
-        let removed = sources::removed_in_web_app(c, device_id, source_id, &below)?.into_iter().collect();
+        let removed = sources::removed_in_web_app(c, device_id, source_id)?.into_iter().collect();
         Ok((known, live, removed))
     })
     .await?;
@@ -179,10 +164,10 @@ where
     // Removals go first so that a path is free before a new file takes it over.
     for (id, path) in plan.removals {
         let shown = path.clone();
-        let (store, device, prefix) = (store.clone(), device.clone(), prefix.clone());
+        let (store, device) = (store.clone(), device.clone());
         let deleted = db::with(&db, move |c| {
-            let changed = ingest::mark_deleted(c, &store, &device, &placed(&prefix, &path), false)?;
-            sql::sources::delete_source_item().bind(c, &source_id, &id).map(drop)?;
+            let changed = ingest::mark_deleted(c, &store, &device, &path, false)?;
+            links::forget_remote(c, source_id, &id)?;
             Ok(changed)
         })
         .await;
@@ -195,10 +180,10 @@ where
 
     // A file that only got another name is moved, not made again.
     for (item, from) in plan.renames {
-        let (stored, store, device, prefix, from) = (item.clone(), store.clone(), device.clone(), prefix.clone(), from);
+        let (stored, store, device, from) = (item.clone(), store.clone(), device.clone(), from);
         let moved = db::with(&db, move |c| {
-            ingest::move_path(c, &store, &device, &placed(&prefix, &from), &placed(&prefix, &stored.path))?;
-            sources::remember_item(c, source_id, stored.id(), &stored.path, &stored.marker)?;
+            ingest::move_path(c, &store, &device, &from, &stored.path)?;
+            links::remember_remote(c, source_id, device.id, &stored.path, stored.id(), &stored.marker)?;
             Ok(())
         })
         .await;
@@ -216,12 +201,12 @@ where
         }
         let fetched = async {
             let content = fetch(item.clone()).await?;
-            let (stored, store, device, prefix) = (item.clone(), store.clone(), device.clone(), prefix.clone());
+            let (stored, store, device) = (item.clone(), store.clone(), device.clone());
             db::with(&db, move |c| {
-                commit(c, &store, source_id, &device, &prefix, &stored, content)?;
+                commit(c, &store, source_id, &device, &stored, content)?;
                 // Made again under another name (another format): the file it replaces goes.
                 if let Some(old) = leaves {
-                    ingest::mark_deleted(c, &store, &device, &placed(&prefix, &old), false)?;
+                    ingest::mark_deleted(c, &store, &device, &old, false)?;
                 }
                 Ok(())
             })

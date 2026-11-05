@@ -3,7 +3,7 @@
 A **fetch plugin** teaches the master a new kind of [source](sources.md): a site, a protocol, a service with its own API. The master
 keeps the database and the schedule; the plugin only answers three questions about a source: *are these settings usable?*, *what does it
 offer right now?* and *write this one file here*. Anyone can write one, in any language, and run it as a container next to their master. The
-[fetch module](fetch.md) (`modules/fetch/service`) is the reference: read it next to this page.
+[fetch module](sources.md#web-files-and-feeds) (`modules/fetch/service`) is the reference: read it next to this page.
 
 A plugin has two parts, both optional except the first:
 
@@ -33,7 +33,7 @@ container and it is connected.
   passwords) reaches it.
 - **Data:** give the container only `data/tmp` of the master's data folder, **at the same path as the master** (`/data/tmp`), because the
   master names files by it. Keep its port off the network: it has no login, only the secret. The compose file of the
-  [fetch module](fetch.md#run-it) is the model; a plugin in another repository ships its own compose overlay for it.
+  [fetch module](sources.md#run-it) is the model; a plugin in another repository ships its own compose overlay for it.
 - **Trust:** whoever has the secret can announce a plugin, and a plugin is a program with write access to `data/tmp`. Run what you trust.
 - **Build:** one Dockerfile per plugin, against the `fafnirx-module-kit` (and `fafnirx-fetch-api`) crates of this repository (path or git
   dependency). `docker/Dockerfile.fetch` is the example. Push the image to any registry your servers pull from.

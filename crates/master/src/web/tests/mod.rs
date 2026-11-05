@@ -131,6 +131,12 @@ impl Api {
     }
 }
 
+/// Makes the master folder `path`; whoever is logged in on `api` has to be an administrator.
+async fn master_folder(api: &Api, path: &str) {
+    let (status, body) = api.json(Method::POST, "/api/master-folders", json!({ "path": path })).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
 fn master_folders_of(all: &Value) -> Vec<Value> {
     all.as_array().unwrap().iter().filter(|f| f["master"] == true).cloned().collect()
 }

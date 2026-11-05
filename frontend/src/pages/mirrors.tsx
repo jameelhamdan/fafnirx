@@ -1,11 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { BookOpen, Check, Copy, Download, FolderOpen, KeyRound, Lock, Plus, RefreshCw, RotateCcw } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { ErrorNote, PageHeader } from '@/components/common'
+import { ErrorNote, PageHeader, SELECT } from '@/components/common'
 import { Confirm } from '@/components/confirm'
 import { JobList } from '@/components/job-list'
-import { ScopePicker } from '@/components/scope-picker'
 import { StorageForm } from '@/components/storage-form'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -15,6 +14,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
+import { useApiMutation } from '@/lib/mutation'
 import { NO_STORAGE, storageBody, storageProblem } from '@/lib/storage'
 import { bytes, count } from '@/lib/format'
 import { copyText } from '@/lib/clipboard'
@@ -30,7 +30,7 @@ const BLANK = {
   kind: 'backup' as Kind,
   name: '',
   storage: NO_STORAGE,
-  scope: '',
+  folder: '',
   interval_hours: '24',
   keep_runs: '3',
   crypt_password: '',
@@ -128,6 +128,24 @@ function problem(form: typeof BLANK, t: ReturnType<typeof useT>): string | null 
   return null
 }
 
+/** Picks what a mirror holds: one whole folder, or everything. */
+function FolderChoice({ value, onChange }: { value: string; onChange: (folder: string) => void }) {
+  const t = useT()
+  const { data, error } = useQuery({ queryKey: ['mirrors', 'folders'], queryFn: () => api.get<string[]>('/api/mirrors/folders') })
+  return (
+    <div className="space-y-1.5">
+      <select aria-label={t('Folder to mirror')} className={`${SELECT} w-full`} value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">{t('Everything')}</option>
+        {(data ?? []).map((f) => <option key={f} value={f}>{f}</option>)}
+      </select>
+      {error && <p role="alert" className="text-sm text-destructive">{error.message}</p>}
+      <p className="text-xs text-muted-foreground">
+        {value === '' ? t('Mirrors everything: the master files and every user.') : t('Mirrors {folder} and everything in it.', { folder: value })}
+      </p>
+    </div>
+  )
+}
+
 function AddMirror() {
   const t = useT()
   const client = useQueryClient()
@@ -135,18 +153,17 @@ function AddMirror() {
   const [form, setForm] = useState(BLANK)
   const set = (patch: Partial<typeof BLANK>) => setForm((f) => ({ ...f, ...patch }))
   const blocked = problem(form, t)
-  const create = useMutation({
-    mutationFn: () =>
+  const create = useApiMutation(() =>
       api.post('/api/mirrors', {
         name: form.name,
         kind: form.kind,
         ...storageBody(form.storage),
-        scope: form.scope,
+        folder: form.folder,
         interval_hours: Number(form.interval_hours),
         keep_runs: Number(form.keep_runs),
         crypt_password: form.kind === 'backup' ? form.crypt_password : '',
         crypt_salt: form.kind === 'backup' ? form.crypt_salt : '',
-      }),
+      }), {
     onSuccess: () => {
       toast.success(t('Mirror {name} added. The first run starts within a few seconds.', { name: form.name }))
       setOpen(false)
@@ -172,7 +189,7 @@ function AddMirror() {
       <Step n={1} title={t('What kind of copy?')}>
         <div role="radiogroup" aria-label={t('Kind of mirror')} className="grid gap-2 sm:grid-cols-2">
           <Choice selected={form.kind === 'backup'} onSelect={() => set({ kind: 'backup' })} icon={<Lock className="size-4" />} title={t('Backup')}>
-            {t('Compressed and encrypted with your key. Smallest and safe on storage you do not control. Restored with rclone.')}
+            {t('Encrypted with your key. Safe on storage you do not control. Restored with rclone.')}
           </Choice>
           <Choice selected={form.kind === 'replica'} onSelect={() => set({ kind: 'replica' })} icon={<FolderOpen className="size-4" />} title={t('Replica')}>
             {t('Your files exactly as they are. Browse them, share them or copy them back with any tool.')}
@@ -181,7 +198,7 @@ function AddMirror() {
       </Step>
 
       <Step n={2} title={t('What to copy')}>
-        <ScopePicker value={form.scope} onChange={(scope) => set({ scope })} />
+        <FolderChoice value={form.folder} onChange={(folder) => set({ folder })} />
       </Step>
 
       <Step n={3} title={t('Where to put it')}>
@@ -220,7 +237,7 @@ function Guide({ open }: { open: boolean }) {
       <div className="mt-3 grid gap-4 sm:grid-cols-2">
         <div className="space-y-1">
           <p className="flex items-center gap-2 font-medium"><Lock className="size-4" />{t('Backup')}</p>
-          <p className="text-muted-foreground">{t('Names and contents are encrypted with your key and compressed before they leave the master. Use it for cloud storage. To restore, download the restore kit and run rclone.')}</p>
+          <p className="text-muted-foreground">{t('Names and contents are encrypted with your key before they leave the master. Use it for cloud storage. To restore, download the restore kit and run rclone.')}</p>
         </div>
         <div className="space-y-1">
           <p className="flex items-center gap-2 font-medium"><FolderOpen className="size-4" />{t('Replica')}</p>
@@ -239,19 +256,17 @@ function Guide({ open }: { open: boolean }) {
 
 export default function Mirrors() {
   const t = useT()
-  const client = useQueryClient()
   const [resync, setResync] = useState<string | null>(null)
   const { data, error } = useQuery({ queryKey: ['mirrors'], queryFn: () => api.get<JobState[]>('/api/mirrors') })
-  const resyncNow = useMutation({
-    mutationFn: (name: string) => api.post(`/api/mirrors/${name}/resync`),
-    onSuccess: (_d, name) => { toast.success(t('{name} will re-send every file on its next run.', { name })); void client.invalidateQueries({ queryKey: ['mirrors'] }) },
-    onError: (e) => toast.error(e.message),
+  const resyncNow = useApiMutation((name: string) => api.post(`/api/mirrors/${name}/resync`), {
+    invalidate: [['mirrors']],
+    success: (_r, name) => t('{name} will re-send every file on its next run.', { name }),
+    toastError: true,
   })
-  const kit = useMutation({
-    mutationFn: (name: string) => api.get<{ config: string }>(`/api/mirrors/${name}/restore-kit`).then((r) => ({ name, config: r.config })),
-    onSuccess: ({ name, config }) => saveText(`${name}-restore.conf`, config),
-    onError: (e) => toast.error(e.message),
-  })
+  const kit = useApiMutation(
+    (name: string) => api.get<{ config: string }>(`/api/mirrors/${name}/restore-kit`).then((r) => ({ name, config: r.config })),
+    { onSuccess: ({ name, config }) => saveText(`${name}-restore.conf`, config), toastError: true },
+  )
   return (
     <div>
       <PageHeader
@@ -272,7 +287,7 @@ export default function Mirrors() {
               <div className="space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant={backup ? 'default' : 'secondary'}>{backup ? <><Lock className="size-3" />{t('Backup')}</> : <><FolderOpen className="size-3" />{t('Replica')}</>}</Badge>
-                  <span>{j.detail.scope ? String(j.detail.scope) : t('Everything')} → {j.detail.remote ? String(j.detail.remote) : `${String(j.detail.remote_type)}:${String(j.detail.remote_path || '')}`}</span>
+                  <span>{j.detail.folder ? String(j.detail.folder) : t('Everything')} → {j.detail.remote ? String(j.detail.remote) : `${String(j.detail.remote_type)}:${String(j.detail.remote_path || '')}`}</span>
                 </div>
                 <div>
                   {t('keeps {count} runs', { count: String(j.detail.keep_runs) })}

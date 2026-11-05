@@ -69,14 +69,8 @@ try {
   check(conflict.includes('1 conflicts') && (await live('alice/family')).every((p) => !p.includes('conflict')), 'and what was put aside is not sent')
   check(!names(dirL).some((n) => n.includes('(conflict ')), 'no conflict copy among the files')
 
-  check(laptop.c('folder', 'mode', 'family', 'mine').stdout.includes('"mine"'), 'a folder can be set to keep this computer\'s version')
-  write(dirL, 'a.txt', 'L')
-  write(dirD, 'a.txt', 'D')
-  desktop.c('sync')
-  laptop.c('sync')
-  check(read(dirL, 'a.txt') === 'L' && stored('alice/family', 'a.txt') === 'L', 'mine: ours is kept and sent as the current version')
-  desktop.c('sync')
-  check(read(dirD, 'a.txt') === 'L', 'and reaches the other computer')
+  const refused = run(CLIENT, ['--config', laptop.cfg, 'folder', 'mode', 'family', 'mine'], { ok: false })
+  check(refused.code !== 0, 'there is no mode that replaces the master\'s version with this computer\'s')
 
   check(desktop.c('folder', 'mode', 'family').stdout.includes('both,'), 'the other computer keeps its own setting')
   laptop.c('folder', 'mode', 'family', 'keep')

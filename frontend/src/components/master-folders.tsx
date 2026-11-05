@@ -1,4 +1,3 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
 import { useState } from 'react'
 import { FormDialog } from '@/components/form-dialog'
@@ -7,19 +6,18 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
 import { useT } from '@/lib/i18n'
+import { useApiMutation } from '@/lib/mutation'
 
 /** The dialog an administrator adds a master folder with. */
 export function AddMasterFolder() {
   const t = useT()
-  const client = useQueryClient()
   const [open, setOpen] = useState(false)
   const [path, setPath] = useState('')
-  const create = useMutation({
-    mutationFn: () => api.post('/api/master-folders', { path }),
+  const create = useApiMutation(() => api.post('/api/master-folders', { path }), {
+    invalidate: [['folders']],
     onSuccess: () => {
       setOpen(false)
       setPath('')
-      void client.invalidateQueries({ queryKey: ['folders'] })
     },
   })
   return (

@@ -13,7 +13,7 @@ cargo build --workspace
 export FAFNIRX_DATABASE_URL=$FAFNIRX_TEST_DATABASE_URL FAFNIRX_DATA=./data FAFNIRX_ADMIN_PASSWORD=pw
 cargo run -p fafnirx-master            # devices :7443, web app and API :8080
 (cd frontend && npm run dev)           # hot reload :5173, proxies /api to :8080
-cargo run -p fafnirx -- enroll --no-service --server http://127.0.0.1:7443   # token from the web app or FAFNIRX_TOKEN
+cargo run -p fafnirx -- install --in-place --no-start --server http://127.0.0.1:7443   # token from the web app or FAFNIRX_TOKEN
 ```
 
 - Building the master generates typed queries against a real PostgreSQL ([below](#typed-queries)); the client needs none.
@@ -34,10 +34,6 @@ cargo run -p fafnirx -- enroll --no-service --server http://127.0.0.1:7443   # t
 | E2E: video module | `node e2e-video.mjs` | `fafnirx-video` built |
 | E2E: delete and retention | `node e2e-retention.mjs` | ~2 min |
 | E2E: synced folders (several clients, two users) | `node e2e-folders.mjs` | Built binaries, test DB |
-| Benchmark of a running master (GET only) | `node bench-readonly.mjs http://host` | Optional `FAFNIRX_USER`, `FAFNIRX_PASSWORD` |
-| Benchmark of a release build with a synthetic library | `node bench-local.mjs [tiny] [large]` | `FAFNIRX_BIN_DIR` (release), test DB, Python with Pillow |
-| Scaling in Docker (cores, RAM, settings) | `python bench_docker.py <library> out.jsonl b1=0:0 b2=0-1:0-1` | Image `fafnirx:bench`, library from `bench-library.py` |
-| Disk and PostgreSQL I/O in Docker | `bash bench-disk.sh` | Docker |
 
 Database tests use a schema of their own, so they run in parallel. `crates/master/src/web/tests/` drives the real router in
 memory; `routes.rs` pins the access rule of every route. Video parts need ffmpeg, which tests do not: they check parsing and
@@ -105,25 +101,27 @@ Synchronous `postgres` behind an `r2d2` pool.
 **Schema.** `crates/master/migrations/0001_schema.sql` is the schema of 4.0.0. Add `NNNN_name.sql` next to it and an entry at
 the end of `ALL` in `platform/migrations.rs`. Applied on start, in order, in one transaction behind an advisory lock, with a
 checksum. Never edit a released migration; a newer database than the master is refused. Avoid long locks, and test on populated
-data. `upgrade_from_3.sql` is the one-time way from the 3.x schema; delete it and its code in `migrations.rs` when no such
-database is left.
-Update the [diagram](architecture.md#database) and `frontend/src/lib/types.ts`.
+data.
+Update the [diagram](architecture.md#database).
 
-**API.** Handler in the app, registered in `light()` or `heavy()` (moves file contents) in `web/mod.rs`; type in `types.ts`; a
+**API.** Handler in the app, registered in `light()` or `heavy()` (moves file contents) in `web/mod.rs`; a response struct gets
+`#[cfg_attr(test, derive(ts_rs::TS), ts(export))]`, and `cargo test -p fafnirx-master` regenerates its TypeScript type in
+`frontend/src/lib/generated/` (commit it; CI checks it; `types.ts` re-exports it); a
 test in `web/tests/`; a line in `ROUTES` (`routes.rs`). Errors are `ApiError` (`bad`, `not_found`, `conflict`) →
 `{ "error": "..." }`. Every handler takes `Extension<Access>` and limits itself to the role: `check_see`/`check_write(folder)`
 (others' devices answer 404), `viewer()`/`scope_args()` for file queries, `require_admin()`, `require_workspace()`. Parse ids
 with `Id` and check visibility like any input. Test each role.
 
-**Device contract.** Edit `proto/fafnirx.proto` (types regenerate). Keep it additive. Reads are limited to client updates
+**Device contract.** Edit `proto/fafnirx.proto` (types regenerate). Reads are limited to client updates
 and the folders the user syncs (shared, master and own); any other call that reads, lists or deletes stored data changes the security model (see
 [CONTRIBUTING](../CONTRIBUTING.md)).
 
-**A source.** Model: `integrations/rclone_source.rs` (a file is known by its path). A `sources` row says where it writes
-(`device_id` and `folder_prefix`, from the `folder` of the request, checked by `integrations/api.rs`; a source without one gets a
-`local` folder `source-<name>`), claimed by `integrations::claim_source`, dispatched by `kind`. A source lists its files as
-`syncsource::Item`s (path, optional key, marker) and fetches one; `syncsource::apply` compares the listing with `source_items` (by
-key, else path) and live `files` below the prefix, moves a file whose key has a new name (`ingest::move_path`), downloads the
+**A source.** Model: `integrations/rclone_source.rs` (a file is known by its path). A source is a `links` row (direction `in`,
+shared with mirrors: `repo/links.rs`) whose `folder_id` is the folder it writes into (from the `folder` of the request, checked by
+`integrations/api.rs`; a source without one gets a `local` folder `source-<name>`). `integrations::claim` takes it when due and
+dispatches by `kind`. A source lists its files as
+`syncsource::Item`s (path, optional key, marker) and fetches one; `syncsource::apply` compares the listing with its `link_items` (by
+key, else path) and the live `files` of the folder, moves a file whose key has a new name (`ingest::move_path`), downloads the
 rest to temp files, records with `ingest::commit_version` and `mark_deleted`, and deletes nothing if listing fails. A kind of
 module also offers `load` in the SDK so the Edit form can show its settings.
 
@@ -150,7 +148,7 @@ Actions → **Release** → Run workflow on `master` with `X.Y.Z` (*dry_run* reh
 
 1. **Check:** version is `X.Y.Z`, newer than all releases, unused, not below `Cargo.toml`; publishing secrets exist; Docker Hub login works.
 2. **Version commit** by `prepare-release.sh` (`Cargo.toml`, `Cargo.lock`) on branch `release/X.Y.Z`; every later job tests that commit.
-3. **Verify:** CI; client builds for Windows, macOS, Linux (installer, tarballs, `.deb`, and the plain `fafnirx-X.Y.Z-<os>-<arch>` + `.sha256` clients update from); Docker image started on amd64 and arm64.
+3. **Verify:** CI; client builds for Windows, macOS, Linux (installer, `.deb`, and the plain `fafnirx-X.Y.Z-<os>-<arch>` + `.sha256` clients update from); Docker image started on amd64 and arm64.
 4. **Publish, only if all passed:** fast-forward `master`, push the image (`<version>`, `<major>.<minor>`, `latest`), tag and GitHub Release, then Homebrew. The temporary branch is deleted.
 
 A failure before step 4 leaves `master` untouched; if `master` moved, nothing is published: run again. If publishing fails

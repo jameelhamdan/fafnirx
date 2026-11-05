@@ -37,8 +37,6 @@ services:
       # or not working shows a warning to administrators.
       FAFNIRX_PLUGINS: "${FAFNIRX_PLUGINS:-${COMPOSE_PROFILES:-}}"
       # Sizes for the machine, empty = the default (docs/deployment.md#sizing-and-tuning)
-      FAFNIRX_WORKER_THREADS: "${FAFNIRX_WORKER_THREADS:-}"
-      FAFNIRX_BLOCKING_THREADS: "${FAFNIRX_BLOCKING_THREADS:-}"
       FAFNIRX_DB_POOL: "${FAFNIRX_DB_POOL:-}"
       FAFNIRX_JOB_WORKERS: "${FAFNIRX_JOB_WORKERS:-}"
       FAFNIRX_STREAMS: "${FAFNIRX_STREAMS:-}"
@@ -69,7 +67,7 @@ services:
       # Segments, removed after a week unwatched. It runs as FAFNIRX_UID: a host folder it cannot write to means no playback.
       - "${FAFNIRX_VIDEO_CACHE_DIR:-./video-cache}:/cache"
 
-  # Sources made of addresses of files and feeds: docs/fetch.md.
+  # Sources made of addresses of files and feeds: docs/sources.md.
   # No login and no published port. It writes only below data/tmp, so that is all of the data folder it gets.
   fetch:
     image: "${FAFNIRX_FETCH_IMAGE:-jameelh99/fafnirx-fetch:latest}"

@@ -12,11 +12,10 @@ Outbound: the storage of your sources and mirrors, only.
 
 ```text
 files/users/<user>/<device>/<path>  current tree; shareable as a network drive
-files/<path>                        master files
+files/<name>/<path>                 master folders
 versions/<id>/<user>/<device>/<path> replaced or deleted versions
 tmp/                                uploads being assembled (removed after a day untouched)
 cache/thumbs/                       thumbnails and previews, made on demand and kept
-updates/<platform>/                 your own signed client builds (optional)
 ```
 
 `FAFNIRX_CONFIG_DIR` (`./config`) holds only `rclone.conf`. fafnirx verifies hashes on upload and before mirroring but does
@@ -56,7 +55,7 @@ FAFNIRX_WEB_ADDRESS=fafnirx.example.com
 FAFNIRX_DEVICE_ADDRESS=fafnirx.example.com:7443
 ```
 
-Enroll with `fafnirx enroll --server https://fafnirx.example.com:7443`. Host ports: `FAFNIRX_HTTP_PORT`, `FAFNIRX_HTTPS_PORT`,
+Enroll with `fafnirx install --server https://fafnirx.example.com:7443`. Host ports: `FAFNIRX_HTTP_PORT`, `FAFNIRX_HTTPS_PORT`,
 `FAFNIRX_DEVICE_PORT`. The master trusts Caddy's forwarded address (`FAFNIRX_TRUSTED_PROXY` = the compose network), so logins
 are limited per person. The `Caddyfile` is short and editable. Streaming segments are not cached (that would bypass the login).
 
@@ -88,7 +87,6 @@ DENY`, `nosniff`, and HSTS behind https. Browser uploads use 8 MiB pieces; live 
 | PostgreSQL (paths → versions, tokens, settings, credentials, library data) | `docker compose exec db pg_dump -U fafnirx fafnirx > fafnirx.sql`, or ZFS snapshots |
 | `data/files/`, `data/versions/` | ZFS snapshots, or the offsite mirror |
 | `config/rclone.conf` (credentials) | Copy it somewhere private |
-| Update signing key | Wherever you keep `update.key` (not on the master) |
 
 Snapshot **the database first, then the data**: a file a newer snapshot lacks is still in `versions/` until retention.
 3-2-1: the master is one copy, a snapshot or other disk the second, a mirror the offsite one. A mirror holds files, not the
@@ -101,8 +99,11 @@ docker compose exec -T db psql -U fafnirx fafnirx < fafnirx.sql      # into an e
 ## Upgrades
 
 `docker compose pull && docker compose up -d`. The master brings the database up to date when it starts, in one
-transaction, and refuses a database newer than itself. **Back up first.** A database made by the 3.x releases is upgraded in place
-by 4.0.0 with its data kept; a manually picked album (not a folder's) is removed, since albums are folders now. A PostgreSQL
+transaction, and refuses a database newer than itself. **Back up first.** 5.0.0 upgrades a 4.x database in place with its data kept, but the model is simpler, so some things change: the
+master files become master folders, an album of a place inside a folder is removed (albums show whole folders), a source writes into
+a whole folder (what was below its subfolder stays where it is and is still its own), a mirror that held part of a folder holds the
+whole folder, and a mirror of all master folders or of a whole user is removed (add it again per folder, or as everything). Backup mirrors made by 4.x were compressed before they were encrypted and the restore kit of 5.0.0 does not read them: add a new
+backup, and delete the old one once it has run. 3.x databases must go through 4.x first. A PostgreSQL
 major upgrade needs dump and restore. Clients update themselves from GitHub within about six hours.
 
 ## Security checklist
@@ -111,14 +112,13 @@ major upgrade needs dump and restore. Clients update themselves from GitHub with
 - `8080` and `7443` off the internet unless behind TLS.
 - Device tokens are shown once and stored as SHA-256 hashes; revoke lost devices. A device adds data to its own device; it reads and writes only the folders of its user, those shared with them and the master folders.
 - Source and mirror credentials, and the encryption key of backup mirrors, are plain text in the database and `rclone.conf`: protect backups and the config folder. Keep a copy of each backup key away from the master.
-- The [fetch module](fetch.md) reaches any address your server can reach: give it only `data/tmp` (compose does), keep its port unpublished, only let people you trust add sources, and read its [legal notes](fetch.md#legal).
+- The [fetch module](sources.md#web-files-and-feeds) reaches any address your server can reach: give it only `data/tmp` (compose does), keep its port unpublished, only let people you trust add sources, and read its [legal notes](sources.md#legal).
 - A [plugin](plugins.md) is a container with write access to `data/tmp`: run only what you trust. Don't publish its port; it has no login, only the shared token.
-- Keep the update signing key off the master.
 - The master's disk is not encrypted by fafnirx: use an encrypted dataset. A **backup** mirror is encrypted with its own key ([Mirrors](mirrors.md)); a replica is not.
 
 ## Sizing and tuning
 
-Measured with `tests/bench_docker.py` and `tests/bench-disk.sh` in Docker on an Apple M2, with the master and PostgreSQL on the
+Measured in Docker on an Apple M2, with the master and PostgreSQL on the
 same cores, 5,150 photos and 16 clients. Each figure is one run; ignore differences under 15%.
 
 | Machine | Settings | Timeline | Dashboard | Thumbnails |
@@ -139,8 +139,7 @@ What limits it, first to last:
 3. **DB pool.** 2 connections cut timeline reads from 316 to 197 req/s; 32 was no faster than 8 and doubled PostgreSQL's memory.
    About twice the cores is right.
 
-`FAFNIRX_WORKER_THREADS` rarely needs changing: one thread served reads as fast as four. Requests queue for the database without
-a limit, so with 256 clients at once the slowest 1% waited 2-4 s, though none failed.
+Requests queue for the database without a limit, so with 256 clients at once the slowest 1% waited 2-4 s, though none failed.
 
 **Disk.** Keep PostgreSQL on the machine's own disk. On Docker Desktop, a Mac folder mounted into the container managed 270 small
 fsynced writes/s against 821 on the VM's disk, and PostgreSQL reads were 18% slower. Leave `fsync` on: turning it off gained 23%

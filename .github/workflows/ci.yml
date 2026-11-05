@@ -59,6 +59,8 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      # The web app's types are generated from the response structs: a changed struct needs its regenerated file committed.
+      - run: git diff --exit-code frontend/src/lib/generated
 
   web:
     runs-on: ubuntu-latest

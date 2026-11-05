@@ -202,7 +202,7 @@ fn a_renamed_folder_keeps_its_files_members_and_albums() {
         );
         assert_eq!(try_upload(&api, "bob/family", "pics/a.txt", b"hello").await, StatusCode::OK);
         let (status, album) = api
-            .json(Method::POST, "/api/albums", json!({"name": "", "folder": {"device": "bob/family", "path": "pics"}}))
+            .json(Method::POST, "/api/albums", json!({"name": "", "folder": {"device": "bob/family", "path": ""}}))
             .await;
         assert_eq!(status, StatusCode::OK, "{album}");
 
@@ -274,12 +274,19 @@ fn only_an_administrator_makes_master_folders_and_everyone_sees_them() {
         );
 
         api.cookie = admin;
+        // Like any folder, it is removed once it has no files: with files in it, it stays.
+        api.upload("master:Photos", "a.jpg", b"x").await;
+        let photos = master_folders_of(&api.get("/api/folders").await.1)[1]["public_id"].as_str().unwrap().to_string();
+        assert_eq!(
+            api.json(Method::DELETE, &format!("/api/master-folders/{photos}"), json!({})).await.0,
+            StatusCode::CONFLICT
+        );
         assert_eq!(api.json(Method::DELETE, &format!("/api/master-folders/{id}"), json!({})).await.0, StatusCode::OK);
         assert_eq!(
             api.json(Method::DELETE, &format!("/api/master-folders/{id}"), json!({})).await.0,
             StatusCode::NOT_FOUND
         );
-        assert!(api._dir.path().join("files/Music").is_dir(), "the files stay");
+        assert!(!api._dir.path().join("files/Music").exists(), "its folder goes with it");
         assert_eq!(master_folders_of(&api.get("/api/folders").await.1).len(), 1);
     });
 }

@@ -1,4 +1,3 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { FormDialog } from '@/components/form-dialog'
 import { Input } from '@/components/ui/input'
@@ -6,6 +5,7 @@ import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
 import { useT } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
+import { useApiMutation } from '@/lib/mutation'
 
 /**
  * Makes a folder of the user's: it lives on the master, anything can be uploaded into it, and computers can keep it in step. The
@@ -13,13 +13,11 @@ import { useSession } from '@/lib/session'
  */
 export function NewFolder({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (folder: string) => void }) {
   const t = useT()
-  const client = useQueryClient()
   const me = useSession()?.user?.name
   const [name, setName] = useState('')
-  const create = useMutation({
-    mutationFn: () => api.post<{ folder: string }>('/api/folders', { name }),
+  const create = useApiMutation((): Promise<{ folder: string }> => api.post('/api/folders', { name }), {
+    invalidate: [['folders'], ['devices'], ['files']],
     onSuccess: (made) => {
-      for (const key of ['folders', 'devices', 'files']) void client.invalidateQueries({ queryKey: [key] })
       setName('')
       onCreated(made.folder)
     },

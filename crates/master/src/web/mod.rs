@@ -130,8 +130,8 @@ where
     Ok(crate::platform::db::with(&state.db, f).await?)
 }
 
-/// Like [`run`], in one transaction that tells the live pages of `channel` before it commits (a change that fails tells nobody).
-pub async fn change<T, F>(state: &Shared, channel: &'static str, f: F) -> Result<T, ApiError>
+/// Like [`run`], in one transaction that tells the live pages of `topic` before it commits (a change that fails tells nobody).
+pub async fn change<T, F>(state: &Shared, topic: crate::platform::db::Topic, f: F) -> Result<T, ApiError>
 where
     T: Send + 'static,
     F: FnOnce(&mut postgres::Transaction) -> anyhow::Result<T> + Send + 'static,
@@ -139,7 +139,7 @@ where
     run(state, move |c| {
         let mut tx = c.transaction()?;
         let out = f(&mut tx)?;
-        crate::platform::db::notify(&mut tx, channel, "")?;
+        crate::platform::db::notify(&mut tx, topic, "")?;
         tx.commit()?;
         Ok(out)
     })
@@ -222,7 +222,7 @@ fn light() -> Router<Shared> {
         .route("/api/sources/:user/:name/run", post(integrations::api::run_source))
         .route("/api/sources/:user/:name/toggle", post(integrations::api::toggle_source))
         .route("/api/mirrors", get(integrations::api::mirrors).post(integrations::api::create_mirror))
-        .route("/api/mirrors/scope", get(integrations::api::mirror_scope))
+        .route("/api/mirrors/folders", get(integrations::api::mirror_folders))
         .route("/api/mirrors/:name", delete(integrations::api::delete_mirror))
         .route("/api/mirrors/:name/run", post(integrations::api::run_mirror))
         .route("/api/mirrors/:name/toggle", post(integrations::api::toggle_mirror))

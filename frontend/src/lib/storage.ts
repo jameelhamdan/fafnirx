@@ -10,19 +10,17 @@ export interface Storage {
 }
 
 export const NO_STORAGE: Storage = { preset: 'b2', values: {}, path: '', advanced: '' }
-/** The first service, for a source that starts under Services. */
-export const NO_SERVICE: Storage = { ...NO_STORAGE, preset: PRESETS.find((p) => p.service)?.id ?? NO_STORAGE.preset }
 
 export const presetOf = (s: Storage) => PRESETS.find((p) => p.id === s.preset) ?? PRESETS[0]
 
 /** The part of the API body that names the storage. */
 export function storageBody(s: Storage) {
   const preset = presetOf(s)
-  const plain = preset.fields.filter((f) => !f.obscure).map((f) => [f.key, (s.values[f.key] ?? '').trim()] as const)
+  const plain = preset.fields.filter((f) => !f.obscure && !(preset.custom && f.key === 'backend')).map((f) => [f.key, (s.values[f.key] ?? '').trim()] as const)
   const lines = [...plain.filter(([, v]) => v).map(([k, v]) => `${k}=${v}`), s.advanced.trim()].filter(Boolean)
   return {
     remote: preset.id === 'conf' ? s.path.trim() : '',
-    remote_type: preset.type,
+    remote_type: preset.custom ? (s.values.backend ?? '').trim() : preset.type,
     remote_path: preset.id === 'conf' ? '' : s.path.trim(),
     options: lines.join('\n'),
     secrets: Object.fromEntries(preset.fields.filter((f) => f.obscure).map((f) => [f.key, s.values[f.key] ?? '']).filter(([, v]) => v)),

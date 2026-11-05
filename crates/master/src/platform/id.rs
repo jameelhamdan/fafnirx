@@ -11,6 +11,7 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "string"))]
 pub struct Id(pub Uuid);
 
 impl From<Uuid> for Id {

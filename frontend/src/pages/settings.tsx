@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useApiMutation } from '@/lib/mutation'
 import { useEffect, useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
 import { ErrorNote, PageHeader } from '@/components/common'
@@ -20,15 +21,14 @@ import { msg, useT } from '@/lib/i18n'
 function useSaveSettings(data: SettingsData) {
   const t = useT()
   const client = useQueryClient()
-  return useMutation({
-    mutationFn: (changes: Partial<SettingsData>) => api.put<SettingsData>('/api/settings', { ...data, ...changes }),
+  return useApiMutation((changes: Partial<SettingsData>) => api.put<SettingsData>('/api/settings', { ...data, ...changes }), {
     onSuccess: (saved) => {
       client.setQueryData(['settings'], saved)
       // The menu follows the session.
       void client.invalidateQueries({ queryKey: ['session'] })
       toast.success(t('Settings saved'))
     },
-    onError: (e) => toast.error(e.message),
+    toastError: true,
   })
 }
 

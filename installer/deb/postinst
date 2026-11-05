@@ -1,0 +1,8 @@
+#!/bin/sh
+# After the package is installed or upgraded. A computer that is enrolled gets its service started again on the new program; a
+# new one is set up by hand: sudo fafnirx install --server <address of the master>
+set -e
+if [ "$1" = configure ] && [ -f /etc/fafnirx/config.toml ]; then
+  fafnirx install --in-place || echo "fafnirx: the service could not be restarted; run: sudo fafnirx install --in-place" >&2
+fi
+exit 0

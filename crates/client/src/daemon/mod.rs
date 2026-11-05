@@ -135,7 +135,7 @@ struct Hub {
     errors: Arc<Mutex<Vec<String>>>,
 }
 
-/// What the daemon connects with. `enroll` can change it while the daemon runs.
+/// What the daemon connects with. `install --server` can change it while the daemon runs.
 #[derive(PartialEq)]
 struct Identity {
     server: String,
@@ -144,10 +144,7 @@ struct Identity {
 
 impl Identity {
     fn load(cfg: &Config, config_path: &Path) -> Result<Self> {
-        Ok(Self {
-            server: cfg.server.clone(),
-            token: credentials::load(&cfg.server, config_path, cfg.token.as_deref())?,
-        })
+        Ok(Self { server: cfg.server.clone(), token: credentials::load(&cfg.server, config_path)? })
     }
 }
 
@@ -276,7 +273,7 @@ fn spawn_heartbeat(hub: Hub, mut client: Client, config_path: PathBuf, identity:
 fn spawn_synced_watch(hub: Hub, mut client: Client, config_path: PathBuf) {
     let attached = |path: &Path| -> Vec<String> {
         Config::load(path)
-            .map(|c| c.synced.into_iter().map(|s| s.key().to_string()).collect())
+            .map(|c| c.attached_folders().map(|s| s.key().to_string()).collect())
             .unwrap_or_default()
     };
     tokio::spawn(async move {
@@ -310,12 +307,12 @@ fn spawn_synced_watch(hub: Hub, mut client: Client, config_path: PathBuf) {
 }
 
 /// Checks for a new release now and then.
-fn spawn_updater(mut client: Client, config_path: PathBuf, work_dir: PathBuf) {
+fn spawn_updater(config_path: PathBuf, work_dir: PathBuf) {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(30)).await;
         loop {
-            if let Some(cfg) = Config::load(&config_path).ok().filter(|c| c.auto_update) {
-                match update::check_and_apply(&mut client, &cfg, &work_dir, false).await {
+            if Config::load(&config_path).is_ok_and(|c| c.auto_update) {
+                match update::check_and_apply(&work_dir, false).await {
                     Ok(true) => {
                         tracing::info!("restarting to run the new version");
                         restart();
@@ -331,7 +328,7 @@ fn spawn_updater(mut client: Client, config_path: PathBuf, work_dir: PathBuf) {
 
 /// Answers `fafnirx update`: the program file is where only the service may change it, so the service does the update, says how
 /// it went in `update_result_file`, and starts again on the new version.
-fn spawn_update_requests(mut client: Client, config_path: PathBuf, state_dir: PathBuf) {
+fn spawn_update_requests(state_dir: PathBuf) {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -339,16 +336,13 @@ fn spawn_update_requests(mut client: Client, config_path: PathBuf, state_dir: Pa
             // Empty while the request is being written.
             let Some(nonce) = std::fs::read_to_string(&marker).ok().filter(|n| !n.is_empty()) else { continue };
             let _ = std::fs::remove_file(&marker);
-            let (answer, restart_now) = match Config::load(&config_path) {
+            let (answer, restart_now) = match update::check().await {
                 Err(e) => (format!("failed: {e:#}"), false),
-                Ok(cfg) => match update::check(Some(&mut client), &cfg).await {
+                Ok(None) => (format!("current {}", update::VERSION), false),
+                Ok(Some(version)) => match update::check_and_apply(&state_dir, true).await {
+                    Ok(true) => (format!("updated {version}"), true),
+                    Ok(false) => (format!("current {}", update::VERSION), false),
                     Err(e) => (format!("failed: {e:#}"), false),
-                    Ok(None) => (format!("current {}", update::VERSION), false),
-                    Ok(Some(version)) => match update::check_and_apply(&mut client, &cfg, &state_dir, true).await {
-                        Ok(true) => (format!("updated {version}"), true),
-                        Ok(false) => (format!("current {}", update::VERSION), false),
-                        Err(e) => (format!("failed: {e:#}"), false),
-                    },
                 },
             };
             let _ = std::fs::write(update_result_file(&state_dir), format!("{nonce}\n{answer}"));
@@ -397,10 +391,6 @@ pub async fn run(config_path: PathBuf) -> Result<()> {
         println!("fafnirx is already running for {}", config_path.display());
         return Ok(());
     }
-    // An update or an install leaves an older program behind now and then: only this version may be on the computer.
-    if let Ok(exe) = std::env::current_exe() {
-        tokio::task::spawn_blocking(move || crate::update::purge::announce(&fafnirx_common::plain_path(&exe), false));
-    }
     let result = serve(config_path, cfg, state_dir.clone()).await;
     if let Err(e) = &result {
         StatusFile::new(status_file(&state_dir)).edit(|s| s.fatal = format!("{e:#}"));
@@ -409,7 +399,7 @@ pub async fn run(config_path: PathBuf) -> Result<()> {
 }
 
 async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Result<()> {
-    let token = credentials::load(&cfg.server, &config_path, cfg.token.as_deref())?;
+    let token = credentials::load(&cfg.server, &config_path)?;
     let client = net::client(&cfg, &token, &crate::service::instance::client_id(&state_dir))?;
     let identity = Identity::load(&cfg, &config_path)?;
     let marker = paused_marker(&state_dir);
@@ -438,9 +428,9 @@ async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Res
     spawn_control(hub.clone(), engine.activity.clone(), engine.sent.clone(), state_dir.clone());
     spawn_heartbeat(hub.clone(), client.clone(), config_path.clone(), identity);
     spawn_synced_watch(hub.clone(), client.clone(), config_path.clone());
-    spawn_update_requests(client.clone(), config_path.clone(), state_dir.clone());
+    spawn_update_requests(state_dir.clone());
     requests::spawn(config_path.clone(), state_dir.clone(), hub.wake.clone());
-    spawn_updater(client, config_path.clone(), state_dir.clone());
+    spawn_updater(config_path.clone(), state_dir.clone());
 
     let mut watched: Vec<PathBuf> = Vec::new();
     let mut attached: Vec<crate::synced::Attached> = Vec::new();
@@ -488,7 +478,7 @@ async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Res
         }
         let initial_done = engine.state.initial_sync_done();
         delay = next_delay(&cfg, failing > 0);
-        if !cfg.synced.is_empty() {
+        if cfg.attached_folders().next().is_some() {
             // The master tells a running client when another computer changed a synced folder (`spawn_synced_watch`); this is
             // for when that call is not there (the call failed) or a message was lost.
             delay = delay.min(SYNCED_POLL);
@@ -497,7 +487,7 @@ async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Res
             s.synced = synced_status;
             s.syncing = false;
             s.activity = Activity::default();
-            s.folders = cfg.folders.len() + cfg.synced.len();
+            s.folders = cfg.folders.len();
             s.synced_files = synced_files;
             s.synced_bytes = synced_bytes;
             s.failing = failing as usize;
@@ -514,11 +504,11 @@ const SYNCED_POLL: Duration = Duration::from_secs(60);
 /// Syncs the synced folders attached to this computer, both ways, after the device's own folders. A problem with one
 /// folder is shown and the next one goes on; a master that cannot be reached ends the cycle.
 async fn sync_attached(attached: &mut Vec<crate::synced::Attached>, cfg: &Config, token: &str, state_dir: &Path, daemon: &Hub, result: &mut Result<Report, SyncError>) {
-    attached.retain(|a| cfg.synced.iter().any(|s| a.is(s)));
+    attached.retain(|a| cfg.attached_folders().any(|s| a.is(s)));
     if matches!(result, Err(SyncError::Offline(_) | SyncError::Paused)) {
         return;
     }
-    for s in &cfg.synced {
+    for s in cfg.attached_folders() {
         if attached.iter().any(|a| a.is(s)) {
             continue;
         }

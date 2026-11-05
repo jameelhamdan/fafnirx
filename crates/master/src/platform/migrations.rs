@@ -18,12 +18,10 @@ pub struct Migration {
     pub sql: &'static str,
 }
 
-pub const ALL: &[Migration] = &[Migration { version: 1, name: "schema", sql: include_str!("../../migrations/0001_schema.sql") }];
-
-/// The 3.x releases recorded 19 migrations; this is the way from there to `ALL` (see the file). Remove it with the file.
-const RELEASED_VERSION: i64 = 19;
-const RELEASED_LAST: &str = "pictures_on_demand";
-const UPGRADE_FROM_3: &str = include_str!("../../migrations/upgrade_from_3.sql");
+pub const ALL: &[Migration] = &[
+    Migration { version: 1, name: "schema", sql: include_str!("../../migrations/0001_schema.sql") },
+    Migration { version: 2, name: "folders", sql: include_str!("../../migrations/0002_folders.sql") },
+];
 
 const TRACKING: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (
     version    BIGINT PRIMARY KEY,
@@ -41,19 +39,6 @@ pub fn apply(conn: &mut Client, lock: i64, migrations: &[Migration]) -> Result<(
     let mut tx = conn.transaction()?;
     tx.execute("SELECT pg_advisory_xact_lock($1)", &[&lock])?;
     tx.batch_execute(TRACKING)?;
-    let released = tx.query("SELECT name FROM schema_migrations WHERE version = $1", &[&RELEASED_VERSION])?;
-    let at_release = released.first().is_some_and(|r| r.get::<_, String>(0) == RELEASED_LAST) && tx.query_one("SELECT MAX(version) FROM schema_migrations", &[])?.get::<_, Option<i64>>(0) == Some(RELEASED_VERSION);
-    if at_release {
-        if let Some(first) = migrations.first() {
-            tx.batch_execute(UPGRADE_FROM_3).context("upgrading the database of a 3.x release")?;
-            tx.execute("DELETE FROM schema_migrations", &[])?;
-            tx.execute(
-                "INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES ($1, $2, $3, $4)",
-                &[&first.version, &first.name, &checksum(first.sql), &unix_now()],
-            )?;
-            tracing::info!("database of a 3.x release upgraded");
-        }
-    }
     let applied: HashMap<i64, String> = tx
         .query("SELECT version, checksum FROM schema_migrations", &[])?
         .iter()
@@ -184,5 +169,73 @@ mod tests {
         assert!(format!("{err:#}").contains("newer fafnirx-master"), "{err:#}");
         let err = apply(&mut db.conn, LOCK, &[step(1, "CREATE TABLE t (a TEXT)"), step(2, "SELECT 1")]).unwrap_err();
         assert!(format!("{err:#}").contains("was changed"), "{err:#}");
+    }
+
+    #[test]
+    fn the_master_files_become_master_folders_with_everything_that_pointed_into_them() {
+        let mut db = Scratch::new();
+        apply(&mut db.conn, LOCK, &ALL[..1]).unwrap();
+        db.conn
+            .batch_execute(
+                "INSERT INTO master_folders (prefix, created_at) VALUES ('Music', 1);
+                 INSERT INTO files (device_id, path) VALUES (0, 'Music/a.txt'), (0, 'Music/Rock/b.txt'), (0, 'Scans/2024/c.txt'), (0, 'loose.txt');
+                 INSERT INTO versions (file_id, root_hash, size, mtime, created_at) SELECT id, decode('00', 'hex'), 1, 1, 1 FROM files;
+                 INSERT INTO albums (user_id, folder_device_id, folder_prefix, name, created_at, updated_at)
+                     VALUES (1, 0, 'Music', 'music', 1, 1), (1, 0, 'Music/Rock', 'rock', 1, 1), (1, 0, 'Loose', 'gone', 1, 1);
+                 INSERT INTO sources (user_id, name, kind, config, device_id, folder_prefix, created_at) VALUES (1, 'feed', 'rclone', '{}', 0, 'Music/Feeds/', 1);
+                 INSERT INTO source_items (source_id, remote_id, path, remote_version) SELECT id, 'r', 'x.txt', 'm' FROM sources;
+                 INSERT INTO mirrors (name, remote_type, remote_path, options, scope, created_at)
+                     VALUES ('everything', 'local', '/x', '{}', '', 1), ('all-master', 'local', '/z', '{}', '_master', 1), ('some', 'local', '/y', '{}', '_master/Music/Rock', 1);
+                 INSERT INTO events (device_id, path, action, ts) VALUES (0, 'Music/a.txt', 'add', 1);",
+            )
+            .unwrap();
+        apply(&mut db.conn, LOCK, ALL).unwrap();
+
+        let strings = |db: &mut Scratch, sql: &str| -> Vec<String> { db.conn.query(sql, &[]).unwrap().iter().map(|r| r.get(0)).collect() };
+        assert_eq!(
+            strings(&mut db, "SELECT folder FROM devices WHERE kind = 'master' ORDER BY folder"),
+            ["master:Music", "master:Scans"]
+        );
+        assert_eq!(
+            strings(
+                &mut db,
+                "SELECT d.folder || ' ' || f.path FROM files f JOIN devices d ON d.id = f.device_id ORDER BY 1"
+            ),
+            ["master:Music a.txt", "master:Music Rock/b.txt", "master:Scans 2024/c.txt"],
+            "the files are below their folder, and a file in no folder is no longer recorded"
+        );
+        assert_eq!(
+            strings(
+                &mut db,
+                "SELECT d.folder || ' ' || a.name FROM albums a JOIN devices d ON d.id = a.folder_device_id"
+            ),
+            ["master:Music music"],
+            "an album of a whole folder stays; one of a place inside a folder is no longer possible"
+        );
+        assert_eq!(
+            strings(
+                &mut db,
+                "SELECT d.folder || ' ' || l.name || ' ' || i.path FROM links l JOIN devices d ON d.id = l.folder_id JOIN link_items i ON i.link_id = l.id WHERE l.direction = 'in'"
+            ),
+            ["master:Music feed Feeds/x.txt"],
+            "a source writes into a whole folder: what was below its subfolder is named from the folder"
+        );
+        assert_eq!(
+            strings(
+                &mut db,
+                "SELECT l.name || ' ' || COALESCE(d.folder, '-') FROM links l LEFT JOIN devices d ON d.id = l.folder_id WHERE l.direction = 'out' ORDER BY l.name"
+            ),
+            ["everything -", "some master:Music"],
+            "a mirror of part of a folder holds the folder; one of all the master folders no longer exists"
+        );
+        assert_eq!(strings(&mut db, "SELECT path FROM events"), ["a.txt"]);
+        assert!(db
+            .conn
+            .query_one(
+                "SELECT to_regclass('master_folders') IS NULL AND NOT EXISTS (SELECT 1 FROM devices WHERE id = 0)",
+                &[]
+            )
+            .unwrap()
+            .get::<_, bool>(0));
     }
 }

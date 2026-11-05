@@ -5,9 +5,9 @@ import { createHash, randomBytes } from 'node:crypto'
 import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
-import { CHUNK, CLIENT, ENV, EXE, MASTER, SIGN, check, clientIn, harness, isolate, passedChecks, run, sleep, until } from './lib.mjs'
+import { CHUNK, CLIENT, ENV, EXE, MASTER, check, clientIn, harness, isolate, passedChecks, run, sleep, until } from './lib.mjs'
 
-const h = await harness('fafnirx-e2e-', { binaries: [MASTER, CLIENT, SIGN] })
+const h = await harness('fafnirx-e2e-', { binaries: [MASTER, CLIENT] })
 const { tmp, data, schema, master } = h
 const server = `http://127.0.0.1:${master.grpc}`
 let daemon = null
@@ -19,7 +19,7 @@ const stored = async (device, p) => {
     [device, p],
   )
   if (!row) return null
-  const file = row[1] === null ? path.join(data, 'files', ...(device === '_master' ? [] : ['users']), device, p) : path.join(data, 'versions', String(row[0]), device, p)
+  const file = row[1] === null ? path.join(data, 'files', ...(device.startsWith('master:') ? [device.slice(7)] : ['users', device]), p) : path.join(data, 'versions', String(row[0]), device.replace(/^master:/, ''), p)
   return fs.existsSync(file) ? fs.readFileSync(file) : null
 }
 const known = async (p) => (await schema.rows('SELECT 1 FROM files WHERE path = $1', [p])).length > 0
@@ -278,26 +278,26 @@ try {
   check(await until(() => known('y.txt'), 60), 'a new folder in the folder of a user becomes a device of that user')
   const kind = (await schema.rows("SELECT kind FROM devices WHERE name = 'newdrive'"))[0]?.[0]
   check(kind === 'local', 'and it is a local device')
-  // Master files: whatever is in files/ and not in files/users/ belongs to nobody.
+  // Master folders: a folder in files/ (not files/users/) belongs to nobody.
   fs.mkdirSync(path.join(data, 'files', 'scans'), { recursive: true })
   fs.writeFileSync(path.join(data, 'files', 'scans', 'loose.txt'), 'dropped on the share, for everybody')
-  check(await until(() => known('scans/loose.txt'), 60), 'a file dropped into files/ outside any user folder is picked up')
-  const [master0] = await schema.rows("SELECT d.kind, d.user_id IS NULL, d.folder FROM files f JOIN devices d ON d.id = f.device_id WHERE f.path = 'scans/loose.txt'")
-  check(master0?.[0] === 'master' && master0[1] === true && master0[2] === '_master', 'it is a master file: no user, no device of anyone')
-  check((await schema.rows("SELECT 1 FROM files WHERE device_id = 0 AND path LIKE 'users/%'")).length === 0, 'the folders of the users are never part of the master files')
+  check(await until(() => known('loose.txt'), 60), 'a file dropped into a new folder of files/ outside users/ is picked up')
+  const [master0] = await schema.rows("SELECT d.kind, d.user_id IS NULL, d.folder FROM files f JOIN devices d ON d.id = f.device_id WHERE f.path = 'loose.txt'")
+  check(master0?.[0] === 'master' && master0[1] === true && master0[2] === 'master:scans', 'the folder is a master folder: no user, no device of anyone')
+  check((await schema.rows("SELECT 1 FROM devices WHERE kind = 'master' AND lower(name) LIKE 'users%'")).length === 0, 'the folders of the users are never a master folder')
   const bob = (await admin2.post('/api/users', { name: 'bob', role: 'readonly', password: 'password-1' }))
   check(bob.status === 200, 'a user is added')
   const asBob = await master.admin('bob', 'password-1')
-  check((await asBob.get('/api/files?device=_master&path=scans')).json.entries.some((e) => e.name === 'loose.txt'), 'a read-only user sees the master files')
-  check((await asBob.bytes('/api/files/download?device=_master&path=scans/loose.txt')).body.toString() === 'dropped on the share, for everybody', 'and can download them')
+  check((await asBob.get('/api/files?device=master:scans')).json.entries.some((e) => e.name === 'loose.txt'), 'a read-only user sees the master folders')
+  check((await asBob.bytes('/api/files/download?device=master:scans&path=loose.txt')).body.toString() === 'dropped on the share, for everybody', 'and can download them')
   check((await asBob.get('/api/files?device=admin/photos')).status === 404, 'but not the files of the administrator')
   check((await asBob.post('/api/devices', { name: 'mine' })).status === 403, 'and has no devices of their own')
   // The top level says what each folder is and whether the web app may change it.
   const tops = async (who) => Object.fromEntries((await who.get('/api/files')).json.entries.map((e) => [e.device, [e.device_kind, e.writable]]))
   const adminTop = await tops(admin2)
-  check(adminTop._master?.join() === 'master,true' && adminTop['admin/photos']?.join() === 'local,true', 'the master files and a local folder are changeable')
+  check(adminTop['master:scans']?.join() === 'master,true' && adminTop['admin/photos']?.join() === 'local,true', 'a master folder and a local folder are changeable')
   check(adminTop['admin/laptop']?.join() === 'device,false', 'what a computer sends is read-only in the web app')
-  check((await tops(asBob))._master?.join() === 'master,false', 'a read-only user cannot change the master files')
+  check((await tops(asBob))['master:scans']?.join() === 'master,false', 'a read-only user cannot change a master folder')
   // A scan can be asked for, by an administrator only.
   const oldFile = path.join(data, 'files', 'scans', 'asked-for.txt')
   fs.writeFileSync(oldFile, 'put there by hand')
@@ -305,34 +305,17 @@ try {
   check((await asBob.post('/api/files/rescan')).status === 403, 'only an administrator can ask for a scan')
   const asked = await admin2.post('/api/files/rescan')
   check(asked.status === 200 && typeof asked.json.started === 'boolean', 'an administrator can ask for a scan')
-  check(await until(() => known('scans/asked-for.txt'), 60), 'and the file put there by hand is recorded')
+  check(await until(() => known('asked-for.txt'), 60), 'and the file put there by hand is recorded')
   fs.unlinkSync(path.join(data, 'files', 'users', 'admin', 'photos', 'dropped', 'x.txt'))
   const removed = await until(async () => (await schema.rows("SELECT deleted_at FROM files WHERE path = 'dropped/x.txt'"))[0]?.[0] != null, 60)
   check(removed, 'a file removed from files/<name>/ is marked deleted')
 
-  // --- signed update -----------------------------------------------------------------------------------------------------------------
-  const key = path.join(tmp, 'update.key')
-  const pub = /update_public_key = "([^"]+)"/.exec(run(SIGN, ['keygen', '--out', key]).stdout)[1]
-  const newToken = (await admin2.post('/api/devices/admin%2Flaptop/token')).json.token
   const copy = path.join(tmp, `fafnirx-copy${EXE}`)
-  fs.copyFileSync(CLIENT, copy)
-  const before = fs.readFileSync(copy)
-  fs.writeFileSync(cfg, `update_public_key = "${pub}"\n${fs.readFileSync(cfg, 'utf8')}`)
   const platform = `${{ win32: 'windows', darwin: 'macos', linux: 'linux' }[process.platform]}-x86_64`
-  run(SIGN, ['publish', '--key', key, '--platform', platform, '--version', '99.0.0', '--bin', SIGN, '--out', path.join(data, 'updates')])
-  run(CLIENT, ['--config', cfg, 'enroll', '--no-service', '--server', server], { input: `${newToken}\n` })
-  const sig = path.join(data, 'updates', platform, 'signature')
-  const good = fs.readFileSync(sig, 'utf8')
-  fs.writeFileSync(sig, good.slice(0, 10) + (good[10] === 'A' ? 'B' : 'A') + good.slice(11))
-  const refused = run(copy, ['--config', cfg, 'update'], { ok: false })
-  check(refused.code !== 0 && fs.readFileSync(copy).equals(before), 'a tampered update is refused and the binary is untouched')
-  fs.writeFileSync(sig, good)
-  const applied = run(copy, ['--config', cfg, 'update'], { ok: false })
-  check(applied.code === 0 && fs.readFileSync(copy).equals(fs.readFileSync(SIGN)), `a signed update replaces the executable (${applied.stdout.trim()})`)
 
   // --- update from the project's releases ---------------------------------------------------------------------------------------------
   // A stand-in for GitHub: the API answer, the executable and its checksum, on a local port (FAFNIRX_UPDATE_URL points the client at it).
-  const newBinary = fs.readFileSync(SIGN)
+  const newBinary = fs.readFileSync(MASTER) // any other executable will do
   const name = `fafnirx-99.0.0-${platform}${EXE}`
   const sum = createHash('sha256').update(newBinary).digest('hex')
   let wrongSum = true
@@ -346,7 +329,6 @@ try {
     else { res.statusCode = 404; res.end() }
   })
   await new Promise((ok) => releases.listen(0, '127.0.0.1', ok))
-  fs.writeFileSync(cfg, fs.readFileSync(cfg, 'utf8').replace(/update_public_key = .*\n/, ''))
   fs.copyFileSync(CLIENT, copy)
   const env = { FAFNIRX_UPDATE_URL: `http://127.0.0.1:${releases.address().port}/latest` }
   // Not `run`: that blocks this process, which has to answer the client's requests meanwhile.

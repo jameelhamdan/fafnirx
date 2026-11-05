@@ -34,10 +34,10 @@ flowchart LR
   re-sending; a delete as "marked deleted", recoverable until retention ends). A mass deletion is held back by the
   client for hours ([delete guard](usage.md#the-delete-guard)).
 - **The master changes only its own files**, never a file on a device. Files a device or source sent cannot be edited or
-  renamed on the master; only folders and master files can.
+  renamed on the master; only folders and master folders can.
 - **Deleting in the web app hides first.** The file goes to the Trash; the device is not asked for it again. In a
   synced folder, computers delete it too. It is erased when retention ends, or when you choose **Delete forever** in the Trash.
-- **Roles.** Administrator: everything. Normal: master files and own folders, read and write. Read only: reads master files.
+- **Roles.** Administrator: everything. Normal: master folders and own folders, read and write. Read only: reads master folders.
 
 ## Not in scope
 
@@ -51,9 +51,8 @@ flowchart LR
 |---|---|
 | `fafnirx` | Client: watcher, resumable upload, offline queue, tray, self-update. Android: [fafnirx-android](https://github.com/jameelhamdan/fafnirx-android) (separate repository) |
 | `fafnirx-master` | Device API, web API and app, users, file store, background work |
-| `fafnirx-fetch` | Optional [module](modules.md): reads web sources (addresses and feeds) and writes the files for the master to commit ([fetch](fetch.md)). An add-on container. Other kinds of source: [plugins](plugins.md) |
+| `fafnirx-fetch` | Optional [module](modules.md): reads web sources (addresses and feeds) and writes the files for the master to commit ([fetch](sources.md#web-files-and-feeds)). An add-on container. Other kinds of source: [plugins](plugins.md) |
 | `fafnirx-video` | Optional [module](modules.md): video playback in the web app, video details and poster frames ([video](video.md)). An add-on container, so the master stays free of ffmpeg |
-| `fafnirx-sign` | Optional: sign your own client builds |
 | PostgreSQL | All metadata |
 | rclone | Mirror uploads and storage sources (in the Docker image) |
 

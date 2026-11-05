@@ -20,7 +20,6 @@ export const EXE = process.platform === 'win32' ? '.exe' : ''
 export const BIN = process.env.FAFNIRX_BIN_DIR ?? path.join(ROOT, 'target', 'debug')
 export const MASTER = path.join(BIN, `fafnirx-master${EXE}`)
 export const CLIENT = path.join(BIN, `fafnirx${EXE}`)
-export const SIGN = path.join(BIN, `fafnirx-sign${EXE}`)
 export const CHUNK = 4 * 1024 * 1024
 export const ENV = { ...process.env, FAFNIRX_TOKEN_STORE: 'file', RUST_LOG: 'info' }
 

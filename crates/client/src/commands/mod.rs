@@ -1,13 +1,15 @@
 //! The one-shot CLI commands: everything `fafnirx <command>` does except running the daemon.
 
 mod folder;
+mod install;
 mod status;
 
-pub use folder::{create_folder, folder_add, keep_held, list_available, resolve_waiting, set_mode, sync_folder, unsync_folder};
+pub use folder::{create_folder, folder_add, keep_held, list_available, resolve_waiting, set_mode, sync_folder};
+pub use install::{install, uninstall, Install};
 pub use status::{release_deletes, status};
 
 use crate::config::credentials;
-use crate::config::{self, control_dir, Config};
+use crate::config::{self, control_dir, Config, Mode, NewFolder, Target};
 use crate::sync::{state, throttle};
 use crate::{daemon, net, service, sync, update};
 use anyhow::{bail, Context, Result};
@@ -16,22 +18,24 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// Stops syncing a folder of this computer, collected or attached to a folder of the master. Nothing is deleted.
 pub fn remove_folder(config_path: &Path, name: &str) -> Result<()> {
-    config::remove_folder_from_file(config_path, name)?;
-    println!("no longer collecting \"{name}\"; what is already on the master stays there");
+    let full = config::remove_folder_from_file(config_path, name)?;
+    println!("\"{full}\" is no longer synced here; the files stay in the folder and on the master");
     Ok(())
 }
 
 pub fn list_folders(config_path: &Path) -> Result<()> {
     let cfg = Config::load(config_path)?;
-    if cfg.folders.is_empty() && cfg.synced.is_empty() {
+    if cfg.folders.is_empty() {
         println!("no folders yet: fafnirx folder add <path>");
     }
     for f in &cfg.folders {
-        println!("{}\t{}", f.name, f.path.display());
-    }
-    for s in &cfg.synced {
-        println!("{}\t{}\t(synced {})", s.name, s.path.display(), s.mode.name());
+        if f.is_computer() {
+            println!("{}\t{}", f.name, f.path.display());
+        } else {
+            println!("{}\t{}\t(synced {})", f.name, f.path.display(), f.mode.name());
+        }
     }
     Ok(())
 }
@@ -51,7 +55,8 @@ pub fn read_token() -> Result<String> {
     Ok(token.trim().to_string())
 }
 
-pub async fn enroll(config_path: PathBuf, server: String, token: String, start_service: bool) -> Result<()> {
+/// Connects this computer to the master: writes the config, keeps the token, and says hello. `fafnirx install` calls it.
+pub async fn enroll(config_path: PathBuf, server: String, token: String) -> Result<()> {
     let token = token.trim().to_string();
     if token.is_empty() {
         bail!("empty token");
@@ -60,8 +65,7 @@ pub async fn enroll(config_path: PathBuf, server: String, token: String, start_s
     service::prepare_dirs(&config_path)?;
     // Re-enrolling keeps folders and settings; a config that cannot be read is an error, not something to overwrite.
     let mut cfg = if config_path.exists() { Config::load(&config_path)? } else { Config::new(server.clone()) };
-    cfg.server = server.trim_end_matches('/').to_string();
-    cfg.token = None;
+    cfg.server = config::normalize_server(&server);
     cfg.validate()?;
     cfg.save(&config_path)?;
     if cfg.is_plain_over_internet() {
@@ -80,14 +84,6 @@ pub async fn enroll(config_path: PathBuf, server: String, token: String, start_s
         Ok(name) => println!("connected to {} as device \"{name}\"", cfg.server),
         Err(e) => println!("warning: could not reach {} yet: {e:#}", cfg.server),
     }
-    if start_service {
-        // Enrolling is the last step of setting a device up, so it also makes the client run from now on.
-        match service::install(&config_path, false) {
-            Ok(()) => println!("the client runs in the background now and starts again with the computer"),
-            Err(e) => println!("warning: could not start the client as a service ({e:#}); run `fafnirx install-service` to retry"),
-        }
-    }
-    println!("next: fafnirx folder add <path>; it collects them as soon as they are added");
     Ok(())
 }
 
@@ -110,7 +106,7 @@ pub fn add_folders(config_path: &Path, paths: &[PathBuf], name: Option<&str>) ->
         if let Some(warning) = crate::service::disk_access::warning_for(config_path, path) {
             eprintln!("warning: {warning}");
         }
-        match config::add_folder_to_file(config_path, path, name) {
+        match config::add_folder_to_file(config_path, NewFolder { dir: path, target: Target::Computer, name, id: None, mode: Mode::Up }) {
             Ok(f) => {
                 println!("collecting {} as \"{}\"", f.path.display(), f.name);
                 wake_client(config_path);
@@ -138,7 +134,7 @@ struct Connection {
 fn connect(config_path: &Path) -> Result<Connection> {
     let cfg = Config::load(config_path)?;
     let state_dir = cfg.state_dir(config_path);
-    let token = credentials::load(&cfg.server, config_path, cfg.token.as_deref())?;
+    let token = credentials::load(&cfg.server, config_path)?;
     let client = net::client(&cfg, &token, &crate::service::instance::client_id(&state_dir))?;
     Ok(Connection { cfg, state_dir, token, client })
 }
@@ -173,7 +169,7 @@ pub async fn sync_once(config_path: PathBuf) -> Result<()> {
         Ok(r) => r,
         Err(e) => bail!("sync failed: {e}"),
     };
-    for synced in &cfg.synced {
+    for synced in cfg.attached_folders() {
         let mut attached = crate::synced::Attached::open(&cfg, &token, &dir, synced, Arc::new(Mutex::new(Vec::new())))?;
         match attached.cycle(&cfg).await {
             Ok(r) => report.add(&r),
@@ -190,9 +186,7 @@ pub async fn update_now(config_path: PathBuf, check_only: bool) -> Result<()> {
     let cfg = Config::load(&config_path)?;
     let dir = cfg.state_dir(&config_path);
     if check_only {
-        // Only builds you signed come from the master, and asking for them takes its token; the releases on GitHub do not.
-        let mut client = if cfg.update_public_key.is_some() { Some(connect(&config_path)?.client) } else { None };
-        match update::check(client.as_mut(), &cfg).await? {
+        match update::check().await? {
             Some(version) => println!("available {version}"),
             None => println!("current {}", update::VERSION),
         }
@@ -201,8 +195,7 @@ pub async fn update_now(config_path: PathBuf, check_only: bool) -> Result<()> {
     if config::is_system_config(&config_path) && service::installed() {
         return update_service(&dir).await;
     }
-    let Connection { mut client, .. } = connect(&config_path)?;
-    if update::check_and_apply(&mut client, &cfg, &dir, true).await? {
+    if update::check_and_apply(&dir, true).await? {
         println!("updated; starting the client again");
         service::restart_background(&config_path, &dir)?;
     } else {

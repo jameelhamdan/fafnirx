@@ -9,28 +9,33 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// A folder that is only uploaded (a backup): the client never writes to it.
+/// Where a folder of this computer goes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Target {
+    /// This computer's own namespace on the master: the folder is only uploaded (a backup), the client never writes to it.
+    #[default]
+    Computer,
+    /// A folder on the master: one of the user's, another user's shared with them, or `master:<path>`. Changes go the way its
+    /// mode says. It is not also uploaded to this computer's namespace.
+    Folder,
+}
+
+/// A local folder and where it goes. Every folder is the same thing: the target and the mode are the only differences.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Folder {
     pub path: PathBuf,
-    /// Top-level directory of this folder inside the device namespace.
+    /// With the target `computer`: the top-level directory of this folder inside the computer's namespace. With `folder`: the
+    /// folder on the master, a synced folder of the user, `<owner>/<name>`, or `master:<path>`.
     pub name: String,
-}
-
-/// A local folder attached to a folder on the master that is not this computer's own namespace: a synced folder, one of the
-/// user's folders, or a master folder (`master:<path>`). Changes go both ways unless the mode says otherwise. It is not also
-/// uploaded to this device.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SyncedFolder {
-    /// The folder on the master: the name of a synced folder of the user, `<owner>/<name>`, or `master:<path>`.
-    pub name: String,
-    pub path: PathBuf,
-    /// The stable address of that folder, which keeps working when it is renamed on the master. Set when attaching.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub target: Target,
+    /// The stable address of the folder on the master, which keeps working when it is renamed there. Set when attaching.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    /// Which way it goes, and what happens to a file changed here and on the master (or changed here and deleted there).
+    /// Which way it goes, and what happens to a file changed here and on the master (or changed here and deleted there). A
+    /// folder that goes to the computer's namespace only ever goes up.
     #[serde(default, skip_serializing_if = "is_default")]
     pub mode: Mode,
     /// With `ask`: how long a file waits for an answer; after that both versions are kept. 0: for ever.
@@ -38,7 +43,23 @@ pub struct SyncedFolder {
     pub ask_timeout_hours: u64,
 }
 
-impl SyncedFolder {
+impl Folder {
+    /// A folder uploaded to this computer's namespace.
+    pub fn computer(path: PathBuf, name: String) -> Self {
+        Self {
+            path,
+            name,
+            target: Target::Computer,
+            id: None,
+            mode: Mode::Up,
+            ask_timeout_hours: default_ask_timeout(),
+        }
+    }
+
+    pub fn is_computer(&self) -> bool {
+        self.target == Target::Computer
+    }
+
     /// What the master is asked for: the stable id when there is one, else the name.
     pub fn key(&self) -> &str {
         self.id.as_deref().unwrap_or(&self.name)
@@ -55,8 +76,6 @@ pub enum Mode {
     Both,
     /// What changes here goes to the master; nothing comes back, and nothing is deleted here.
     Up,
-    /// Both ways. A file changed on both sides stays this computer's, and is sent (the master keeps the old one in its history).
-    Mine,
     /// Both ways. A file changed on both sides is kept in both versions, this computer's under `name (conflict <computer> <date>).ext`.
     Keep,
     /// Both ways. A person is asked about a file changed on both sides (a question on screen); until then nothing changes.
@@ -64,13 +83,12 @@ pub enum Mode {
 }
 
 impl Mode {
-    pub const ALL: [Mode; 5] = [Mode::Both, Mode::Up, Mode::Mine, Mode::Keep, Mode::Ask];
+    pub const ALL: [Mode; 4] = [Mode::Both, Mode::Up, Mode::Keep, Mode::Ask];
 
     pub fn name(self) -> &'static str {
         match self {
             Mode::Both => "both",
             Mode::Up => "up",
-            Mode::Mine => "mine",
             Mode::Keep => "keep",
             Mode::Ask => "ask",
         }
@@ -123,16 +141,10 @@ fn is_default<T: Default + PartialEq>(v: &T) -> bool {
 pub struct Config {
     /// `http://host:7443` on a trusted network, `https://...` through a TLS proxy such as a Cloudflare tunnel.
     pub server: String,
-    /// Device token. Normally absent: `enroll` keeps it in the OS keychain.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token: Option<String>,
     /// The client looks for new releases now and then and installs them. Off: it stays on its version until `fafnirx update`
     /// is run by hand.
     #[serde(default = "yes")]
     pub auto_update: bool,
-    /// Base64 ed25519 public key. With it the client updates from the master, to builds signed with the matching key.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub update_public_key: Option<String>,
     /// Upload limit in KiB/s, 0 for unlimited.
     #[serde(default)]
     pub bandwidth_limit_kbps: u64,
@@ -150,10 +162,8 @@ pub struct Config {
     /// Web UI of the master, opened from the tray menu. Default: port 8080 on the server's host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_url: Option<String>,
-    #[serde(default, rename = "folders")]
+    #[serde(default)]
     pub folders: Vec<Folder>,
-    #[serde(default, rename = "synced", skip_serializing_if = "Vec::is_empty")]
-    pub synced: Vec<SyncedFolder>,
 }
 
 fn yes() -> bool {
@@ -174,9 +184,7 @@ impl Config {
     pub fn new(server: impl Into<String>) -> Self {
         Self {
             server: server.into(),
-            token: None,
             auto_update: true,
-            update_public_key: None,
             bandwidth_limit_kbps: 0,
             watch: true,
             scan_interval_secs: default_scan(),
@@ -184,13 +192,15 @@ impl Config {
             state_dir: None,
             web_url: None,
             folders: Vec::new(),
-            synced: Vec::new(),
         }
     }
 
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
-        let cfg: Config = toml::from_str(&text).with_context(|| format!("parse config {}", path.display()))?;
+        let mut cfg: Config = toml::from_str(&text).with_context(|| format!("parse config {}", path.display()))?;
+        for f in cfg.folders.iter_mut().filter(|f| f.is_computer()) {
+            f.mode = Mode::Up;
+        }
         cfg.validate()?;
         Ok(cfg)
     }
@@ -206,49 +216,57 @@ impl Config {
         if self.host().is_none() {
             bail!("server must be an http:// or https:// URL");
         }
-        let mut names = std::collections::HashSet::new();
+        let mut computer = std::collections::HashSet::new();
+        let mut attached = std::collections::HashSet::new();
         for f in &self.folders {
-            if f.name.is_empty() || f.name.contains(['/', '\\']) || f.name == "." || f.name == ".." {
-                bail!("folder name {:?} must be a single path component", f.name);
+            if f.is_computer() {
+                if f.name.is_empty() || f.name.contains(['/', '\\']) || f.name == "." || f.name == ".." {
+                    bail!("folder name {:?} must be a single path component", f.name);
+                }
+                if !computer.insert(fafnirx_common::fold_path(&f.name)) {
+                    bail!(
+                        "two folders are called {:?}: the master keeps them side by side under this name, and names that differ \
+                         only in case or accents are the same there. Give one a different name, for example {:?}",
+                        f.name,
+                        format!("{}-2", f.name)
+                    );
+                }
+                continue;
             }
-            if !names.insert(fafnirx_common::fold_path(&f.name)) {
-                bail!(
-                    "two folders are called {:?}: the master keeps them side by side under this name, and names that differ \
-                     only in case or accents are the same there. Give one a different name, for example {:?}",
-                    f.name,
-                    format!("{}-2", f.name)
-                );
-            }
-        }
-        let mut synced = std::collections::HashSet::new();
-        for s in &self.synced {
-            if let Some(path) = s.name.strip_prefix(MASTER_KEY) {
+            if let Some(path) = f.name.strip_prefix(MASTER_KEY) {
                 if fafnirx_common::clean_remote_path(path).is_err() {
-                    bail!("master folder name {:?} must be `master:` and a path in the master files", s.name);
+                    bail!("master folder name {:?} must be `master:` and a path in the master files", f.name);
                 }
             } else {
                 // The name of one's own folder, or `<owner>/<name>` for one another user synced.
-                let (owner, name) = s.name.split_once('/').unwrap_or(("a", &s.name));
+                let (owner, name) = f.name.split_once('/').unwrap_or(("a", &f.name));
                 if !fafnirx_common::valid_device_name(owner) || !fafnirx_common::valid_device_name(name) {
-                    bail!("synced folder name {:?} must be lowercase letters, digits, '.', '_' and '-'", s.name);
+                    bail!("synced folder name {:?} must be lowercase letters, digits, '.', '_' and '-'", f.name);
                 }
             }
-            if !synced.insert(s.name.as_str()) {
+            if !attached.insert(f.name.as_str()) {
                 bail!(
-                    "the synced folder {:?} is attached twice; a synced folder is attached to one folder of a computer",
-                    s.name
+                    "the folder {:?} is attached twice; a folder of the master is attached to one folder of a computer",
+                    f.name
                 );
             }
         }
         Ok(())
     }
 
+    /// The folders uploaded to this computer's own namespace.
+    pub fn computer_folders(&self) -> impl Iterator<Item = &Folder> {
+        self.folders.iter().filter(|f| f.is_computer())
+    }
+
+    /// The folders attached to a folder of the master.
+    pub fn attached_folders(&self) -> impl Iterator<Item = &Folder> {
+        self.folders.iter().filter(|f| !f.is_computer())
+    }
+
     /// Every local directory the client collects or syncs.
     pub fn paths(&self) -> impl Iterator<Item = (&str, &Path)> {
-        self.folders
-            .iter()
-            .map(|f| (f.name.as_str(), f.path.as_path()))
-            .chain(self.synced.iter().map(|s| (s.name.as_str(), s.path.as_path())))
+        self.folders.iter().map(|f| (f.name.as_str(), f.path.as_path()))
     }
 
     /// The host of the server URL, if it is an http(s) URL.
@@ -288,6 +306,24 @@ fn is_private_host(host: &str) -> bool {
     !host.contains('.') || [".local", ".lan", ".internal", ".home.arpa"].iter().any(|s| host.ends_with(s))
 }
 
+/// The address of the master as a person types it (`nas.lan`, `nas.lan:7443`, `https://fafnirx.example.com`) as the URL the client
+/// uses: without a scheme it is plain http, for a trusted network, and without a port the one the devices use.
+pub fn normalize_server(input: &str) -> String {
+    let s = input.trim();
+    if s.contains("://") {
+        return s.trim_end_matches('/').to_string();
+    }
+    let s = s.trim_end_matches('/');
+    let has_port = s
+        .rsplit_once(':')
+        .is_some_and(|(_, port)| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()));
+    if has_port {
+        format!("http://{s}")
+    } else {
+        format!("http://{s}:7443")
+    }
+}
+
 /// Writes through a temporary file so a reader (the daemon) never sees half a config.
 fn write_atomic(path: &Path, text: &str) -> Result<()> {
     fafnirx_common::write_atomic(path, text).with_context(|| format!("write {}", path.display()))
@@ -305,7 +341,7 @@ fn edit_file<T>(path: &Path, change: impl FnOnce(&mut toml_edit::DocumentMut) ->
 
 /// The `[[key]]` tables of the document, made when there are none.
 fn tables<'a>(doc: &'a mut toml_edit::DocumentMut, key: &str) -> Result<&'a mut toml_edit::ArrayOfTables> {
-    // `enroll` writes an empty `folders = []`; that has to become a list of tables first.
+    // `install` writes an empty `folders = []`; that has to become a list of tables first.
     if doc.get(key).and_then(|f| f.as_array()).is_some_and(|a| a.is_empty()) {
         doc.remove(key);
     }
@@ -331,20 +367,36 @@ pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// Adds a folder to the config file, keeping everything else in the file (comments included) as it is.
-/// The name defaults to the directory's own name, made unique. Returns the folder as stored.
-pub fn add_folder_to_file(config_path: &Path, dir: &Path, name: Option<&str>) -> Result<Folder> {
-    let cfg = Config::load(config_path).context("run `fafnirx enroll` first")?;
-    let path = free_directory(&cfg, dir)?;
-    let name = match name {
+/// What to add to the config: the folder, where it goes, and for a folder of the master its stable id and mode.
+pub struct NewFolder<'a> {
+    pub dir: &'a Path,
+    pub target: Target,
+    /// With the target `computer`: the name in the computer's namespace (default: the directory's own, made unique). With
+    /// `folder`: the folder of the master.
+    pub name: Option<&'a str>,
+    pub id: Option<&'a str>,
+    pub mode: Mode,
+}
+
+/// Adds a folder to the config file, keeping everything else in the file (comments included) as it is. A folder of the master is
+/// made on this computer if it is not there yet: the usual way to set up another computer is to attach a new, empty folder and let
+/// it fill. Returns the folder as stored.
+pub fn add_folder_to_file(config_path: &Path, new: NewFolder) -> Result<Folder> {
+    let cfg = Config::load(config_path).context("run `fafnirx install --server <address>` first")?;
+    let computer = new.target == Target::Computer;
+    if !computer {
+        std::fs::create_dir_all(new.dir).with_context(|| format!("cannot make {}", new.dir.display()))?;
+    }
+    let path = free_directory(&cfg, new.dir)?;
+    let name = match new.name {
         Some(n) => n.to_string(),
-        None => {
+        None if computer => {
             let base = path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .filter(|n| !n.is_empty())
                 .context("this folder has no name of its own; choose one with --name")?;
-            let taken: std::collections::HashSet<String> = cfg.folders.iter().map(|f| fafnirx_common::fold_path(&f.name)).collect();
+            let taken: std::collections::HashSet<String> = cfg.computer_folders().map(|f| fafnirx_common::fold_path(&f.name)).collect();
             let mut candidate = base.clone();
             let mut n = 2;
             while taken.contains(&fafnirx_common::fold_path(&candidate)) {
@@ -353,8 +405,16 @@ pub fn add_folder_to_file(config_path: &Path, dir: &Path, name: Option<&str>) ->
             }
             candidate
         }
+        None => bail!("name the folder of the master to attach"),
     };
-    let folder = Folder { path, name };
+    let folder = Folder {
+        path,
+        name,
+        target: new.target,
+        id: new.id.map(str::to_string),
+        mode: if computer { Mode::Up } else { new.mode },
+        ask_timeout_hours: default_ask_timeout(),
+    };
     let mut check = cfg;
     check.folders.push(folder.clone());
     check.validate()?;
@@ -363,6 +423,15 @@ pub fn add_folder_to_file(config_path: &Path, dir: &Path, name: Option<&str>) ->
         let mut table = toml_edit::Table::new();
         table["path"] = toml_edit::value(folder.path.to_string_lossy().into_owned());
         table["name"] = toml_edit::value(folder.name.clone());
+        if !computer {
+            table["target"] = toml_edit::value("folder");
+        }
+        if let Some(id) = &folder.id {
+            table["id"] = toml_edit::value(id.clone());
+        }
+        if !computer && folder.mode != Mode::default() {
+            table["mode"] = toml_edit::value(folder.mode.name());
+        }
         tables(doc, "folders")?.push(table);
         Ok(())
     })?;
@@ -387,45 +456,13 @@ fn free_directory(cfg: &Config, dir: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Attaches a local folder to the synced folder `name`, keeping everything else in the file as it is. The folder is made if
-/// it is not there yet: the usual way to set up another computer is to attach a new, empty folder and let it fill.
-pub fn attach_synced_to_file(config_path: &Path, name: &str, id: Option<&str>, dir: &Path, mode: Mode) -> Result<SyncedFolder> {
-    let cfg = Config::load(config_path).context("run `fafnirx enroll` first")?;
-    std::fs::create_dir_all(dir).with_context(|| format!("cannot make {}", dir.display()))?;
-    let synced = SyncedFolder {
-        name: name.to_string(),
-        path: free_directory(&cfg, dir)?,
-        id: id.map(str::to_string),
-        mode,
-        ask_timeout_hours: default_ask_timeout(),
-    };
-    let mut check = cfg;
-    check.synced.push(synced.clone());
-    check.validate()?;
-
-    edit_file(config_path, |doc| {
-        let mut table = toml_edit::Table::new();
-        table["name"] = toml_edit::value(synced.name.clone());
-        table["path"] = toml_edit::value(synced.path.to_string_lossy().into_owned());
-        if let Some(id) = &synced.id {
-            table["id"] = toml_edit::value(id.clone());
-        }
-        if mode != Mode::default() {
-            table["mode"] = toml_edit::value(mode.name());
-        }
-        tables(doc, "synced")?.push(table);
-        Ok(())
-    })?;
-    Ok(synced)
-}
-
 /// Sets the mode of a folder on the master (which way it goes, and what happens to a file changed on both sides), and with `Ask` how
 /// long a file waits for an answer. Returns the name of the folder in full.
-pub fn set_synced_mode_in_file(config_path: &Path, name: &str, mode: Mode, ask_timeout_hours: Option<u64>) -> Result<String> {
-    let full = Config::load(config_path)?.synced_named(name)?.name.clone();
+pub fn set_mode_in_file(config_path: &Path, name: &str, mode: Mode, ask_timeout_hours: Option<u64>) -> Result<String> {
+    let full = Config::load(config_path)?.attached_named(name)?.name.clone();
     edit_file(config_path, |doc| {
-        let Some(list) = doc.get_mut("synced").and_then(|s| s.as_array_of_tables_mut()) else { return Ok(()) };
-        for table in list.iter_mut().filter(|t| is_named(t, &full)) {
+        let Some(list) = doc.get_mut("folders").and_then(|s| s.as_array_of_tables_mut()) else { return Ok(()) };
+        for table in list.iter_mut().filter(|t| is_attached(t, &full)) {
             if mode == Mode::default() {
                 table.remove("mode");
             } else {
@@ -450,8 +487,7 @@ pub fn set_synced_mode_in_file(config_path: &Path, name: &str, mode: Mode, ask_t
 pub fn follow_renames_in_file(config_path: &Path, listed: &[(String, String)]) -> Result<Vec<(String, String)>> {
     let cfg = Config::load(config_path)?;
     let changes: Vec<(String, String)> = cfg
-        .synced
-        .iter()
+        .attached_folders()
         .filter_map(|s| {
             let id = s.id.as_deref()?;
             let (name, _) = listed.iter().find(|(_, listed_id)| listed_id == id)?;
@@ -462,9 +498,9 @@ pub fn follow_renames_in_file(config_path: &Path, listed: &[(String, String)]) -
         return Ok(changes);
     }
     edit_file(config_path, |doc| {
-        let Some(list) = doc.get_mut("synced").and_then(|s| s.as_array_of_tables_mut()) else { return Ok(()) };
+        let Some(list) = doc.get_mut("folders").and_then(|s| s.as_array_of_tables_mut()) else { return Ok(()) };
         for (old, new) in &changes {
-            for table in list.iter_mut().filter(|t| is_named(t, old)) {
+            for table in list.iter_mut().filter(|t| is_attached(t, old)) {
                 table["name"] = toml_edit::value(new.clone());
             }
         }
@@ -473,15 +509,15 @@ pub fn follow_renames_in_file(config_path: &Path, listed: &[(String, String)]) -
     Ok(changes)
 }
 
-/// Whether `name`, as a person types it, means the synced folder `full` (`<owner>/<name>`): in full, or by its name alone.
+/// Whether `name`, as a person types it, means the folder of the master `full` (`<owner>/<name>`): in full, or by its name alone.
 pub fn names_synced(full: &str, name: &str) -> bool {
     full == name || (!name.contains('/') && !full.starts_with(MASTER_KEY) && full.rsplit('/').next() == Some(name))
 }
 
 impl Config {
-    /// The synced folder a person means by `name`: in full, or by its name alone when only one has it.
-    pub fn synced_named(&self, name: &str) -> Result<&SyncedFolder> {
-        let found: Vec<&SyncedFolder> = self.synced.iter().filter(|s| names_synced(&s.name, name)).collect();
+    /// The folder of the master a person means by `name`: in full, or by its name alone when only one has it.
+    pub fn attached_named(&self, name: &str) -> Result<&Folder> {
+        let found: Vec<&Folder> = self.attached_folders().filter(|s| names_synced(&s.name, name)).collect();
         match found.as_slice() {
             [one] => Ok(one),
             [] => bail!("no synced folder named \"{name}\" is attached"),
@@ -493,42 +529,47 @@ impl Config {
     }
 }
 
-/// Detaches a synced folder from this computer. The files stay in the local folder and on the master. It can be named in full
-/// (`<owner>/<name>`) or, when that is not ambiguous, by its name alone. Returns the name in full.
-pub fn detach_synced_from_file(config_path: &Path, name: &str) -> Result<String> {
-    let full = Config::load(config_path)?.synced_named(name)?.name.clone();
-    edit_file(config_path, |doc| {
-        if let Some(list) = doc.get_mut("synced").and_then(|s| s.as_array_of_tables_mut()) {
-            list.retain(|t| !is_named(t, &full));
-            if list.is_empty() {
-                doc.remove("synced");
-            }
-        }
-        Ok(())
-    })?;
-    Ok(full)
+/// Whether a `[[folders]]` table is the folder of the master called `name`.
+fn is_attached(table: &toml_edit::Table, name: &str) -> bool {
+    is_named(table, name) && table.get("target").and_then(|t| t.as_str()) == Some("folder")
 }
 
-/// Removes a folder from the config file. Data already uploaded stays on the master.
-pub fn remove_folder_from_file(config_path: &Path, name: &str) -> Result<()> {
-    Config::load(config_path)?;
+/// Stops syncing a folder on this computer: a folder of the master (named in full, or by its name alone when that is not
+/// ambiguous) or one collected here. The files stay in the local folder and on the master. Returns the name in full.
+pub fn remove_folder_from_file(config_path: &Path, name: &str) -> Result<String> {
+    let cfg = Config::load(config_path)?;
+    let attached = cfg.attached_folders().any(|s| names_synced(&s.name, name));
+    let full = if attached { cfg.attached_named(name)?.name.clone() } else { name.to_string() };
     edit_file(config_path, |doc| {
         let folders = doc
             .get_mut("folders")
             .and_then(|f| f.as_array_of_tables_mut())
             .with_context(|| format!("no folder named \"{name}\""))?;
         let before = folders.len();
-        folders.retain(|t| !is_named(t, name));
+        folders.retain(|t| !(is_named(t, &full) && (t.get("target").is_some() == attached)));
         if folders.len() == before {
             bail!("no folder named \"{name}\"");
         }
         Ok(())
-    })
+    })?;
+    Ok(full)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn add(cfg: &Path, dir: &Path, name: Option<&str>) -> Result<Folder> {
+        add_folder_to_file(cfg, NewFolder { dir, target: Target::Computer, name, id: None, mode: Mode::Both })
+    }
+
+    fn attach(cfg: &Path, name: &str, id: Option<&str>, dir: &Path, mode: Mode) -> Result<Folder> {
+        add_folder_to_file(cfg, NewFolder { dir, target: Target::Folder, name: Some(name), id, mode })
+    }
+
+    fn attached(cfg: &Config) -> Vec<Folder> {
+        cfg.attached_folders().cloned().collect()
+    }
 
     #[test]
     fn roundtrip_and_validation() {
@@ -546,7 +587,6 @@ name = "docs"
         .unwrap();
         let cfg = Config::load(&path).unwrap();
         assert!(cfg.watch && cfg.scan_interval_secs == 3600 && cfg.bandwidth_limit_kbps == 0);
-        assert!(cfg.token.is_none());
         cfg.save(&path).unwrap();
         assert_eq!(Config::load(&path).unwrap().folders.len(), 1);
     }
@@ -577,9 +617,9 @@ watch = false
         for d in ["a/photos", "b/photos", "c", "a/photos/raw"] {
             std::fs::create_dir_all(dir.path().join(d)).unwrap();
         }
-        let a = add_folder_to_file(&cfg, &dir.path().join("a/photos"), None).unwrap();
-        let b = add_folder_to_file(&cfg, &dir.path().join("b/photos"), None).unwrap();
-        let c = add_folder_to_file(&cfg, &dir.path().join("c"), Some("docs")).unwrap();
+        let a = add(&cfg, &dir.path().join("a/photos"), None).unwrap();
+        let b = add(&cfg, &dir.path().join("b/photos"), None).unwrap();
+        let c = add(&cfg, &dir.path().join("c"), Some("docs")).unwrap();
         assert_eq!(
             (a.name.as_str(), b.name.as_str(), c.name.as_str()),
             ("photos", "photos-2", "docs"),
@@ -593,28 +633,25 @@ watch = false
         assert_eq!(loaded.bandwidth_limit_kbps, 500);
 
         let err = |r: Result<Folder>| format!("{:#}", r.unwrap_err());
-        assert!(err(add_folder_to_file(&cfg, &dir.path().join("a/photos"), None)).contains("already collected"));
+        assert!(err(add(&cfg, &dir.path().join("a/photos"), None)).contains("already collected"));
         assert!(
-            err(add_folder_to_file(&cfg, &dir.path().join("a/photos/raw"), None)).contains("overlaps"),
+            err(add(&cfg, &dir.path().join("a/photos/raw"), None)).contains("overlaps"),
             "a folder inside a collected one"
         );
-        assert!(
-            err(add_folder_to_file(&cfg, dir.path(), Some("all"))).contains("overlaps"),
-            "a folder containing collected ones"
-        );
-        assert!(err(add_folder_to_file(&cfg, &dir.path().join("missing"), None)).contains("cannot read"));
+        assert!(err(add(&cfg, dir.path(), Some("all"))).contains("overlaps"), "a folder containing collected ones");
+        assert!(err(add(&cfg, &dir.path().join("missing"), None)).contains("cannot read"));
 
         // Names that differ only in case or in Unicode form are the same name to the master.
-        let same = |name: &str| err(add_folder_to_file(&cfg, &dir.path().join("c"), Some(name)));
+        let same = |name: &str| err(add(&cfg, &dir.path().join("c"), Some(name)));
         assert!(same("docs").contains("already collected"), "the same folder again");
         std::fs::create_dir_all(dir.path().join("d")).unwrap();
-        let clash = |name: &str| err(add_folder_to_file(&cfg, &dir.path().join("d"), Some(name)));
+        let clash = |name: &str| err(add(&cfg, &dir.path().join("d"), Some(name)));
         assert!(clash("DOCS").contains("different name"), "case: {}", clash("DOCS"));
         assert!(clash("photos").contains("\"photos-2\""), "the error suggests a free name");
-        add_folder_to_file(&cfg, &dir.path().join("d"), Some("caf\u{e9}")).unwrap();
+        add(&cfg, &dir.path().join("d"), Some("caf\u{e9}")).unwrap();
         std::fs::create_dir_all(dir.path().join("e")).unwrap();
         assert!(
-            err(add_folder_to_file(&cfg, &dir.path().join("e"), Some("cafe\u{301}"))).contains("different name"),
+            err(add(&cfg, &dir.path().join("e"), Some("cafe\u{301}"))).contains("different name"),
             "an accent as its own character"
         );
         remove_folder_from_file(&cfg, "caf\u{e9}").unwrap();
@@ -627,13 +664,13 @@ watch = false
     }
 
     #[test]
-    fn folders_can_be_added_to_a_config_written_by_enroll() {
+    fn folders_can_be_added_to_a_config_written_by_install() {
         let dir = tempfile::tempdir().unwrap();
         let cfg_path = dir.path().join("config.toml");
         let cfg = Config::new("http://x:7443");
         cfg.save(&cfg_path).unwrap();
         std::fs::create_dir_all(dir.path().join("one")).unwrap();
-        add_folder_to_file(&cfg_path, &dir.path().join("one"), None).unwrap();
+        add(&cfg_path, &dir.path().join("one"), None).unwrap();
         assert_eq!(Config::load(&cfg_path).unwrap().folders.len(), 1);
         remove_folder_from_file(&cfg_path, "one").unwrap();
         assert!(Config::load(&cfg_path).unwrap().folders.is_empty());
@@ -657,7 +694,7 @@ watch = false
         let mut cfg = Config::new("ftp://x");
         assert!(cfg.validate().is_err());
         cfg.server = "https://x".into();
-        cfg.folders.push(Folder { path: "a".into(), name: "a/b".into() });
+        cfg.folders.push(Folder::computer("a".into(), "a/b".into()));
         assert!(cfg.validate().is_err());
     }
 
@@ -674,20 +711,20 @@ watch = false
         for d in ["a", "b"] {
             std::fs::create_dir_all(dir.path().join(d)).unwrap();
         }
-        attach_synced_to_file(&cfg, "plain", None, &dir.path().join("a"), Mode::Both).unwrap();
-        attach_synced_to_file(&cfg, "mine", None, &dir.path().join("b"), Mode::Mine).unwrap();
+        attach(&cfg, "plain", None, &dir.path().join("a"), Mode::Both).unwrap();
+        attach(&cfg, "mine", None, &dir.path().join("b"), Mode::Keep).unwrap();
         let text = std::fs::read_to_string(&cfg).unwrap();
         assert_eq!(text.matches("mode").count(), 1, "only a choice that is not the default is written: {text}");
-        let mode = |name: &str| Config::load(&cfg).unwrap().synced_named(name).unwrap().mode;
-        assert_eq!((mode("plain"), mode("mine")), (Mode::Both, Mode::Mine));
+        let mode = |name: &str| Config::load(&cfg).unwrap().attached_named(name).unwrap().mode;
+        assert_eq!((mode("plain"), mode("mine")), (Mode::Both, Mode::Keep));
 
-        set_synced_mode_in_file(&cfg, "plain", Mode::Keep, Some(0)).unwrap();
-        set_synced_mode_in_file(&cfg, "mine", Mode::Both, None).unwrap();
+        set_mode_in_file(&cfg, "plain", Mode::Keep, Some(0)).unwrap();
+        set_mode_in_file(&cfg, "mine", Mode::Both, None).unwrap();
         let loaded = Config::load(&cfg).unwrap();
-        let (plain, mine) = (loaded.synced_named("plain").unwrap(), loaded.synced_named("mine").unwrap());
+        let (plain, mine) = (loaded.attached_named("plain").unwrap(), loaded.attached_named("mine").unwrap());
         assert_eq!((plain.mode, plain.ask_timeout_hours), (Mode::Keep, 0));
         assert_eq!((mine.mode, mine.ask_timeout_hours), (Mode::Both, 24), "back to the defaults");
-        assert!(Mode::Both.pulls() && Mode::Mine.pulls() && !Mode::Up.pulls());
+        assert!(Mode::Both.pulls() && Mode::Keep.pulls() && !Mode::Up.pulls());
         assert!("ASK".parse::<Mode>().is_ok() && "theirs".parse::<Mode>().is_err());
     }
 
@@ -697,25 +734,25 @@ watch = false
         let cfg = dir.path().join("fafnirx.toml");
         std::fs::write(&cfg, "server = \"http://x:7443\"\n").unwrap();
         let id = "2f1b6a52-6d0e-4c0c-9a54-1f0b7f3e9a11";
-        let up = attach_synced_to_file(&cfg, "master:Música/Rock", Some(id), &dir.path().join("a"), Mode::Up).unwrap();
+        let up = attach(&cfg, "master:Música/Rock", Some(id), &dir.path().join("a"), Mode::Up).unwrap();
         assert_eq!((up.key(), up.mode), (id, Mode::Up));
-        attach_synced_to_file(&cfg, "master:Photos", None, &dir.path().join("b"), Mode::Both).unwrap();
+        attach(&cfg, "master:Photos", None, &dir.path().join("b"), Mode::Both).unwrap();
         let loaded = Config::load(&cfg).unwrap();
-        assert_eq!(loaded.synced[0], up, "what is written is read back");
+        assert_eq!(attached(&loaded)[0], up, "what is written is read back");
         assert_eq!(
-            (loaded.synced[1].key(), loaded.synced[1].mode),
+            (attached(&loaded)[1].key(), attached(&loaded)[1].mode),
             ("master:Photos", Mode::Both),
             "without an id the name is the key"
         );
 
         // A master folder is named in full: a bare name never means one.
-        assert!(loaded.synced_named("Photos").is_err() && loaded.synced_named("master:Photos").is_ok());
-        let bad = attach_synced_to_file(&cfg, "master:../x", None, &dir.path().join("c"), Mode::Both);
+        assert!(loaded.attached_named("Photos").is_err() && loaded.attached_named("master:Photos").is_ok());
+        let bad = attach(&cfg, "master:../x", None, &dir.path().join("c"), Mode::Both);
         assert!(format!("{:#}", bad.unwrap_err()).contains("master folder"));
 
-        assert_eq!(set_synced_mode_in_file(&cfg, "master:Photos", Mode::Up, None).unwrap(), "master:Photos");
-        assert_eq!(Config::load(&cfg).unwrap().synced[1].mode, Mode::Up);
-        set_synced_mode_in_file(&cfg, "master:Photos", Mode::Both, None).unwrap();
+        assert_eq!(set_mode_in_file(&cfg, "master:Photos", Mode::Up, None).unwrap(), "master:Photos");
+        assert_eq!(attached(&Config::load(&cfg).unwrap())[1].mode, Mode::Up);
+        set_mode_in_file(&cfg, "master:Photos", Mode::Both, None).unwrap();
         assert!(
             !std::fs::read_to_string(&cfg).unwrap().contains("master:Photos\"\nmode"),
             "the default is not written"
@@ -733,9 +770,9 @@ watch = false
 ",
         )
         .unwrap();
-        attach_synced_to_file(&cfg, "family", Some("id-1"), &dir.path().join("a"), Mode::Both).unwrap();
-        attach_synced_to_file(&cfg, "master:Music", Some("id-2"), &dir.path().join("b"), Mode::Up).unwrap();
-        attach_synced_to_file(&cfg, "old", None, &dir.path().join("c"), Mode::Both).unwrap();
+        attach(&cfg, "family", Some("id-1"), &dir.path().join("a"), Mode::Both).unwrap();
+        attach(&cfg, "master:Music", Some("id-2"), &dir.path().join("b"), Mode::Up).unwrap();
+        attach(&cfg, "old", None, &dir.path().join("c"), Mode::Both).unwrap();
         let listed = [
             ("ana/home".to_string(), "id-1".to_string()),
             ("master:Music".to_string(), "id-2".to_string()),
@@ -749,10 +786,14 @@ watch = false
         );
         let loaded = Config::load(&cfg).unwrap();
         assert_eq!(
-            loaded.synced.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            attached(&loaded).iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
             ["ana/home", "master:Music", "old"]
         );
-        assert_eq!((loaded.synced[0].key(), loaded.synced[1].mode), ("id-1", Mode::Up), "the id and the rest stay");
+        assert_eq!(
+            (attached(&loaded)[0].key(), attached(&loaded)[1].mode),
+            ("id-1", Mode::Up),
+            "the id and the rest stay"
+        );
         assert!(follow_renames_in_file(&cfg, &listed).unwrap().is_empty(), "nothing more to do");
     }
 
@@ -764,38 +805,51 @@ watch = false
         for d in ["a", "b", "a/inner", "c"] {
             std::fs::create_dir_all(dir.path().join(d)).unwrap();
         }
-        assert!(Config::load(&cfg).unwrap().synced.is_empty(), "a config without the table has none attached");
-        let new = attach_synced_to_file(&cfg, "fresh", None, &dir.path().join("not/there/yet"), Mode::Both).unwrap();
+        assert!(attached(&Config::load(&cfg).unwrap()).is_empty(), "a config without the table has none attached");
+        let new = attach(&cfg, "fresh", None, &dir.path().join("not/there/yet"), Mode::Both).unwrap();
         assert!(new.path.is_dir(), "a folder that does not exist is made");
-        assert_eq!(detach_synced_from_file(&cfg, "fresh").unwrap(), "fresh", "it says which folder it detached");
-        add_folder_to_file(&cfg, &dir.path().join("c"), None).unwrap();
-        attach_synced_to_file(&cfg, "family", None, &dir.path().join("a"), Mode::Both).unwrap();
-        attach_synced_to_file(&cfg, "work", None, &dir.path().join("b"), Mode::Both).unwrap();
+        assert_eq!(remove_folder_from_file(&cfg, "fresh").unwrap(), "fresh", "it says which folder it detached");
+        add(&cfg, &dir.path().join("c"), None).unwrap();
+        attach(&cfg, "family", None, &dir.path().join("a"), Mode::Both).unwrap();
+        attach(&cfg, "work", None, &dir.path().join("b"), Mode::Both).unwrap();
         let loaded = Config::load(&cfg).unwrap();
-        assert_eq!(loaded.synced.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["family", "work"]);
-        assert_eq!(loaded.folders.len(), 1, "the backup folders are not touched");
+        assert_eq!(attached(&loaded).iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["family", "work"]);
+        assert_eq!(loaded.computer_folders().count(), 1, "the backup folders are not touched");
         assert!(std::fs::read_to_string(&cfg).unwrap().contains("# notes"), "comments survive");
 
-        let err = |r: Result<SyncedFolder>| format!("{:#}", r.unwrap_err());
-        assert!(err(attach_synced_to_file(&cfg, "family", None, &dir.path().join("a"), Mode::Both)).contains("already collected"));
-        assert!(err(attach_synced_to_file(&cfg, "other", None, &dir.path().join("a/inner"), Mode::Both)).contains("overlaps"));
+        let err = |r: Result<Folder>| format!("{:#}", r.unwrap_err());
+        assert!(err(attach(&cfg, "family", None, &dir.path().join("a"), Mode::Both)).contains("already collected"));
+        assert!(err(attach(&cfg, "other", None, &dir.path().join("a/inner"), Mode::Both)).contains("overlaps"));
         assert!(
-            err(attach_synced_to_file(&cfg, "other", None, &dir.path().join("c"), Mode::Both)).contains("already collected"),
+            err(attach(&cfg, "other", None, &dir.path().join("c"), Mode::Both)).contains("already collected"),
             "not a folder that is backed up either"
         );
         std::fs::create_dir_all(dir.path().join("d")).unwrap();
-        assert!(err(attach_synced_to_file(&cfg, "family", None, &dir.path().join("d"), Mode::Both)).contains("attached twice"));
-        assert!(err(attach_synced_to_file(&cfg, "Bad Name", None, &dir.path().join("d"), Mode::Both)).contains("lowercase"));
+        assert!(err(attach(&cfg, "family", None, &dir.path().join("d"), Mode::Both)).contains("attached twice"));
+        assert!(err(attach(&cfg, "Bad Name", None, &dir.path().join("d"), Mode::Both)).contains("lowercase"));
 
         // Folders of two owners with one name: the short name is ambiguous, the full one is not.
-        attach_synced_to_file(&cfg, "bob/work", None, &dir.path().join("d"), Mode::Both).unwrap();
-        let ambiguous = format!("{:#}", detach_synced_from_file(&cfg, "work").unwrap_err());
+        attach(&cfg, "bob/work", None, &dir.path().join("d"), Mode::Both).unwrap();
+        let ambiguous = format!("{:#}", remove_folder_from_file(&cfg, "work").unwrap_err());
         assert!(ambiguous.contains("work, bob/work"), "{ambiguous}");
-        detach_synced_from_file(&cfg, "bob/work").unwrap();
-        detach_synced_from_file(&cfg, "family").unwrap();
-        assert_eq!(Config::load(&cfg).unwrap().synced.len(), 1);
-        detach_synced_from_file(&cfg, "work").unwrap();
-        assert!(!std::fs::read_to_string(&cfg).unwrap().contains("synced"), "the empty table is removed");
-        assert!(detach_synced_from_file(&cfg, "work").is_err());
+        remove_folder_from_file(&cfg, "bob/work").unwrap();
+        remove_folder_from_file(&cfg, "family").unwrap();
+        assert_eq!(attached(&Config::load(&cfg).unwrap()).len(), 1);
+        remove_folder_from_file(&cfg, "work").unwrap();
+        assert!(attached(&Config::load(&cfg).unwrap()).is_empty(), "nothing is attached any more");
+        assert!(remove_folder_from_file(&cfg, "work").is_err());
+    }
+
+    #[test]
+    fn the_address_of_the_master_is_completed() {
+        for (typed, url) in [
+            ("nas.lan", "http://nas.lan:7443"),
+            ("nas.lan:9000", "http://nas.lan:9000"),
+            ("  10.0.0.5 ", "http://10.0.0.5:7443"),
+            ("http://nas.lan:7443/", "http://nas.lan:7443"),
+            ("https://fafnirx.example.com", "https://fafnirx.example.com"),
+        ] {
+            assert_eq!(normalize_server(typed), url, "{typed}");
+        }
     }
 }

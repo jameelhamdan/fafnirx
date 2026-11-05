@@ -76,9 +76,9 @@ pub fn content_known(c: &mut impl GenericClient, root: &[u8]) -> Result<bool, Er
     q::content_known().bind(c, &root).one()
 }
 
-/// Path of a live file of the device below `prefix` (empty for anywhere) with this content, preferring `prefer`.
-pub fn live_path_with_root(c: &mut impl GenericClient, device_id: i64, prefix: &str, root: &[u8], prefer: Option<&str>) -> Result<Option<String>, Error> {
-    q::live_path_with_root().bind(c, &device_id, &root, &prefix, &prefer.unwrap_or("")).opt()
+/// Path of a live file of the device with this content, preferring `prefer`.
+pub fn live_path_with_root(c: &mut impl GenericClient, device_id: i64, root: &[u8], prefer: Option<&str>) -> Result<Option<String>, Error> {
+    q::live_path_with_root().bind(c, &device_id, &root, &prefer.unwrap_or("")).opt()
 }
 
 /// A live path of the device that is the same name as `path` but spelled differently (another case), unless `path` is itself
@@ -110,10 +110,10 @@ pub struct Change {
     /// A deletion made in the web app.
     pub from_web: bool,
 }
-/// The paths of a device below `prefix` (empty for all) written or deleted at or after `since` (unix seconds; 0 for everything). Needs no history:
+/// The paths of a device written or deleted at or after `since` (unix seconds; 0 for everything). Needs no history:
 /// it reads the state of the files, so it works however long the client was away, as long as the trash keeps the deletion.
-pub fn changes_since(c: &mut impl GenericClient, device_id: i64, prefix: &str, since: i64) -> Result<Vec<Change>, Error> {
-    let rows = q::changes_since().bind(c, &device_id, &since, &prefix).all()?;
+pub fn changes_since(c: &mut impl GenericClient, device_id: i64, since: i64) -> Result<Vec<Change>, Error> {
+    let rows = q::changes_since().bind(c, &device_id, &since).all()?;
     Ok(rows
         .into_iter()
         .map(|r| {

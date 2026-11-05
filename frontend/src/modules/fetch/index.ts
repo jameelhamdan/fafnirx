@@ -1,11 +1,10 @@
-import { defineSourceKind, FetchQueueCard, msg, type FrontendModule } from '@/sdk'
+import { defineSourceKind, msg, type FrontendModule } from '@/sdk'
 import { NO_WEB, webBody, webLoad, webProblem, type Web } from './web'
 import { WebForm } from './web-form'
 
 // The fetch module has no viewer: what it adds to the web app is its kind of source (offered by the Sources page when the module
-// is up) and its section of the Processing page.
+// is up).
 export default {
-  queue: FetchQueueCard,
   sources: [
     defineSourceKind<Web>({
       id: 'web',

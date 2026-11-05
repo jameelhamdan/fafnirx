@@ -129,6 +129,7 @@ pub fn description<'a>(video: &str, neighbours: &'a [Neighbour]) -> Option<&'a N
 
 /// What an .nfo says about an episode or a film.
 #[derive(Serialize, Default, Debug, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Described {
     pub title: Option<String>,
     pub show: Option<String>,

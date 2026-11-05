@@ -1,0 +1,8 @@
+#!/bin/sh
+# Before the package is removed (not when it is upgraded): stops the service and the tray's start at login. The config and what
+# was backed up stay; `fafnirx uninstall --purge` removes the config too.
+set -e
+if [ "$1" = remove ] || [ "$1" = deconfigure ]; then
+  fafnirx uninstall --keep-binary || true
+fi
+exit 0

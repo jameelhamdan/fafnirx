@@ -8,16 +8,13 @@
 
 use crate::platform::db::{self, Device};
 use crate::platform::store::Store;
-use crate::repo::{albums, devices, events, files, jobs, settings};
+use crate::repo::{devices, events, files, jobs, settings};
 use anyhow::Result;
 use fafnirx_common::{unix_now, HASH_LEN};
 use fafnirx_db::client::GenericClient;
 use fafnirx_db::queries as sql;
 use postgres::Client;
 use std::path::Path;
-
-/// The id of the device that holds the master files (see migration 0006).
-pub const MASTER_DEVICE_ID: i64 = 0;
 
 pub struct NewVersion<'a> {
     pub device: &'a Device,
@@ -55,8 +52,8 @@ fn make_current(conn: &mut impl GenericClient, file_id: uuid::Uuid, version_id: 
 /// Appends to the change log shown in the web UI.
 fn log_event(conn: &mut impl GenericClient, device: &Device, path: &str, action: &str, ts: i64, hash: Option<&str>, detail: Option<&str>) -> Result<(), postgres::Error> {
     events::record(conn, device.id, path, action, ts, hash, detail)?;
-    db::notify(conn, "files", &device.name)?;
-    db::notify(conn, "activity", &device.name)
+    db::notify(conn, db::Topic::Files, &device.name)?;
+    db::notify(conn, db::Topic::Activity, &device.name)
 }
 
 /// Queues reading the kind, size and EXIF data of a new content, once per content.
@@ -78,19 +75,6 @@ pub fn commit_version(conn: &mut Client, store: &Store, staged: &Path, v: &NewVe
     let result = commit_inner(conn, store, staged, v);
     let _ = std::fs::remove_file(staged);
     result
-}
-
-/// The master files share the root of `files/` with `users/`, which holds the folders of the users: a master path cannot
-/// start with that name.
-pub fn check_master_path(device: &Device, path: &str) -> Result<()> {
-    if device.id != MASTER_DEVICE_ID {
-        return Ok(());
-    }
-    let first = path.split('/').next().unwrap_or("").to_lowercase();
-    if first == crate::platform::store::USERS_DIR {
-        return Err(crate::web::ApiError::conflict("users is where the folders of the users are kept: the master files cannot use that name").into());
-    }
-    Ok(())
 }
 
 /// Rules of the most limited computer: no name Windows cannot keep, no two paths (or folders above them) differing only in
@@ -129,7 +113,6 @@ fn commit_inner(conn: &mut Client, store: &Store, staged: &Path, v: &NewVersion)
     let ts = unix_now();
     let root: &[u8] = &v.root;
     let dev = v.device;
-    check_master_path(dev, v.path)?;
     check_names(conn, dev, v.path, v.renamed_from, false)?;
     let mut tx = conn.transaction()?;
     // Both paths of a rename, in a fixed order so that two renames cannot wait for each other.
@@ -181,17 +164,11 @@ fn commit_inner(conn: &mut Client, store: &Store, staged: &Path, v: &NewVersion)
         queue_meta(&mut tx, dev, v.path, root)?;
         // The old path is vacated, not deleted: the log has the one `rename` event, and the trash does not get the file.
         let vacated = match v.renamed_from {
-            Some(old) => {
-                let gone = files::vacate_renamed(&mut tx, dev.id, old, ts)?.map(|id| (old, id));
-                if albums::follow_folder_move(&mut tx, dev.id, old, v.path, ts)? {
-                    db::notify(&mut tx, "library", "")?;
-                }
-                gone
-            }
+            Some(old) => files::vacate_renamed(&mut tx, dev.id, old, ts)?.map(|id| (old, id)),
             None => None,
         };
         devices::touch_collected(&mut tx, dev.id, ts)?;
-        db::notify(&mut tx, "devices", &dev.name)?;
+        db::notify(&mut tx, db::Topic::Devices, &dev.name)?;
         Ok(vacated)
     })();
     let vacated = match recorded {
@@ -217,7 +194,6 @@ fn commit_inner(conn: &mut Client, store: &Store, staged: &Path, v: &NewVersion)
 /// moved, not copied, and recorded as a rename of the same content, with the old path vacated like any rename. Devices and
 /// sources are not moved here: their files are theirs to move. The caller checks that the device is changeable.
 pub fn move_path(conn: &mut Client, store: &Store, device: &Device, from: &str, to: &str) -> Result<()> {
-    check_master_path(device, to)?;
     check_names(conn, device, to, Some(from), true)?;
     let mut tx = conn.transaction()?;
     let mut locked = [from, to];
@@ -260,11 +236,8 @@ pub fn move_path(conn: &mut Client, store: &Store, device: &Device, from: &str, 
         log_event(&mut tx, device, to, "rename", ts, Some(&hex::encode(&root)), Some(from))?;
         queue_meta(&mut tx, device, to, &root)?;
         files::vacate_renamed(&mut tx, device.id, from, ts)?;
-        if albums::follow_folder_move(&mut tx, device.id, from, to, ts)? {
-            db::notify(&mut tx, "library", "")?;
-        }
         devices::touch(&mut tx, device.id, ts)?;
-        db::notify(&mut tx, "devices", &device.name)?;
+        db::notify(&mut tx, db::Topic::Devices, &device.name)?;
         Ok(())
     })();
     if let Err(e) = recorded.and_then(|()| tx.commit().map_err(Into::into)) {
@@ -326,7 +299,7 @@ fn delete_locked(tx: &mut postgres::Transaction, store: &Store, device: &Device,
         sql::files::keep_source_item_deleted().bind(tx, &device.id, &path).map(drop)?;
     }
     devices::touch(tx, device.id, ts)?;
-    db::notify(tx, "devices", &device.name)?;
+    db::notify(tx, db::Topic::Devices, &device.name)?;
     if let Some(version_id) = deleted {
         archive_deleted(store, device, path, version_id);
     }
@@ -384,9 +357,6 @@ pub fn adopt_live(conn: &mut Client, store: &Store, device: &Device, path: &str,
     queue_meta(&mut tx, device, path, root)?;
     if let Some(old) = renamed_from {
         files::vacate_renamed(&mut tx, device.id, old, ts)?;
-        if albums::follow_folder_move(&mut tx, device.id, old, path, ts)? {
-            db::notify(&mut tx, "library", "")?;
-        }
     }
     devices::mark_stale(&mut tx, device.id)?;
     tx.commit()?;
@@ -438,42 +408,6 @@ mod tests {
 
     fn live(store: &Store, path: &str) -> Option<Vec<u8>> {
         std::fs::read(store.live_path("admin/d", path).unwrap()).ok()
-    }
-
-    #[test]
-    fn an_album_of_a_folder_follows_the_folder_when_it_is_renamed() {
-        let db = testing::db_with_device();
-        let mut c = db.get().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path()).unwrap();
-        for (path, data) in [("Show/S1/a.mkv", b"a"), ("Show/S1/b.mkv", b"b")] {
-            commit(&mut c, &store, path, data, None).unwrap();
-        }
-        let album = albums::insert(&mut *c, 1, "Show", "", (1, "Show/"), 0).unwrap();
-        let follows = |c: &mut Client| -> (String, String) {
-            let r = c.query_one("SELECT folder_prefix, name FROM albums WHERE id = $1", &[&album]).unwrap();
-            (r.get(0), r.get(1))
-        };
-
-        commit(&mut c, &store, "Show 2/S1/a.mkv", b"a", Some("Show/S1/a.mkv")).unwrap();
-        assert_eq!(follows(&mut c), ("Show/".into(), "Show".into()), "a file is still in the folder: the album stays");
-        commit(&mut c, &store, "Show 2/S1/b.mkv", b"b", Some("Show/S1/b.mkv")).unwrap();
-        assert_eq!(
-            follows(&mut c),
-            ("Show 2/".into(), "Show 2".into()),
-            "the folder moved: the album and its name follow"
-        );
-
-        // An album the user named themselves keeps its name.
-        c.execute("UPDATE albums SET name = 'My show' WHERE id = $1", &[&album]).unwrap();
-        commit(&mut c, &store, "Show 3/S1/a.mkv", b"a", Some("Show 2/S1/a.mkv")).unwrap();
-        commit(&mut c, &store, "Show 3/S1/b.mkv", b"b", Some("Show 2/S1/b.mkv")).unwrap();
-        assert_eq!(follows(&mut c), ("Show 3/".into(), "My show".into()));
-
-        // A folder emptied into an unrelated place is not followed.
-        commit(&mut c, &store, "Else/where/S1/a.mkv", b"a", Some("Show 3/S1/a.mkv")).unwrap();
-        commit(&mut c, &store, "Else/where/S1/b.mkv", b"b", Some("Show 3/S1/b.mkv")).unwrap();
-        assert_eq!(follows(&mut c), ("Show 3/".into(), "My show".into()));
     }
 
     #[test]
@@ -570,11 +504,11 @@ mod tests {
         );
 
         let root = root_hash(&[chunk_hash(b"two")], 3);
-        assert_eq!(live_path_with_root(&mut *c, 1, "", &root, None).unwrap().as_deref(), Some("a"));
+        assert_eq!(live_path_with_root(&mut *c, 1, &root, None).unwrap().as_deref(), Some("a"));
         commit(&mut c, &store, "b", b"two", Some("a")).unwrap();
         assert!(live(&store, "a").is_none(), "the old path of a rename leaves the live tree");
         assert_eq!(live(&store, "b").unwrap(), b"two");
-        assert_eq!(live_path_with_root(&mut *c, 1, "", &root, Some("a")).unwrap().as_deref(), Some("b"));
+        assert_eq!(live_path_with_root(&mut *c, 1, &root, Some("a")).unwrap().as_deref(), Some("b"));
 
         assert!(mark_deleted(&mut c, &store, &device, "b", false).unwrap());
         assert!(live(&store, "b").is_none());
@@ -611,16 +545,16 @@ mod tests {
 
         // A file that a source collected is remembered as removed in the web app in the source's own record.
         c.execute(
-            "INSERT INTO sources (name, kind, config, device_id, user_id, created_at) VALUES ('s', 'rclone', '{}', 1, 1, 0)",
+            "INSERT INTO links (direction, name, kind, config, folder_id, user_id, interval_secs, created_at) VALUES ('in', 's', 'rclone', '{}', 1, 1, 3600, 0)",
             &[],
         )
         .unwrap();
         c.execute(
-            "INSERT INTO source_items (source_id, remote_id, path, remote_version) SELECT id, 'r', 'b', 'm' FROM sources",
+            "INSERT INTO link_items (link_id, device_id, path, remote_id, version) SELECT id, 1, 'b', 'r', 'm' FROM links",
             &[],
         )
         .unwrap();
-        let flag = |c: &mut postgres::Client| -> bool { c.query_one("SELECT removed_in_web_app FROM source_items", &[]).unwrap().get(0) };
+        let flag = |c: &mut postgres::Client| -> bool { c.query_one("SELECT removed_in_web_app FROM link_items", &[]).unwrap().get(0) };
         assert!(mark_deleted(&mut c, &store, &device, "b", false).unwrap());
         assert!(!flag(&mut c), "a delete by the source itself is not one made in the web app");
         commit(&mut c, &store, "b", b"again", None).unwrap();

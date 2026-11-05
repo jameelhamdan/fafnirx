@@ -30,7 +30,7 @@ const ROUTES: &[(&str, &str, Rule)] = &[
     ("GET", "/api/settings", Rule::Admin),
     ("PUT", "/api/settings", Rule::Admin),
     ("GET", "/api/mirrors", Rule::Admin),
-    ("GET", "/api/mirrors/scope", Rule::Admin),
+    ("GET", "/api/mirrors/folders", Rule::Admin),
     ("POST", "/api/mirrors", Rule::Admin),
     ("DELETE", "/api/mirrors/:name", Rule::Admin),
     ("POST", "/api/mirrors/:name/run", Rule::Admin),

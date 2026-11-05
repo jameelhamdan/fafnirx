@@ -6,7 +6,7 @@ use crate::library::{artwork, embedded};
 use crate::modules;
 use crate::platform::db::{self, Db};
 use crate::platform::store::Store;
-use crate::repo::{file_meta, files, jobs, settings};
+use crate::repo::{file_meta, jobs, settings};
 use anyhow::{Context, Result};
 pub use fafnirx_common::meta::{parse_time, valid_position};
 use fafnirx_common::unix_now;
@@ -343,7 +343,6 @@ pub(crate) fn work_one(db: &Db, store: &Store, cache_root: &Path) -> Result<bool
     let Some(jobs::Claimed { id, kind, payload, attempts }) = claim(db)? else { return Ok(false) };
     let result = match kind.as_str() {
         "meta" => read_job(db, store, &payload).map(|()| None),
-        "artwork" => artwork_job(db, &payload),
         "thumb" => thumb_job(db, store, cache_root, &payload),
         other => Err(anyhow::anyhow!("unknown job kind {other:?}")),
     };
@@ -374,7 +373,7 @@ fn finish(db: &Db, id: uuid::Uuid, kind: &str, payload: &str, attempts: i64, res
     // Whoever asked for a picture waits for this: the picture is there, or there will not be one.
     if kind == "thumb" && over {
         if let Some(file) = serde_json::from_str::<ThumbJob>(payload).ok().map(|j| j.id) {
-            let _ = db::notify(&mut *c, "thumbs", &file);
+            let _ = db::notify(&mut *c, db::Topic::Thumbs, &file);
         }
     }
 }
@@ -422,35 +421,10 @@ fn read_job(db: &Db, store: &Store, payload: &str) -> Result<()> {
         },
         unix_now(),
     )?;
-    db::notify(&mut *c, "files", &p.device)?;
-    // Pictures are not made here: they are made when somebody looks at the file (see `thumb_job`). A video also gets a look
-    // for the picture and description that sit next to it, as a job of its own so that the queue shows what it found.
-    if kind(&p.path) == Some("video") {
-        jobs::enqueue(&mut *c, "artwork", &serde_json::json!({ "device": p.device, "path": p.path, "root": p.root }))?;
-    }
+    db::notify(&mut *c, db::Topic::Files, &p.device)?;
+    // Pictures are not made here: they are made when somebody looks at the file (see `thumb_job`). The picture and the description
+    // that sit next to a video are looked up whenever they are asked for (see `artwork`), so one that arrives later is used.
     Ok(())
-}
-
-/// Looks for the picture and the .nfo next to a video, and says what it found. Nothing is stored: the pictures are looked
-/// up again whenever they are asked for, so one that arrives later is used.
-fn artwork_job(db: &Db, payload: &str) -> Result<Option<String>> {
-    let p: JobFile = serde_json::from_str(payload)?;
-    let mut c = db.get()?;
-    if current_file(&mut c, &p)?.is_none() {
-        return Ok(Some("replaced or deleted since".into()));
-    }
-    let picture = match artwork::find_picture(&mut c, &p.device, &p.path) {
-        Some((art, _, artwork::Source::Own)) => format!("picture: {art}"),
-        Some((art, _, artwork::Source::Folder)) => format!("picture of its folder: {art}"),
-        None => "no picture next to it: a frame of the video is used".to_string(),
-    };
-    let near = files::neighbours(&mut *c, &p.device, &p.path)?;
-    let details = match artwork::description(&p.path, &near) {
-        Some((nfo, _)) => format!("details: {nfo}"),
-        None => "no .nfo".to_string(),
-    };
-    db::notify(&mut *c, "files", &p.device)?;
-    Ok(Some(format!("{picture}; {details}")))
 }
 
 /// A picture somebody asked for: of this file (`id` is how the browser knows it), at this size.

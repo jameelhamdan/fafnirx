@@ -65,8 +65,6 @@ export const defineSourceKind = <S,>(kind: SourceKind<S>): SourceKind => kind as
 export interface FrontendModule {
   /** Shows files in the viewer and in the details of a file. The first module whose `match` says yes is used. */
   viewer?: { match: (file: ModuleFile) => boolean; component: ComponentType<ViewerProps> }
-  /** A part of the queue page, given what the module reports (its `GET /status`) and its id. */
-  queue?: ComponentType<{ report: unknown; module: string }>
   /** The kinds of source the module reads; the Sources page offers them while the module is up. */
   sources?: SourceKind[]
 }
@@ -99,7 +97,7 @@ function useActive(): LoadedModule[] {
   return useMemo(() => loaded.filter((m) => up?.[m.id]), [loaded, up])
 }
 
-export const viewerOf = (modules: LoadedModule[], file: ModuleFile) => modules.find((m) => m.viewer?.match(file))?.viewer?.component
+const viewerOf = (modules: LoadedModule[], file: ModuleFile) => modules.find((m) => m.viewer?.match(file))?.viewer?.component
 
 /** The component that shows this file, if a module that is up and loaded can. */
 export function useViewer(file: ModuleFile) {
@@ -109,14 +107,6 @@ export function useViewer(file: ModuleFile) {
 /** Whether a module that is up can show this file. */
 export function useHasViewer(file: ModuleFile): boolean {
   return useViewer(file) !== undefined
-}
-
-/** The parts of the queue page, with the report each was given. */
-export function useQueueSections(reports: Record<string, unknown>) {
-  return useActive().flatMap((m) => {
-    const Section = m.queue
-    return Section && reports[m.id] !== undefined ? [{ id: m.id, Section, report: reports[m.id] }] : []
-  })
 }
 
 /** The kinds of source the loaded modules offer, with whether the module can read them now (it lists `fetch.<id>`). */

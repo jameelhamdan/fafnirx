@@ -32,16 +32,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Connect this device to a master. The device token is asked for (hidden), or read from standard input or
-    /// FAFNIRX_TOKEN; it is not an argument because other users of the machine can see arguments.
-    Enroll {
-        /// Address of the master: http://host:7443 on a trusted network, https://... behind a TLS proxy
-        #[arg(long)]
-        server: String,
-        /// Do not start the client in the background and at every login (the default)
-        #[arg(long)]
-        no_service: bool,
-    },
     /// Folders of this computer and where each one goes: this computer's own namespace on the master, a master folder, or a folder of yours
     Folder(FolderCmd),
     /// Run in the foreground: watch, upload, stay connected
@@ -79,13 +69,38 @@ enum Cmd {
         #[arg(long)]
         check: bool,
     },
-    /// Install the client as a service of this computer: it starts at boot, for every user, and the tray starts at login
-    InstallService {
+    /// Set this computer up: put the program where it belongs, connect it to the master, collect folders, and run the client as a
+    /// service of the computer (Linux, macOS) or at login (Windows). The device token is asked for (hidden), or read from standard
+    /// input or FAFNIRX_TOKEN; it is not an argument because other users of the machine can see arguments.
+    Install {
+        /// The master: nas.lan, nas.lan:7443 or a URL. Without it an enrolled computer is only brought up to date
+        #[arg(long)]
+        server: Option<String>,
+        /// A folder to collect (repeat for more)
+        #[arg(long = "folder")]
+        folders: Vec<PathBuf>,
+        /// The program is where it belongs already (a package or a setup put it there): do not copy it
+        #[arg(long)]
+        in_place: bool,
+        /// Do not install the service or the start at login
+        #[arg(long)]
+        no_start: bool,
+        /// Windows: do not add the program to the PATH
+        #[arg(long)]
+        no_path: bool,
+        /// Say what would be done, and do nothing
         #[arg(long)]
         dry_run: bool,
     },
-    /// Remove the service (what was backed up, the config and the state stay)
-    UninstallService {
+    /// Take this computer's client away: the service, the start at login, and the program. What was backed up stays on the master
+    Uninstall {
+        /// Also remove the config, the token and the state of this client
+        #[arg(long)]
+        purge: bool,
+        /// Leave the program file (a package removes its own)
+        #[arg(long)]
+        keep_binary: bool,
+        /// Say what would be done, and do nothing
         #[arg(long)]
         dry_run: bool,
     },
@@ -97,8 +112,8 @@ impl Cmd {
     /// Whether the command changes the config or the token, or reads the token, which a system-wide install keeps from users.
     fn needs_admin(&self) -> bool {
         match self {
-            Cmd::InstallService { dry_run } | Cmd::UninstallService { dry_run } => !dry_run,
-            Cmd::Enroll { .. } | Cmd::Sync | Cmd::ReleaseDeletes => true,
+            Cmd::Install { dry_run, .. } | Cmd::Uninstall { dry_run, .. } => !dry_run,
+            Cmd::Sync | Cmd::ReleaseDeletes => true,
             // Listing what this computer has changes and reads nothing secret; every other thing a folder does does.
             Cmd::Folder(FolderCmd { action: FolderAction::List { available: false } }) => false,
             Cmd::Folder(_) => true,
@@ -126,7 +141,7 @@ enum FolderAction {
         /// Name in this computer's namespace (only with the target computer; default: the folder name)
         #[arg(long)]
         name: Option<String>,
-        /// both (default; the server's version wins a clash), up (send only), mine, keep or ask: see `folder mode`
+        /// both (default; the server's version wins a clash), up (send only), keep or ask: see `folder mode`
         #[arg(long)]
         mode: Option<config::Mode>,
         /// Make the folder first when there is none of that name (your own synced folders)
@@ -141,8 +156,8 @@ enum FolderAction {
     /// Make a folder of yours on the master that your computers and other users can sync (add it with `folder add`)
     Create { name: String },
     /// Show or set how a synced folder syncs: both (both ways; the master's version wins a file changed on both sides and this
-    /// computer's is put aside), up (send only; nothing comes back), mine (both ways; this computer's version wins), keep (both ways;
-    /// both versions are kept) or ask (both ways; a question on screen)
+    /// computer's is put aside), up (send only; nothing comes back), keep (both ways; both versions are kept) or ask (both ways; a
+    /// question on screen)
     Mode {
         name: String,
         mode: Option<config::Mode>,
@@ -153,7 +168,7 @@ enum FolderAction {
     /// Say which version of the files waiting for a decision (mode `ask`) is kept
     Resolve {
         name: String,
-        #[arg(value_parser = ["theirs", "mine", "both"])]
+        #[arg(value_parser = ["theirs", "both"])]
         keep: String,
         /// Only this file (a path in the folder); all that wait when not given
         path: Option<String>,
@@ -202,7 +217,7 @@ fn main() -> Result<()> {
 fn run(cli: Cli) -> Result<()> {
     let config_path = cli.config.clone().unwrap_or_else(default_config_path);
     // The system-wide install belongs to the computer: what changes it, or reads its token, is done by an administrator.
-    let system = config::is_system_config(&config_path) || (!cfg!(windows) && matches!(cli.cmd, Cmd::InstallService { .. } | Cmd::UninstallService { .. }));
+    let system = config::is_system_config(&config_path) || (!cfg!(windows) && matches!(cli.cmd, Cmd::Install { .. } | Cmd::Uninstall { .. }));
     if cli.cmd.needs_admin() && system && !service::elevate::is_admin() {
         use std::io::IsTerminal;
         let mut args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
@@ -238,11 +253,6 @@ fn run(cli: Cli) -> Result<()> {
             init_logging(None);
             tokio_main(commands::update_now(config_path, check))
         }
-        Cmd::Enroll { server, no_service } => {
-            init_logging(None);
-            let token = commands::read_token()?;
-            tokio_main(commands::enroll(config_path, server, token, !no_service))
-        }
         Cmd::Folder(FolderCmd { action }) => match action {
             FolderAction::Add { paths, target, name, mode, create } => tokio_main(commands::folder_add(config_path, paths, target, name, create, mode)),
             FolderAction::List { available: false } => commands::list_folders(&config_path),
@@ -251,21 +261,20 @@ fn run(cli: Cli) -> Result<()> {
             FolderAction::Resolve { name, keep, path } => commands::resolve_waiting(&config_path, &name, &keep, path.as_deref()),
             FolderAction::Keep { name } => commands::keep_held(&config_path, &name),
             FolderAction::Mode { name, mode, ask_timeout_hours } => commands::set_mode(&config_path, &name, mode, ask_timeout_hours),
-            FolderAction::Remove { name } => {
-                // A synced folder if the name means one (an ambiguous name is said so); else one collected into this computer.
-                if config::Config::load(&config_path)?.synced.iter().any(|s| config::names_synced(&s.name, &name)) {
-                    commands::unsync_folder(&config_path, &name)
-                } else {
-                    commands::remove_folder(&config_path, &name)
-                }
-            }
+            FolderAction::Remove { name } => commands::remove_folder(&config_path, &name),
         },
         Cmd::Status { json } => commands::status(&config_path, json),
         Cmd::ReleaseDeletes => commands::release_deletes(&config_path),
         Cmd::Pause => commands::set_paused(&config_path, true),
         Cmd::Resume => commands::set_paused(&config_path, false),
-        Cmd::InstallService { dry_run } => service::install(&config_path, dry_run),
-        Cmd::UninstallService { dry_run } => service::uninstall(&config_path, dry_run),
+        Cmd::Install { server, folders, in_place, no_start, no_path, dry_run } => {
+            init_logging(None);
+            tokio_main(commands::install(
+                config_path,
+                commands::Install { server, folders, in_place, no_start, no_path, dry_run },
+            ))
+        }
+        Cmd::Uninstall { purge, keep_binary, dry_run } => commands::uninstall(&config_path, purge, keep_binary, dry_run),
         Cmd::Restart => {
             init_logging(None);
             tokio_main(commands::restart(config_path))

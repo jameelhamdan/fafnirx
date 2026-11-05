@@ -1,12 +1,12 @@
 #!/bin/sh
-# Installs the fafnirx client on Linux or macOS in one command: downloads the release for this machine, checks its
-# sha256, and runs install.sh from it (copy the binary, enroll the device, add folders, start the service). It asks for the\n# administrator password: the client is a service of the computer.
+# Installs the fafnirx client on Linux or macOS in one command: downloads the program for this machine, checks its sha256, and
+# runs `fafnirx install` with your options. It asks for the administrator password: the client is a service of the computer.
 #
 #   curl -fsSL https://raw.githubusercontent.com/jameelhamdan/fafnirx/master/installer/get.sh | sh -s -- \
-#       --server http://nas.lan:7443 --folder ~/Documents
+#       --server nas.lan --folder ~/Documents
 #
-# All options go to install.sh (--server, --folder, ...). The device token is asked for on the terminal, or taken from
-# FAFNIRX_TOKEN. FAFNIRX_VERSION=3.0.1 installs that version instead of the latest.
+# All options go to `fafnirx install` (--server, --folder, --no-start, --dry-run). The device token is asked for on the
+# terminal, or taken from FAFNIRX_TOKEN. FAFNIRX_VERSION=4.0.4 installs that version instead of the latest.
 set -eu
 
 repo=jameelhamdan/fafnirx
@@ -14,7 +14,7 @@ repo=jameelhamdan/fafnirx
 case "$(uname -s)" in
   Linux) os=linux ;;
   Darwin) os=macos ;;
-  *) echo "this installer is for Linux and macOS; on Windows use the setup from the release page" >&2; exit 1 ;;
+  *) echo "this installer is for Linux and macOS; on Windows use get.ps1 or the setup from the release page" >&2; exit 1 ;;
 esac
 case "$(uname -m)" in
   x86_64 | amd64) arch=x86_64 ;;
@@ -36,22 +36,21 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 echo "downloading $name"
-curl -fsSL -o "$work/$name.tar.gz" "$url/$name.tar.gz"
-curl -fsSL -o "$work/$name.tar.gz.sha256" "$url/$name.tar.gz.sha256"
+curl -fsSL -o "$work/fafnirx" "$url/$name"
+curl -fsSL -o "$work/$name.sha256" "$url/$name.sha256"
 
-expected=$(cut -d ' ' -f 1 "$work/$name.tar.gz.sha256")
+expected=$(cut -d ' ' -f 1 "$work/$name.sha256")
 if command -v sha256sum >/dev/null 2>&1; then
-  actual=$(sha256sum "$work/$name.tar.gz" | cut -d ' ' -f 1)
+  actual=$(sha256sum "$work/fafnirx" | cut -d ' ' -f 1)
 else
-  actual=$(shasum -a 256 "$work/$name.tar.gz" | cut -d ' ' -f 1)
+  actual=$(shasum -a 256 "$work/fafnirx" | cut -d ' ' -f 1)
 fi
 [ "$expected" = "$actual" ] || { echo "the download does not match its sha256; nothing was installed" >&2; exit 1; }
-
-tar -xzf "$work/$name.tar.gz" -C "$work"
+chmod +x "$work/fafnirx"
 
 # When this script is piped into sh, standard input is the script: the token prompt must read the terminal.
 if [ -z "${FAFNIRX_TOKEN:-}" ] && [ -r /dev/tty ]; then
-  sh "$work/$name/install.sh" "$@" </dev/tty
-  exit $?
+  "$work/fafnirx" install "$@" </dev/tty
+else
+  "$work/fafnirx" install "$@"
 fi
-sh "$work/$name/install.sh" "$@"

@@ -1,4 +1,5 @@
-import { useInfiniteQuery, useMutation } from '@tanstack/react-query'
+import { useInfiniteQuery } from '@tanstack/react-query'
+import { useApiMutation } from '@/lib/mutation'
 import { File, RotateCcw, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
@@ -41,15 +42,14 @@ export default function TrashPage() {
   const retention = trash.data?.pages[0]?.retention_days ?? 30
   const chosen = entries.filter((e) => selected.has(e.id))
 
-  const restore = useMutation({
-    mutationFn: async (list: TrashEntry[]) => {
-      let done = 0
-      for (const e of list) {
-        await api.post('/api/files/restore', { device: e.device, path: e.path, version: e.version })
-        done++
-      }
-      return done
-    },
+  const restore = useApiMutation(async (list: TrashEntry[]) => {
+    let done = 0
+    for (const e of list) {
+      await api.post('/api/files/restore', { device: e.device, path: e.path, version: e.version })
+      done++
+    }
+    return done
+  }, {
     onSuccess: (done) => {
       toast.success(t('Restored {files}', { files: plural(done, 'file') }))
       setSelected(new Set())
@@ -60,17 +60,16 @@ export default function TrashPage() {
       void refresh()
     },
   })
-  const purge = useMutation({
-    mutationFn: async (list: TrashEntry[]) => {
-      let files = 0
-      let freed = 0
-      for (let i = 0; i < list.length; i += PURGE_AT_ONCE) {
-        const done = await api.post<{ files: number; bytes: number }>('/api/trash/purge', { ids: list.slice(i, i + PURGE_AT_ONCE).map((e) => e.id) })
-        files += done.files
-        freed += done.bytes
-      }
-      return { files, freed }
-    },
+  const purge = useApiMutation(async (list: TrashEntry[]) => {
+    let files = 0
+    let freed = 0
+    for (let i = 0; i < list.length; i += PURGE_AT_ONCE) {
+      const done = await api.post<{ files: number; bytes: number }>('/api/trash/purge', { ids: list.slice(i, i + PURGE_AT_ONCE).map((e) => e.id) })
+      files += done.files
+      freed += done.bytes
+    }
+    return { files, freed }
+  }, {
     onSuccess: ({ files, freed }) => {
       toast.success(t('Deleted {files} for good, {size} freed', { files: plural(files, 'file'), size: bytes(freed) }))
       setSelected(new Set())

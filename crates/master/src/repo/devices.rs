@@ -153,12 +153,6 @@ pub fn mark_stale(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
     fafnirx_db::queries::files::mark_stale().bind(c, &id).map(drop)
 }
 
-/// (files, bytes) of the master files.
-pub fn master_totals(c: &mut impl GenericClient) -> Result<(i64, i64), Error> {
-    let t = q::master_totals().bind(c).one()?;
-    Ok((t.file_count, t.total_bytes))
-}
-
 /// device, local, source or master.
 pub fn kind_of(c: &mut impl GenericClient, id: i64) -> Result<String, Error> {
     q::device_kind().bind(c, &id).one()
@@ -175,23 +169,19 @@ pub fn id_and_kind(c: &mut impl GenericClient, folder: &str) -> Result<Option<(i
 }
 
 /// A folder a user can use, whoever owns it, as the web app shows it. The same thing is a folder of the user, one another user shared
-/// with them, or a folder of the master files: the difference is the owner and who may change it.
+/// with them, or a master folder: the difference is the owner and who may change it.
 #[derive(serde::Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Folder {
-    /// The device it is kept in (0 for a master folder).
+    /// The device row it is kept in.
     #[serde(skip)]
     pub id: i64,
     /// The stable address of the folder: it stays when the folder is renamed.
+    #[cfg_attr(test, ts(type = "string"))]
     pub public_id: uuid::Uuid,
     pub name: String,
     /// How the clients name it: `<owner>/<name>`, or `master:<path>`.
     pub folder: String,
-    /// The folder of the device it is kept in, for the file store (`_master` for a master folder).
-    #[serde(skip)]
-    pub storage: String,
-    /// Where in that device it starts: empty for the whole device, else a path without a slash at the end.
-    #[serde(skip)]
-    pub prefix: String,
     /// The user it belongs to; empty for a master folder.
     pub owner: String,
     /// Their own, not one another user shared with them.
@@ -209,17 +199,6 @@ pub struct Folder {
     pub changed_at: Option<i64>,
 }
 
-impl Folder {
-    /// The paths in the device that the folder holds start with this (empty, or a path and a slash).
-    pub fn prefix_path(&self) -> String {
-        if self.prefix.is_empty() {
-            String::new()
-        } else {
-            format!("{}/", self.prefix)
-        }
-    }
-}
-
 fn folders_matching(c: &mut impl GenericClient, user_id: i64, key: Option<&str>) -> Result<Vec<Folder>, Error> {
     Ok(q::folders_for_user()
         .bind(c, &user_id, &key)
@@ -230,8 +209,6 @@ fn folders_matching(c: &mut impl GenericClient, user_id: i64, key: Option<&str>)
             public_id: f.public_id,
             name: f.name,
             folder: f.folder,
-            storage: f.storage,
-            prefix: f.prefix,
             owner: f.owner,
             mine: f.mine,
             can_write: f.can_write,
@@ -255,38 +232,30 @@ pub fn folder(c: &mut impl GenericClient, user_id: i64, key: &str) -> Result<Opt
     Ok(folders_matching(c, user_id, Some(key))?.into_iter().next())
 }
 
-/// The paths of all master folders.
-pub fn master_prefixes(c: &mut impl GenericClient) -> Result<Vec<String>, Error> {
-    q::all_master_prefixes().bind(c).all()
+/// The id and folder (`master:<name>`) of every master folder.
+pub fn master_devices(c: &mut impl GenericClient) -> Result<Vec<(i64, String)>, Error> {
+    Ok(q::master_devices().bind(c).all()?.into_iter().map(|d| (d.id, d.folder)).collect())
 }
 
-/// Adds a master folder; false when it exists.
-pub fn insert_master_folder(c: &mut impl GenericClient, prefix: &str, now: i64) -> Result<bool, Error> {
-    Ok(q::insert_master_folder().bind(c, &prefix, &now)? > 0)
+/// The master folders that are `name`, inside it or around it.
+pub fn master_names_overlapping(c: &mut impl GenericClient, name: &str) -> Result<Vec<String>, Error> {
+    q::master_folder_names_under().bind(c, &name).all()
 }
 
-/// The path of the master folder with this id.
-pub fn master_folder_path(c: &mut impl GenericClient, public_id: uuid::Uuid) -> Result<Option<String>, Error> {
-    q::master_folder_prefix().bind(c, &public_id).opt()
+/// Makes a master folder, returning its folder name (`master:<name>`), or `None` when it exists.
+pub fn insert_master_folder(c: &mut impl GenericClient, name: &str, now: i64) -> Result<Option<String>, Error> {
+    q::insert_master_folder().bind(c, &name, &now).opt()
 }
 
-/// Gives the master folder another path (its files are moved by the caller).
-pub fn rename_master_folder(c: &mut impl GenericClient, public_id: uuid::Uuid, prefix: &str) -> Result<(), Error> {
-    q::rename_master_folder().bind(c, &prefix, &public_id).map(drop)
-}
-
-/// Removes the entry of a master folder (its files stay), returning its path.
-pub fn delete_master_folder(c: &mut impl GenericClient, public_id: uuid::Uuid) -> Result<Option<String>, Error> {
-    let prefix = q::master_folder_prefix().bind(c, &public_id).opt()?;
-    if prefix.is_some() {
-        q::delete_master_folder().bind(c, &public_id)?;
-    }
-    Ok(prefix)
+/// The device row, name and folder of the master folder with this stable id.
+pub fn master_folder_by_public_id(c: &mut impl GenericClient, public_id: uuid::Uuid) -> Result<Option<(i64, String, String)>, Error> {
+    Ok(q::master_folder_by_public_id().bind(c, &public_id).opt()?.map(|r| (r.id, r.name, r.folder)))
 }
 
 /// What a computer says about a shared folder attached to it. `name` is the shared folder when a computer is asked, and the
 /// computer when a shared folder is.
 #[derive(serde::Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct FolderState {
     pub name: String,
     pub files: i64,
@@ -348,6 +317,7 @@ pub fn folder_states_of_folder(c: &mut impl GenericClient, folder: &str, all: bo
 
 /// A user a shared folder is shared with.
 #[derive(serde::Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Member {
     pub user: String,
     /// Whether they may change what is in it.

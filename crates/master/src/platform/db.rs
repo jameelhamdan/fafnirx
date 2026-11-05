@@ -36,10 +36,85 @@ pub fn hash_token(token: &str) -> String {
 /// The channel the master listens on for changes to show live.
 pub const CHANNEL: &str = "fafnirx";
 
-/// Tells the live update stream (and so the browsers) that something changed. `topic` is one of `files`
-/// (then `key` is the device), `activity`, `devices`, `alerts`, `jobs`. Delivered when the transaction commits.
-pub fn notify(conn: &mut impl GenericClient, topic: &str, key: &str) -> Result<(), postgres::Error> {
-    let payload = serde_json::json!({ "topic": topic, "key": key }).to_string();
+/// What a change is about. Browsers learn of it through the live update stream (`web/events.rs`) and refresh what it names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Topic {
+    /// Everything may have changed: a browser that missed events looks again at all of it.
+    Resync,
+    /// Albums, tags, favorites and the timeline. Key: none.
+    Library,
+    /// A picture that someone asked for is made. Key: the id of the file.
+    Thumbs,
+    /// Files of a device. Key: the folder of the device.
+    Files,
+    /// A device or folder was added, changed or removed. Key: its folder (empty: the list).
+    Devices,
+    /// What a computer is doing now. Key: its folder.
+    Activity,
+    /// An alert was opened or closed. Key: the folder of the device it is about, or what it names.
+    Alerts,
+    /// A source or mirror ran. Key: `<user>/<source>`, or `mirrors`.
+    Jobs,
+    /// A user was added or changed. Only for administrators.
+    Users,
+}
+
+/// Who is told about a change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reach {
+    /// Everybody: not about one device, or only a hint to look again.
+    Everyone,
+    /// Whoever can see the folder that is the key (everybody when there is none).
+    Folder,
+    /// Whoever can see the folder that is the key; a key that is not a folder (a mirror) is for the administrators.
+    Source,
+    Admins,
+}
+
+impl Topic {
+    pub const ALL: [Topic; 9] = [
+        Topic::Resync,
+        Topic::Library,
+        Topic::Thumbs,
+        Topic::Files,
+        Topic::Devices,
+        Topic::Activity,
+        Topic::Alerts,
+        Topic::Jobs,
+        Topic::Users,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Topic::Resync => "resync",
+            Topic::Library => "library",
+            Topic::Thumbs => "thumbs",
+            Topic::Files => "files",
+            Topic::Devices => "devices",
+            Topic::Activity => "activity",
+            Topic::Alerts => "alerts",
+            Topic::Jobs => "jobs",
+            Topic::Users => "users",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Topic> {
+        Topic::ALL.into_iter().find(|t| t.name() == name)
+    }
+
+    pub fn reach(self) -> Reach {
+        match self {
+            Topic::Resync | Topic::Library | Topic::Thumbs => Reach::Everyone,
+            Topic::Files | Topic::Devices | Topic::Activity | Topic::Alerts => Reach::Folder,
+            Topic::Jobs => Reach::Source,
+            Topic::Users => Reach::Admins,
+        }
+    }
+}
+
+/// Tells the live update stream (and so the browsers) that something changed. Delivered when the transaction commits.
+pub fn notify(conn: &mut impl GenericClient, topic: Topic, key: &str) -> Result<(), postgres::Error> {
+    let payload = serde_json::json!({ "topic": topic.name(), "key": key }).to_string();
     conn.execute("SELECT pg_notify($1, $2)", &[&CHANNEL, &payload])?;
     Ok(())
 }
@@ -167,6 +242,15 @@ pub mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_topic_is_named_once_and_found_by_its_name() {
+        for topic in Topic::ALL {
+            assert_eq!(Topic::parse(topic.name()), Some(topic));
+        }
+        assert_eq!(Topic::parse("nothing"), None);
+        assert_eq!(Topic::Users.reach(), Reach::Admins);
+    }
 
     #[test]
     fn a_folder_pattern_takes_wildcards_literally() {

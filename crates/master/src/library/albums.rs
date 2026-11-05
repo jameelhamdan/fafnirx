@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 /// A place in the file tree: a device's folder name and a path below it.
 #[derive(Serialize, Deserialize, Clone)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, rename = "AlbumFolder"))]
 pub struct Folder {
     /// The device's folder name (`<user>/<device>`).
     device: String,
@@ -28,6 +29,7 @@ pub struct Folder {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct AlbumInfo {
     id: Id,
     name: String,
@@ -54,7 +56,7 @@ impl From<albums::Album> for AlbumInfo {
             count: a.files,
             bytes: a.bytes,
             cover: a.cover.map(Id),
-            folder: Folder { device: a.folder.0, path: a.folder.1.trim_end_matches('/').to_string() },
+            folder: Folder { device: a.folder, path: String::new() },
         }
     }
 }
@@ -122,7 +124,7 @@ pub async fn create(State(state): State<Shared>, Extension(who): Extension<Acces
     let out = run(&state, move |c| {
         // One album per folder, so asking again gives the one there is.
         let shown = find_folder(c, &who, &body.folder)?;
-        if let Some(id) = albums::following(c, who.user_id, shown.device_id, &shown.prefix)? {
+        if let Some(id) = albums::of_folder(c, who.user_id, shown.device_id)? {
             return load_album(c, &who, id);
         }
         let name = match body.name.trim() {
@@ -130,8 +132,8 @@ pub async fn create(State(state): State<Shared>, Extension(who): Extension<Acces
             _ => clean_name(&body.name)?.to_string(),
         };
         let mut tx = c.transaction()?;
-        let id = albums::insert(&mut tx, who.user_id, &name, body.description.trim(), (shown.device_id, &shown.prefix), unix_now())?;
-        db::notify(&mut tx, "library", "")?;
+        let id = albums::insert(&mut tx, who.user_id, &name, body.description.trim(), shown.device_id, unix_now())?;
+        db::notify(&mut tx, db::Topic::Library, "")?;
         let album = load_album(&mut tx, &who, id)?;
         tx.commit()?;
         Ok(album)
@@ -140,26 +142,20 @@ pub async fn create(State(state): State<Shared>, Extension(who): Extension<Acces
     Ok(Json(out))
 }
 
-/// A folder of a device the user can see, as an album shows it.
+/// A folder the user can see, as an album shows it.
 struct FolderShown {
     device_id: i64,
-    /// What the paths of its files start with: empty for the whole device, else the path and a slash.
-    prefix: String,
     /// What to call an album of it.
     name: String,
 }
 
 fn find_folder(c: &mut postgres::Client, who: &Access, folder: &Folder) -> anyhow::Result<FolderShown> {
     let device = crate::files::browse::find_device(c, who, &folder.device)?;
-    let path = input::folder_path(&folder.path)?;
-    let name = path
-        .rsplit('/')
-        .next()
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| device.name.rsplit('/').next().unwrap_or(&device.name))
-        .to_string();
-    let prefix = if path.is_empty() { path } else { path + "/" };
-    Ok(FolderShown { device_id: device.id, prefix, name })
+    if !input::folder_path(&folder.path)?.is_empty() {
+        return Err(ApiError::bad("An album shows a whole folder: make the folder you want a folder of its own").into());
+    }
+    let name = device.name.rsplit('/').next().unwrap_or(&device.name).to_string();
+    Ok(FolderShown { device_id: device.id, name })
 }
 
 #[derive(Serialize)]
@@ -227,7 +223,7 @@ pub struct AlbumEdit {
 
 pub async fn edit(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>, Json(body): Json<AlbumEdit>) -> Res<AlbumInfo> {
     let name = body.name.as_deref().map(clean_name).transpose()?.map(str::to_string);
-    let out = change(&state, "library", move |tx| {
+    let out = change(&state, crate::platform::db::Topic::Library, move |tx| {
         load_album(tx, &who, id)?;
         if let Some(name) = &name {
             albums::rename(tx, id, name)?;
@@ -257,7 +253,7 @@ pub async fn delete(State(state): State<Shared>, Extension(who): Extension<Acces
         if !albums::delete(c, who.user_id, id)? {
             return Err(ApiError::not_found("No such album").into());
         }
-        db::notify(c, "library", "")?;
+        db::notify(c, db::Topic::Library, "")?;
         Ok(())
     })
     .await

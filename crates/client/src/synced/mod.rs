@@ -11,7 +11,7 @@
 mod spellings;
 
 use self::spellings::Spellings;
-use crate::config::{Config, Folder, Mode, SyncedFolder};
+use crate::config::{Config, Folder, Mode};
 use crate::daemon::{self, SyncedStatus};
 use crate::net;
 use crate::sync::guard;
@@ -38,12 +38,9 @@ const CURSOR: &str = "synced_cursor";
 /// A synced folder attached to a folder of this computer.
 pub struct Attached {
     engine: Engine,
-    synced: SyncedFolder,
+    synced: Folder,
     host: String,
     spellings: Spellings,
-    /// Files answered at the start of this pull, with the master's content the answer was about: if the master lists that
-    /// same change again (the cursor was held back), it is not a new conflict.
-    answered: HashMap<String, Vec<u8>>,
     read_only: bool,
 }
 
@@ -97,7 +94,7 @@ enum Applied {
 /// How far before its own time the master lists changes (`list_changes` rewinds its cursor by this much).
 const LISTING_LAG: i64 = 2;
 
-/// The state database of a synced folder: one per folder, beside the client's own. `key` is the stable id of the folder (`SyncedFolder::key`),
+/// The state database of a synced folder: one per folder, beside the client's own. `key` is the stable id of the folder (`Folder::key`),
 /// so that a folder renamed on the master keeps its state.
 pub fn state_file(state_dir: &Path, key: &str) -> PathBuf {
     let id = hex::encode(&chunk_hash(key.as_bytes())[..4]);
@@ -106,7 +103,7 @@ pub fn state_file(state_dir: &Path, key: &str) -> PathBuf {
 
 /// What a synced folder is doing, from its state database alone. It is all kept there (what is in step, what is held back,
 /// how the last cycle ended), so `status` and `release-deletes` work with the client stopped.
-pub fn status_of(synced: &SyncedFolder, state: &State) -> SyncedStatus {
+pub fn status_of(synced: &Folder, state: &State) -> SyncedStatus {
     let (files, bytes) = state.totals().unwrap_or((0, 0));
     let (last_cycle, last_error) = state.outcome().unwrap_or_default();
     SyncedStatus {
@@ -139,7 +136,7 @@ pub fn status_of(synced: &SyncedFolder, state: &State) -> SyncedStatus {
 }
 
 impl Attached {
-    pub fn open(cfg: &Config, token: &str, state_dir: &Path, synced: &SyncedFolder, errors: Arc<Mutex<Vec<String>>>) -> Result<Self> {
+    pub fn open(cfg: &Config, token: &str, state_dir: &Path, synced: &Folder, errors: Arc<Mutex<Vec<String>>>) -> Result<Self> {
         let client = net::synced_client(cfg, token, &crate::service::instance::client_id(state_dir), synced.key())?;
         let mut state = State::open(&state_file(state_dir, synced.key()))?;
         state.adopt_folder(&synced.path.display().to_string())?;
@@ -153,14 +150,7 @@ impl Attached {
         engine.exclude = Some(state_dir.to_path_buf());
         engine.group = guard::at_the_top;
         let host = gethostname::gethostname().to_string_lossy().into_owned();
-        Ok(Self {
-            engine,
-            synced: synced.clone(),
-            host,
-            spellings: Spellings::new(&synced.path),
-            answered: HashMap::new(),
-            read_only: false,
-        })
+        Ok(Self { engine, synced: synced.clone(), host, spellings: Spellings::new(&synced.path), read_only: false })
     }
 
     pub fn name(&self) -> &str {
@@ -168,7 +158,7 @@ impl Attached {
     }
 
     /// Whether this is still the folder attached in the config.
-    pub fn is(&self, synced: &SyncedFolder) -> bool {
+    pub fn is(&self, synced: &Folder) -> bool {
         self.synced.name == synced.name && self.synced.path == synced.path
     }
 
@@ -211,8 +201,7 @@ impl Attached {
         self.engine.skip = self.engine.state.pending_paths()?;
         // The engine collects one folder with no name of its own: the files of a synced folder are at the top.
         let mut one = cfg.clone();
-        one.folders = vec![Folder { path: self.synced.path.clone(), name: String::new() }];
-        one.synced.clear();
+        one.folders = vec![Folder::computer(self.synced.path.clone(), String::new())];
         let pushed = self.engine.cycle(&one).await?;
         report.add(&pushed);
         Ok(report)
@@ -222,7 +211,6 @@ impl Attached {
     async fn pull(&mut self, report: &mut Report) -> Result<(), SyncError> {
         // What was read of the folders is only good for one pull: the person changes them in between.
         self.spellings.clear();
-        self.answered.clear();
         self.apply_answers(report).await?;
         let listing = self.list_changes().await?;
         let cursor = listing.cursor;
@@ -371,7 +359,7 @@ impl Attached {
     /// A path has other content on the master than it had when it was last in step.
     async fn changed_on_master(&mut self, path: &str, target: &Path, change: &pb::Change, deletions: &mut Vec<(Synced, PathBuf)>, report: &mut Report) -> Result<(), SyncError> {
         let base = self.engine.state.synced(path)?;
-        if base.as_ref().is_some_and(|b| b.root_hash == change.root_hash) || self.answered.get(path).is_some_and(|answered| *answered == change.root_hash) {
+        if base.as_ref().is_some_and(|b| b.root_hash == change.root_hash) {
             return Ok(());
         }
         // Another spelling of this name is here (a different case, or of a folder above it). Every kind of computer treats that as
@@ -556,16 +544,6 @@ impl Attached {
                 self.keep_as_conflict(path, target, report)?;
                 Settled::Receive
             }
-            Mode::Mine => {
-                // No longer in step, so the next send makes it the master's current version (the old one stays in its history).
-                report.conflicts += 1;
-                self.engine.report_error(format!(
-                    "{}/{path}: changed here and on the server. This computer's version is kept and sent",
-                    self.synced.name
-                ));
-                state.remove_synced(path)?;
-                Settled::Leave
-            }
             Mode::Ask => {
                 let (local_size, local_mtime_ns) = local_stat(target)?.unwrap_or_default();
                 let mut pending = Pending { path: path.to_string(), local_size, local_mtime_ns, found_at: unix_now(), ..Default::default() };
@@ -642,14 +620,9 @@ impl Attached {
             mode: p.mode,
             from_web: p.from_web,
         };
-        // This computer's version stays and is sent. (If it is gone, the person deleted it meanwhile: nothing is left to keep.)
-        if choice == "mine" && here {
-            self.engine.state.remove_synced(&p.path)?;
-            self.answered.insert(p.path.clone(), p.root_hash.clone());
-            return Ok(());
-        }
         if here {
-            if choice == "both" {
+            // (An answer `mine`, given before that choice was removed and not yet applied, keeps both.)
+            if matches!(choice, "both" | "mine") {
                 self.keep_as_conflict(&p.path, &target, report)?;
             } else {
                 self.put_aside(&p.path, &target, report)?;
@@ -927,15 +900,16 @@ mod tests {
             let held = Arc::new(Mutex::new(Calls::default()));
             let url = serve(held.clone()).await;
             let (folder, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-            let synced = SyncedFolder {
+            let synced = Folder {
                 name: "alice/family".into(),
                 path: folder.path().to_path_buf(),
+                target: crate::config::Target::Folder,
                 id: None,
                 mode: Mode::Keep,
                 ask_timeout_hours: 24,
             };
             let mut cfg = Config::new(url);
-            cfg.synced.push(synced.clone());
+            cfg.folders.push(synced.clone());
             let attached = Attached::open(&cfg, "token", state.path(), &synced, Arc::new(Mutex::new(Vec::new()))).unwrap();
             Self { attached, cfg, held, folder, _state: state }
         }
@@ -1068,18 +1042,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mine_keeps_ours_and_sends_it() {
-        let mut rig = Rig::new().await.with_policy(Mode::Mine);
-        std::fs::write(rig.folder.path().join("b.txt"), "mine").unwrap();
-        rig.remote_has("b.txt", b"theirs");
-        let report = rig.cycle().await;
-        assert_eq!((report.downloaded, report.conflicts), (0, 1));
-        assert_eq!(rig.local("b.txt").as_deref(), Some("mine"));
-        assert!(rig.sent("b.txt"), "and it becomes the master's version");
-        assert!(rig.names() == ["b.txt"], "nothing is put aside: {:?}", rig.names());
-    }
-
-    #[tokio::test]
     async fn a_file_edited_here_and_deleted_there_follows_the_policy() {
         let mut rig = Rig::new().await.with_policy(Mode::Both);
         rig.remote_has("d.txt", b"one");
@@ -1091,15 +1053,6 @@ mod tests {
         let aside = rig.aside();
         assert_eq!(aside.len(), 1, "{aside:?}");
         assert!(!rig.sent("d.txt") && rig.conflicts().is_empty());
-
-        let mut rig = Rig::new().await.with_policy(Mode::Mine);
-        rig.remote_has("d.txt", b"one");
-        rig.cycle().await;
-        std::fs::write(rig.folder.path().join("d.txt"), "edited here").unwrap();
-        rig.remote_deleted("d.txt");
-        rig.cycle().await;
-        assert_eq!(rig.local("d.txt").as_deref(), Some("edited here"));
-        assert!(rig.sent("d.txt"), "and it is sent again");
     }
 
     #[cfg(any(windows, target_os = "macos", feature = "tray"))]
@@ -1130,7 +1083,7 @@ mod tests {
 
         #[tokio::test]
         async fn the_answer_is_applied_at_the_next_cycle() {
-            for (choice, name, ours_aside, sent) in [("theirs", "theirs", true, false), ("mine", "mine", false, true), ("both", "theirs", false, false)] {
+            for (choice, name, ours_aside, sent) in [("theirs", "theirs", true, false), ("both", "theirs", false, false)] {
                 let mut rig = waiting().await;
                 assert_eq!(rig.attached.engine.state.answer_pending(Some("b.txt"), choice).unwrap(), 1);
                 rig.cycle().await;
@@ -1147,11 +1100,11 @@ mod tests {
             let mut rig = waiting().await;
             // The cursor was held back, so the master lists the same change once more.
             rig.remote_has("b.txt", b"theirs");
-            rig.attached.engine.state.answer_pending(Some("b.txt"), "mine").unwrap();
+            rig.attached.engine.state.answer_pending(Some("b.txt"), "theirs").unwrap();
             rig.cycle().await;
             assert!(rig.attached.engine.state.pendings().unwrap().is_empty(), "not asked again");
-            assert_eq!(rig.local("b.txt").as_deref(), Some("mine"));
-            assert!(rig.sent("b.txt"));
+            assert_eq!(rig.local("b.txt").as_deref(), Some("theirs"));
+            assert!(!rig.sent("b.txt"));
         }
 
         #[tokio::test]
@@ -1433,9 +1386,10 @@ mod tests {
     async fn held_deletions_are_kept_in_the_state_so_they_show_with_the_client_stopped() {
         let (rig, _) = held_rig().await;
         assert_eq!(rig.attached.engine.state.pull_hold().unwrap().map(|(n, _)| n), Some(12));
-        let synced = SyncedFolder {
+        let synced = Folder {
             name: "alice/family".into(),
             path: rig.folder.path().to_path_buf(),
+            target: crate::config::Target::Folder,
             id: None,
             mode: Mode::Keep,
             ask_timeout_hours: 24,

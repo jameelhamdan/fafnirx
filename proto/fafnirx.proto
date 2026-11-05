@@ -29,10 +29,6 @@ service Collector {
   // Marks a path deleted on the device. Nothing is removed from the master.
   rpc MarkDeleted(DeleteRequest) returns (DeleteResponse);
 
-  // Client binary updates, hosted by the master and signed off-box.
-  rpc GetUpdateInfo(UpdateInfoRequest) returns (UpdateInfo);
-  rpc DownloadUpdate(UpdateInfoRequest) returns (stream UpdateChunk);
-
   // The folders of the user of the calling device.
   rpc ListFolders(ListFoldersRequest) returns (ListFoldersResponse);
 
@@ -131,22 +127,6 @@ message DeleteRequest {
 }
 
 message DeleteResponse {}
-
-message UpdateInfoRequest {
-  string platform = 1;          // e.g. "windows-x86_64"
-}
-
-message UpdateInfo {
-  bool available = 1;
-  string version = 2;
-  bytes sha256 = 3;
-  bytes signature = 4;          // ed25519 over "fafnirx-update\n<platform>\n<version>\n<sha256 hex>"
-  uint64 size = 5;
-}
-
-message UpdateChunk {
-  bytes data = 1;
-}
 
 message ListFoldersRequest {}
 

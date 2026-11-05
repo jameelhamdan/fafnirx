@@ -1,4 +1,5 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
+import { useApiMutation } from '@/lib/mutation'
 import { ArrowLeft, FolderOpen, Image as ImageIcon, Pencil, Trash2 } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
@@ -27,13 +28,12 @@ function EditAlbum({ album, onClose }: { album: AlbumInfo; onClose: () => void }
   const refresh = useRefreshLibrary()
   const [name, setName] = useState(album.name)
   const [description, setDescription] = useState(album.description)
-  const save = useMutation({
-    mutationFn: () => api.patch(`/api/albums/${album.id}`, { name, description }),
+  const save = useApiMutation(() => api.patch(`/api/albums/${album.id}`, { name, description }), {
     onSuccess: () => {
       void refresh()
       onClose()
     },
-    onError: (e) => toast.error(e.message),
+    toastError: true,
   })
 
   return (
@@ -73,15 +73,13 @@ export default function Album() {
   const source = useMemo(() => (assets ? { assets } : null), [assets])
   useViewerSource(source)
 
-  const cover = useMutation({
-    mutationFn: (file: string) => api.patch(`/api/albums/${id}`, { cover: file }),
+  const cover = useApiMutation((file: string) => api.patch(`/api/albums/${id}`, { cover: file }), {
     onSuccess: () => { toast.success(t('Cover changed')); clear(); void refresh() },
-    onError: (e) => toast.error(e.message),
+    toastError: true,
   })
-  const remove = useMutation({
-    mutationFn: () => api.delete(`/api/albums/${id}`),
+  const remove = useApiMutation(() => api.delete(`/api/albums/${id}`), {
     onSuccess: () => { toast.success(t('Album deleted. Its photos are untouched.')); void refresh(); navigate('/albums') },
-    onError: (e) => toast.error(e.message),
+    toastError: true,
   })
 
   if (error) {

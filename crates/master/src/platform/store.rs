@@ -1,7 +1,7 @@
 //! Plain-file store. The current version of every file lives under its own name:
 //!   files/users/<user>/<device>/<path>             the live tree: the files of a device (its "folder" is <user>/<device>)
-//!   files/<path>                                   master files, which belong to no user (folder `_master`)
-//!   versions/<version id>/<folder>/<path>          what a newer version or a deletion replaced (master: no folder)
+//!   files/<name>/<path>                            a master folder, which belongs to no user (its "folder" is master:<name>)
+//!   versions/<version id>/<folder>/<path>          what a newer version or a deletion replaced
 //!   tmp/                                         uploads and downloads that are not complete yet
 
 use anyhow::{bail, Context, Result};
@@ -11,20 +11,25 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// The folder name of the master files, those that belong to no user. No user or device can be called this.
-pub const MASTER_FOLDER: &str = "_master";
+/// The start of the name of a master folder, a folder of the master files that belongs to no user: `master:<path>`. The same
+/// words the clients and the API use.
+pub const MASTER_PREFIX: &str = "master:";
+
+/// Whether a folder (`<user>/<device>`, or `master:<path>`) is a master folder.
+pub fn is_master(folder: &str) -> bool {
+    folder.starts_with(MASTER_PREFIX)
+}
 
 /// The folder of `files/` that holds the folders of all users, apart from the master files, so that a network share can
 /// make it read-only in one place. Master files cannot start with this name.
 pub const USERS_DIR: &str = "users";
 
 /// A file as modules and the streaming proxy name it: its place below `files/` (`users/<user>/<device>/<path>` for the files
-/// of a device, just `<path>` for a master file).
+/// of a device, `<name>/<path>` for a file of the master folder `<name>`).
 pub fn tree_path(folder: &str, path: &str) -> String {
-    if folder == MASTER_FOLDER {
-        path.to_string()
-    } else {
-        format!("{USERS_DIR}/{folder}/{path}")
+    match folder.strip_prefix(MASTER_PREFIX) {
+        Some(name) => format!("{name}/{path}"),
+        None => format!("{USERS_DIR}/{folder}/{path}"),
     }
 }
 
@@ -48,10 +53,18 @@ impl Store {
         Ok(store)
     }
 
-    /// `<base>/<folder>`: `<user>/<device>` (below `users/` when `nested`), or `base` itself for the master files.
+    /// `<base>/<folder>`: `<user>/<device>` (below `users/` when `nested`), or `<name>` for the master folder `master:<name>`.
     fn folder_in(base: &Path, folder: &str, nested: bool) -> Result<PathBuf> {
-        if folder == MASTER_FOLDER {
-            return Ok(base.to_path_buf());
+        if let Some(name) = folder.strip_prefix(MASTER_PREFIX) {
+            let mut out = base.to_path_buf();
+            for (n, part) in name.split('/').enumerate() {
+                let reserved = n == 0 && part.to_lowercase() == USERS_DIR;
+                if part.is_empty() || part.contains(['\\', ':']) || part.starts_with('.') || reserved {
+                    bail!("master folder {folder:?} cannot be stored");
+                }
+                out.push(part);
+            }
+            return Ok(out);
         }
         let mut out = base.to_path_buf();
         if nested {
@@ -84,12 +97,12 @@ impl Store {
         Ok(out)
     }
 
-    /// The live tree: one folder per user with one folder per device in it, and the master files beside them.
+    /// The live tree: one folder per user with one folder per device in it, and the master folders beside them.
     pub fn live_root(&self) -> &Path {
         &self.files
     }
 
-    /// The folder of a device in the live tree (the whole live tree for the master files).
+    /// The folder of a device in the live tree.
     pub fn live_dir(&self, folder: &str) -> PathBuf {
         Self::folder_in(&self.files, folder, true).unwrap_or_else(|_| self.files.join("\0invalid"))
     }
@@ -106,6 +119,9 @@ impl Store {
         if from.is_dir() {
             if to.exists() {
                 bail!("{} exists already", to.display());
+            }
+            if let Some(parent) = to.parent() {
+                fs::create_dir_all(parent)?;
             }
             fs::rename(&from, &to).with_context(|| format!("move {} to {}", from.display(), to.display()))?;
         }

@@ -81,11 +81,8 @@ fn offline_alerts(conn: &mut impl GenericClient) -> Result<(), postgres::Error> 
     let rows = devices::clients_last_seen(conn)?;
     for (name, last_seen) in rows {
         let idle = unix_now() - last_seen;
-        if idle > limit {
-            alerts::upsert(conn, "device_offline", &name, &format!("Device {name} has not been seen for {idle} s"))?;
-        } else {
-            alerts::resolve(conn, "device_offline", &name)?;
-        }
+        let message = (idle > limit).then(|| format!("Device {name} has not been seen for {idle} s"));
+        alerts::set(conn, "device_offline", &name, message.as_deref())?;
     }
     Ok(())
 }
@@ -98,11 +95,8 @@ fn disk_alert(conn: &mut impl GenericClient, data_dir: &std::path::Path) -> Resu
         return Ok(());
     }
     let used = 100.0 * (total - avail) as f64 / total as f64;
-    if used > DISK_ALERT_PERCENT {
-        alerts::upsert(conn, "disk_usage", "", &format!("Master disk is {used:.0}% full"))
-    } else {
-        alerts::resolve(conn, "disk_usage", "")
-    }
+    let message = (used > DISK_ALERT_PERCENT).then(|| format!("Master disk is {used:.0}% full"));
+    alerts::set(conn, "disk_usage", "", message.as_deref())
 }
 
 pub fn hourly(db: &Db, store: &Store, cache_root: &Path) -> Result<()> {

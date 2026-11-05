@@ -1,19 +1,19 @@
 //! Who is asking and what they may reach.
 //!
-//! Every file belongs to a device, and a device belongs to a user or, for the master files, to nobody. The folder of a
-//! device (`<user>/<device>`, or `_master`) is how the API names it, so the rules are about folders:
+//! Every file belongs to a device, and a device belongs to a user or, for a master folder, to nobody. The folder of a
+//! device (`<user>/<device>`, or `master:<name>`) is how the API names it, so the rules are about folders:
 //!
-//! |          | own devices | master files | other users' devices | users, settings, mirrors, sources |
-//! |----------|-------------|--------------|----------------------|-----------------------------------|
-//! | admin    | read, write | read, write  | read, write          | yes                               |
-//! | normal   | read, write | read, write  | no                   | no                                |
-//! | readonly | none        | read         | no                   | no                                |
+//! |          | own devices | master folders | other users' devices | users, settings, mirrors, sources |
+//! |----------|-------------|----------------|----------------------|-----------------------------------|
+//! | admin    | read, write | read, write    | read, write          | yes                               |
+//! | normal   | read, write | read, write    | no                   | no                                |
+//! | readonly | none        | read           | no                   | no                                |
 //!
 //! On top of that, a shared folder whose owner added the user is theirs to read, and to write when the owner allowed it
-//! (never for a read-only account).
+//! (never for a read-only account). The folders a user can use, and whether they may change each, are decided in one place, the
+//! query `folders_for_user`; this only looks the folder up in what it gave.
 
 use super::ApiError;
-use crate::platform::store::MASTER_FOLDER;
 use crate::repo::Viewer;
 use axum::http::StatusCode;
 
@@ -49,8 +49,8 @@ pub struct Access {
     pub user_id: i64,
     pub name: String,
     pub role: Role,
-    /// The shared folders of other users this user was added to (`<owner>/<name>`), and whether they may change them.
-    pub shared_with_me: Vec<(String, bool)>,
+    /// The folders this user can use (their own, those shared with them, the master folders), and whether they may change each.
+    pub folders: Vec<(String, bool)>,
 }
 
 fn forbidden(what: &str) -> ApiError {
@@ -64,19 +64,12 @@ impl Access {
 
     /// Whether the folder of a device is one this user may look at.
     pub fn can_see(&self, folder: &str) -> bool {
-        if self.shared_with_me.iter().any(|(f, _)| f == folder) {
-            return true;
-        }
-        match self.role {
-            Role::Admin => true,
-            Role::Normal => folder == MASTER_FOLDER || self.owns(folder),
-            Role::Readonly => folder == MASTER_FOLDER,
-        }
+        self.is_admin() || self.folders.iter().any(|(f, _)| f == folder) || (self.role == Role::Normal && self.owns(folder))
     }
 
     /// Whether the folder of a device is one this user may add, change or delete files in.
     pub fn can_write(&self, folder: &str) -> bool {
-        match (self.role, self.shared_with_me.iter().find(|(f, _)| f == folder)) {
+        match (self.role, self.folders.iter().find(|(f, _)| f == folder)) {
             (Role::Readonly, _) => false,
             (Role::Admin, _) => true,
             (_, Some((_, may_write))) => *may_write,
@@ -150,14 +143,26 @@ mod tests {
     use super::*;
 
     fn access(role: Role) -> Access {
-        Access { user_id: 7, name: "bob".into(), role, shared_with_me: vec![("alice/family".into(), false)] }
+        // What `folders_for_user` gives bob: a master folder, his own folder and a folder alice shared with him to read.
+        let writes = role != Role::Readonly;
+        Access {
+            user_id: 7,
+            name: "bob".into(),
+            role,
+            // (a read-only account has no folders of its own)
+            folders: [("master:Photos", true), ("bob/laptop", writes), ("alice/family", false)]
+                .into_iter()
+                .filter(|(f, _)| writes || *f != "bob/laptop")
+                .map(|(f, w)| (f.to_string(), w && writes))
+                .collect(),
+        }
     }
 
     #[test]
     fn what_each_role_can_reach() {
         let (admin, normal, readonly) = (access(Role::Admin), access(Role::Normal), access(Role::Readonly));
         for (folder, seen_by, written_by) in [
-            ("_master", [true, true, true], [true, true, false]),
+            ("master:Photos", [true, true, true], [true, true, false]),
             ("bob/laptop", [true, true, false], [true, true, false]),
             ("alice/laptop", [true, false, false], [true, false, false]),
             ("bobby/laptop", [true, false, false], [true, false, false]),
@@ -174,10 +179,10 @@ mod tests {
 
         // The owner can allow writing, to a normal account only.
         let mut allowed = access(Role::Normal);
-        allowed.shared_with_me = vec![("alice/family".into(), true)];
+        allowed.folders = vec![("alice/family".into(), true)];
         assert!(allowed.can_write("alice/family") && !allowed.can_write("alice/other"));
         let mut read_only_account = access(Role::Readonly);
-        read_only_account.shared_with_me = vec![("alice/family".into(), true)];
+        read_only_account.folders = vec![("alice/family".into(), true)];
         assert!(read_only_account.can_see("alice/family") && !read_only_account.can_write("alice/family"));
     }
 }

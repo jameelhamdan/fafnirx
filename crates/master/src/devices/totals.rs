@@ -20,8 +20,8 @@ pub fn refresh(conn: &mut Client, device_id: i64) -> Result<()> {
     let Some(folder) = devices::lock(&mut tx, device_id)? else {
         return Ok(());
     };
-    sql::devices::update_totals().bind(&mut tx, &unix_now(), &device_id).map(drop)?;
-    db::notify(&mut tx, "devices", &folder)?;
+    sql::devices::update_totals().bind(&mut tx, &device_id).map(drop)?;
+    db::notify(&mut tx, db::Topic::Devices, &folder)?;
     tx.commit()?;
     Ok(())
 }

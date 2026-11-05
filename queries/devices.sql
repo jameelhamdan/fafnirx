@@ -26,12 +26,12 @@ ON CONFLICT (device_id) DO UPDATE SET updated_at = EXCLUDED.updated_at, phase = 
 SELECT d.name, d.kind, d.created_at, d.revoked_at, d.hostname, d.os, d.ip, d.client_version, d.disk_total,
        d.disk_free, d.last_seen, d.last_collected, d.total_bytes, d.file_count,
        a.updated_at AS activity_at, a.phase, a.current_file, a.files_done, a.files_total, a.bytes_done, a.bytes_total, a.speed_bps,
-       u.name AS user_name, d.folder
+       COALESCE(u.name, '') AS user_name, d.folder
 FROM devices d
-JOIN users u ON u.id = d.user_id
+LEFT JOIN users u ON u.id = d.user_id
 LEFT JOIN device_activity a ON a.device_id = d.id
 WHERE (:folder::text IS NULL OR d.folder = :folder) AND visible(d, :user::bigint, :all::boolean)
-ORDER BY u.name, d.name;
+ORDER BY d.folder;
 
 --! user_for_device : (id, role)
 SELECT id, role FROM users WHERE name = :name AND disabled_at IS NULL;
@@ -56,7 +56,7 @@ SELECT 1 FROM devices WHERE folder = :folder AND kind IN ('device', 'local');
 SELECT folder FROM devices WHERE id = :id FOR UPDATE;
 
 --! update_totals
-UPDATE devices d SET file_count = t.live, total_bytes = t.bytes, deleted_files = t.gone, totals_stale = FALSE, totals_at = :now
+UPDATE devices d SET file_count = t.live, total_bytes = t.bytes, deleted_files = t.gone, totals_stale = FALSE
 FROM (SELECT COUNT(*) FILTER (WHERE f.deleted_at IS NULL) AS live,
              COALESCE(SUM(v.size) FILTER (WHERE f.deleted_at IS NULL), 0)::BIGINT AS bytes,
              COUNT(*) FILTER (WHERE f.deleted_at IS NOT NULL AND f.deleted_by IS DISTINCT FROM 'rename') AS gone
@@ -79,9 +79,6 @@ FROM devices d WHERE visible(d, :user::bigint, :all::boolean);
 --! mark_totals_stale
 UPDATE devices SET totals_stale = TRUE WHERE id = ANY(:ids);
 
---! master_totals
-SELECT file_count, total_bytes FROM devices WHERE kind = 'master';
-
 --! device_kind
 SELECT kind FROM devices WHERE id = :id;
 
@@ -96,31 +93,20 @@ SELECT id, kind FROM devices WHERE folder = :folder;
 
 --! folders_for_user (key?) : (last_collected?)
 -- Every folder a user can use, whoever owns it: their own, those whose owner added them, and the master folders. `folder` is how
--- clients name it (`<owner>/<name>`, `master:<path>`), `storage` the folder of the device it is kept in, `prefix` where in the device
--- it starts (empty for the whole device). A read-only account never writes. `key` narrows it to one: its name (for one's own), its
--- full name or its stable id.
-SELECT d.id, d.public_id, d.name, d.folder, d.folder AS storage, ''::text AS prefix, u.name AS owner, TRUE AS mine,
-       u.role <> 'readonly' AS can_write, EXISTS (SELECT 1 FROM shared_members m WHERE m.folder_id = d.id) AS shared, FALSE AS master,
+-- clients name it (`<owner>/<name>`, `master:<path>`). A read-only account never writes. `key` narrows it to one: the name of one's
+-- own, its full name or its stable id.
+SELECT d.id, d.public_id, d.name, d.folder, COALESCE(o.name, '') AS owner, COALESCE(d.user_id = :user_id, FALSE) AS mine,
+       me.role <> 'readonly' AND (d.kind = 'master' OR d.user_id = :user_id OR COALESCE(m.can_write, FALSE)) AS can_write,
+       d.kind = 'master' OR EXISTS (SELECT 1 FROM shared_members s WHERE s.folder_id = d.id) AS shared, d.kind = 'master' AS master,
        d.created_at, d.file_count AS files, d.total_bytes AS bytes, d.last_collected
-FROM devices d JOIN users u ON u.id = d.user_id
-WHERE d.kind = 'local' AND d.user_id = :user_id AND u.disabled_at IS NULL
-  AND (:key::text IS NULL OR d.name = :key OR d.folder = :key OR d.public_id::text = :key)
-UNION ALL
-SELECT d.id, d.public_id, d.name, d.folder, d.folder, ''::text, o.name, FALSE, m.can_write AND u.role <> 'readonly', TRUE, FALSE,
-       d.created_at, d.file_count, d.total_bytes, d.last_collected
-FROM shared_members m JOIN devices d ON d.id = m.folder_id JOIN users o ON o.id = d.user_id JOIN users u ON u.id = m.user_id
-WHERE d.kind = 'local' AND m.user_id = :user_id AND o.disabled_at IS NULL AND u.disabled_at IS NULL
-  AND (:key::text IS NULL OR d.folder = :key OR d.public_id::text = :key)
-UNION ALL
-SELECT 0, mf.public_id, mf.prefix, 'master:' || mf.prefix, '_master', mf.prefix, '', FALSE, u.role <> 'readonly', TRUE, TRUE, mf.created_at,
-       (SELECT COUNT(*) FROM files f WHERE f.device_id = 0 AND f.deleted_at IS NULL AND starts_with(f.path, mf.prefix || '/')),
-       (SELECT COALESCE(SUM(v.size), 0)::bigint FROM files f JOIN versions v ON v.id = f.current_version_id
-         WHERE f.device_id = 0 AND f.deleted_at IS NULL AND starts_with(f.path, mf.prefix || '/')),
-       (SELECT MAX(v.created_at) FROM files f JOIN versions v ON v.id = f.current_version_id
-         WHERE f.device_id = 0 AND starts_with(f.path, mf.prefix || '/'))
-FROM master_folders mf JOIN users u ON u.id = :user_id AND u.disabled_at IS NULL
-WHERE :key::text IS NULL OR 'master:' || mf.prefix = :key OR mf.public_id::text = :key
-ORDER BY 4;
+FROM devices d
+JOIN users me ON me.id = :user_id AND me.disabled_at IS NULL
+LEFT JOIN users o ON o.id = d.user_id
+LEFT JOIN shared_members m ON m.folder_id = d.id AND m.user_id = :user_id
+WHERE d.kind IN ('local', 'master')
+  AND (d.kind = 'master' OR d.user_id = :user_id OR (m.user_id IS NOT NULL AND o.disabled_at IS NULL))
+  AND (:key::text IS NULL OR (d.user_id = :user_id AND d.name = :key) OR d.folder = :key OR d.public_id::text = :key)
+ORDER BY d.folder;
 
 --! clear_folder_state
 DELETE FROM device_folder_state WHERE device_id = :device_id;
@@ -163,21 +149,34 @@ SELECT id FROM files WHERE device_id = :id;
 DELETE FROM events WHERE device_id = :id;
 
 --! delete_folder_device
--- A folder with a source writing into it is not removed: the source would have nowhere to go.
-DELETE FROM devices WHERE id = :id AND kind = 'local' AND NOT EXISTS (SELECT 1 FROM sources s WHERE s.device_id = devices.id);
+-- A folder with a source writing into it, or a mirror holding it, is not removed.
+DELETE FROM devices WHERE id = :id AND kind IN ('local', 'master') AND NOT EXISTS (SELECT 1 FROM links l WHERE l.folder_id = devices.id);
 
 --! ensure_local_device
 INSERT INTO devices (name, kind, token_hash, created_at, user_id) VALUES (:name, 'local', '!', :now, :user_id)
 ON CONFLICT (user_id, name) DO UPDATE SET name = devices.name RETURNING id;
 
---! device_for_rename : (user_name)
--- The row of a folder that can be renamed, locked so that nothing else renames it meanwhile.
-SELECT d.id, d.name, d.kind, d.folder, d.user_id, u.name AS user_name
-FROM devices d JOIN users u ON u.id = d.user_id
-WHERE d.folder = :folder AND d.kind = 'local' FOR UPDATE OF d;
+--! device_for_rename : (user_id?)
+-- The row of a folder that can be renamed (one of a user, or a master folder), locked so that nothing else renames it meanwhile.
+SELECT d.id, d.name, d.kind, d.folder, d.user_id, COALESCE(u.name, '') AS user_name
+FROM devices d LEFT JOIN users u ON u.id = d.user_id
+WHERE d.folder = :folder AND d.kind IN ('local', 'master') FOR UPDATE OF d;
 
---! name_taken
-SELECT EXISTS (SELECT 1 FROM devices WHERE user_id = :user_id AND name = :name) AS taken;
+--! name_taken (user_id?)
+SELECT EXISTS (SELECT 1 FROM devices WHERE user_id IS NOT DISTINCT FROM :user_id::bigint AND name = :name AND kind IN ('device', 'local', 'master')) AS taken;
+
+--! master_devices
+SELECT id, folder FROM devices WHERE kind = 'master' ORDER BY name;
+
+--! insert_master_folder
+INSERT INTO devices (name, kind, token_hash, created_at) VALUES (:name, 'master', '!', :now) ON CONFLICT DO NOTHING RETURNING folder;
+
+--! master_folder_by_public_id
+SELECT id, name, folder FROM devices WHERE public_id = :public_id AND kind = 'master';
+
+--! master_folder_names_under
+-- The master folders at, inside or around `name`, for the rule that master folders do not nest.
+SELECT name FROM devices WHERE kind = 'master' AND (lower(name) = lower(:name) OR starts_with(lower(name), lower(:name) || '/') OR starts_with(lower(:name), lower(name) || '/'));
 
 --! rename_device
 -- The trigger `devices_folder_renamed` makes the folder again.
@@ -194,25 +193,17 @@ UPDATE alerts SET key = :new WHERE key = :old AND resolved_at IS NULL
 --! rename_folder_in_folder_state
 UPDATE device_folder_state SET folder = :new WHERE folder = :old;
 
---! rename_folder_in_mirror_scopes
--- A mirror's scope is a path below files/ without users/: it follows the folder it is, or is inside.
-UPDATE mirrors SET scope = :new || substr(scope, length(:old) + 1)
-WHERE scope = :old OR starts_with(scope, :old || '/');
-
 --! device_version_ids
 SELECT v.id FROM versions v JOIN files f ON f.id = v.file_id WHERE f.device_id = :id;
 
---! all_master_prefixes
-SELECT prefix FROM master_folders;
+--! folder_links : (last_status?, owner?)
+-- The sources that write into a folder and the mirrors that hold it (or everything): a user's own sources, or all of them.
+SELECT l.direction, l.name, u.name AS owner, l.kind, l.last_status
+FROM links l LEFT JOIN users u ON u.id = l.user_id
+WHERE (l.direction = 'in' AND l.folder_id = :id AND (:all::boolean OR l.user_id = :user::bigint))
+   OR (l.direction = 'out' AND :all::boolean AND (l.folder_id IS NULL OR l.folder_id = :id))
+ORDER BY l.name;
 
---! insert_master_folder
-INSERT INTO master_folders (prefix, created_at) VALUES (:prefix, :now) ON CONFLICT (prefix) DO NOTHING;
-
---! delete_master_folder
-DELETE FROM master_folders WHERE public_id = :public_id;
-
---! rename_master_folder
-UPDATE master_folders SET prefix = :prefix WHERE public_id = :public_id;
-
---! master_folder_prefix
-SELECT prefix FROM master_folders WHERE public_id = :public_id;
+--! folder_album
+-- The album of the user that is a shortcut to the folder.
+SELECT id, name FROM albums WHERE folder_device_id = :id AND user_id = :user::bigint LIMIT 1;

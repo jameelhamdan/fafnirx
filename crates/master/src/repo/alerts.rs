@@ -1,6 +1,6 @@
 //! Alerts: what is wrong and needs somebody's attention, one open alert per kind and key.
 
-use crate::platform::db::notify;
+use crate::platform::db::{notify, Topic};
 use fafnirx_common::unix_now;
 use fafnirx_db::client::GenericClient;
 use fafnirx_db::client::Params;
@@ -11,7 +11,15 @@ use uuid::Uuid;
 /// Opens an alert, or refreshes the message of the already open one.
 pub fn upsert(c: &mut impl GenericClient, kind: &str, key: &str, message: &str) -> Result<(), Error> {
     q::upsert_alert().bind(&mut *c, &kind, &key, &message, &unix_now())?;
-    notify(c, "alerts", key)
+    notify(c, Topic::Alerts, key)
+}
+
+/// What a check that runs again and again says: with a message the alert is open (and refreshed), without one it is closed.
+pub fn set(c: &mut impl GenericClient, kind: &str, key: &str, message: Option<&str>) -> Result<(), Error> {
+    match message {
+        Some(message) => upsert(c, kind, key, message),
+        None => resolve(c, kind, key),
+    }
 }
 
 /// Like `upsert` for something reported again and again (with every heartbeat): nobody is told unless the alert is new or
@@ -26,7 +34,7 @@ pub fn raise(c: &mut impl GenericClient, kind: &str, key: &str, message: &str) -
 /// Closes the open alert of this kind and key, if there is one.
 pub fn resolve(c: &mut impl GenericClient, kind: &str, key: &str) -> Result<(), Error> {
     if q::resolve_alert().bind(&mut *c, &unix_now(), &kind, &key)? > 0 {
-        notify(c, "alerts", key)?;
+        notify(c, Topic::Alerts, key)?;
     }
     Ok(())
 }
@@ -34,7 +42,11 @@ pub fn resolve(c: &mut impl GenericClient, kind: &str, key: &str) -> Result<(), 
 /// Closes the open alert of this kind and key when it was last raised before `before`. Returns whether it did.
 pub fn resolve_if_quiet(c: &mut impl GenericClient, kind: &str, key: &str, before: i64) -> Result<bool, Error> {
     let params = q::ResolveStaleAlertsParams { now: unix_now(), kind, key, before };
-    Ok(q::resolve_stale_alerts().params(c, &params)? > 0)
+    let closed = q::resolve_stale_alerts().params(&mut *c, &params)? > 0;
+    if closed {
+        notify(c, Topic::Alerts, key)?;
+    }
+    Ok(closed)
 }
 
 /// An alert as the dashboard shows it.
@@ -48,11 +60,14 @@ pub fn open(c: &mut impl GenericClient) -> Result<Vec<Open>, Error> {
 /// Closes an alert by hand.
 pub fn dismiss(c: &mut impl GenericClient, id: Uuid) -> Result<(), Error> {
     q::dismiss_alert().bind(&mut *c, &unix_now(), &id)?;
-    notify(c, "alerts", "")
+    notify(c, Topic::Alerts, "")
 }
 
 /// Closes the open alerts of a kind that were last raised before `quiet_since`. Whoever raises such an alert does it again
 /// every time it still holds (a client with every heartbeat), so one that went quiet has been fixed or is no longer reported.
 pub fn expire_quiet(c: &mut impl GenericClient, kind: &str, quiet_since: i64) -> Result<(), Error> {
-    q::expire_quiet_alerts().bind(c, &unix_now(), &kind, &quiet_since).map(drop)
+    if q::expire_quiet_alerts().bind(&mut *c, &unix_now(), &kind, &quiet_since)? > 0 {
+        notify(c, Topic::Alerts, "")?;
+    }
+    Ok(())
 }

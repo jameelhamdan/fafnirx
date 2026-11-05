@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useApiMutation } from '@/lib/mutation'
 import { Archive, ArchiveRestore, Clapperboard, Download, ExternalLink, Heart, History, Play, RotateCcw, Trash2 } from 'lucide-react'
 import { lazy, Suspense, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -135,15 +136,13 @@ export function DetailsSheet({ device, path, onClose, onDeleted }: { device: str
   })
   const refresh = () => Promise.all([client.invalidateQueries({ queryKey: ['info'] }), client.invalidateQueries({ queryKey: ['files'] })])
 
-  const remove = useMutation({
-    mutationFn: () => api.post('/api/files/delete', { items: [{ device, path }] }),
+  const remove = useApiMutation(() => api.post('/api/files/delete', { items: [{ device, path }] }), {
     onSuccess: () => { toast.success(t('Deleted. It stays recoverable until the retention period ends.')); onDeleted() },
-    onError: (e) => toast.error(e.message),
+    toastError: true,
   })
-  const restore = useMutation({
-    mutationFn: (version: number) => api.post('/api/files/restore', { device, path, version }),
+  const restore = useApiMutation((version: number) => api.post('/api/files/restore', { device, path, version }), {
     onSuccess: () => { toast.success(t('Restored as the newest version')); void refresh() },
-    onError: (e) => toast.error(e.message),
+    toastError: true,
   })
 
   const exif = info?.exif ? Object.entries(info.exif) : []

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/common", "crates/db", "crates/master", "crates/client", "crates/sign", "crates/module-api", "crates/fetch-api", "crates/module-kit", "modules/video/service", "modules/fetch/service"]
+members = ["crates/common", "crates/db", "crates/master", "crates/client", "crates/module-api", "crates/fetch-api", "crates/module-kit", "modules/video/service", "modules/fetch/service"]
 
 [workspace.package]
 version = "4.1.0"
@@ -15,7 +15,6 @@ anyhow = "1"
 base64 = "0.22"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
-ed25519-dalek = "2"
 hex = "0.4"
 prost = "0.13"
 rusqlite = { version = "0.32", features = ["bundled"] }

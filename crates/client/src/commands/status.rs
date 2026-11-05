@@ -1,7 +1,7 @@
 //! What the client is doing, and the deletions it holds back.
 
 use super::wake_client;
-use crate::config::{self, Config, SyncedFolder};
+use crate::config::{self, Config, Folder};
 use crate::daemon;
 use crate::sync::state;
 use anyhow::Result;
@@ -58,7 +58,7 @@ pub fn status(config_path: &Path, json: bool) -> Result<()> {
     }
     let version = print_daemon(&dir);
     let access = daemon::read_status(&dir).and_then(|s| s.full_disk_access);
-    let folders = cfg.folders.iter().map(|f| f.path.as_path()).chain(cfg.synced.iter().map(|s| s.path.as_path()));
+    let folders = cfg.folders.iter().map(|f| f.path.as_path());
     if let Some(blocked) = crate::service::disk_access::first_blocked(access, folders) {
         println!("ATTENTION: {}", crate::service::disk_access::blocked_text(blocked));
     }
@@ -99,12 +99,12 @@ fn print_daemon(dir: &Path) -> Option<String> {
 }
 
 /// The state databases of this client: its own, and one for each synced folder attached.
-fn states_of<'a>(cfg: &'a Config, dir: &Path) -> Vec<(Option<&'a SyncedFolder>, state::State)> {
+fn states_of<'a>(cfg: &'a Config, dir: &Path) -> Vec<(Option<&'a Folder>, state::State)> {
     let mut states = Vec::new();
     if let Ok(own) = state::State::open(&dir.join("state.db")) {
         states.push((None, own));
     }
-    for s in &cfg.synced {
+    for s in cfg.attached_folders() {
         if let Ok(state) = state::State::open(&crate::synced::state_file(dir, s.key())) {
             states.push((Some(s), state));
         }
@@ -128,7 +128,7 @@ fn held_lines(dir: &Path, cfg: &Config) -> Vec<String> {
                 left % 3600 / 60
             ));
         }
-        if let (Some(SyncedFolder { name, .. }), Ok(Some((files, since)))) = (synced, state.pull_hold()) {
+        if let (Some(Folder { name, .. }), Ok(Some((files, since)))) = (synced, state.pull_hold()) {
             lines.push(format!(
                 "holding {files} files of \"{name}\" that were deleted on the master, since {} ago: fafnirx release-deletes \
                  deletes them here, fafnirx folder keep {name} keeps them",

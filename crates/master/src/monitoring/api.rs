@@ -1,6 +1,6 @@
 //! The numbers on the dashboard.
 
-use crate::devices::api::{device_summaries, DeviceSummary};
+use crate::devices::api::{computers_and_folders, DeviceSummary};
 use crate::integrations::api::{job_states, JobState};
 use crate::repo::{alerts, devices, events};
 use crate::web::access::Access;
@@ -15,6 +15,7 @@ use serde::Serialize;
 const DAYS: i64 = 14;
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, rename = "DashboardTotals"))]
 pub struct Totals {
     files: i64,
     bytes: i64,
@@ -22,6 +23,7 @@ pub struct Totals {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, rename = "DashboardDay"))]
 pub struct Day {
     /// Days since 1970-01-01.
     day: i64,
@@ -32,6 +34,7 @@ pub struct Day {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Recent {
     id: i64,
     ts: i64,
@@ -48,6 +51,7 @@ impl From<events::Recent> for Recent {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Alert {
     id: crate::platform::id::Id,
     kind: String,
@@ -58,6 +62,7 @@ pub struct Alert {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, rename = "DashboardDisk"))]
 pub struct Disk {
     total: u64,
     used: u64,
@@ -66,6 +71,7 @@ pub struct Disk {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Dashboard {
     devices: Vec<DeviceSummary>,
     online: usize,
@@ -116,7 +122,7 @@ pub fn recent(c: &mut Client, who: &Access, limit: i64, folder: Option<&str>) ->
 pub async fn dashboard(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Dashboard> {
     let data_dir = state.data_dir.clone();
     let out = run(&state, move |c| {
-        let devices = device_summaries(c, &who, None)?;
+        let devices = computers_and_folders(c, &who)?;
         let online = devices.iter().filter(|d| d.online).count();
         // Sources are per user (an administrator sees all); mirrors belong to the administrators.
         let (sources, mirrors) = if who.has_workspace() { job_states(c, &who)? } else { Default::default() };

@@ -231,7 +231,7 @@ fn windows_user_commands(exe: &Path, config: &Path) -> (String, String) {
 /// and state in their profile. A service of the computer is for the config of the computer (`install`).
 fn install_for_user(dry: bool, exe: &Path, config: &Path) -> Result<()> {
     if !dry && !config.exists() {
-        bail!("there is no config yet: run `fafnirx enroll --server <url>` first");
+        bail!("there is no config yet: run `fafnirx install --server <address>` first");
     }
     let (client, tray) = windows_user_commands(exe, config);
     run(dry, "reg", &["add", WINDOWS_USER_RUN_KEY, "/v", "fafnirx", "/t", "REG_SZ", "/d", &client, "/f"])?;
@@ -257,14 +257,14 @@ pub fn install(config_path: &Path, dry: bool) -> Result<()> {
     install_service(config_path, dry)?;
     if !dry {
         if let Ok(exe) = std::env::current_exe() {
-            crate::update::purge::announce(&fafnirx_common::plain_path(&exe), true);
+            crate::update::purge::announce(&fafnirx_common::plain_path(&exe));
         }
     }
     Ok(())
 }
 
 /// Installs the service and the tray of every user, and starts the service. Needs an administrator; the config of the computer
-/// (`fafnirx enroll`) comes first, because the service starts with it. On Windows the client of the user is installed instead.
+/// (`fafnirx install --server <address>`) comes first, because the service starts with it. On Windows the client of the user is installed instead.
 fn install_service(config_path: &Path, dry: bool) -> Result<()> {
     let exe = std::env::current_exe()?;
     let exe = fafnirx_common::plain_path(&exe);
@@ -274,7 +274,7 @@ fn install_service(config_path: &Path, dry: bool) -> Result<()> {
     let config = system_config_path();
     if !dry {
         if !config.exists() {
-            bail!("there is no config for the computer yet: run `fafnirx enroll --server <url>` first");
+            bail!("there is no config for the computer yet: run `fafnirx install --server <address>` first");
         }
         check_exe_is_protected(&exe)?;
         prepare_dirs(&config)?;

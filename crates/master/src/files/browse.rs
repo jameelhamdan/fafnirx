@@ -1,20 +1,19 @@
 //! The file browser: folders and files of the devices a user can reach (and the master files), search, details, history,
-//! delete and restore. A device is named by its folder (`<user>/<device>`; `_master` for the master files).
+//! delete and restore. A device is named by its folder (`<user>/<device>`; `master:<name>` for a master folder).
 
 use crate::devices::api::device_summaries;
 use crate::files::ingest;
 use crate::library::meta;
 use crate::monitoring::api::Recent;
 use crate::platform::db::{self, Device};
-use crate::platform::store::MASTER_FOLDER;
 use crate::repo::listing::{self, Listed, Page, Sort};
-use crate::repo::{albums, devices, events, files, settings, sources};
+use crate::repo::{devices, events, files, settings};
 use crate::web::access::Access;
 use crate::web::input;
 use crate::web::{act, run, ApiError, Done, Res, Shared};
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
-use fafnirx_common::{base_name, clean_remote_path, secs_of_ns, unix_now, DAY_SECS};
+use fafnirx_common::{base_name, clean_remote_path, secs_of_ns, DAY_SECS};
 use fafnirx_db::queries as sql;
 use postgres::Client;
 use serde::{Deserialize, Serialize};
@@ -52,8 +51,10 @@ pub struct ListQuery {
 }
 
 #[derive(Serialize, Default)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Entry {
     /// device, dir or file
+    #[cfg_attr(test, ts(type = "'device' | 'dir' | 'file'"))]
     kind: &'static str,
     /// For a file: its id in the library (the address of its viewer, favorites and albums).
     id: Option<crate::platform::id::Id>,
@@ -76,6 +77,7 @@ pub struct Entry {
     height: Option<i64>,
     taken_at: Option<i64>,
     /// For a device entry: master, device, local or source.
+    #[cfg_attr(test, ts(type = "'device' | 'local' | 'master' | null"))]
     device_kind: Option<String>,
     /// For a photo or video: its details have not been read yet, so it is still being processed.
     processing: bool,
@@ -84,9 +86,11 @@ pub struct Entry {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Listing {
     device: Option<String>,
     /// What the device is (master, device, local or source) and whether the web app may change its files.
+    #[cfg_attr(test, ts(type = "'device' | 'local' | 'master' | null"))]
     device_kind: Option<String>,
     writable: bool,
     path: String,
@@ -170,30 +174,22 @@ impl ListQuery {
     }
 }
 
-/// The top level: the master files, then one folder per device (an administrator's own and the others').
+/// The top level: one folder per device (the master folders, an administrator's own and the others').
 fn top_level(c: &mut Client, who: &Access, path: String, retention_days: i64) -> anyhow::Result<Listing> {
-    let (master_files, master_bytes) = devices::master_totals(c)?;
-    let mut entries = vec![Entry {
-        kind: "device",
-        name: MASTER_FOLDER.into(),
-        device: MASTER_FOLDER.into(),
-        files: Some(master_files),
-        size: Some(master_bytes),
-        device_kind: Some("master".into()),
-        writable: who.can_write(MASTER_FOLDER),
-        ..Default::default()
-    }];
-    entries.extend(device_summaries(c, who, None)?.into_iter().map(|d| Entry {
-        kind: "device",
-        // Named by its location (`user/name`), as it is when opened.
-        name: d.folder.clone(),
-        writable: editable_kind(&d.kind) && who.can_write(&d.folder),
-        device_kind: Some(d.kind),
-        device: d.folder,
-        files: Some(d.files),
-        size: Some(d.bytes),
-        ..Default::default()
-    }));
+    let entries: Vec<Entry> = device_summaries(c, who, None)?
+        .into_iter()
+        .map(|d| Entry {
+            kind: "device",
+            // Named by its location (`user/name`), as it is when opened.
+            name: d.folder.clone(),
+            writable: editable_kind(&d.kind) && who.can_write(&d.folder),
+            device_kind: Some(d.kind),
+            device: d.folder,
+            files: Some(d.files),
+            size: Some(d.bytes),
+            ..Default::default()
+        })
+        .collect();
     let total = entries.len() as i64;
     Ok(Listing {
         device: None,
@@ -307,6 +303,7 @@ pub struct FileRef {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct VersionInfo {
     id: i64,
     created_at: i64,
@@ -320,6 +317,7 @@ pub struct VersionInfo {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, rename = "FileInfo"))]
 pub struct Info {
     /// The id of the file, which is also its address for the modules (`/api/m/<module>/<id>/...`).
     id: crate::platform::id::Id,
@@ -335,10 +333,12 @@ pub struct Info {
     mime: String,
     preview: bool,
     /// Work still to do on a photo or video: waiting, running or failed.
+    #[cfg_attr(test, ts(type = "'waiting' | 'running' | 'failed' | null"))]
     work: Option<String>,
     width: Option<i64>,
     height: Option<i64>,
     taken_at: Option<i64>,
+    #[cfg_attr(test, ts(type = "Record<string, string> | null"))]
     exif: serde_json::Value,
     versions: Vec<VersionInfo>,
     events: Vec<Recent>,
@@ -455,7 +455,7 @@ pub async fn remove(State(state): State<Shared>, Extension(who): Extension<Acces
                 }
             }
         }
-        db::notify(c, "files", "")?;
+        db::notify(c, db::Topic::Files, "")?;
         Ok(deleted)
     })
     .await?;
@@ -543,8 +543,7 @@ pub async fn move_files(State(state): State<Shared>, Extension(who): Extension<A
 }
 
 /// Moves a file, or a folder with everything below it, to `to` within a device (both cleaned paths); returns how many files
-/// moved. Nothing moves if something is in the way. A folder moved as a whole takes the albums and the sources that point into
-/// it along, wherever it goes. The caller checked that the device is changeable.
+/// moved. Nothing moves if something is in the way. The caller checked that the device is changeable.
 pub fn move_tree(c: &mut Client, store: &crate::platform::store::Store, dev: &Device, from: &str, to: &str) -> anyhow::Result<usize> {
     if to == from || to.starts_with(&format!("{from}/")) {
         return Err(ApiError::bad("Choose a different place, not inside the folder itself").into());
@@ -563,15 +562,6 @@ pub fn move_tree(c: &mut Client, store: &crate::platform::store::Store, dev: &De
     for (new, old) in &targets {
         ingest::move_path(c, store, dev, old, new)?;
     }
-    if targets.len() > 1 || targets[0].1 != from {
-        let (old, new) = (format!("{from}/"), format!("{to}/"));
-        let followed = albums::follow_folder(c, dev.id, &old, &new, unix_now(), false)?;
-        let sourced = sources::follow_folder(c, dev.id, &old, &new)? > 0;
-        if followed || sourced {
-            db::notify(c, "library", "")?;
-            db::notify(c, "jobs", "")?;
-        }
-    }
-    db::notify(c, "files", &dev.name)?;
+    db::notify(c, db::Topic::Files, &dev.name)?;
     Ok(targets.len())
 }

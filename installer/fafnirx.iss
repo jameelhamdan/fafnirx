@@ -1,4 +1,6 @@
 ; Built by installer/build.ps1, which passes /DAppVersion=<workspace version>.
+; The setup is a window around `fafnirx install`: it places the program, asks for the server, the token and a folder, and leaves
+; the rest (PATH, enrolling, the start at login) to the program, which does the same for every other way of installing it.
 #ifndef AppVersion
   #error AppVersion is not defined; build with installer\build.ps1
 #endif
@@ -27,7 +29,6 @@ Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-ChangesEnvironment=yes
 UninstallDisplayName=fafnirx {#AppVersion}
 
 [Tasks]
@@ -36,12 +37,9 @@ Name: addpath; Description: "Add fafnirx to the PATH"; Flags: checkedonce
 [Files]
 Source: "{#ExePath}"; DestDir: "{app}"; Flags: ignoreversion
 
-[Registry]
-Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addpath; Check: NeedsPath(ExpandConstant('{app}'))
-
 [UninstallRun]
-Filename: "{app}\fafnirx.exe"; Parameters: "uninstall-service"; Flags: runhidden; RunOnceId: "UninstallService"
-Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM fafnirx.exe"; Flags: runhidden; RunOnceId: "KillClient"
+; Stops the client and the tray, takes the start at login and the PATH entry away. The files are removed by this uninstaller.
+Filename: "{app}\fafnirx.exe"; Parameters: "uninstall --keep-binary"; Flags: runhidden; RunOnceId: "Uninstall"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
@@ -54,15 +52,6 @@ var
 function ConfigFile: string;
 begin
   Result := ExpandConstant('{localappdata}\fafnirx\config.toml');
-end;
-
-function NeedsPath(Dir: string): Boolean;
-var
-  Paths: string;
-begin
-  if not RegQueryStringValue(HKCU, 'Environment', 'Path', Paths) then
-    Paths := '';
-  Result := Pos(';' + Lowercase(Dir) + ';', ';' + Lowercase(Paths) + ';') = 0;
 end;
 
 procedure BrowseFolder(Sender: TObject);
@@ -129,7 +118,7 @@ end;
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
-  // A silent install without /SERVER only installs the files.
+  // A silent install without /SERVER only installs the files (and the PATH entry).
   if (CurPageID = ConfigPage.ID) and not (WizardSilent and (Trim(ServerEdit.Text) = '')) then
   begin
     if (Trim(ServerEdit.Text) = '') or (Trim(TokenEdit.Text) = '') then
@@ -149,82 +138,42 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Code: Integer;
 begin
-  // The client and the tray are ended so that the program file can be replaced; the setup starts them again.
+  // The client and the tray are ended so that the program file can be replaced (the program being replaced may be one that
+  // cannot do it itself); the install starts them again.
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM fafnirx.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
   Sleep(500);
   Result := '';
 end;
 
-function RunClient(const Args, LogFile: String): Boolean;
-var
-  Code: Integer;
-begin
-  Result := Exec(ExpandConstant('{cmd}'),
-    '/c ""' + ExpandConstant('{app}\fafnirx.exe') + '" ' + Args + ' > "' + LogFile + '" 2>&1"',
-    '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
-end;
-
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  Server, Log: String;
+  Args, Log: String;
   Output: AnsiString;
+  Code: Integer;
   Ok: Boolean;
 begin
   if CurStep <> ssPostInstall then
     Exit;
-  if Trim(ServerEdit.Text) = '' then
-  begin
-    // Upgrade of an enrolled device: keep its settings and start the client and the tray again.
-    if FileExists(ConfigFile) then
-      RunClient('install-service', ExpandConstant('{tmp}\fafnirx-setup.log'));
-    Exit;
-  end;
-  Server := Trim(ServerEdit.Text);
-  if Pos('://', Server) = 0 then
-  begin
-    if Pos(':', Server) = 0 then
-      Server := Server + ':7443';
-    Server := 'http://' + Server;
-  end;
   Log := ExpandConstant('{tmp}\fafnirx-setup.log');
-  WizardForm.StatusLabel.Caption := 'Connecting to the server...';
-  SetEnvironmentVariable('FAFNIRX_TOKEN', Trim(TokenEdit.Text));
-  Ok := RunClient('enroll --no-service --server "' + Server + '"', Log);
-  if Ok and (Trim(FolderEdit.Text) <> '') then
-    Ok := RunClient('add-folder "' + RemoveBackslashUnlessRoot(Trim(FolderEdit.Text)) + '"', Log);
-  if Ok then
-    Ok := RunClient('install-service', Log);
+  Args := 'install --in-place';
+  if not WizardIsTaskSelected('addpath') then
+    Args := Args + ' --no-path';
+  if Trim(ServerEdit.Text) <> '' then
+  begin
+    Args := Args + ' --server "' + Trim(ServerEdit.Text) + '"';
+    if Trim(FolderEdit.Text) <> '' then
+      Args := Args + ' --folder "' + RemoveBackslashUnlessRoot(Trim(FolderEdit.Text)) + '"';
+    SetEnvironmentVariable('FAFNIRX_TOKEN', Trim(TokenEdit.Text));
+    WizardForm.StatusLabel.Caption := 'Connecting to the server...';
+  end;
+  Ok := Exec(ExpandConstant('{cmd}'),
+    '/c ""' + ExpandConstant('{app}\fafnirx.exe') + '" ' + Args + ' > "' + Log + '" 2>&1"',
+    '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
+  SetEnvironmentVariable('FAFNIRX_TOKEN', '');
   if not Ok then
   begin
-    SetEnvironmentVariable('FAFNIRX_TOKEN', '');
     LoadStringFromFile(Log, Output);
     SuppressibleMsgBox('fafnirx was installed but could not be set up:' + #13#10#13#10 + String(Output) + #13#10 +
-      'Fix the problem and run "fafnirx enroll ..." again, or re-run this setup.', mbError, MB_OK, IDOK);
-  end;
-end;
-
-procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
-var
-  Paths, Dir: String;
-  P: Integer;
-begin
-  if CurUninstallStep = usUninstall then
-  begin
-    // Make sure no client still holds fafnirx.exe open when the files are removed.
-    Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM fafnirx.exe', '', SW_HIDE, ewWaitUntilTerminated, P);
-    Sleep(1000);
-    Exit;
-  end;
-  if CurUninstallStep <> usPostUninstall then
-    Exit;
-  Dir := ExpandConstant('{app}');
-  if RegQueryStringValue(HKCU, 'Environment', 'Path', Paths) then
-  begin
-    P := Pos(';' + Lowercase(Dir), ';' + Lowercase(Paths));
-    if P > 0 then
-    begin
-      Delete(Paths, P, Length(Dir) + 1);
-      RegWriteExpandStringValue(HKCU, 'Environment', 'Path', Paths);
-    end;
+      'Fix the problem and run "fafnirx install --server ..." again, or re-run this setup.', mbError, MB_OK, IDOK);
   end;
 end;

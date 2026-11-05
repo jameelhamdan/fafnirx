@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -18,10 +18,10 @@ import { useT } from '@/lib/i18n'
 import { filesLink } from '@/lib/links'
 import { deviceAddress, useSession } from '@/lib/session'
 import type { UserInfo } from '@/lib/types'
+import { useApiMutation } from '@/lib/mutation'
 
-export function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail) => void }) {
+function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail) => void }) {
   const t = useT()
-  const client = useQueryClient()
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [owner, setOwner] = useState('')
@@ -29,12 +29,11 @@ export function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail)
   const isAdmin = session?.user?.role === 'admin'
   // An administrator can add a device for any user who can have one.
   const users = useQuery({ queryKey: ['users'], queryFn: () => api.get<UserInfo[]>('/api/users'), enabled: isAdmin && open })
-  const create = useMutation({
-    mutationFn: () => api.post<DeviceDetail>('/api/devices', { name, user: owner || undefined }),
+  const create = useApiMutation(() => api.post<DeviceDetail>('/api/devices', { name, user: owner || undefined }), {
+    invalidate: [['devices']],
     onSuccess: (made) => {
       setOpen(false)
       setName('')
-      void client.invalidateQueries({ queryKey: ['devices'] })
       onCreated(made)
     },
   })

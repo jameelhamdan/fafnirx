@@ -1,4 +1,4 @@
-//! Renaming a folder of a user (a `local` one, shared or not). Its files, history, albums, sources and members stay with it: they
+//! Renaming a folder of a user (a `local` one, shared or not) or a master folder. Its files, history, albums, sources and members stay with it: they
 //! point at the device row, which stays. What is kept under the old `<user>/<name>` is moved or rewritten here: the folder on
 //! disk, what the versions kept of it, the queued jobs, the open alerts, what computers said about it, and the mirrors that
 //! copy it.
@@ -12,9 +12,17 @@ use crate::web::ApiError;
 use fafnirx_db::queries::devices as q;
 use postgres::Client;
 
-/// Gives the folder `folder` the name `new_name`. Returns the new folder. Only the owner (or an administrator) may.
+/// Gives the folder `folder` the name `new_name`. Returns the new folder. Only the owner (or an administrator) may rename a folder
+/// of a user; only an administrator a master folder.
 pub fn rename(c: &mut Client, store: &Store, who: &Access, folder: &str, new_name: &str) -> anyhow::Result<String> {
-    let new_name = input::device_name(new_name)?;
+    let master = crate::platform::store::is_master(folder);
+    let new_name = if master {
+        who.require_admin()?;
+        // Checked before the folder is locked: it asks the database too.
+        super::master_folders::check(c, new_name, folder.strip_prefix(crate::platform::store::MASTER_PREFIX))?
+    } else {
+        input::device_name(new_name)?
+    };
     let new_name = new_name.as_str();
     // Nothing is looked at in the live tree meanwhile.
     let _layout = livetree::layout();
@@ -22,7 +30,7 @@ pub fn rename(c: &mut Client, store: &Store, who: &Access, folder: &str, new_nam
     let Some(row) = q::device_for_rename().bind(&mut tx, &folder).opt()? else {
         return Err(ApiError::not_found("No such folder").into());
     };
-    if !who.is_admin() && row.user_name != who.name {
+    if !master && !who.is_admin() && row.user_name != who.name {
         // Not theirs to see, or only seen through a share.
         return Err(ApiError::not_found("No such folder").into());
     }
@@ -37,20 +45,19 @@ pub fn rename(c: &mut Client, store: &Store, who: &Access, folder: &str, new_nam
     q::rename_folder_in_jobs().bind(&mut tx, &new_folder, &row.folder)?;
     q::rename_folder_in_alerts().bind(&mut tx, &new_folder, &row.folder)?;
     q::rename_folder_in_folder_state().bind(&mut tx, &new_folder, &row.folder)?;
-    q::rename_folder_in_mirror_scopes().bind(&mut tx, &new_folder, &row.folder)?;
     if let Err(e) = store.rename_folder(&row.folder, &new_folder, &versions) {
         // A part may have moved: put it back.
         let _ = store.rename_folder(&new_folder, &row.folder, &versions);
         return Err(ApiError::conflict(format!("The folder cannot be moved on disk: {e:#}")).into());
     }
-    if let Err(e) = db::notify(&mut tx, "devices", &new_folder).and_then(|_| tx.commit()) {
+    if let Err(e) = db::notify(&mut tx, db::Topic::Devices, &new_folder).and_then(|_| tx.commit()) {
         let _ = store.rename_folder(&new_folder, &row.folder, &versions);
         return Err(e.into());
     }
     // Tell the pages and computers that had the old name.
     for key in [&row.folder, &new_folder] {
-        db::notify(c, "devices", key)?;
-        db::notify(c, "files", key)?;
+        db::notify(c, db::Topic::Devices, key)?;
+        db::notify(c, db::Topic::Files, key)?;
     }
     Ok(new_folder)
 }

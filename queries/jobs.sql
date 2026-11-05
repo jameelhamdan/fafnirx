@@ -92,3 +92,11 @@ ORDER BY f.id DESC LIMIT :limit;
 SELECT j.kind, j.status FROM jobs j
 WHERE j.status IN ('queued', 'running', 'failed')
   AND j.payload::jsonb ->> 'device' = :device AND j.payload::jsonb ->> 'path' = :path;
+
+--! link_runs : (last_status?, last_message?, last_run_at?, owner?, folder?)
+-- The last run of each source and mirror, to show with the rest of the work: a user's own sources, or all; mirrors belong to the
+-- administrators.
+SELECT l.id, l.direction, l.name, l.kind, u.name AS owner, d.folder, l.last_status, l.last_message, l.last_run_at
+FROM links l LEFT JOIN users u ON u.id = l.user_id LEFT JOIN devices d ON d.id = l.folder_id
+WHERE l.last_status IS NOT NULL AND (:all::boolean OR l.user_id = :user::bigint)
+ORDER BY l.last_run_at DESC NULLS LAST;

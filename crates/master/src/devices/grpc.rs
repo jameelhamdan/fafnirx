@@ -6,8 +6,6 @@ use fafnirx_common::pb::collector_server::Collector;
 use fafnirx_common::pb::*;
 use fafnirx_common::{chunk_count, chunk_hash, clean_remote_path, root_hash, to_hash, unix_now, CHUNK_SIZE, HASH_LEN};
 use postgres::Client;
-use sha2::{Digest, Sha256};
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio_stream::wrappers::ReceiverStream;
@@ -16,7 +14,6 @@ use tonic::{Request, Response, Status, Streaming};
 pub struct Service {
     pub db: Db,
     pub store: Arc<Store>,
-    pub updates_dir: PathBuf,
     /// The proxies whose word about a device's address is believed (`FAFNIRX_TRUSTED_PROXY`).
     pub trusted: crate::platform::proxy::Trusted,
     /// What the database announced (`{"topic":..,"key":..}`), the same stream the web app listens to.
@@ -97,27 +94,18 @@ fn acting(conn: &mut Client, who: &Caller, write: bool) -> Result<Device, Status
     Ok(place(conn, who, write)?.device)
 }
 
-/// Where a call works: a device and, for a master folder, the path of it in the master files (empty or ending in a slash).
-/// Paths in the messages are relative to it.
+/// Where a call works: a device (a computer, or a folder it names). Paths in the messages are relative to it.
 struct Place {
     device: Device,
-    prefix: String,
     /// A call that names a folder: what is written there has to be named so that every kind of computer can hold it.
     folder: bool,
-}
-
-impl Place {
-    /// A path of the message as the path of the device.
-    fn inside(&self, path: &str) -> String {
-        format!("{}{path}", self.prefix)
-    }
 }
 
 /// The folder a caller names in `x-fafnirx-folder` (or in the message): any folder the user can use is found the same way, by its
 /// name or its stable id, whoever owns it. Without a name the call is about the device.
 fn place(conn: &mut Client, who: &Caller, write: bool) -> Result<Place, Status> {
     let (dev, user) = authenticate_user(conn, who)?;
-    let Some(key) = &who.folder else { return Ok(Place { device: dev, prefix: String::new(), folder: false }) };
+    let Some(key) = &who.folder else { return Ok(Place { device: dev, folder: false }) };
     let found = devices::folder(conn, user, key)
         .map_err(internal)?
         .ok_or_else(|| Status::not_found(format!("no folder called \"{key}\"")))?;
@@ -125,7 +113,7 @@ fn place(conn: &mut Client, who: &Caller, write: bool) -> Result<Place, Status> 
         // Not PermissionDenied, which is about the device (in use by another computer) and stops the whole client.
         return Err(Status::failed_precondition(format!("\"{key}\" is shared with you to read only")));
     }
-    Ok(Place { prefix: found.prefix_path(), device: Device { id: found.id, name: found.storage }, folder: true })
+    Ok(Place { device: Device { id: found.id, name: found.folder }, folder: true })
 }
 
 /// How long a device that is not heard from keeps its credentials to itself. After that another computer using the
@@ -278,18 +266,6 @@ impl Service {
             },
         })
     }
-
-    /// Authenticates a device and returns its id.
-    async fn check_token(&self, who: Caller) -> Result<i64, Status> {
-        self.blocking(move |c| Ok(authenticate(c, &who)?.id)).await
-    }
-
-    fn update_dir(&self, platform: &str) -> Result<PathBuf, Status> {
-        if platform.is_empty() || !platform.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-            return Err(Status::invalid_argument("invalid platform"));
-        }
-        Ok(self.updates_dir.join(platform))
-    }
 }
 
 #[tonic::async_trait]
@@ -343,9 +319,7 @@ impl Collector for Service {
                 devices::save_folder_state(c, dev.id, &states, unix_now())?;
                 alert_held_deletions(c, &dev.name, &states)?;
                 // A conflict that has not come back for ten minutes is over.
-                if alerts::resolve_if_quiet(c, "device_conflict", &dev.name, unix_now() - 600)? {
-                    db::notify(c, "alerts", &dev.name)?;
-                }
+                alerts::resolve_if_quiet(c, "device_conflict", &dev.name, unix_now() - 600)?;
                 if hb.phase.is_empty() || hb.phase == "idle" {
                     // Going from busy to idle means the sync is done: the totals shown for the device are brought up to date.
                     if devices::clear_progress(c, dev.id)? {
@@ -363,7 +337,7 @@ impl Collector for Service {
                     };
                     devices::save_progress(c, dev.id, &progress, unix_now())?;
                 }
-                db::notify(c, "devices", &dev.name)?;
+                db::notify(c, db::Topic::Devices, &dev.name)?;
                 if !hb.errors.is_empty() {
                     let msg = hb.errors.iter().take(5).map(|e| clip(e, 300)).collect::<Vec<_>>().join("\n");
                     alerts::upsert(c, "upload_error", &dev.name, &msg)?;
@@ -381,7 +355,7 @@ impl Collector for Service {
         let store = self.store.clone();
         self.blocking(move |c| {
             let at = place(c, &who, true)?;
-            let (dev, path) = (&at.device, at.inside(&m.path));
+            let (dev, path) = (&at.device, m.path.clone());
             let current = files::live_content(c, dev.id, &path)?.map(|(root, _)| root);
             // A backup device is told it is up to date for a path deleted in the web app, whatever it holds now. A shared
             // folder is not: its computers delete such a file themselves, so a file there is a new one.
@@ -391,7 +365,7 @@ impl Collector for Service {
             }
             // The device already has this content under another path (a rename or a copy): the commit
             // takes it from there, nothing needs to be sent.
-            if files::live_path_with_root(c, dev.id, &at.prefix, &m.root, None)?.is_some() {
+            if files::live_path_with_root(c, dev.id, &m.root, None)?.is_some() {
                 return Ok(Response::new(NegotiateResponse { missing: vec![], already_current: false }));
             }
             let missing = store.missing_chunks(dev.id, &m.root, &m.chunks);
@@ -437,18 +411,17 @@ impl Collector for Service {
         let version_id = self
             .blocking(move |c| {
                 let at = place(c, &who, true)?;
-                let (dev, path) = (&at.device, at.inside(&m.path));
-                let renamed_from = renamed_from.map(|from| at.inside(&from));
+                let (dev, path) = (&at.device, m.path.clone());
                 if who.folder.is_none() && files::deleted_in_web_app(c, dev.id, &path)? {
                     return Ok(0);
                 }
                 if at.folder {
-                    // The master files take the rules of the most limited computer for what is synced into them.
+                    // A folder takes the rules of the most limited computer for what is synced into it.
                     ingest::check_names(c, dev, &path, renamed_from.as_deref(), true)?;
                 }
                 // Content the device already has under another path is taken from there; otherwise the
                 // upload must be complete and intact.
-                let staged = match files::live_path_with_root(c, dev.id, &at.prefix, &m.root, renamed_from.as_deref())? {
+                let staged = match files::live_path_with_root(c, dev.id, &m.root, renamed_from.as_deref())? {
                     Some(from) => store
                         .copy_live_to_temp(&dev.name, &from, &m.root)
                         .map_err(|e| Status::failed_precondition(format!("the file this one is copied from changed: {e:#}")))?,
@@ -481,40 +454,11 @@ impl Collector for Service {
         let store = self.store.clone();
         self.blocking(move |c| {
             let at = place(c, &who, true)?;
-            ingest::mark_deleted(c, &store, &at.device, &at.inside(&path), false)?;
+            ingest::mark_deleted(c, &store, &at.device, &path, false)?;
             Ok(())
         })
         .await?;
         Ok(Response::new(DeleteResponse {}))
-    }
-
-    async fn get_update_info(&self, req: Request<UpdateInfoRequest>) -> Result<Response<UpdateInfo>, Status> {
-        let who = caller_of(&req, &self.trusted)?;
-        self.check_token(who).await?;
-        let dir = self.update_dir(&req.get_ref().platform)?;
-        let (Ok(version), Ok(signature)) = (std::fs::read_to_string(dir.join("version")), std::fs::read_to_string(dir.join("signature"))) else {
-            return Ok(Response::new(UpdateInfo { available: false, ..Default::default() }));
-        };
-        let bin = dir.join("bin");
-        let data = tokio::fs::read(&bin).await.map_err(|_| Status::not_found("update binary missing"))?;
-        let sig = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, signature.trim()).map_err(|_| Status::internal("bad signature file"))?;
-        Ok(Response::new(UpdateInfo {
-            available: true,
-            version: version.trim().to_string(),
-            sha256: Sha256::digest(&data).to_vec(),
-            signature: sig,
-            size: data.len() as u64,
-        }))
-    }
-
-    type DownloadUpdateStream = ReceiverStream<Result<UpdateChunk, Status>>;
-
-    async fn download_update(&self, req: Request<UpdateInfoRequest>) -> Result<Response<Self::DownloadUpdateStream>, Status> {
-        let who = caller_of(&req, &self.trusted)?;
-        self.check_token(who).await?;
-        let bin = self.update_dir(&req.get_ref().platform)?.join("bin");
-        let file = tokio::fs::File::open(&bin).await.map_err(|_| Status::not_found("no update"))?;
-        Ok(Response::new(stream_file(file, |data| UpdateChunk { data })))
     }
 
     async fn list_folders(&self, req: Request<ListFoldersRequest>) -> Result<Response<ListFoldersResponse>, Status> {
@@ -566,10 +510,7 @@ impl Collector for Service {
                 let at = place(c, &who, false)?;
                 let complete = deletions_may_be_missing(c, since);
                 // A caller that may have missed deletions is sent everything that is live, to compare with what it has.
-                let mut changes = files::changes_since(c, at.device.id, &at.prefix, if complete { 0 } else { since })?;
-                for change in &mut changes {
-                    change.path.drain(..at.prefix.len());
-                }
+                let changes = files::changes_since(c, at.device.id, if complete { 0 } else { since })?;
                 Ok((changes, complete))
             })
             .await?;
@@ -606,7 +547,7 @@ impl Collector for Service {
                 for name in asked {
                     // The caller may name a folder by its stable id; the answer names it the way it was asked.
                     if let Some(f) = devices::folder(c, user, &name)? {
-                        found.push((name, f.storage));
+                        found.push((name, f.folder));
                     }
                 }
                 Ok(found)
@@ -661,7 +602,6 @@ impl Collector for Service {
             let path = path.clone();
             self.blocking(move |c| {
                 let at = place(c, &who, false)?;
-                let path = at.inside(&path);
                 if files::live_content(c, at.device.id, &path)?.is_none() {
                     return Err(Status::not_found("no such file").into());
                 }
@@ -759,7 +699,7 @@ mod tests {
     }
 
     #[test]
-    fn a_master_folder_is_a_prefix_of_the_master_files_that_every_user_may_use() {
+    fn a_master_folder_is_a_folder_that_every_user_may_use() {
         let db = setup();
         let mut conn = db.get().unwrap();
         let c: &mut Client = &mut conn;
@@ -773,9 +713,10 @@ mod tests {
 
         let path = super::super::master_folders::check(c, "/Music/", None).unwrap();
         assert_eq!(path, "Music");
-        devices::insert_master_folder(c, &path, 1).unwrap();
+        let folder = devices::insert_master_folder(c, &path, 1).unwrap().expect("made");
+        assert_eq!(folder, "master:Music");
         let at = place(c, &on("master:Music"), true).unwrap();
-        assert_eq!((at.device.id, at.prefix.as_str(), at.inside("a/b.txt").as_str()), (0, "Music/", "Music/a/b.txt"));
+        assert_eq!((at.device.name.as_str(), at.folder), ("master:Music", true));
         assert_eq!(
             place(c, &on("master:music"), false).err().map(|e| e.code()),
             Some(tonic::Code::NotFound),
@@ -784,7 +725,7 @@ mod tests {
         assert_eq!(devices::folders(c, owner).unwrap().iter().filter(|f| f.master).count(), 1);
 
         // Neither inside another, nor around one, nor in the folders of the users, nor a name Windows cannot keep.
-        for bad in ["Music/Rock", "music", "users/x", "A:b"] {
+        for bad in ["Music/Rock", "music", "users/x", "A:b", "Users"] {
             assert!(super::super::master_folders::check(c, bad, None).is_err(), "{bad}");
         }
         assert!(super::super::master_folders::check(c, "Photos", None).is_ok());
@@ -859,6 +800,7 @@ mod tests {
             .get(0)
         };
         let own_device = authenticate(c, &caller("first")).unwrap().name;
+        let master = devices::insert_master_folder(c, "Photos", 0).unwrap().expect("made");
         for (who, uid, everything, family_seen, device_seen) in [
             ("its owner", owner, false, true, true),
             ("a member", member, false, true, false),
@@ -867,7 +809,7 @@ mod tests {
         ] {
             assert_eq!(sees(c, &family, uid, everything), family_seen, "{who} and the shared folder");
             assert_eq!(sees(c, &own_device, uid, everything), device_seen, "{who} and the owner's computer");
-            assert!(sees(c, "master", uid, everything), "{who} and the master files");
+            assert!(sees(c, &master, uid, everything), "{who} and a master folder");
         }
         c.execute("UPDATE users SET disabled_at = 1 WHERE id = $1", &[&owner]).unwrap();
         assert!(!sees(c, &family, member, false), "a member loses the folder of a disabled owner");
@@ -915,7 +857,7 @@ mod tests {
             files::make_current(c, file, v).unwrap();
         }
         let paths = |c: &mut Client, since| -> Vec<(String, bool)> {
-            files::changes_since(c, id, "", since)
+            files::changes_since(c, id, since)
                 .unwrap()
                 .into_iter()
                 .map(|x| (x.path, x.root.is_some()))
@@ -927,7 +869,7 @@ mod tests {
 
         files::delete_path(c, id, "a.txt", 400, false).unwrap();
         assert_eq!(paths(c, 300), [("a.txt".into(), false)], "a deletion is a change, without content");
-        let all = files::changes_since(c, id, "", 0).unwrap();
+        let all = files::changes_since(c, id, 0).unwrap();
         let b = all.iter().find(|x| x.path == "b.txt").unwrap();
         assert_eq!((b.root, b.size, b.mtime, b.mode), (Some(root), 3, 5, 0o644));
     }

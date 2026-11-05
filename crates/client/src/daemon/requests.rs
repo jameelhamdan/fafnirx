@@ -7,7 +7,7 @@
 
 use super::status::{read_status, Status};
 use crate::commands;
-use crate::config::{self, control_dir, Config};
+use crate::config::{self, control_dir, Config, Mode, NewFolder, Target};
 use anyhow::{bail, Context, Result};
 use fafnirx_common::unix_now;
 use serde::{Deserialize, Serialize};
@@ -39,9 +39,6 @@ pub enum Request {
         path: PathBuf,
         create: bool,
     },
-    DetachSynced {
-        name: String,
-    },
     SetMode {
         name: String,
         mode: crate::config::Mode,
@@ -62,7 +59,7 @@ impl Request {
                 .into_iter()
                 .chain(paths.iter().map(|p| p.as_os_str().to_owned()))
                 .collect(),
-            Self::RemoveFolder { name } | Self::DetachSynced { name } => vec!["folder".into(), "remove".into(), name.into()],
+            Self::RemoveFolder { name } => vec!["folder".into(), "remove".into(), name.into()],
             Self::AttachSynced { name, path, create } => {
                 let mut args = vec!["folder".into(), "add".into(), path.as_os_str().to_owned(), "--target".into(), name.into()];
                 if *create {
@@ -160,7 +157,7 @@ async fn apply(config_path: &Path, request: Request, mine: &(dyn Fn(&Path) -> bo
         Request::AddFolder { paths } => {
             let (mut added, mut failed) = (0, Vec::new());
             for path in &paths {
-                match own_directory(path, mine).and_then(|p| config::add_folder_to_file(config_path, &p, None)) {
+                match own_directory(path, mine).and_then(|p| config::add_folder_to_file(config_path, NewFolder { dir: &p, target: Target::Computer, name: None, id: None, mode: Mode::Up })) {
                     Ok(_) => added += 1,
                     Err(e) => failed.push(format!("{}: {e:#}", path.display())),
                 }
@@ -172,7 +169,11 @@ async fn apply(config_path: &Path, request: Request, mine: &(dyn Fn(&Path) -> bo
         }
         Request::RemoveFolder { name } => {
             let cfg = Config::load(config_path)?;
-            let folder = cfg.folders.iter().find(|f| f.name == name).with_context(|| format!("no folder named \"{name}\""))?;
+            let folder = cfg
+                .attached_folders()
+                .find(|f| config::names_synced(&f.name, &name))
+                .or_else(|| cfg.computer_folders().find(|f| f.name == name))
+                .with_context(|| format!("no folder named \"{name}\""))?;
             if !mine(&folder.path) {
                 bail!("\"{name}\" is not yours; ask an administrator to remove it with `sudo fafnirx folder remove`");
             }
@@ -186,28 +187,20 @@ async fn apply(config_path: &Path, request: Request, mine: &(dyn Fn(&Path) -> bo
         }
         Request::SetMode { name, mode } => {
             let cfg = Config::load(config_path)?;
-            if !mine(&cfg.synced_named(&name)?.path) {
+            if !mine(&cfg.attached_named(&name)?.path) {
                 bail!("\"{name}\" is not yours; ask an administrator to change it with `sudo fafnirx folder mode`");
             }
             // The question is shown by the tray, which is on a screen: no need to look for one here.
             mode.check_available()?;
-            config::set_synced_mode_in_file(config_path, &name, mode, None)?;
+            config::set_mode_in_file(config_path, &name, mode, None)?;
             Ok(String::new())
         }
         Request::Resolve { name, keep, path } => {
             let cfg = Config::load(config_path)?;
-            if !mine(&cfg.synced_named(&name)?.path) {
+            if !mine(&cfg.attached_named(&name)?.path) {
                 bail!("\"{name}\" is not yours; ask an administrator to answer with `sudo fafnirx folder resolve`");
             }
             commands::resolve_waiting(config_path, &name, &keep, path.as_deref())?;
-            Ok(String::new())
-        }
-        Request::DetachSynced { name } => {
-            let cfg = Config::load(config_path)?;
-            if !mine(&cfg.synced_named(&name)?.path) {
-                bail!("\"{name}\" is not yours; ask an administrator to detach it with `sudo fafnirx folder remove`");
-            }
-            config::detach_synced_from_file(config_path, &name)?;
             Ok(String::new())
         }
     }
@@ -329,9 +322,8 @@ mod tests {
         assert_eq!(words(Request::RemoveFolder { name: "docs".into() }), ["folder", "remove", "docs"]);
         let attach = Request::AttachSynced { name: "ana/family".into(), path: "/f".into(), create: true };
         assert_eq!(words(attach), ["folder", "add", "/f", "--target", "ana/family", "--create"]);
-        assert_eq!(words(Request::DetachSynced { name: "family".into() }), ["folder", "remove", "family"]);
-        let set = Request::SetMode { name: "family".into(), mode: crate::config::Mode::Mine };
-        assert_eq!(words(set), ["folder", "mode", "family", "mine"]);
+        let set = Request::SetMode { name: "family".into(), mode: crate::config::Mode::Keep };
+        assert_eq!(words(set), ["folder", "mode", "family", "keep"]);
         let one = Request::Resolve { name: "family".into(), keep: "both".into(), path: Some("a b.txt".into()) };
         assert_eq!(words(one), ["folder", "resolve", "family", "both", "--", "a b.txt"]);
         let all = Request::Resolve { name: "family".into(), keep: "theirs".into(), path: None };

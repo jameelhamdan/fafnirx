@@ -67,7 +67,7 @@ master|connect)
   if [ "$kind" = master ]; then
     echo "== programs in the image"
     docker run --rm --entrypoint sh "$image" -c 'rclone version | head -1; test "$(id -u)" = 1000; ! command -v ffmpeg'
-    docker run --rm --entrypoint sh "$image" -c 'for b in fafnirx-master fafnirx-sign; do command -v $b; done'
+    docker run --rm --entrypoint sh "$image" -c 'for b in fafnirx-master; do command -v $b; done'
   fi
 
   echo "== database"

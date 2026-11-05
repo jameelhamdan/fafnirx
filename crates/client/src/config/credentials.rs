@@ -1,5 +1,4 @@
-//! The device token lives in the OS keychain, with a file fallback next to
-//! the config. A `token` in the TOML is accepted as a last resort.
+//! The device token lives in the OS keychain, with a file fallback next to the config.
 //!
 //! A system-wide install (its service has no user, and runs for all of them) keeps it in the file only: in the config folder,
 //! readable by the service's account and the administrators.
@@ -45,11 +44,19 @@ pub fn store(server: &str, config_path: &Path, token: &str) -> Result<&'static s
     Ok("token file")
 }
 
+/// Removes the token wherever `store` put it.
+pub fn forget(server: &str, config_path: &Path) {
+    if use_keychain(config_path) {
+        let _ = entry(server).and_then(|e| Ok(e.delete_credential()?));
+    }
+    let _ = std::fs::remove_file(fallback_path(config_path));
+}
+
 fn load_keychain(server: &str) -> Option<String> {
     entry(server).ok()?.get_password().ok().filter(|t| !t.is_empty())
 }
 
-pub fn load(server: &str, config_path: &Path, from_config: Option<&str>) -> Result<String> {
+pub fn load(server: &str, config_path: &Path) -> Result<String> {
     if use_keychain(config_path) {
         if let Some(t) = load_keychain(server) {
             return Ok(t);
@@ -61,8 +68,5 @@ pub fn load(server: &str, config_path: &Path, from_config: Option<&str>) -> Resu
             return Ok(t.to_string());
         }
     }
-    match from_config {
-        Some(t) if !t.is_empty() => Ok(t.to_string()),
-        _ => anyhow::bail!("no device token found; run `fafnirx enroll`"),
-    }
+    anyhow::bail!("no device token found; run `fafnirx install --server <address>`")
 }

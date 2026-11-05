@@ -172,24 +172,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev libxdo-dev
 
-      - name: Build (Linux, macOS)
-        if: ${{ !startsWith(matrix.name, 'windows') }}
+      - name: Build
         run: |
           cargo build --profile client --locked -p fafnirx
-          test "$(target/client/fafnirx --version)" = "fafnirx $VERSION"
+          exe=target/client/fafnirx
+          if [ -f "$exe.exe" ]; then exe=$exe.exe; fi
+          test "$("$exe" --version)" = "fafnirx $VERSION"
           mkdir out
-          stage=fafnirx-$VERSION-${{ matrix.name }}
-          mkdir "$stage"
-          cp target/client/fafnirx installer/install.sh "$stage/"
-          tar czf "out/$stage.tar.gz" "$stage"
-          # The plain executable is what installed clients download to update themselves (crates/client/src/release.rs).
-          cp target/client/fafnirx "out/fafnirx-$VERSION-${{ matrix.name }}"
+          # The plain executable is what installers and installed clients download (get.sh, get.ps1, crates/client/src/update/release.rs).
+          case "${{ matrix.name }}" in
+            windows*) cp "$exe" "out/fafnirx-$VERSION-${{ matrix.name }}.exe" ;;
+            *) cp "$exe" "out/fafnirx-$VERSION-${{ matrix.name }}" ;;
+          esac
+          # Every install starts by saying what it would do: a program that cannot is not published.
+          "$exe" install --dry-run --in-place --server nas.lan --folder .
 
       - name: Debian package
         if: matrix.deb
         run: |
           cargo install cargo-deb --locked
           cargo deb -p fafnirx --no-build --output out/
+          # The package installs, starts nothing without a config, and removes cleanly.
+          sudo dpkg -i out/*.deb
+          fafnirx --version
+          sudo dpkg -r fafnirx
 
       # build.ps1 reads the version from Cargo.toml and stops if the binary reports a different one.
       - name: Windows installer
@@ -198,10 +204,16 @@ jobs:
         run: |
           choco install innosetup -y --no-progress
           installer\build.ps1
-          New-Item -ItemType Directory out | Out-Null
           Copy-Item dist\fafnirx-setup-*.exe out\
-          # The plain executable is what installed clients download to update themselves (crates/client/src/release.rs).
-          Copy-Item target\client\fafnirx.exe "out\fafnirx-$env:VERSION-windows-x86_64.exe"
+          # The setup installs the files without a server, and its uninstaller takes everything away.
+          $setup = (Get-ChildItem out\fafnirx-setup-*.exe).FullName
+          & $setup /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+          $installed = "$env:LOCALAPPDATA\Programs\fafnirx"
+          if (-not (Test-Path "$installed\fafnirx.exe")) { throw 'the setup did not install the program' }
+          & "$installed\fafnirx.exe" --version
+          & "$installed\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+          Start-Sleep 5
+          if (Test-Path "$installed\fafnirx.exe") { throw 'the uninstaller left the program behind' }
 
       - name: Checksums
         # macOS has shasum but not sha256sum; both write the same "hash  name" line.

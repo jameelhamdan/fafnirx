@@ -20,8 +20,6 @@
 //!                           characters, e.g. `openssl rand -hex 24`); without it no module may join
 //!   FAFNIRX_PLUGINS         comma separated ids of the modules that must be running (`video,fetch`); one that is not connected
 //!                           or not working is reported to administrators (default: none required)
-//!   FAFNIRX_WORKER_THREADS  threads of the async runtime, which serve requests (default: the cores the process may use)
-//!   FAFNIRX_BLOCKING_THREADS  most threads for blocking work (database calls, hashing, zip) at once (default 512)
 //!   FAFNIRX_DB_POOL         connections to PostgreSQL (default 8)
 //!   FAFNIRX_STREAMS         file transfers (downloads, uploads, zips) served at once; the rest wait (default 32)
 //!   FAFNIRX_JOB_WORKERS     jobs (details and pictures of photos) worked on at once (default: the cores, 2 to 6)
@@ -58,15 +56,11 @@ fn address(var: &str, default: &str) -> Result<SocketAddr> {
 }
 
 fn main() -> Result<()> {
-    let mut runtime = tokio::runtime::Builder::new_multi_thread();
-    runtime.enable_all();
-    if let Some(n) = platform::tuning::get("FAFNIRX_WORKER_THREADS") {
-        runtime.worker_threads(n);
-    }
-    if let Some(n) = platform::tuning::get("FAFNIRX_BLOCKING_THREADS") {
-        runtime.max_blocking_threads(n);
-    }
-    runtime.build().context("start the async runtime")?.block_on(run())
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("start the async runtime")?
+        .block_on(run())
 }
 
 async fn run() -> Result<()> {
@@ -118,7 +112,7 @@ async fn run() -> Result<()> {
     let app = web::router(state).into_make_service_with_connect_info::<SocketAddr>();
     servers.spawn(async move { axum::serve(listener, app).await.context("web server") });
 
-    let svc = devices::grpc::Service { db, store, updates_dir: data_dir.join("updates"), trusted, events };
+    let svc = devices::grpc::Service { db, store, trusted, events };
     let addr = address("FAFNIRX_LISTEN", "0.0.0.0:7443")?;
     tracing::info!("fafnirx-master listening for devices on {addr}");
     servers.spawn(async move {

@@ -20,7 +20,7 @@ threat model is in [docs/architecture.md](docs/architecture.md#security-model), 
   master files; administrators see everything. SMB/NFS shares of `files/` have their own logins and are outside these roles.
 - Ids (UUIDs) are not secrets: access is checked on every request.
 - Data is not encrypted at rest or on mirrors.
-- Client updates need a valid Ed25519 signature from a key that is not on the master, or come from GitHub releases with a checksum.
+- Client updates come from GitHub releases and are checked against the checksum published with them.
 
 Reports about these designed limits are welcome as ideas, not vulnerabilities. Ways around them are vulnerabilities.
 

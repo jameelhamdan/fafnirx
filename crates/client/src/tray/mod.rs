@@ -9,7 +9,7 @@ mod text;
 
 pub use open::ensure_tray;
 
-use crate::config::{control_dir, Config, Folder, Mode, SyncedFolder};
+use crate::config::{control_dir, Config, Folder, Mode};
 use crate::daemon::{self, requests::Request};
 use crate::service::disk_access;
 use anyhow::{Context, Result};
@@ -44,12 +44,12 @@ enum Action {
     OpenFolder(PathBuf),
     OpenUrl(String),
     AddFolders,
+    /// Stop syncing a folder of this computer, collected or attached to a folder of the master.
     RemoveFolder(String),
     /// Sync a local folder, to be chosen, with this existing synced folder.
     AttachSynced(String),
     /// Make a synced folder from a local folder, to be chosen.
     NewSynced,
-    DetachSynced(String),
     /// What the synced folder does with a file changed here and on the master.
     SetMode(String, Mode),
     /// Ask again about the files of this synced folder that wait for a decision.
@@ -101,13 +101,10 @@ struct Menus {
     /// Actions of the fixed items. The folder entries come and go, so their actions are kept apart.
     actions: Actions,
     folder_actions: Actions,
-    shown_folders: Vec<Folder>,
-    synced: Submenu,
-    synced_actions: Actions,
-    /// The line of each attached folder that says how it is doing.
+    /// The line of each folder attached to a folder of the master that says how it is doing.
     synced_states: Vec<(String, Line)>,
-    /// The attached folders and the synced folders of the master that are not attached, as the submenu shows them.
-    shown_synced: (Vec<SyncedFolder>, Vec<(String, bool)>),
+    /// The folders and the folders of the master that are not attached, as the submenu shows them.
+    shown_folders: (Vec<Folder>, Vec<(String, bool)>),
 }
 
 impl Menus {
@@ -118,7 +115,6 @@ impl Menus {
         let (now, last_sync, on_server, session, error) = (info("..."), info(""), info(""), info(""), info(""));
         let (pause, sync, check) = (control("Pause"), control("Sync now"), control("Check for updates"));
         let updates = info("Updates: not checked");
-        let downloads = control("Downloads on GitHub...");
         let client = control("Stop client");
         let access = control("Full Disk Access settings...");
         let quit = control("Quit tray");
@@ -134,7 +130,6 @@ impl Menus {
             (pause.item.id().clone(), Action::TogglePause),
             (sync.item.id().clone(), Action::SyncNow),
             (check.item.id().clone(), Action::CheckUpdates),
-            (downloads.item.id().clone(), Action::OpenUrl(crate::update::release::releases_page())),
             (client.item.id().clone(), Action::ToggleClient),
             (quit.item.id().clone(), Action::Quit),
             (access.item.id().clone(), Action::AllowDiskAccess),
@@ -145,10 +140,8 @@ impl Menus {
             (open[3].item.id().clone(), Action::OpenUrl(cfg.dashboard_url())),
         ];
 
-        let folders = Submenu::new("Collected folders", true);
-        let folder_actions = fill_folders_menu(&folders, &add_folders, &cfg.folders);
-        let synced = Submenu::new("Synced folders", true);
-        let (synced_actions, synced_states) = fill_synced_menu(&synced, &cfg.synced, &[]);
+        let folders = Submenu::new("Folders", true);
+        let (folder_actions, synced_states) = fill_folders_menu(&folders, &add_folders, &cfg.folders, &[]);
         let sep = PredefinedMenuItem::separator;
         let menu = Menu::new();
         menu.append_items(&[
@@ -166,10 +159,8 @@ impl Menus {
             &sync.item,
             &check.item,
             &updates.item,
-            &downloads.item,
             &sep(),
             &folders,
-            &synced,
             &sep(),
             &open[0].item,
             &open[1].item,
@@ -199,11 +190,8 @@ impl Menus {
             add_folders,
             actions,
             folder_actions,
-            shown_folders: cfg.folders.clone(),
-            synced,
-            synced_actions,
             synced_states,
-            shown_synced: (cfg.synced.clone(), Vec::new()),
+            shown_folders: (cfg.folders.clone(), Vec::new()),
         })
     }
 
@@ -234,20 +222,16 @@ impl Menus {
         }
     }
 
-    /// Rebuilds the folder list when the config file changed (by the tray, the CLI or by hand).
-    fn sync_folders(&mut self, folders: &[Folder]) {
-        if folders != self.shown_folders {
-            self.folder_actions = fill_folders_menu(&self.folders, &self.add_folders, folders);
-            self.shown_folders = folders.to_vec();
-        }
-    }
-
-    /// Rebuilds the synced folders when the config or the master's list of them changed.
-    fn sync_synced(&mut self, attached: &[SyncedFolder], on_master: &[(String, bool)]) {
-        let available: Vec<(String, bool)> = on_master.iter().filter(|(n, _)| !attached.iter().any(|s| &s.name == n)).cloned().collect();
-        if (attached, available.as_slice()) != (self.shown_synced.0.as_slice(), self.shown_synced.1.as_slice()) {
-            (self.synced_actions, self.synced_states) = fill_synced_menu(&self.synced, attached, &available);
-            self.shown_synced = (attached.to_vec(), available);
+    /// Rebuilds the folder list when the config or the master's list of folders changed (by the tray, the CLI or by hand).
+    fn sync_folders(&mut self, folders: &[Folder], on_master: &[(String, bool)]) {
+        let available: Vec<(String, bool)> = on_master
+            .iter()
+            .filter(|(n, _)| !folders.iter().any(|f| !f.is_computer() && &f.name == n))
+            .cloned()
+            .collect();
+        if (folders, available.as_slice()) != (self.shown_folders.0.as_slice(), self.shown_folders.1.as_slice()) {
+            (self.folder_actions, self.synced_states) = fill_folders_menu(&self.folders, &self.add_folders, folders, &available);
+            self.shown_folders = (folders.to_vec(), available);
         }
     }
 
@@ -263,67 +247,44 @@ impl Menus {
     }
 
     fn action(&self, id: &MenuId) -> Option<Action> {
-        self.actions
-            .iter()
-            .chain(&self.folder_actions)
-            .chain(&self.synced_actions)
-            .find(|(i, _)| i == id)
-            .map(|(_, a)| a.clone())
+        self.actions.iter().chain(&self.folder_actions).find(|(i, _)| i == id).map(|(_, a)| a.clone())
     }
 }
 
-/// Fills the "Collected folders" submenu: one entry per collected folder, then "Collect folders...".
-fn fill_folders_menu(menu: &Submenu, add_item: &MenuItem, folders: &[Folder]) -> Actions {
-    for _ in 0..menu.items().len() {
-        menu.remove_at(0);
-    }
-    let mut actions = Actions::new();
-    if folders.is_empty() {
-        let _ = menu.append(&MenuItem::new("No folders yet", false, None));
-    }
-    for f in folders {
-        let path = MenuItem::new(f.path.display().to_string(), false, None);
-        let open = MenuItem::new("Open folder", true, None);
-        let stop = MenuItem::new("Stop collecting", true, None);
-        actions.push((open.id().clone(), Action::OpenFolder(f.path.clone())));
-        actions.push((stop.id().clone(), Action::RemoveFolder(f.name.clone())));
-        if let Ok(sub) = Submenu::with_items(&f.name, true, &[&path, &PredefinedMenuItem::separator(), &open, &stop]) {
-            let _ = menu.append(&sub);
-        }
-    }
-    let _ = menu.append(&PredefinedMenuItem::separator());
-    let _ = menu.append(add_item);
-    actions
-}
-
-/// Fills the "Synced folders" submenu: the folders synced here (⇄), the synced folders of the master that are not
-/// synced here yet, and the way to make a new one.
-fn fill_synced_menu(menu: &Submenu, attached: &[SyncedFolder], available: &[(String, bool)]) -> (Actions, Vec<(String, Line)>) {
+/// Fills the "Folders" submenu: one entry per folder of this computer (⇄ for one synced with a folder of the master), the folders of
+/// the master that are not synced here yet, and the ways to add one.
+fn fill_folders_menu(menu: &Submenu, add_item: &MenuItem, folders: &[Folder], available: &[(String, bool)]) -> (Actions, Vec<(String, Line)>) {
     for _ in 0..menu.items().len() {
         menu.remove_at(0);
     }
     let mut actions = Actions::new();
     // One line per attached folder that says how it is doing; `show_synced_state` keeps it current.
     let mut states = Vec::new();
-    for s in attached {
-        let state = Line::new("waiting for the client", false);
-        let path = MenuItem::new(s.path.display().to_string(), false, None);
+    if folders.is_empty() {
+        let _ = menu.append(&MenuItem::new("No folders yet", false, None));
+    }
+    for f in folders {
+        let path = MenuItem::new(f.path.display().to_string(), false, None);
         let open = MenuItem::new("Open folder", true, None);
-        let stop = MenuItem::new("Stop syncing here", true, None);
-        actions.push((open.id().clone(), Action::OpenFolder(s.path.clone())));
-        actions.push((stop.id().clone(), Action::DetachSynced(s.name.clone())));
-        let (conflicts, conflict_actions) = conflict_menu(s);
-        actions.extend(conflict_actions);
-        let title = format!("{} \u{21c4}", s.name);
-        let items: [&dyn tray_icon::menu::IsMenuItem; 6] = [&state.item, &path, &PredefinedMenuItem::separator(), &open, &conflicts, &stop];
-        if let Ok(sub) = Submenu::with_items(&title, true, &items) {
+        let stop = MenuItem::new(if f.is_computer() { "Stop collecting" } else { "Stop syncing here" }, true, None);
+        actions.push((open.id().clone(), Action::OpenFolder(f.path.clone())));
+        actions.push((stop.id().clone(), Action::RemoveFolder(f.name.clone())));
+        let sub = if f.is_computer() {
+            Submenu::with_items(&f.name, true, &[&path, &PredefinedMenuItem::separator(), &open, &stop])
+        } else {
+            let state = Line::new("waiting for the client", false);
+            let (conflicts, conflict_actions) = conflict_menu(f);
+            actions.extend(conflict_actions);
+            let items: [&dyn tray_icon::menu::IsMenuItem; 6] = [&state.item, &path, &PredefinedMenuItem::separator(), &open, &conflicts, &stop];
+            let sub = Submenu::with_items(format!("{} \u{21c4}", f.name), true, &items);
+            states.push((f.name.clone(), state));
+            sub
+        };
+        if let Ok(sub) = sub {
             let _ = menu.append(&sub);
         }
-        states.push((s.name.clone(), state));
     }
-    if !attached.is_empty() && !available.is_empty() {
-        let _ = menu.append(&PredefinedMenuItem::separator());
-    }
+    let _ = menu.append(&PredefinedMenuItem::separator());
     for (name, read_only) in available {
         let item = MenuItem::new(
             format!("Sync \"{name}\" with a folder...{}", if *read_only { " (read only)" } else { "" }),
@@ -333,23 +294,20 @@ fn fill_synced_menu(menu: &Submenu, attached: &[SyncedFolder], available: &[(Str
         actions.push((item.id().clone(), Action::AttachSynced(name.clone())));
         let _ = menu.append(&item);
     }
-    if !attached.is_empty() || !available.is_empty() {
-        let _ = menu.append(&PredefinedMenuItem::separator());
-    }
     let new = MenuItem::new("New folder from a local folder...", true, None);
     actions.push((new.id().clone(), Action::NewSynced));
     let _ = menu.append(&new);
+    let _ = menu.append(add_item);
     (actions, states)
 }
 
 /// The mode of this folder, one entry checked, and (with `ask`) the way to be asked again about what waits.
-fn conflict_menu(synced: &SyncedFolder) -> (Submenu, Actions) {
+fn conflict_menu(synced: &Folder) -> (Submenu, Actions) {
     let mut actions = Actions::new();
     let sub = Submenu::new("How it syncs", true);
     let choices = [
         (Mode::Both, "Both ways (the server's wins a clash; mine is put aside)"),
         (Mode::Up, "Send only (nothing comes back)"),
-        (Mode::Mine, "Both ways, mine wins a clash (replaces the server's)"),
         (Mode::Keep, "Both ways, keep both on a clash"),
         (Mode::Ask, "Both ways, ask me on a clash"),
     ];
@@ -417,11 +375,11 @@ fn resolve_conflicts(config_path: &Path, files: Vec<(String, daemon::ConflictInf
     }
 }
 
-/// What the person chose for one file: `theirs`, `mine` or `both`; `None` to decide later (closing the window).
+/// What the person chose for one file: `theirs` or `both`; `None` to decide later (closing the window).
 fn ask_which(folder: &str, file: &daemon::ConflictInfo) -> Option<&'static str> {
     use rfd::{MessageButtons, MessageDialogResult::Custom};
     const THEIRS: &str = "Keep the server's";
-    const MINE: &str = "Keep mine";
+    const LATER: &str = "Decide later";
     const BOTH: &str = "Keep both";
     let ago = |unix: i64| format!("changed {} ago", daemon::age(unix_now() - unix));
     let server = if file.deleted {
@@ -436,23 +394,12 @@ fn ask_which(folder: &str, file: &daemon::ConflictInfo) -> Option<&'static str> 
         ago(file.local_mtime),
     );
     let first = message(rfd::MessageLevel::Warning, body)
-        .set_buttons(MessageButtons::YesNoCancelCustom(THEIRS.into(), BOTH.into(), MINE.into()))
+        .set_buttons(MessageButtons::YesNoCancelCustom(THEIRS.into(), BOTH.into(), LATER.into()))
         .show();
     match first {
         Custom(c) if c == THEIRS => Some("theirs"),
         Custom(c) if c == BOTH => Some("both"),
-        Custom(c) if c == MINE => {
-            // Replacing what others did is not one click away.
-            let sure = message(
-                rfd::MessageLevel::Warning,
-                format!("Keep this computer's \"{}\"? It replaces the server's version for every computer.", file.path),
-            )
-            .set_buttons(MessageButtons::OkCancelCustom("Keep mine".into(), "Decide later".into()))
-            .show();
-            matches!(sure, Custom(c) if c == MINE).then_some("mine")
-        }
-        // Where the system cannot show the button texts it shows Yes / No / Cancel, in the order of the buttons above: the
-        // first two are the safe ones, and Cancel (the one that replaces the server's) is not taken for a choice.
+        // Where the system cannot show the button texts it shows Yes / No / Cancel, in the order of the buttons above.
         rfd::MessageDialogResult::Yes => Some("theirs"),
         rfd::MessageDialogResult::No => Some("both"),
         _ => None,
@@ -478,11 +425,7 @@ fn attach_synced_dialog(config_path: &Path, name: &str, dir: &Path, create: bool
 
 /// The first folder of `config` that the client cannot reach for want of Full Disk Access (macOS).
 fn blocked_folder(status: Option<&daemon::Status>, config: &Config) -> Option<PathBuf> {
-    let paths = config
-        .folders
-        .iter()
-        .map(|f| f.path.as_path())
-        .chain(config.synced.iter().map(|s| s.path.as_path()));
+    let paths = config.folders.iter().map(|f| f.path.as_path());
     disk_access::first_blocked(status.and_then(|s| s.full_disk_access), paths).map(Path::to_path_buf)
 }
 
@@ -592,11 +535,6 @@ fn new_synced(config_path: &Path, on_master: &[(String, bool)], owner: &str) {
     }
 }
 
-fn detach_synced_dialog(config_path: &Path, name: &str) {
-    let text = format!("Stop syncing \"{name}\" on this computer?\n\nNothing is deleted: the files stay in the folder and on the server.");
-    confirm_then(text, || cli_change(config_path, &Request::DetachSynced { name: name.into() }));
-}
-
 fn message(level: rfd::MessageLevel, text: String) -> rfd::MessageDialog {
     rfd::MessageDialog::new().set_level(level).set_title("fafnirx").set_description(text)
 }
@@ -620,7 +558,7 @@ fn cli_change(config_path: &Path, request: &Request) -> anyhow::Result<()> {
 }
 
 fn remove_folder_dialog(config_path: &Path, name: &str) {
-    let text = format!("Stop collecting \"{name}\"?\n\nFiles already uploaded stay on the server.");
+    let text = format!("Stop syncing \"{name}\" on this computer?\n\nNothing is deleted: the files stay in the folder and on the server.");
     confirm_then(text, || cli_change(config_path, &Request::RemoveFolder { name: name.into() }));
 }
 
@@ -674,7 +612,6 @@ impl Env {
                 let known = self.on_master.locked().clone();
                 new_synced(&self.config_path, &known, owner_of(daemon::read_status(&self.state_dir).as_ref()));
             }
-            Action::DetachSynced(name) => detach_synced_dialog(&self.config_path, &name),
             Action::SetMode(name, mode) => {
                 if let Err(e) = cli_change(&self.config_path, &Request::SetMode { name, mode }) {
                     message(rfd::MessageLevel::Error, format!("{e:#}")).show();
@@ -792,10 +729,9 @@ pub fn run(config_path: PathBuf) -> Result<()> {
             }
             menus.show_access(blocked.as_deref());
             if let Some(c) = &cfg_now {
-                menus.sync_folders(&c.folders);
                 let readonly = status.as_ref().map(|s| s.synced_readonly.as_slice()).unwrap_or_default();
                 let on_master: Vec<(String, bool)> = env.on_master.locked().iter().map(|(n, _)| (n.clone(), readonly.contains(n))).collect();
-                menus.sync_synced(&c.synced, &on_master);
+                menus.sync_folders(&c.folders, &on_master);
             }
             menus.show_synced_state(status.as_ref(), unix);
             ask_about_conflicts(&config_path, status.as_ref());

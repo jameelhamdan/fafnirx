@@ -20,9 +20,8 @@ flowchart TB
 | Client `fafnirx` (`crates/client`) | Watch, hash in chunks, upload, offline queue, folder sync, tray, self-update from GitHub releases |
 | Master `fafnirx-master` (`crates/master`) | Device API, web API, file store, ingest, retention, alerts, sources, mirrors, metadata |
 | Web app (`frontend`) | React, built into the master. A module's part is built apart and loaded by the browser from the module while it is up |
-| Modules (`modules/<id>/service`) | Optional add-on containers that announce themselves to the master; only the master talks to them ([modules](modules.md)). Today: `fafnirx-video` ([video](video.md)) and `fafnirx-fetch`, which reads web sources ([fetch](fetch.md)); more kinds of source are plugins of the same shape ([plugins](plugins.md)) |
+| Modules (`modules/<id>/service`) | Optional add-on containers that announce themselves to the master; only the master talks to them ([modules](modules.md)). Today: `fafnirx-video` ([video](video.md)) and `fafnirx-fetch`, which reads web sources ([fetch](sources.md#web-files-and-feeds)); more kinds of source are plugins of the same shape ([plugins](plugins.md)) |
 | `crates/module-api`, `fetch-api`, `module-kit` | The contract between master and module, what a module that reads sources says to the master, and the plumbing every such module shares |
-| `crates/sign` | Optional: signed client builds |
 | `crates/common` | gRPC types, chunking, hashing, path rules |
 
 ## Design decisions
@@ -30,12 +29,12 @@ flowchart TB
 - **Two APIs, two trust levels.** The device gRPC API (`proto/fafnirx.proto`) has no call that reads, lists or deletes the
   files of a device. The one exception is [folders](#folders), which a device reads and writes for its own user. Everything
   else that reads or deletes is in the web API, behind a login and role checks. Different ports, no shared authentication.
-- **Plain files.** The current version of a path is stored whole in `files/users/<user>/<device>/<path>` (`files/<path>` for
-  master files). A replaced or deleted version moves to `versions/<version id>/...`. Chunks exist only on the wire and in
+- **Plain files.** The current version of a path is stored whole in `files/users/<user>/<device>/<path>` (`files/<name>/<path>` in
+  a master folder). A replaced or deleted version moves to `versions/<version id>/...`. Chunks exist only on the wire and in
   `tmp/`; there is no cross-file deduplication.
 - **Users own devices; the name is the folder.** A device name is a slug, unique per user, and `<user>/<name>` names it in the
   store, mirrors and API. There are three kinds: a computer (`device`, bound to a token), a folder of a user (`local`, no token)
-  and the master files (`master`, id 0, `_master`, no owner). A folder can be renamed: its directory, versions and every row
+  and a master folder (`master`, no owner, named by its path in `files/`; its folder is `master:<name>`). A folder can be renamed: its directory, versions and every row
   keyed by the name move in one transaction; everything else points at the device id, so albums and sources follow. A
   `public_id` is the address clients keep, so a rename does not detach them.
 - **IDs.** Files, albums, tags, jobs and alerts have random UUIDs, shown as 22-character URL-safe Base64. Devices, users,
@@ -111,8 +110,9 @@ over SSE; the web app maps topics to stale queries and refetches once per burst.
 
 A folder is a `local` device owned by a user. It is shared when the owner adds other users to it, each read-write or
 read-only; a member can leave. Versions, trash, retention, mirrors, the watcher and the web file browser treat every folder
-alike. A **master folder** is a named subfolder of the master files (never the whole of them) that computers can sync both
-ways; administrators make and remove them, every user can use them, read-only users read. The web app and the clients name a
+alike. A **master folder** is a folder of the master files that belongs to nobody: a device row like the others, named by its
+path in `files/`, that computers can sync both ways; administrators make, rename and remove them, every user can use them,
+read-only users read. A new folder in `files/` becomes one by itself unless it would be inside, or around, another. The web app and the clients name a
 folder `<owner>/<name>` or `master:<path>`, and one query gives every folder a user can use.
 
 A computer reaches a folder like this:
@@ -132,11 +132,10 @@ A computer reaches a folder like this:
 - **Web access.** Members see a shared folder in their listings and may write if allowed. Deleting a folder needs all its
   files deleted first, then removes trash, versions, log and stored copies.
 
-**Client sync.** Each `[[synced]]` folder has its own state database. A cycle receives, then sends with the same upload
+**Client sync.** Each folder attached to a folder of the master (`target = "folder"`) has its own state database. A cycle receives, then sends with the same upload
 engine. A local file that still matches its recorded size and mtime is unchanged, so the master's change applies; otherwise it
 is hashed: equal means in step, different is a conflict. The folder's mode settles conflicts: the master's version wins and the
-local one is parked in `.fafnirx-conflicts/`, or the local one wins and is sent, or both are kept (the local one is renamed),
-or the user is asked (answered with `folder resolve` or from the tray, and kept as both after a timeout). There is no
+local one is parked in `.fafnirx-conflicts/`, or both are kept (the local one is renamed), or the user is asked (answered with `folder resolve` or from the tray, and kept as both after a timeout). There is no
 compare-and-swap on the master, so a push can overwrite a version another computer committed after this one's receive. Received
 files are written to a temporary name, verified and renamed. `status` reads only the state database, so it works with the
 client stopped.
@@ -151,8 +150,8 @@ client stopped.
 |---|---|---|
 | Offline and disk alerts, expiry of upload-error and held-deletion alerts | master, every minute | |
 | Retention, version pruning, stale uploads, cache cleaning | master, hourly | Removes files with their records |
-| Sources, mirrors | master | Claimed with `FOR UPDATE SKIP LOCKED`. Mirrors and rclone sources run one at a time; sources a module reads, two at a time. A run fetches at most `max_per_run` files and asks for another while more wait |
-| Metadata (`meta`, then `artwork`) | master, table `jobs` | 3 attempts; videos are probed by a module; a job can leave a note shown in Processing |
+| Sources, mirrors | master | Both are `links` (interval, enabled, last status), claimed with `FOR UPDATE SKIP LOCKED` by one loop. Mirrors and rclone sources run one at a time; sources a module reads, two at a time. A run fetches at most `max_per_run` files and asks for another while more wait |
+| Metadata (`meta`) | master, table `jobs` | 3 attempts; videos are probed by a module; a job can leave a note shown in Processing |
 | Thumbnails (`thumb`) | master | Queued by the first request for a picture, answered `202`, announced when done. Workers scale with cores; newest request first. Kept in `cache/thumbs/` |
 | Segments, subtitles | video module | On request; in memory |
 | Listing and fetching a source | fetch module | When the master asks; in memory |
@@ -190,20 +189,24 @@ erDiagram
     albums {
         uuid id PK
         uuid cover_file_id FK
-        bigint folder_device_id FK
-        text folder_prefix
+        bigint folder_device_id FK "the folder it is a shortcut to"
     }
     jobs {
         uuid id PK
         bigint seq "queue order"
-        text kind "meta, artwork, thumb, proxy"
+        text kind "meta, thumb"
         text note
     }
 ```
 
-Other tables: `sessions`, `shared_members`, `master_folders`, `device_folder_state` (what each computer says about its
-folders, replaced with every heartbeat), `device_activity`, `alerts`, `settings`, `sources`, `source_items`, `mirrors`,
-`mirror_items`, `schema_migrations`. The schema is `crates/master/migrations/0001_schema.sql`; the master applies migrations it
+Sources and mirrors are the two directions of one `links` table (`direction` `in`/`out`): a folder tied to some storage, with a
+schedule, a last status and a `config` text (the storage; for a mirror also its passwords). A source writes into one whole folder
+of its owner's, a mirror holds one whole folder or everything. `link_items` remembers what each has copied, so the scheduler,
+the run/toggle/delete handlers and the run list are written once. A link points at the folder row, so renaming a folder needs no
+patching of links.
+
+Other tables: `sessions`, `shared_members`, `device_folder_state` (what each computer says about its
+folders, replaced with every heartbeat), `device_activity`, `alerts`, `settings`, `links`, `link_items`, `schema_migrations`. The schema is `crates/master/migrations/` (`0001_schema.sql`, `0002_folders.sql`); the master applies migrations it
 has not applied when it starts, once, under a lock, and refuses a database newer than itself. Events are kept 90 days.
 
 Device totals (files, bytes, deleted) are kept on the device row, marked stale by writes and recomputed when the device
@@ -227,7 +230,7 @@ hash and commits through the device path.
 | Compromised device | Cannot read, list or delete anything but the folders of its user, those shared with them and the master folders |
 | Stolen password | Guesses rate-limited per address and user; sessions end on disable, new password, logout. Add Access or a VPN |
 | A user reaching another's files | Queries and downloads are limited to the role's devices; others' devices answer 404. Ids are random but never trusted: access is checked on every call |
-| Compromised master | Cannot ship a client update: GitHub, or builds signed with a key not on the master |
+| Compromised master | Cannot ship a client update: clients update from GitHub releases |
 | Path tricks | Validated on arrival and again when mapped to disk |
 | Stored HTML/SVG opened in a browser | Always a download with `nosniff` |
 | Tampered chunk, bit rot | Verified on arrival and before install; re-hashed before mirroring (a mismatch fails that file) |

@@ -17,7 +17,7 @@ pub fn rclone_config() -> PathBuf {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MirrorSpec {
     pub name: String,
-    /// `replica`: the files as they are. `backup`: compressed and encrypted with the two passwords below.
+    /// `replica`: the files as they are. `backup`: encrypted with the two passwords below.
     pub kind: String,
     pub crypt_password: String,
     pub crypt_salt: String,
@@ -30,8 +30,8 @@ pub struct MirrorSpec {
     /// rclone backend options (`access_key_id`, `region`, ...), as rclone's lowercase names.
     pub options: BTreeMap<String, Value>,
     pub interval_hours: f64,
-    /// The folder it holds, like `ana/laptop/Documents` or `_master`; empty for everything (`scope`).
-    pub scope: String,
+    /// The folder it holds, like `ana/laptop` or `master:Photos`; empty for everything.
+    pub folder: String,
     /// Runs of history (replaced and removed files) kept on the mirror.
     pub keep_runs: i64,
 }
@@ -109,7 +109,7 @@ impl MirrorSpec {
             _ => bail!("kind must be replica or backup"),
         }
         normalize_storage(&mut self.remote, &mut self.remote_type, &mut self.remote_path, &mut self.options)?;
-        self.scope = crate::integrations::scope::normalize(&self.scope)?;
+        self.folder = self.folder.trim().trim_matches('/').to_string();
         self.interval_hours = hours_to_secs(self.interval_hours).map_err(|e| anyhow!(e.1))? as f64 / 3600.0;
         if !(1..=100).contains(&self.keep_runs) {
             bail!("keep_runs must be between 1 and 100");
@@ -133,7 +133,7 @@ mod tests {
             remote_path: " bucket/x ".into(),
             options: [("Access-Key".to_string(), Value::from(1))].into(),
             interval_hours: 72.0,
-            scope: " /ana/laptop/ ".into(),
+            folder: " /ana/laptop/ ".into(),
             keep_runs: 3,
         }
     }
@@ -150,7 +150,7 @@ mod tests {
         m.normalize().unwrap();
         assert_eq!((m.remote_type.as_str(), m.remote_path.as_str()), ("s3", "bucket/x"));
         assert_eq!(m.options["access_key"], Value::from("1"));
-        assert_eq!(m.scope, "ana/laptop");
+        assert_eq!(m.folder, "ana/laptop");
         let mut bad = spec();
         bad.keep_runs = 0;
         assert!(bad.normalize().is_err());

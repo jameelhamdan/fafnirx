@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useApiMutation } from '@/lib/mutation'
 import { Check, Copy, FolderOpen, FolderSync, LogOut, MoreHorizontal, Pencil, Plus, Server, Trash2, UserPlus, X } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
@@ -88,30 +89,31 @@ function People({ folder }: { folder: Folder }) {
   const people = useQuery({ queryKey: ['folders', 'people'], queryFn: () => api.get<Person[]>('/api/folders/people'), staleTime: 60_000 })
   const suggestions = (people.data ?? []).filter((p) => !folder.members.some((m) => m.user === p.name))
   // Adding a user and changing what they may do are the same request.
-  const save = useMutation({ mutationFn: (m: { user: string; can_write: boolean }) => api.post(members, m), onSuccess: refresh, onError: (e) => toast.error(e.message) })
-  const remove = useMutation({
-    mutationFn: (m: { user: string; can_write: boolean }) => api.delete(`${members}/${encodeURIComponent(m.user)}`),
+  const save = useApiMutation((m: { user: string; can_write: boolean }) => api.post(members, m), {
+    onSuccess: refresh,
+    toastError: true,
+  })
+  const remove = useApiMutation((m: { user: string; can_write: boolean }) => api.delete(`${members}/${encodeURIComponent(m.user)}`), {
     onSuccess: (_, m) => {
       refresh()
       toast(t('Stopped sharing with {name}', { name: m.user }), { action: { label: t('Undo'), onClick: () => save.mutate(m) } })
     },
-    onError: (e) => toast.error(e.message),
+    toastError: true,
   })
   // Several names at once, separated by commas or spaces; the ones that fail stay in the field with the reason.
-  const add = useMutation({
-    mutationFn: async () => {
-      const failed: { name: string; why: string }[] = []
-      for (const name of names.split(/[\s,;]+/).filter(Boolean)) {
-        try {
-          // A read-only account can only read: give it that instead of failing.
-          const reader = people.data?.find((p) => p.name === name.toLowerCase())?.can_write === false
-          await api.post(members, { user: name, can_write: canWrite && !reader })
-        } catch (e) {
-          failed.push({ name, why: e instanceof Error ? e.message : String(e) })
-        }
+  const add = useApiMutation(async () => {
+    const failed: { name: string; why: string }[] = []
+    for (const name of names.split(/[\s,;]+/).filter(Boolean)) {
+      try {
+        // A read-only account can only read: give it that instead of failing.
+        const reader = people.data?.find((p) => p.name === name.toLowerCase())?.can_write === false
+        await api.post(members, { user: name, can_write: canWrite && !reader })
+      } catch (e) {
+        failed.push({ name, why: e instanceof Error ? e.message : String(e) })
       }
-      return failed
-    },
+    }
+    return failed
+  }, {
     onSuccess: (failed) => {
       setNames(failed.map((f) => f.name).join(', '))
       refresh()
@@ -202,12 +204,14 @@ function FolderPanel({ folder, onClose }: { folder: Folder | undefined; onClose:
   const [renaming, setRenaming] = useState(false)
   const ended = () => { setAsking(null); onClose(); refresh() }
   const failed = (e: Error) => { setAsking(null); toast.error(e.message) }
-  const remove = useMutation({
-    mutationFn: () => (folder?.master ? api.delete(`/api/master-folders/${folder.public_id}`) : api.delete(`/api/folders/${encodeURIComponent(folder?.name ?? '')}`)),
+  const remove = useApiMutation(() => (folder?.master ? api.delete(`/api/master-folders/${folder.public_id}`) : api.delete(`/api/folders/${encodeURIComponent(folder?.name ?? '')}`)), {
     onSuccess: ended,
     onError: failed,
   })
-  const leave = useMutation({ mutationFn: () => api.post('/api/folders/leave', { folder: folder?.folder }), onSuccess: ended, onError: failed })
+  const leave = useApiMutation(() => api.post('/api/folders/leave', { folder: folder?.folder }), {
+    onSuccess: ended,
+    onError: failed,
+  })
   return (
     <Sheet open={folder !== undefined} onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="w-full gap-0 overflow-y-auto sm:max-w-lg">
@@ -232,6 +236,7 @@ function FolderPanel({ folder, onClose }: { folder: Folder | undefined; onClose:
                 <h3 className="text-sm font-medium">{folder.mine || (folder.master && admin) ? t('Computers it is attached to') : t('Your computers that have it')}</h3>
                 {folder.computers.length > 0 ? <FolderStateList rows={folder.computers} /> : <AttachHint folder={folder} />}
               </section>
+              <Rules folder={folder} />
               <section className="flex flex-wrap gap-2 border-t pt-4">
                 {folder.master ? (
                   admin && (
@@ -259,7 +264,7 @@ function FolderPanel({ folder, onClose }: { folder: Folder | undefined; onClose:
             <Confirm
               open={asking === 'delete'}
               title={folder.master ? t('Remove {name}?', { name: folder.name }) : t('Delete {name}?', { name: folder.folder })}
-              description={folder.master ? t('Computers stop syncing it. The files stay in the master files.') : t('This removes the folder for good, with its trash and the history of its files. It can only be deleted once all its files are deleted.')}
+              description={t('This removes the folder for good, with its trash and the history of its files. It can only be deleted once all its files are deleted.')}
               action={folder.master ? t('Remove') : t('Delete')}
               destructive
               onConfirm={() => remove.mutate()}
@@ -278,6 +283,28 @@ function FolderPanel({ folder, onClose }: { folder: Folder | undefined; onClose:
         )}
       </SheetContent>
     </Sheet>
+  )
+}
+
+/** What else works with a folder: the sources that write into it, the mirrors that hold it, and the album that is a shortcut to it. */
+function Rules({ folder }: { folder: Folder }) {
+  const t = useT()
+  const { sources, mirrors, album } = folder.rules
+  if (sources.length === 0 && mirrors.length === 0 && !album) return null
+  const status = (s: string | null) => (s ? <Badge variant={s === 'failed' ? 'destructive' : 'outline'} className="ms-2">{s}</Badge> : null)
+  return (
+    <section className="space-y-2">
+      <h3 className="text-sm font-medium">{t('What works with it')}</h3>
+      <ul className="space-y-1 text-sm">
+        {sources.map((s) => (
+          <li key={`s/${s.key}`}><Link className="underline" to="/sources">{t('Source {name}', { name: s.key })}</Link>{status(s.status)}</li>
+        ))}
+        {mirrors.map((m) => (
+          <li key={`m/${m.name}`}><Link className="underline" to="/mirrors">{t('Mirror {name}', { name: m.name })}</Link>{status(m.status)}</li>
+        ))}
+        {album && <li><Link className="underline" to={`/albums/${album.id}`}>{t('Album {name}', { name: album.name })}</Link></li>}
+      </ul>
+    </section>
   )
 }
 
@@ -357,7 +384,7 @@ export default function Folders() {
     { id: 'all', label: t('All ({count})', { count: data?.length ?? 0 }) },
     { id: 'mine', label: t('Yours ({count})', { count: mine }) },
     { id: 'others', label: t('Shared with you ({count})', { count: (data?.length ?? 0) - mine - master }) },
-    { id: 'master', label: t('Master files ({count})', { count: master }) },
+    { id: 'master', label: t('Master folders ({count})', { count: master }) },
   ]
   return (
     <div>

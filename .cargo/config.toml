@@ -1,0 +1,5 @@
+# The TypeScript types of the web API are generated from the master's response structs (`ts-rs`, in the master's tests):
+# `cargo test -p fafnirx-master` rewrites frontend/src/lib/generated/. 64-bit numbers are plain numbers in JSON.
+[env]
+TS_RS_EXPORT_DIR = { value = "frontend/src/lib/generated", relative = true }
+TS_RS_LARGE_INT = "number"

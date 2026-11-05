@@ -1,5 +1,7 @@
 //! The queue of background work, to look at and to steer: what is being read or made, what waits, what failed and
-//! why, and what the modules that are set up report (the video module: segments being cut, subtitle tracks).
+//! why. One list for all of it, whatever does the work: the jobs in the database (details, pictures), the runs of sources and
+//! mirrors, and what the modules that are set up report (files being fetched, segments being cut), each row saying what it is
+//! for and which module (`plugin`) does it.
 //!
 //! Everybody sees the jobs of the devices they can see. Only an administrator holds the queue back, retries, cancels or asks
 //! for files to be read again.
@@ -20,6 +22,7 @@ const LIST: i64 = 200;
 const REBUILD_BATCH: i64 = 1000;
 
 #[derive(Serialize, Default)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, rename = "QueueSummary"))]
 pub struct Summary {
     kind: String,
     queued: i64,
@@ -30,9 +33,11 @@ pub struct Summary {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, rename = "QueueJob"))]
 pub struct Job {
     id: Id,
     kind: String,
+    #[cfg_attr(test, ts(type = "'queued' | 'running' | 'failed' | 'done'"))]
     status: String,
     device: String,
     path: String,
@@ -45,9 +50,12 @@ pub struct Job {
     finished_at: Option<i64>,
     /// A job that failed and will be tried again waits until then.
     retry_at: Option<i64>,
+    /// The module or kind of source that does the work; empty for the master's own.
+    plugin: String,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, rename = "QueueState"))]
 pub struct Queue {
     /// Held back by an administrator: nothing new is started.
     paused: bool,
@@ -55,9 +63,6 @@ pub struct Queue {
     can_control: bool,
     summary: Vec<Summary>,
     jobs: Vec<Job>,
-    /// What each module that reports its work is doing, by module id, as it reports it (the web app's module of the same
-    /// name shows it). A module that is off or does not answer is not listed.
-    modules: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -85,6 +90,7 @@ impl From<jobs::Item> for Job {
             started_at: j.started_at,
             finished_at: j.finished_at,
             retry_at: waiting_to_retry.then_some(j.run_after),
+            plugin: String::new(),
         }
     }
 }
@@ -107,14 +113,14 @@ fn summarize(counts: Vec<jobs::Count>) -> Vec<Summary> {
     by_kind.into_values().collect()
 }
 
-/// Whether a user sees the file a module names: `users/<user>/<device>/<path>` for the files of a device, just `<path>` for a
-/// master file (see `store::tree_path`).
+/// Whether a user sees the file a module names: `users/<user>/<device>/<path>` for the files of a device, `<name>/<path>` for a
+/// file of a master folder, which everybody sees (see `store::tree_path`).
 fn sees_path(who: &Access, p: &str) -> bool {
-    use crate::platform::store::{MASTER_FOLDER, USERS_DIR};
+    use crate::platform::store::USERS_DIR;
     let mut parts = p.strip_prefix(USERS_DIR).and_then(|r| r.strip_prefix('/')).unwrap_or("").splitn(3, '/');
     match (parts.next(), parts.next(), parts.next()) {
         (Some(user), Some(device), Some(_)) => who.can_see(&format!("{user}/{device}")),
-        _ => who.can_see(MASTER_FOLDER),
+        _ => true,
     }
 }
 
@@ -128,27 +134,154 @@ fn visible_tasks(who: &Access, mut report: serde_json::Value) -> serde_json::Val
     report
 }
 
+/// A row that does not come from the `jobs` table has no id of its own: this one is made from what names it, so that it is the
+/// same row every time the list is asked for.
+fn id_of(key: &str) -> Id {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(key.as_bytes());
+    Id(uuid::Uuid::from_slice(&digest[..16]).unwrap_or_default())
+}
+
+/// The runs of sources and mirrors as rows of the list: a run that goes on is running, one that ended is done or failed.
+fn runs(c: &mut postgres::Client, all: bool, user: i64) -> anyhow::Result<Vec<Job>> {
+    use fafnirx_db::queries::jobs as q;
+    let row = |key: String, kind: &str, subject: String, name: String, plugin: String, status: Option<String>, message: Option<String>, at: Option<i64>| {
+        let status = match status.as_deref() {
+            Some("running") => "running",
+            Some("failed") => "failed",
+            _ => "done",
+        };
+        let message = message.filter(|m| !m.is_empty());
+        let (started_at, finished_at) = if status == "running" { (at, None) } else { (None, at) };
+        Job {
+            id: id_of(&key),
+            kind: kind.into(),
+            status: status.into(),
+            device: subject,
+            path: name,
+            attempts: 0,
+            error: if status == "failed" { message.clone() } else { None },
+            note: if status == "failed" { None } else { message },
+            created_at: at.unwrap_or_default(),
+            started_at,
+            finished_at,
+            retry_at: None,
+            plugin,
+        }
+    };
+    let mut out = Vec::new();
+    for l in q::link_runs().bind(&mut *c, &all, &user).all()? {
+        let (kind, subject, name) = match l.owner {
+            Some(owner) => ("source", l.folder.unwrap_or_default(), format!("{owner}/{}", l.name)),
+            None => ("mirror", String::new(), l.name),
+        };
+        let plugin = if l.kind == "rclone" || kind == "mirror" { String::new() } else { l.kind };
+        out.push(row(
+            format!("{kind}/{}", l.id),
+            kind,
+            subject,
+            name,
+            plugin,
+            l.last_status,
+            l.last_message,
+            l.last_run_at,
+        ));
+    }
+    Ok(out)
+}
+
+/// What a module reports doing (`active`) and what failed lately (`failed`), as rows of the list. The reports of all modules have
+/// that shape (`fafnirx-module-kit`'s tasks); the module's own word for the task is the kind of the row.
+fn module_jobs(module: &str, report: &serde_json::Value) -> Vec<Job> {
+    let text = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let number = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_i64());
+    let mut out = Vec::new();
+    for a in report.get("active").and_then(|v| v.as_array()).into_iter().flatten() {
+        let (running, since) = (a.get("running").and_then(|x| x.as_bool()).unwrap_or(true), number(a, "since").unwrap_or_default());
+        out.push(Job {
+            id: id_of(&format!("{module}/{}/{}/{since}", text(a, "kind"), text(a, "path"))),
+            kind: text(a, "kind"),
+            status: if running { "running" } else { "queued" }.into(),
+            device: String::new(),
+            path: text(a, "path"),
+            attempts: 0,
+            error: None,
+            note: None,
+            created_at: since,
+            started_at: running.then_some(since),
+            finished_at: None,
+            retry_at: None,
+            plugin: module.into(),
+        });
+    }
+    for f in report.get("failed").and_then(|v| v.as_array()).into_iter().flatten() {
+        let at = number(f, "at").unwrap_or_default();
+        out.push(Job {
+            id: id_of(&format!("{module}/failed/{}/{}/{at}", text(f, "kind"), text(f, "path"))),
+            kind: text(f, "kind"),
+            status: "failed".into(),
+            device: String::new(),
+            path: text(f, "path"),
+            attempts: 1,
+            error: Some(text(f, "error")),
+            note: None,
+            created_at: at,
+            started_at: None,
+            finished_at: Some(at),
+            retry_at: None,
+            plugin: module.into(),
+        });
+    }
+    out
+}
+
+/// Adds the rows that do not come from the `jobs` table to the counts per kind.
+fn count_rows(summary: &mut Vec<Summary>, rows: &[Job]) {
+    for job in rows {
+        let at = summary.iter().position(|s| s.kind == job.kind).unwrap_or_else(|| {
+            summary.push(Summary { kind: job.kind.clone(), ..Default::default() });
+            summary.len() - 1
+        });
+        let s = &mut summary[at];
+        match job.status.as_str() {
+            "queued" => s.queued += 1,
+            "running" => s.running += 1,
+            "failed" => s.failed += 1,
+            _ => s.done += 1,
+        }
+    }
+}
+
 pub async fn show(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Queue> {
     let (all, user) = who.scope_args();
-    let (paused, summary, listed) = run(&state, move |c| {
+    let (paused, mut summary, listed, mut others) = run(&state, move |c| {
         let paused = settings::get_i64(c, PAUSED, 0) == 1;
-        Ok((paused, summarize(jobs::counts(c, all, user)?), jobs::items(c, all, user, LIST)?))
+        Ok((
+            paused,
+            summarize(jobs::counts(c, all, user)?),
+            jobs::items(c, all, user, LIST)?,
+            runs(c, all, user)?,
+        ))
     })
     .await?;
-    let modules = state
-        .modules
-        .statuses()
-        .await
-        .into_iter()
-        .map(|(id, report)| (id, visible_tasks(&who, report)))
-        .collect();
-    Ok(Json(Queue {
-        paused,
-        can_control: who.is_admin(),
-        summary,
-        jobs: listed.into_iter().map(Job::from).collect(),
-        modules,
-    }))
+    for (id, report) in state.modules.statuses().await {
+        others.extend(module_jobs(&id, &visible_tasks(&who, report)));
+    }
+    count_rows(&mut summary, &others);
+    let mut jobs: Vec<Job> = listed.into_iter().map(Job::from).chain(others).collect();
+    // What goes on first, then what failed, then what waits, then what is done, the newest first.
+    let rank = |j: &Job| match j.status.as_str() {
+        "running" => 0,
+        "failed" => 1,
+        "queued" => 2,
+        _ => 3,
+    };
+    // (waiting work in the order it will be done, the rest the newest first)
+    jobs.sort_by_key(|j| {
+        let at = j.finished_at.or(j.started_at).unwrap_or(j.created_at);
+        (rank(j), if j.status == "queued" { at } else { -at })
+    });
+    Ok(Json(Queue { paused, can_control: who.is_admin(), summary, jobs }))
 }
 
 #[derive(Deserialize)]

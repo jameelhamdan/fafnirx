@@ -6,14 +6,13 @@
 //! A run fetches at most `max_per_run` files and, when more are waiting, asks for another run at once: a long list
 //! arrives over several runs, and a restart or a failure loses at most the file being made.
 
-use crate::integrations::syncsource::{self, Download, Item, Listing, Rules, Target};
+use crate::integrations::syncsource::{self, Download, Item, Listing, Rules};
 use crate::integrations::{Outcome, SourceRow};
 use crate::modules;
 use crate::platform::db::{self, Db};
 use crate::platform::store::{hash_file, Store};
 use anyhow::{bail, Context, Result};
 use fafnirx_common::{clean_remote_path, unix_now};
-use fafnirx_db::queries as sql;
 use fafnirx_fetch_api::FetchEntry;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -99,7 +98,7 @@ pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
         db.clone(),
         store,
         source_id,
-        Target { device: src.device, prefix: src.prefix },
+        src.device,
         Listing { items, skipped: listing.skipped + left_out },
         rules,
         |item| {
@@ -128,7 +127,7 @@ pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
     if out.deferred > 0 {
         // More is waiting than one run takes: run again as soon as this one is recorded, unless it was paused meanwhile.
         db::with(&db, move |c| {
-            sql::sources::continue_source_run().bind(c, &source_id).map(drop)?;
+            crate::repo::links::continue_run(c, source_id)?;
             Ok(())
         })
         .await?;

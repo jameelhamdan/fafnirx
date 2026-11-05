@@ -1,7 +1,7 @@
 //! The repositories: where the master's data is stored and what is more than one plain query. A function here is a small
 //! group of typed queries (generated from `queries/*.sql`, see `docs/development.md`) or one with a mapping around it, and
 //! speaks in the master's own terms (a device, an alert, a setting) rather than in rows and columns. A single plain query
-//! is called where it is needed (`sql::mirrors::toggle_mirror().bind(c, &id)`); the rules (who may do what, what a rename
+//! is called where it is needed (`sql::mirrors::mirror_key().bind(c, &name)`); the rules (who may do what, what a rename
 //! means) stay with the handlers, the gRPC service and the background jobs.
 //!
 //! Functions take `&mut impl fafnirx_db::client::GenericClient`, so they run the same on a pooled connection and inside a
@@ -16,6 +16,7 @@ pub mod file_state;
 pub mod files;
 pub mod jobs;
 pub mod library;
+pub mod links;
 pub mod listing;
 pub mod mirrors;
 pub mod retention;

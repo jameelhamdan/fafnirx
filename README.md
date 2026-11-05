@@ -27,7 +27,7 @@ flowchart LR
 - **Photo and video library** over the same files: timeline, favorites, archive, trash, albums (a shortcut to a folder),
   tags, ratings, corrected dates and places. Originals are never changed.
 - **Video player** with subtitles and adaptive quality, as the optional [video module](docs/video.md), installed from the web app, so a server without videos carries no ffmpeg.
-- **Sources and mirrors**: Google Drive and any other [rclone](https://rclone.org) storage in, web files and feeds with the optional [fetch module](docs/fetch.md) and more kinds of source with [plugins](docs/plugins.md); any rclone remote out.
+- **Sources and mirrors**: Google Drive and any other [rclone](https://rclone.org) storage in, web files and feeds with the optional [fetch module](docs/sources.md#web-files-and-feeds) and more kinds of source with [plugins](docs/plugins.md); any rclone remote out.
 - **Users and roles**: administrator, normal, read-only. Six languages (English, Spanish, Chinese, Arabic, Russian, Japanese).
 
 ## Quick start
@@ -39,12 +39,11 @@ printf 'FAFNIRX_ADMIN_PASSWORD=choose-one\nFAFNIRX_DB_PASSWORD=another-one\n' > 
 docker compose up -d
 ```
 
-Open `http://<server>:8080`, log in as `admin`, add a device (its token is shown once). On the device, install the client
-from the [latest release](https://github.com/jameelhamdan/fafnirx/releases/latest), then:
+Open `http://<server>:8080`, log in as `admin`, add a device (its token is shown once). On the device (Linux, macOS; Windows has
+`get.ps1` and a setup, see [Installation](docs/installation.md#2-a-client)):
 
 ```sh
-fafnirx enroll --server http://<server>:7443     # asks for the token
-fafnirx folder add ~/Documents
+curl -fsSL https://raw.githubusercontent.com/jameelhamdan/fafnirx/master/installer/get.sh | sh -s --     --server <server> --folder ~/Documents       # asks for the token
 ```
 
 ## Performance
@@ -59,11 +58,10 @@ A 1-core machine with 512 MB for the whole stack runs it; 2 cores and 1 GB is co
 | [Overview](docs/overview.md) | What it does, how a file travels, the rules |
 | [Installation](docs/installation.md) | Master and clients, configuration reference |
 | [Usage](docs/usage.md) | Web app, library, processing, change log, client |
-| [Sources](docs/sources.md) | Pull files in from Google Drive and other storage |
-| [Mirrors](docs/mirrors.md) | Offsite backups (compressed, encrypted) and replicas |
+| [Sources](docs/sources.md) | Pull files in from storage, Google Drive, web addresses and feeds |
+| [Mirrors](docs/mirrors.md) | Offsite backups (encrypted) and replicas |
 | [Modules](docs/modules.md) | Optional add-on containers: what they are for, how to turn one on |
 | [Video module](docs/video.md) | Video playback, subtitles, details and poster frames |
-| [Fetch module](docs/fetch.md) | Web sources (addresses and feeds): settings, running it, legal notes |
 | [Plugins](docs/plugins.md) | Writing a plugin for a new kind of source |
 | [Deployment](docs/deployment.md) | Storage, proxy, tunnel, backups, security checklist |
 | [Architecture](docs/architecture.md) | Components, data model, IDs, locking, API |
@@ -79,7 +77,6 @@ A 1-core machine with 512 MB for the whole stack runs it; 2 cores and 1 GB is co
 | `crates/common` | Hashing, chunking, path rules, gRPC types |
 | `crates/module-api`, `fetch-api`, `module-kit` | The contract between the master and its modules, and what modules share |
 | `modules` | Optional features as services: `video/service` is `fafnirx-video` (HLS, details, poster frames), `fetch/service` is `fafnirx-fetch` (web sources) |
-| `crates/sign` | `fafnirx-sign`: signed client builds (optional) |
 | `frontend` | Web app (React, shadcn/ui), built into the master |
 | `proto`, `installer`, `tests`, `docs` | Device contract, installers, end-to-end tests, documentation |
 

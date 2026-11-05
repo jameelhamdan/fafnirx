@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 const ACTIVITY_FRESH_SECS: i64 = 15;
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Activity {
     phase: String,
     file: String,
@@ -28,6 +29,7 @@ pub struct Activity {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct DeviceSummary {
     /// The name of the device; it is unique among the devices of its user.
     pub name: String,
@@ -36,6 +38,7 @@ pub struct DeviceSummary {
     /// `<user>/<name>`: how the files API, the library and the live updates name the device.
     pub folder: String,
     /// device (a client), local (uploaded or dropped into `files/<user>/`) or source (imported by the master).
+    #[cfg_attr(test, ts(type = "'device' | 'local' | 'master'"))]
     pub kind: String,
     pub online: bool,
     pub revoked: bool,
@@ -54,7 +57,7 @@ pub struct DeviceSummary {
 }
 
 /// The devices `who` can see (or just the one with this `folder`) with their totals (as of the last sync, see
-/// `totals`), online state and current activity. The master files are not a device and are not listed.
+/// `totals`), online state and current activity. That includes the master folders (kind `master`), which are not computers.
 pub fn device_summaries(c: &mut Client, who: &Access, folder: Option<&str>) -> Result<Vec<DeviceSummary>, postgres::Error> {
     let offline_after = settings::get_i64(c, "offline_after_secs", 60);
     let now = unix_now();
@@ -98,11 +101,17 @@ pub fn device_summaries(c: &mut Client, who: &Access, folder: Option<&str>) -> R
         .collect())
 }
 
+/// The devices page lists computers and the user's own folders; the master folders have their place in the list of folders.
+pub fn computers_and_folders(c: &mut Client, who: &Access) -> Result<Vec<DeviceSummary>, postgres::Error> {
+    Ok(device_summaries(c, who, None)?.into_iter().filter(|d| d.kind != "master").collect())
+}
+
 pub async fn list(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Vec<DeviceSummary>> {
-    Ok(Json(run(&state, move |c| Ok(device_summaries(c, &who, None)?)).await?))
+    Ok(Json(run(&state, move |c| Ok(computers_and_folders(c, &who)?)).await?))
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct DeviceDetail {
     device: DeviceSummary,
     events: Vec<Recent>,
@@ -166,7 +175,7 @@ fn add_device(c: &mut Client, who: &Access, user_id: i64, name: &str) -> anyhow:
     let Some(folder) = devices::insert(c, user_id, name, "device", &db::hash_token(&token), unix_now())? else {
         return Err(ApiError::conflict(format!("There is already a device or folder named {name} for this user")).into());
     };
-    db::notify(c, "devices", &folder)?;
+    db::notify(c, db::Topic::Devices, &folder)?;
     detail_of(c, who, &folder, Some(token))
 }
 
@@ -177,7 +186,7 @@ pub async fn rotate_token(State(state): State<Shared>, Extension(who): Extension
         if !devices::set_token(c, &folder, &db::hash_token(&token))? {
             return Err(ApiError::not_found("No such device").into());
         }
-        db::notify(c, "devices", &folder)?;
+        db::notify(c, db::Topic::Devices, &folder)?;
         detail_of(c, &who, &folder, Some(token))
     })
     .await?;
@@ -193,7 +202,7 @@ pub async fn release(State(state): State<Shared>, Extension(who): Extension<Acce
             return Err(ApiError::not_found("No such device").into());
         }
         alerts::resolve(c, "device_conflict", &folder)?;
-        db::notify(c, "devices", &folder)?;
+        db::notify(c, db::Topic::Devices, &folder)?;
         Ok(())
     })
     .await
@@ -212,13 +221,14 @@ pub async fn revoke(State(state): State<Shared>, Extension(who): Extension<Acces
         }
         // A revoked device is no longer expected to report, so its offline alert would never clear.
         alerts::resolve(c, "device_offline", &folder)?;
-        db::notify(c, "devices", &folder)?;
+        db::notify(c, db::Topic::Devices, &folder)?;
         Ok(())
     })
     .await
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Settings {
     version_count: i64,
     retention_days: i64,

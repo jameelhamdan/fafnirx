@@ -1,7 +1,5 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Pause, Play, RefreshCw, Trash2 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
-import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { ago, duration } from '@/lib/format'
 import type { JobState } from '@/lib/types'
@@ -11,6 +9,7 @@ import { Empty, StatusDot } from './common'
 import { Button } from './ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card'
 import { useT } from '@/lib/i18n'
+import { useApiMutation } from '@/lib/mutation'
 
 /** Sources and mirrors look alike: a status, the last message, and run / pause / delete. */
 export function JobList({
@@ -28,23 +27,18 @@ export function JobList({
   emptyTitle: string
   emptyText: string
 }) {
-  const client = useQueryClient()
   const now = useNow()
   const t = useT()
   const [removing, setRemoving] = useState<JobState | null>(null)
-  const refresh = () => client.invalidateQueries({ queryKey: [kind] })
-  const act = useMutation({
-    mutationFn: ({ job, what }: { job: JobState; what: 'run' | 'toggle' }) => api.post(`/api/${kind}/${job.key}/${what}`),
-    onSuccess: (_d, v) => {
-      if (v.what === 'run') toast.success(t('Run requested for {name}. It starts within a few seconds.', { name: v.job.key }))
-      void refresh()
-    },
-    onError: (e) => toast.error(e.message),
+  const act = useApiMutation(({ job, what }: { job: JobState; what: 'run' | 'toggle' }) => api.post(`/api/${kind}/${job.key}/${what}`), {
+    invalidate: [[kind]],
+    success: (_d, v) => (v.what === 'run' ? t('Run requested for {name}. It starts within a few seconds.', { name: v.job.key }) : ''),
+    toastError: true,
   })
-  const remove = useMutation({
-    mutationFn: (job: JobState) => api.delete(`/api/${kind}/${job.key}`),
-    onSuccess: (_d, job) => { toast.success(t('{name} removed', { name: job.key })); void refresh() },
-    onError: (e) => toast.error(e.message),
+  const remove = useApiMutation((job: JobState) => api.delete(`/api/${kind}/${job.key}`), {
+    invalidate: [[kind]],
+    success: (_d, job) => t('{name} removed', { name: job.key }),
+    toastError: true,
   })
 
   if (jobs.length === 0) return <Empty title={emptyTitle}>{emptyText}</Empty>

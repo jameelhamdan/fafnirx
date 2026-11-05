@@ -1,4 +1,5 @@
-import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
+import { useApiMutation } from '@/lib/mutation'
 import { ArrowDownUp, ChevronRight, Download, FolderInput, FolderPlus, Grid2x2, Images, List, Pencil, Search, Trash2, Upload, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -25,7 +26,7 @@ import { api, downloadZip, query } from '@/lib/api'
 import { count, joinPath, plural } from '@/lib/format'
 import { msg, useT } from '@/lib/i18n'
 import { isLibraryFile } from '@/lib/entries'
-import { MASTER, hasWorkspace, useRole } from '@/lib/session'
+import { hasWorkspace, useRole } from '@/lib/session'
 import { useOpenMedia } from '@/lib/viewer-source'
 import { AccessBadge } from '@/components/files/access-badge'
 import { RescanButton } from '@/components/files/rescan-button'
@@ -99,7 +100,6 @@ export default function Files() {
   const folderInput = useRef<HTMLInputElement>(null)
 
   const role = useRole()
-  const where = device === MASTER ? t('Master files') : device
 
   const listing = useInfiniteQuery({
     queryKey: ['files', device, path, q, type, sort, order, showDeleted],
@@ -113,11 +113,7 @@ export default function Files() {
     },
     placeholderData: (previous) => previous,
   })
-  // The master files are not a device: they are named for what they are.
-  const entries = useMemo(
-    () => (listing.data?.pages.flatMap((p) => p.entries) ?? []).map((e) => (e.kind === 'device' && e.device === MASTER ? { ...e, name: t('Master files') } : e)),
-    [listing.data, t],
-  )
+  const entries = useMemo(() => listing.data?.pages.flatMap((p) => p.entries) ?? [], [listing.data])
   const total = listing.data?.pages[0]?.total ?? 0
   const searching = listing.data?.pages[0]?.searching ?? false
   // The master says what the web app may do here: the master files, local folders and shared folders can be changed, what
@@ -143,14 +139,13 @@ export default function Files() {
 
   // A folder can be shown as an album (a show, a trip): the dialog makes it, renames it or ends it.
   const [albumOf, setAlbumOf] = useState<FolderRef | null>(null)
-  const remove = useMutation({
-    mutationFn: () => api.post<{ deleted: number }>('/api/files/delete', { items: chosen.map((e) => ({ device: e.device, path: e.path })) }),
+  const remove = useApiMutation(() => api.post<{ deleted: number }>('/api/files/delete', { items: chosen.map((e) => ({ device: e.device, path: e.path })) }), {
     onSuccess: (r) => {
       toast.success(t('{files} deleted. Recoverable until the retention period ends.', { files: plural(r.deleted, 'file') }))
       setSelected(new Set())
       void client.invalidateQueries({ queryKey: ['files'] })
     },
-    onError: (e) => toast.error(e.message),
+    toastError: true,
   })
 
   const upload = (files: { file: File; path: string }[]) => {
@@ -165,7 +160,7 @@ export default function Files() {
 
   const crumbs = [
     { name: t('Files'), to: { device: null, path: null } },
-    ...(device ? [{ name: where, to: { device, path: null } }] : []),
+    ...(device ? [{ name: device, to: { device, path: null } }] : []),
     ...path.split('/').filter(Boolean).map((part, i, all) => ({ name: part, to: { device, path: all.slice(0, i + 1).join('/') } })),
   ]
   const filtering = q !== '' || type !== 'all'
@@ -179,7 +174,7 @@ export default function Files() {
     >
       {dragging && (
         <div className="pointer-events-none fixed inset-3 z-30 grid place-items-center rounded-xl border-2 border-dashed border-primary bg-primary/10 backdrop-blur-sm">
-          <p className="text-lg font-medium">{t('Drop to upload to {target}', { target: where + (path ? `/${path}` : '') })}</p>
+          <p className="text-lg font-medium">{t('Drop to upload to {target}', { target: device + (path ? `/${path}` : '') })}</p>
         </div>
       )}
       <PageHeader
@@ -222,7 +217,7 @@ export default function Files() {
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="relative min-w-48 flex-1 sm:max-w-xs">
           <Search className="absolute top-2.5 left-2.5 size-4 text-muted-foreground" />
-          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={device ? t('Search in {where}', { where: where + (path ? `/${path}` : '') }) : t('Search a device first')} disabled={!device} className="pl-8" aria-label={t('Search')} />
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={device ? t('Search in {where}', { where: device + (path ? `/${path}` : '') }) : t('Search a device first')} disabled={!device} className="pl-8" aria-label={t('Search')} />
         </div>
         <Select value={type} onValueChange={(v) => go({ type: v === 'all' ? null : v }, true)} disabled={!device}>
           <SelectTrigger className="w-36" aria-label={t('File type')}><SelectValue /></SelectTrigger>
@@ -240,7 +235,7 @@ export default function Files() {
           {t('Deleted')}
         </label>
         <div className="ml-auto flex items-center gap-2">
-          {device && hasWorkspace(role) && !showDeleted && <FolderAlbumButton folder={{ device, path }} />}
+          {device && !path && hasWorkspace(role) && !showDeleted && <FolderAlbumButton folder={{ device, path }} />}
           <ToggleGroup
             value={view}
             onChange={(v) => go({ view: v === 'grid' ? 'grid' : null }, true)}
@@ -260,8 +255,8 @@ export default function Files() {
             {hasWorkspace(role) && !showDeleted && chosen.length === 1 && chosen[0].kind === 'device' && chosen[0].writable && chosen[0].device_kind === 'local' && (
               <Button size="sm" variant="outline" onClick={() => setRenaming(chosen[0].device)}><Pencil className="size-4" />{t('Rename folder')}</Button>
             )}
-            {hasWorkspace(role) && !showDeleted && chosen.length === 1 && chosen[0].kind === 'dir' && (
-              <Button size="sm" variant="outline" onClick={() => setAlbumOf({ device: chosen[0].device, path: chosen[0].path })}>
+            {hasWorkspace(role) && !showDeleted && chosen.length === 1 && chosen[0].kind === 'device' && ['local', 'master'].includes(chosen[0].device_kind ?? '') && (
+              <Button size="sm" variant="outline" onClick={() => setAlbumOf({ device: chosen[0].device, path: '' })}>
                 <Images className="size-4" />{t('Show as album')}
               </Button>
             )}

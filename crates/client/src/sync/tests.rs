@@ -68,13 +68,6 @@ impl Collector for Recorder {
         self.0.lock().unwrap().deleted.push(req.into_inner().path);
         Ok(Response::new(pb::DeleteResponse {}))
     }
-    async fn get_update_info(&self, _: Request<pb::UpdateInfoRequest>) -> Result<Response<pb::UpdateInfo>, Status> {
-        Err(Status::unimplemented("not under test"))
-    }
-    type DownloadUpdateStream = tokio_stream::Empty<Result<pb::UpdateChunk, Status>>;
-    async fn download_update(&self, _: Request<pb::UpdateInfoRequest>) -> Result<Response<Self::DownloadUpdateStream>, Status> {
-        Err(Status::unimplemented("not under test"))
-    }
     async fn list_folders(&self, _: Request<pb::ListFoldersRequest>) -> Result<Response<pb::ListFoldersResponse>, Status> {
         Err(Status::unimplemented("not under test"))
     }
@@ -120,7 +113,7 @@ impl Rig {
         let url = serve(calls.clone()).await;
         let (folder, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let mut cfg = Config::new(url);
-        cfg.folders.push(Folder { path: folder.path().to_path_buf(), name: "docs".into() });
+        cfg.folders.push(Folder::computer(folder.path().to_path_buf(), "docs".into()));
         let engine = Engine::new(
             net::client(&cfg, "token", "instance").unwrap(),
             State::open(&state.path().join("state.db")).unwrap(),

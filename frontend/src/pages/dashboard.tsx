@@ -1,8 +1,8 @@
+import { useApiMutation } from '@/lib/mutation'
 import { EventList } from '@/components/event-list'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { X } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { toast } from 'sonner'
 import { STATUS } from '@/lib/status'
 import { ActivityView, Empty, ErrorNote, KindBadge, PageHeader, StatusDot } from '@/components/common'
 import { Button } from '@/components/ui/button'
@@ -26,7 +26,6 @@ const ALERT: Record<string, string> = {
   device_conflict: msg('Device used by two computers'),
   deletions_held: msg('Deletions held back'),
   misplaced_files: msg('Files outside a device folder'),
-  reserved_master_files: msg('Master files in a reserved folder'),
 }
 
 
@@ -134,10 +133,9 @@ export default function Dashboard() {
   const client = useQueryClient()
   const now = useNow()
   const { data, error } = useQuery({ queryKey: ['dashboard'], queryFn: () => api.get<DashboardData>('/api/dashboard') })
-  const dismiss = useMutation({
-    mutationFn: (id: string) => api.post(`/api/alerts/${id}/dismiss`),
+  const dismiss = useApiMutation((id: string) => api.post(`/api/alerts/${id}/dismiss`), {
     onSuccess: () => client.invalidateQueries({ queryKey: ['dashboard'] }),
-    onError: (e) => toast.error(e.message),
+    toastError: true,
   })
 
   if (error) return <ErrorNote error={error} />

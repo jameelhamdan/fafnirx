@@ -91,7 +91,7 @@ async fn source_row(api: &Api, name: &str) -> SourceRow {
     let name = name.to_string();
     crate::platform::db::with(&api.db, move |c| {
         let r = c.query_one(
-            "SELECT s.id, s.kind, s.config, s.device_id, d.folder FROM sources s JOIN devices d ON d.id = s.device_id WHERE s.name = $1",
+            "SELECT s.id, s.kind, s.config, s.folder_id, d.folder FROM links s JOIN devices d ON d.id = s.folder_id WHERE s.direction = 'in' AND s.name = $1",
             &[&name],
         )?;
         Ok(SourceRow {
@@ -99,7 +99,6 @@ async fn source_row(api: &Api, name: &str) -> SourceRow {
             kind: r.get(1),
             config: r.get(2),
             device: Device { id: r.get(3), name: r.get(4) },
-            prefix: String::new(),
             key: format!("admin/{name}"),
         })
     })
@@ -108,7 +107,7 @@ async fn source_row(api: &Api, name: &str) -> SourceRow {
 }
 
 async fn live(api: &Api, device_id: i64) -> Vec<String> {
-    let mut paths: Vec<String> = crate::platform::db::with(&api.db, move |c| Ok(fafnirx_db::queries::sources::live_paths().bind(c, &"", &device_id).all()?))
+    let mut paths: Vec<String> = crate::platform::db::with(&api.db, move |c| Ok(crate::repo::sources::live_paths(c, device_id)?))
         .await
         .unwrap();
     paths.sort();
@@ -117,7 +116,7 @@ async fn live(api: &Api, device_id: i64) -> Vec<String> {
 
 async fn run_requested(api: &Api, id: i64) -> bool {
     crate::platform::db::with(&api.db, move |c| {
-        Ok(c.query_one("SELECT run_requested FROM sources WHERE id = $1", &[&id])?.get::<_, i64>(0) == 1)
+        Ok(c.query_one("SELECT run_requested FROM links WHERE id = $1", &[&id])?.get::<_, i64>(0) == 1)
     })
     .await
     .unwrap()
@@ -125,7 +124,7 @@ async fn run_requested(api: &Api, id: i64) -> bool {
 
 async fn clear_run_request(api: &Api, id: i64) {
     crate::platform::db::with(&api.db, move |c| {
-        c.execute("UPDATE sources SET run_requested = 0 WHERE id = $1", &[&id])?;
+        c.execute("UPDATE links SET run_requested = 0 WHERE id = $1", &[&id])?;
         Ok(())
     })
     .await
@@ -181,7 +180,6 @@ fn a_source_a_module_reads_is_fetched_in_parts_and_deletes_only_what_it_is_sure_
             kind: row.kind.clone(),
             config: row.config.clone(),
             device: row.device.clone(),
-            prefix: row.prefix.clone(),
             key: row.key.clone(),
         };
         let row = source_row(&api, "tor").await;

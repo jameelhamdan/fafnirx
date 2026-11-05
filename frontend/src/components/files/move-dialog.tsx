@@ -1,4 +1,5 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useApiMutation } from '@/lib/mutation'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { FormDialog } from '../form-dialog'
@@ -16,15 +17,14 @@ export function MoveDialog({ device, path, onClose, onMoved }: { device: string;
   const client = useQueryClient()
   const refresh = useRefreshLibrary()
   const [to, setTo] = useState(path)
-  const move = useMutation({
-    mutationFn: () => api.post<{ moved: number }>('/api/files/move', { device, from: path, to }),
+  const move = useApiMutation(() => api.post<{ moved: number }>('/api/files/move', { device, from: path, to }), {
     onSuccess: (r) => {
       toast.success(t('Moved {count} file(s)', { count: r.moved }))
       void client.invalidateQueries({ queryKey: ['files'] })
       void refresh()
       onMoved()
     },
-    onError: (e) => toast.error(e.message),
+    toastError: true,
   })
   return (
     <FormDialog

@@ -1,7 +1,7 @@
 //! Only one version of the client may live on a computer. A new install or update can leave an older program behind: in the place
 //! an earlier setup used, in `/usr/bin` when the new one went to `/usr/local/bin`, or in a folder of the `PATH` that comes before
-//! the new one, so that typing `fafnirx` runs the old client. After an install and whenever the client starts, the programs
-//! found are asked their version, and those older than the one running are stopped and removed.
+//! the new one, so that typing `fafnirx` runs the old client. After an install, the programs found are asked their version, and
+//! those older than the one running are stopped and removed.
 //!
 //! What is looked at is limited to the places a setup puts the program and the folders of the `PATH`; only a program that
 //! answers `--version` as `fafnirx <version>` counts, and only an older one is removed (a newer or equal one may be somebody's
@@ -19,15 +19,6 @@ const PROGRAM: &str = "fafnirx";
 
 /// How long a program gets to say its version before it is taken for something else.
 const ASK_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// What was done.
-#[derive(Debug, Default)]
-pub struct Report {
-    /// Older versions that were removed, with the version.
-    pub removed: Vec<(PathBuf, String)>,
-    /// Older versions that could not be removed, and why.
-    pub failed: Vec<(PathBuf, String)>,
-}
 
 /// Where setups put the program: the folders of every install this client has had, besides the one in use.
 fn install_dirs() -> Vec<PathBuf> {
@@ -117,12 +108,13 @@ fn older_copies(current: &Path) -> Vec<(PathBuf, String)> {
     older_than(super::VERSION, found)
 }
 
-/// Ends the processes that run `program`, so that it can be removed.
-fn stop_running(program: &Path) {
+/// Ends the processes that run `program`, so that it can be removed. Not this one.
+pub fn stop_running(program: &Path) {
+    let me = std::process::id();
     #[cfg(windows)]
     {
         let script = format!(
-            "Get-Process -Name fafnirx -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq '{}' }} | Stop-Process -Force",
+            "Get-Process -Name fafnirx -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq '{}' -and $_.Id -ne {me} }} | Stop-Process -Force",
             program.display().to_string().replace('\'', "''")
         );
         let _ = Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &script]).output();
@@ -130,7 +122,7 @@ fn stop_running(program: &Path) {
     #[cfg(target_os = "linux")]
     for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
         let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else { continue };
-        if std::fs::read_link(entry.path().join("exe")).is_ok_and(|exe| exe == program) {
+        if pid != me && std::fs::read_link(entry.path().join("exe")).is_ok_and(|exe| exe == program) {
             let _ = Command::new("kill").arg(pid.to_string()).status();
         }
     }
@@ -139,7 +131,7 @@ fn stop_running(program: &Path) {
         for line in String::from_utf8_lossy(&list.stdout).lines() {
             let line = line.trim_start();
             if let Some((pid, command)) = line.split_once(' ') {
-                if Path::new(command.trim()) == program {
+                if pid != me.to_string() && Path::new(command.trim()) == program {
                     let _ = Command::new("kill").arg(pid).status();
                 }
             }
@@ -170,34 +162,21 @@ fn remove(program: &Path) -> Result<()> {
     }
 }
 
-/// Stops and removes every older copy of the client besides the program at `current`. Nothing is removed when it is not clear
-/// that the file is a client of an older version. A copy that a package manager put there is removed with it only when
-/// `packages` is set (at an install, which asked for the change), never by a client that merely started.
-pub fn older_versions(current: &Path, packages: bool) -> Report {
-    let mut report = Report::default();
+/// After an install: stops and removes every older copy of the client besides the program at `current`, and says what happened.
+/// Nothing is removed when it is not clear that the file is a client of an older version.
+pub fn announce(current: &Path) {
     for (program, version) in older_copies(current) {
-        if !packages && package_of(&program).is_some() {
-            continue;
-        }
         stop_running(&program);
         match remove(&program).with_context(|| format!("remove {} (version {version})", program.display())) {
-            Ok(()) => report.removed.push((program, version)),
-            Err(e) => report.failed.push((program, format!("{e:#}"))),
+            Ok(()) => {
+                tracing::info!("removed the older version {version} of the client at {}", program.display());
+                println!("removed the older version {version} at {}", program.display());
+            }
+            Err(e) => {
+                tracing::warn!("an older version of the client is still at {}: {e:#}", program.display());
+                eprintln!("an older version of the client is still at {}: {e:#}", program.display());
+            }
         }
-    }
-    report
-}
-
-/// Does it and says what happened: for after an install (`packages`), and for the start of the client.
-pub fn announce(current: &Path, packages: bool) {
-    let report = older_versions(current, packages);
-    for (program, version) in &report.removed {
-        tracing::info!("removed the older version {version} of the client at {}", program.display());
-        println!("removed the older version {version} at {}", program.display());
-    }
-    for (program, why) in &report.failed {
-        tracing::warn!("an older version of the client is still at {}: {why}", program.display());
-        eprintln!("an older version of the client is still at {}: {why}", program.display());
     }
 }
 
@@ -281,7 +260,7 @@ mod tests {
             path
         };
         let (old, newer_copy, current) = (make("old", "0.0.1"), make("newer", "99.0.0"), make("current", super::super::VERSION));
-        // The same steps as `older_versions`, with the folders given.
+        // The same steps as `announce`, with the folders given.
         let folders: Vec<_> = ["old", "newer", "current"].iter().map(|n| dir.path().join(n)).collect();
         let found: Vec<_> = programs_in(&folders, &current).into_iter().filter_map(|p| version_of(&p).map(|v| (p, v))).collect();
         let older = older_than(super::super::VERSION, found);

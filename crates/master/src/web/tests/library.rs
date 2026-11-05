@@ -141,8 +141,15 @@ fn a_module_is_for_whoever_can_see_the_file_and_only_when_it_is_set_up() {
             "no such file"
         );
 
-        // The queue page shows the report of the module, without the tasks of files the user cannot see.
-        let tasks = |queue: &serde_json::Value| queue["modules"]["video"]["active"].as_array().unwrap().len();
+        // The queue page lists what the module is doing like any other work, without the tasks of files the user cannot see.
+        let tasks = |queue: &serde_json::Value| {
+            queue["jobs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|j| j["plugin"] == "video" && j["status"] != "failed")
+                .count()
+        };
         assert_eq!(tasks(&api.get("/api/queue").await.1), 2, "an administrator sees every task");
         let bob = add_user(&mut api, "bob", "normal").await;
         api.cookie = bob;
@@ -363,11 +370,13 @@ fn a_folder_is_an_album_and_what_comes_into_it_is_in_the_album() {
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
-        api.json(Method::POST, "/api/folders", json!({"name": "tv"})).await;
-        for (path, shade) in [("Show/S1/Episode 10.png", 1), ("Show/S1/Episode 2.png", 2), ("Other/x.png", 3)] {
-            api.upload("admin/tv", path, &png(4, 4, [shade, shade, shade])).await;
+        api.json(Method::POST, "/api/folders", json!({"name": "show"})).await;
+        api.json(Method::POST, "/api/folders", json!({"name": "other"})).await;
+        for (path, shade) in [("S1/Episode 10.png", 1), ("S1/Episode 2.png", 2)] {
+            api.upload("admin/show", path, &png(4, 4, [shade, shade, shade])).await;
         }
-        let folder = json!({"device": "admin/tv", "path": "Show"});
+        api.upload("admin/other", "x.png", &png(4, 4, [3, 3, 3])).await;
+        let folder = json!({"device": "admin/show", "path": ""});
 
         // The folder is the album: its name is the folder's, and what is below it is in it, in the order of the names.
         let (status, album) = api.json(Method::POST, "/api/albums", json!({"name": "", "folder": folder})).await;
@@ -375,7 +384,7 @@ fn a_folder_is_an_album_and_what_comes_into_it_is_in_the_album() {
         let id = album["id"].as_str().unwrap().to_string();
         assert_eq!(
             (album["name"].clone(), album["count"].clone(), album["folder"].clone()),
-            (json!("Show"), json!(2), folder.clone())
+            (json!("show"), json!(2), folder.clone())
         );
         let names = |detail: &Value| -> Vec<String> {
             detail["assets"]
@@ -386,20 +395,16 @@ fn a_folder_is_an_album_and_what_comes_into_it_is_in_the_album() {
                 .collect()
         };
         let (_, detail) = api.get(&format!("/api/albums/{id}")).await;
-        assert_eq!(
-            names(&detail),
-            ["Show/S1/Episode 2.png", "Show/S1/Episode 10.png"],
-            "Episode 2 comes before Episode 10"
-        );
+        assert_eq!(names(&detail), ["S1/Episode 2.png", "S1/Episode 10.png"], "Episode 2 comes before Episode 10");
 
         // Asking again gives the same album, and a new file in the folder is in it without doing anything.
         let (_, again) = api.json(Method::POST, "/api/albums", json!({"name": "", "folder": folder})).await;
         assert_eq!(again["id"].as_str(), Some(id.as_str()));
-        api.upload("admin/tv", "Show/S1/Episode 3.png", &png(4, 4, [9, 9, 9])).await;
+        api.upload("admin/show", "S1/Episode 3.png", &png(4, 4, [9, 9, 9])).await;
         let (_, detail) = api.get(&format!("/api/albums/{id}")).await;
         assert_eq!(
             names(&detail),
-            ["Show/S1/Episode 2.png", "Show/S1/Episode 3.png", "Show/S1/Episode 10.png"],
+            ["S1/Episode 2.png", "S1/Episode 3.png", "S1/Episode 10.png"],
             "a file that comes later is in the album"
         );
         assert_eq!(api.get("/api/albums").await.1[0]["count"], 3);
@@ -480,13 +485,13 @@ fn an_album_uses_its_poster_as_the_cover_and_a_viewer_steps_through_a_folder() {
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
-        api.json(Method::POST, "/api/folders", json!({"name": "tv"})).await;
-        for (path, shade) in [("Show/S1/E1.png", 1), ("Show/S1/E2.png", 2), ("Show/poster.png", 3), ("Show/S1/cover.png", 4)] {
-            api.upload("admin/tv", path, &png(4, 4, [shade, shade, shade])).await;
+        api.json(Method::POST, "/api/folders", json!({"name": "show"})).await;
+        for (path, shade) in [("S1/E1.png", 1), ("S1/E2.png", 2), ("poster.png", 3), ("S1/cover.png", 4)] {
+            api.upload("admin/show", path, &png(4, 4, [shade, shade, shade])).await;
         }
         let poster = photo_id(&api, "poster.png").await;
         let (_, album) = api
-            .json(Method::POST, "/api/albums", json!({"name": "", "folder": {"device": "admin/tv", "path": "Show"}}))
+            .json(Method::POST, "/api/albums", json!({"name": "", "folder": {"device": "admin/show", "path": ""}}))
             .await;
         assert_eq!(album["cover"], poster.as_str(), "the poster nearest the top of the folder is the cover");
         let id = album["id"].as_str().unwrap().to_string();

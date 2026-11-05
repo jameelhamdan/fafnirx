@@ -9,7 +9,7 @@ It is also the reference for [writing a fetch plugin](../../../docs/plugins.md).
 FAFNIRX_PLUGIN_SECRET=<16+ characters> FAFNIRX_DATA=/data fafnirx-fetch
 ```
 
-It writes only directly in `<FAFNIRX_DATA>/tmp`. All settings, the API and the legal notes: [docs/fetch.md](../../../docs/fetch.md). The
+It writes only directly in `<FAFNIRX_DATA>/tmp`. All settings, the API and the legal notes: [docs/sources.md](../../../docs/sources.md#web-files-and-feeds). The
 contract it implements: `crates/fetch-api` (`fetch.<kind>`).
 
 ## Layout

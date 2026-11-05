@@ -1,10 +1,11 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useApiMutation } from '@/lib/mutation'
 import { Pencil, Plus } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ErrorNote, PageHeader } from '@/components/common'
-import { FolderPlace, type Place } from '@/components/folder-place'
+import { FolderPlace } from '@/components/folder-place'
 import { JobList } from '@/components/job-list'
 import { StorageForm } from '@/components/storage-form'
 import { Button } from '@/components/ui/button'
@@ -13,7 +14,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
-import { NO_SERVICE, NO_STORAGE, storageBody, storageProblem } from '@/lib/storage'
+import { NO_STORAGE, storageBody, storageProblem } from '@/lib/storage'
 import { docs, filesLink } from '@/lib/links'
 import { ScheduleField } from '@/components/schedule-field'
 import { bytes, count } from '@/lib/format'
@@ -25,41 +26,37 @@ import { cn } from '@/lib/utils'
 const CARD = 'rounded-md border px-3 py-2 text-left text-sm transition-colors hover:bg-accent/50'
 const CARD_ON = 'border-primary bg-primary/5 ring-1 ring-primary'
 
-/** The service that is part of the app: Google Drive, read with rclone. The others come from modules (`sdk`, `SourceKind`). */
-const DRIVE = 'drive'
-
 function AddSource() {
   const t = useT()
   const client = useQueryClient()
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [services, setServices] = useState(false)
-  const [choice, setChoice] = useState(DRIVE)
+  const [choice, setChoice] = useState('')
   const [storage, setStorage] = useState(NO_STORAGE)
   const [values, setValues] = useState<Record<string, unknown>>({})
   const [hours, setHours] = useState('24')
-  const [place, setPlace] = useState<Place | null>(null)
+  const [place, setPlace] = useState('')
   const kinds = useSourceKinds()
   const current = services ? kinds.find((k) => k.kind.id === choice)?.kind : undefined
   const value = current ? (values[current.id] ?? current.initial) : undefined
-  const pick = (next: boolean) => { setServices(next); setChoice(DRIVE); setStorage(next ? NO_SERVICE : NO_STORAGE) }
+  const pick = (next: boolean) => { setServices(next); setChoice(next ? (kinds[0]?.kind.id ?? '') : ''); setStorage(NO_STORAGE) }
   const problem = current ? current.problem(value, t) : storageProblem(storage, t)
   const blocked = /^[a-z0-9][a-z0-9_-]*$/i.test(name) ? problem : t('Give it a name of letters, digits, - or _.')
   const body = () => {
     const interval_hours = Number(hours)
-    const folder = place && place.device ? place : undefined
+    const folder = place ? { device: place } : undefined
     if (current) return { name, kind: current.id, config: current.body(value), interval_hours, folder }
     return { name, kind: 'rclone', ...storageBody(storage), interval_hours, folder }
   }
-  const create = useMutation({
-    mutationFn: () => api.post('/api/sources', body()),
+  const create = useApiMutation(() => api.post('/api/sources', body()), {
     onSuccess: () => {
       toast.success(t('Source {name} added. The first run starts within a few seconds.', { name }))
       setOpen(false)
       setName('')
       pick(false)
       setValues({})
-      setPlace(null)
+      setPlace('')
       void client.invalidateQueries({ queryKey: ['sources'] })
       void client.invalidateQueries({ queryKey: ['files'] })
     },
@@ -88,7 +85,7 @@ function AddSource() {
         <Label htmlFor="ss-name">{t('Name')}</Label>
         <Input id="ss-name" placeholder="nextcloud" value={name} onChange={(e) => setName(e.target.value)} />
       </div>
-      <div role="tablist" className="flex gap-1 border-b">
+      {kinds.length > 0 && <div role="tablist" className="flex gap-1 border-b">
         {[[false, t('Storage')], [true, t('Services')]].map(([s, label]) => (
           <button
             key={String(s)}
@@ -101,12 +98,9 @@ function AddSource() {
             {label as string}
           </button>
         ))}
-      </div>
+      </div>}
       {services && (
         <div role="radiogroup" aria-label={t('Services')} className="grid gap-2 sm:grid-cols-3">
-          <button type="button" role="radio" aria-checked={choice === DRIVE} onClick={() => setChoice(DRIVE)} className={cn(CARD, choice === DRIVE && CARD_ON)}>
-            {t('Google Drive')}
-          </button>
           {kinds.map(({ kind, ready }) => (
             <button key={kind.id} type="button" role="radio" aria-checked={choice === kind.id} disabled={!ready} onClick={() => setChoice(kind.id)} className={cn(CARD, choice === kind.id && CARD_ON, 'disabled:cursor-not-allowed disabled:opacity-50')}>
               {t(kind.label)}
@@ -118,7 +112,7 @@ function AddSource() {
       {current ? (
         <current.form value={value} onChange={(next) => setValues((all) => ({ ...all, [current.id]: next }))} />
       ) : (
-        <StorageForm services={services} value={storage} onChange={setStorage} />
+        <StorageForm value={storage} onChange={setStorage} />
       )}
       <FolderPlace own value={place} onChange={setPlace} />
       <ScheduleField id="ss-hours" hours={hours} onChange={setHours} />
@@ -131,11 +125,11 @@ function EditSource({ job }: { job: JobState }) {
   const t = useT()
   const client = useQueryClient()
   const kinds = useSourceKinds()
-  const detail = job.detail as { kind: string; folder: Place; config: Record<string, unknown> }
+  const detail = job.detail as { kind: string; folder: string; config: Record<string, unknown> }
   const kind = kinds.find((k) => k.kind.id === detail.kind)?.kind
   const [open, setOpen] = useState(false)
   const [name, setName] = useState(job.name)
-  const [place, setPlace] = useState<Place | null>(detail.folder)
+  const [place, setPlace] = useState(detail.folder)
   const [hours, setHours] = useState(String(job.interval_secs / 3600))
   const [remotePath, setRemotePath] = useState(String(detail.config?.remote_path ?? ''))
   const [edited, setEdited] = useState<unknown>(undefined)
@@ -149,15 +143,14 @@ function EditSource({ job }: { job: JobState }) {
   }
   const rclone = detail.kind === 'rclone' && !detail.config?.remote
   const problem = kind?.load ? kind.problem(form, t) : null
-  const save = useMutation({
-    mutationFn: () => {
+  const save = useApiMutation(() => {
       const body: Record<string, unknown> = { interval_hours: Number(hours) }
       if (name !== job.name) body.name = name
-      if (place && JSON.stringify(place) !== JSON.stringify(detail.folder)) body.folder = place
+      if (place && place !== detail.folder) body.folder = { device: place }
       if (kind?.load) body.config = kind.body(form)
       else if (rclone && remotePath !== String(detail.config?.remote_path ?? '')) body.remote_path = remotePath
       return api.patch(`/api/sources/${job.key}`, body)
-    },
+    }, {
     onSuccess: () => {
       toast.success(t('Source saved. Changes to where it writes apply from its next run.'))
       setOpen(false)
@@ -219,7 +212,7 @@ export default function Sources() {
           summary={(j) => (
             <>
               {String(j.detail.remote)} ·{' '}
-              <Link className="underline" to={filesLink((j.detail.folder as Place).device, (j.detail.folder as Place).path)}>{t('{files} files, {size}', { files: count(Number(j.detail.files)), size: bytes(Number(j.detail.bytes)) })}</Link>
+              <Link className="underline" to={filesLink(String(j.detail.folder), '')}>{t('{files} files, {size}', { files: count(Number(j.detail.files)), size: bytes(Number(j.detail.bytes)) })}</Link>
             </>
           )}
         />

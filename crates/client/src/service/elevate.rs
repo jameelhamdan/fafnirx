@@ -80,6 +80,11 @@ fn as_root(program: &OsStr, args: &[OsString]) -> Result<(OsString, Vec<OsString
     line.extend(args.iter().cloned());
     match choose(&facts()) {
         Way::Direct => Ok((line.remove(0), line)),
+        // The device token of a scripted install travels in the environment, which sudo would drop.
+        Way::Sudo if std::env::var_os("FAFNIRX_TOKEN").is_some() => {
+            line.insert(0, "--preserve-env=FAFNIRX_TOKEN".into());
+            Ok(("sudo".into(), line))
+        }
         Way::Sudo => Ok(("sudo".into(), line)),
         Way::Pkexec => Ok(("pkexec".into(), line)),
         Way::Manual => Err(by_hand(&line)),

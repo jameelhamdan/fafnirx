@@ -43,43 +43,46 @@ FAFNIRX_IMAGE=jameelh99/fafnirx:<version>   # pin to upgrade on purpose
 | `FAFNIRX_DATA` | `data` (`/data`) | Data directory |
 | `FAFNIRX_LISTEN`, `FAFNIRX_HTTP` | `0.0.0.0:7443`, `0.0.0.0:8080` | Device (gRPC) and web addresses |
 | `FAFNIRX_RCLONE`, `FAFNIRX_RCLONE_CONFIG` | `rclone`, `<data>/rclone.conf` (`/config/rclone.conf`) | rclone binary and config for mirrors |
-| `FAFNIRX_PLUGIN_SECRET` | unset | The secret that the optional [modules](modules.md) (add-on containers: [video](video.md), [fetch](fetch.md)) join the master with and are called with, 16+ characters. Without it no add-on may connect |
+| `FAFNIRX_PLUGIN_SECRET` | unset | The secret that the optional [modules](modules.md) (add-on containers: [video](video.md), [fetch](sources.md#web-files-and-feeds)) join the master with and are called with, 16+ characters. Without it no add-on may connect |
 | `FAFNIRX_PLUGINS` | none | Comma separated ids of the add-ons that must be running (`video,fetch`; the compose file defaults it to `COMPOSE_PROFILES`); one that is not connected or not working shows administrators a warning ([modules](modules.md)) |
 | `FAFNIRX_TRUSTED_PROXY` | none | Proxies whose `X-Forwarded-For` is believed ([proxy](deployment.md#reverse-proxy-with-caddy)) |
 | `RUST_LOG` | `info` | Log level |
-| Tuning: `FAFNIRX_DB_POOL`, `FAFNIRX_JOB_WORKERS`, `FAFNIRX_STREAMS`, `FAFNIRX_WORKER_THREADS`, `FAFNIRX_BLOCKING_THREADS`, `FAFNIRX_TICK_SECS`, `FAFNIRX_INSTANCE_LEASE_SECS` | | Rarely needed: [sizing](deployment.md#sizing-and-tuning) |
+| Tuning: `FAFNIRX_DB_POOL`, `FAFNIRX_JOB_WORKERS`, `FAFNIRX_STREAMS`, `FAFNIRX_TICK_SECS`, `FAFNIRX_INSTANCE_LEASE_SECS` | | Rarely needed: [sizing](deployment.md#sizing-and-tuning) |
 | Compose: `FAFNIRX_DB_PASSWORD`, `*_DIR`, `FAFNIRX_UID/GID`, `FAFNIRX_IMAGE`; with proxy `FAFNIRX_WEB_ADDRESS`, `FAFNIRX_DEVICE_ADDRESS`, `FAFNIRX_HTTP_PORT`, `FAFNIRX_HTTPS_PORT`, `FAFNIRX_DEVICE_PORT`, `FAFNIRX_SUBNET` | | Compose only |
 
 ## 2. A client
 
-**Install → enroll → add folders.** The client only reads the folders it collects.
+**Install → enroll → add folders**, in one command, `fafnirx install`. The client only reads the folders it collects.
 
 First, in the web app: **Devices → Add device**. The name (`a-z 0-9 . _ -`) becomes the folder `files/users/<you>/<name>/` and cannot
 change; the token is shown **once**. Administrators can add devices for other users.
 
-Download from the [latest release](https://github.com/jameelhamdan/fafnirx/releases/latest) (each file has a `.sha256`):
-Windows `fafnirx-setup-<version>.exe`; macOS `fafnirx-<version>-macos-{aarch64,x86_64}.tar.gz`; Debian/Ubuntu
-`fafnirx_<version>-1_{amd64,arm64}.deb`; other Linux `fafnirx-<version>-linux-{x86_64,aarch64}.tar.gz`.
+Then, on the computer (each downloads the program from the [latest release](https://github.com/jameelhamdan/fafnirx/releases/latest),
+checks its `.sha256` and runs `fafnirx install`, which asks for the token, or reads `FAFNIRX_TOKEN`):
 
-- **Windows:** run the setup (SmartScreen: *More info* → *Run anyway*; no administrator rights are needed). It installs into
-  your profile (`%LocalAppData%\Programs\fafnirx`), asks for `http://<server>:7443`, the token and, optionally, a folder to sync (on a computer that already has a config it asks nothing), enrolls, and starts
-  the client and its tray, which start again whenever you log in. Silent:
-  `fafnirx-setup-<version>.exe /VERYSILENT /SERVER=nas.lan /TOKEN=<token> [/FOLDER="C:\Users\me\Documents"]`.
-- **macOS, Linux:**
-  ```sh
-  curl -fsSL https://raw.githubusercontent.com/jameelhamdan/fafnirx/master/installer/get.sh | sh -s -- \
-      --server http://<server>:7443 --folder ~/Documents
-  ```
-  It downloads the release, checks the `.sha256`, installs to `/usr/local/bin` (asks for the administrator password), enrolls
-  (asks for the token; or `FAFNIRX_TOKEN`, `FAFNIRX_VERSION`), adds folders (repeat `--folder`) and starts the service (systemd
-  unit / LaunchDaemon). From a tarball run `sh install.sh ...`. macOS blocking the binary:
-  `sudo xattr -d com.apple.quarantine /usr/local/bin/fafnirx`.
-  **macOS Full Disk Access.** To sync folders in Documents, Desktop, Downloads, iCloud Drive or on another volume, give the
-  client Full Disk Access: *System Settings* → *Privacy & Security* → *Full Disk Access* → `+` → `/usr/local/bin/fafnirx`, switch it
-  on, then `sudo fafnirx restart`. The installer says so at the end; without it these folders fail with `Operation not permitted`
-  (see Troubleshooting).
-- **Debian, Ubuntu:** `sudo apt install ./fafnirx_<version>-1_amd64.deb`, then `sudo fafnirx enroll --server http://<server>:7443`
-  (asks for the token; it starts the service) and `sudo fafnirx folder add ~/Documents`.
+| System | Command |
+|---|---|
+| Linux, macOS | `curl -fsSL https://raw.githubusercontent.com/jameelhamdan/fafnirx/master/installer/get.sh \| sh -s -- --server nas.lan --folder ~/Documents` |
+| Windows (PowerShell) | `irm https://raw.githubusercontent.com/jameelhamdan/fafnirx/master/installer/get.ps1 -OutFile get.ps1; .\get.ps1 -Server nas.lan -Folder $HOME\Documents` |
+| Windows (setup) | Run `fafnirx-setup-<version>.exe` from the release (SmartScreen: *More info* → *Run anyway*; no administrator rights). It asks for the server, the token and a folder. Silent: `fafnirx-setup-<version>.exe /VERYSILENT /SERVER=nas.lan /TOKEN=<token> [/FOLDER="C:\Users\me\Documents"]` |
+| Debian, Ubuntu | `sudo apt install ./fafnirx_<version>-1_amd64.deb` (or `arm64`), then `sudo fafnirx install --server nas.lan --folder ~/Documents` |
+| macOS (Homebrew) | `brew install jameelhamdan/fafnirx/fafnirx`, then `sudo fafnirx install --server nas.lan --folder ~/Documents` |
+| A downloaded program | `sudo ./fafnirx-<version>-<os>-<arch> install --server nas.lan` (Windows: `.\fafnirx-<version>-windows-x86_64.exe install --server nas.lan`) |
+
+`--server` takes `nas.lan`, `nas.lan:7443` or a full URL (`https://...` behind a TLS proxy); without a scheme it is plain `http` on port
+`7443`. `--folder` can be repeated. `fafnirx install --dry-run` says what it would do and changes nothing.
+
+**What `fafnirx install` does**, in this order, and the same everywhere: copies the program to `/usr/local/bin/fafnirx` (Linux, macOS; owned
+by root, because the service runs as root) or `%LocalAppData%\Programs\fafnirx` (Windows; and adds it to your `PATH`, unless
+`--no-path`); enrolls this computer with the master; collects the folders; installs the service and the tray (below) and starts them;
+removes older copies of `fafnirx` that other installs left. Run again on an enrolled computer it brings it up to date. With
+`--in-place` it does not copy the program (a package or the setup put it there); with `--no-start` it installs no service. macOS
+blocking the program: `sudo xattr -d com.apple.quarantine /usr/local/bin/fafnirx`.
+
+**macOS Full Disk Access.** To sync folders in Documents, Desktop, Downloads, iCloud Drive or on another volume, give the client
+Full Disk Access: *System Settings* → *Privacy & Security* → *Full Disk Access* → `+` → `/usr/local/bin/fafnirx`, switch it on, then
+`sudo fafnirx restart`. The install says so at the end; without it these folders fail with `Operation not permitted` (see
+Troubleshooting).
 
 On Linux and macOS the client is **a service of the computer**: it starts at boot, is started again when it fails, reads the
 folders of every user, and its tray starts when a user logs in. Its config, token and state are in `/etc/fafnirx` and
@@ -96,8 +99,9 @@ A folder is stored as `<you>/<device>/<name>/`; the name defaults to the folder'
 use `--name`. Names are compared ignoring case and accents; `folder add` refuses a clash. **Address:** on a LAN/VPN
 `http://<master>:7443`; over the internet an `https://` address in front of the master (`enroll` warns about plain `http://`).
 
-**Uninstall:** Windows *Apps* → *fafnirx*; Linux/macOS `sudo fafnirx uninstall-service` and delete `/usr/local/bin/fafnirx` (or
-`sudo apt remove fafnirx`). Data on the master stays. **From source:** [Development](development.md#build-and-run).
+**Uninstall:** `sudo fafnirx uninstall` (Windows: `fafnirx uninstall`, or *Apps* → *fafnirx*; Debian: `sudo apt remove fafnirx`) stops the
+client and the tray and removes the program; `--purge` also removes the config, the token and the state of this client. Data on the master
+stays. **From source:** [Development](development.md#build-and-run).
 
 ## Troubleshooting
 

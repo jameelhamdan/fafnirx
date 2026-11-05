@@ -1,4 +1,4 @@
-//! What the master and a module that reads sources say to each other (docs/fetch.md). The module owns its kinds of source: it
+//! What the master and a module that reads sources say to each other (docs/sources.md). The module owns its kinds of source: it
 //! checks the settings a user gave, says how to label the source, lists what it offers and writes one file when asked; the
 //! master keeps the database and knows no kind by name. Types only, as in `fafnirx-module-api`
 //! (the manifest, the capabilities and everything every module shares).

@@ -230,7 +230,8 @@ impl Engine {
         self.set_activity("scanning", "", 0, 0, 0);
         let (entries, scanned, unreadable) = self.scan(cfg).await;
         let (changed, mut vanished) = self.detect_changes(&entries, &scanned, &unreadable)?;
-        let every_folder_read = !cfg.folders.is_empty() && scanned.len() == cfg.folders.len();
+        let roots = cfg.computer_folders().count();
+        let every_folder_read = roots > 0 && scanned.len() == roots;
         if vanished.is_empty() {
             // Nothing can be a rename, so a file goes out as soon as it is hashed. The first sync of a big
             // folder starts uploading at once, and an interruption loses at most the file in hand.
@@ -256,7 +257,7 @@ impl Engine {
         let mut entries = Vec::new();
         let mut scanned = HashSet::new();
         let mut unreadable = HashSet::new();
-        for folder in &cfg.folders {
+        for folder in cfg.computer_folders() {
             let (f, exclude): (Folder, Option<PathBuf>) = (folder.clone(), self.exclude.clone());
             match tokio::task::spawn_blocking(move || scan_folder(&f, exclude.as_deref())).await {
                 Ok(Ok(scan)) => {
@@ -309,20 +310,18 @@ impl Engine {
     async fn hash_changed(&mut self, changed: Vec<Changed>, vanished: &mut Vec<Synced>, report: &mut Report) -> Result<Vec<Candidate>, SyncError> {
         let mut candidates = Vec::new();
         let total = changed.len();
+        let mut gone = fafnirx_common::Vanished::new(std::mem::take(vanished).into_iter().map(|v| ((v.root_hash.clone(), v.size as u64), v)));
         for (n, (entry, is_new)) in changed.into_iter().enumerate() {
-            self.check_paused()?;
+            if let Err(e) = self.check_paused() {
+                *vanished = gone.into_remaining();
+                return Err(e);
+            }
             self.set_activity("hashing", &entry.remote, n, total, 0);
             let Some(hashed) = self.hash_one(&entry, report).await else { continue };
-            let renamed_from = if is_new {
-                vanished
-                    .iter()
-                    .position(|v| v.root_hash == hashed.root && v.size as u64 == hashed.size)
-                    .map(|pos| vanished.remove(pos).path)
-            } else {
-                None
-            };
+            let renamed_from = if is_new { gone.take(&(hashed.root.to_vec(), hashed.size)).map(|v| v.path) } else { None };
             candidates.push(Candidate { entry, hashed, renamed_from });
         }
+        *vanished = gone.into_remaining();
         Ok(candidates)
     }
 

@@ -1,7 +1,7 @@
-//! The commands for synced folders.
+//! The commands for the folders attached to a folder of the master.
 
 use super::{connect, wake_client};
-use crate::config::{self, Config, Mode, MASTER_KEY};
+use crate::config::{self, Config, Mode, NewFolder, Target, MASTER_KEY};
 use crate::net;
 use crate::sync::state;
 use anyhow::{bail, Context, Result};
@@ -99,7 +99,10 @@ pub async fn sync_folder(config_path: PathBuf, name: String, dir: PathBuf, creat
     if let Some(warning) = crate::service::disk_access::warning_for(&config_path, &dir) {
         eprintln!("warning: {warning}");
     }
-    let synced = config::attach_synced_to_file(&config_path, &full, names.id_of(&full), &dir, mode)?;
+    let synced = config::add_folder_to_file(
+        &config_path,
+        NewFolder { dir: &dir, target: Target::Folder, name: Some(&full), id: names.id_of(&full), mode },
+    )?;
     println!("{} is synced with \"{}\" ({})", synced.path.display(), synced.name, mode.name());
     if names.readonly.contains(&full) {
         println!("note: \"{full}\" is shared with you to read only: what is in it comes here, and nothing is sent");
@@ -108,18 +111,12 @@ pub async fn sync_folder(config_path: PathBuf, name: String, dir: PathBuf, creat
     Ok(())
 }
 
-pub fn unsync_folder(config_path: &Path, name: &str) -> Result<()> {
-    let full = config::detach_synced_from_file(config_path, name)?;
-    println!("\"{full}\" is no longer synced here; the files stay in the folder and on the master");
-    Ok(())
-}
-
 /// Keeps the files of a synced folder whose deletion on the master is held back, instead of deleting them here. They are sent
 /// again at the next cycle. Only what other computers deleted is ever held: deletions in the web app are applied at once.
 pub fn keep_held(config_path: &Path, name: &str) -> Result<()> {
     let cfg = Config::load(config_path)?;
     let dir = cfg.state_dir(config_path);
-    let synced = cfg.synced_named(name)?;
+    let synced = cfg.attached_named(name)?;
     let state = state::State::open(&crate::synced::state_file(&dir, synced.key()))?;
     let Some((files, _)) = state.pull_hold()? else {
         println!("no deletions of the master are held for \"{}\"", synced.name);
@@ -137,18 +134,15 @@ pub fn keep_held(config_path: &Path, name: &str) -> Result<()> {
 /// Shows the mode of a synced folder, or sets it (and with `ask` how long a file waits for an answer).
 pub fn set_mode(config_path: &Path, name: &str, mode: Option<Mode>, ask_timeout_hours: Option<u64>) -> Result<()> {
     let cfg = Config::load(config_path)?;
-    let synced = cfg.synced_named(name)?;
+    let synced = cfg.attached_named(name)?;
     if mode.is_none() && ask_timeout_hours.is_none() {
         println!("{}: {}, ask timeout {} hours", synced.name, synced.mode.name(), synced.ask_timeout_hours);
         return Ok(());
     }
     let mode = mode.unwrap_or(synced.mode);
     mode.check_available()?;
-    let full = config::set_synced_mode_in_file(config_path, name, mode, ask_timeout_hours)?;
+    let full = config::set_mode_in_file(config_path, name, mode, ask_timeout_hours)?;
     println!("\"{full}\" is synced \"{}\"", mode.name());
-    if mode == Mode::Mine {
-        println!("note: this computer's version replaces the master's, and so the other computers'; the old one stays in the history");
-    }
     wake_client(config_path);
     Ok(())
 }
@@ -157,7 +151,7 @@ pub fn set_mode(config_path: &Path, name: &str, mode: Option<Mode>, ask_timeout_
 pub fn resolve_waiting(config_path: &Path, name: &str, keep: &str, path: Option<&str>) -> Result<()> {
     let cfg = Config::load(config_path)?;
     let dir = cfg.state_dir(config_path);
-    let synced = cfg.synced_named(name)?;
+    let synced = cfg.attached_named(name)?;
     let state = state::State::open(&crate::synced::state_file(&dir, synced.key()))?;
     let answered = state.answer_pending(path, keep)?;
     if answered == 0 {

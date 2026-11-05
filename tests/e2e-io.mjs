@@ -153,9 +153,9 @@ try {
 
   // --- a mirror of one folder holds only that folder, at the same place below files/ ---------------------------------------------
   const scopedDir = path.join(tmp, 'offsite-docs')
-  const scoped = { ...form, name: 'docs-only', remote_path: scopedDir.replaceAll('\\', '/'), scope: 'admin/laptop/docs' }
-  check((await admin.post('/api/mirrors', { ...scoped, name: 'nowhere', scope: 'admin/nope' })).status === 400, 'a folder that does not exist cannot be mirrored')
-  check((await admin.get('/api/mirrors/scope?path=admin%2Flaptop')).json.some((c) => c.name === 'docs' && c.kind === 'folder'), 'the folders of a device are offered to pick from')
+  const scoped = { ...form, name: 'docs-only', remote_path: scopedDir.replaceAll('\\', '/'), folder: 'admin/laptop' }
+  check((await admin.post('/api/mirrors', { ...scoped, name: 'nowhere', folder: 'admin/nope' })).status === 400, 'a folder that does not exist cannot be mirrored')
+  check((await admin.get('/api/mirrors/folders')).json.includes('admin/laptop'), 'the folders are offered to pick from')
   check((await admin.post('/api/mirrors', scoped)).status === 200, 'a mirror of one folder is added')
   const m3 = await until(() => finished('mirrors', 'docs-only'), 90)
   check(m3?.[0] === 'ok', `the mirror of one folder succeeds (${m3?.[0]}: ${JSON.stringify(m3?.[1])})`)
@@ -207,7 +207,7 @@ try {
   files = tree(path.join(mirrorDir, 'files'))
   check(files['users/admin/laptop/docs/moved/moved.txt']?.toString().startsWith('a file that will move') && !('users/admin/laptop/docs/move-me.txt' in files), 'the file is at its new path and gone from the old one')
 
-  // --- a backup is compressed and encrypted; its restore kit brings the files back with plain rclone --------------------------------
+  // --- a backup is encrypted; its restore kit brings the files back with plain rclone --------------------------------
   check((await admin.post('/api/mirrors', vault)).status === 200, 'a backup mirror is added')
   const v1 = await until(() => finished('mirrors', 'vault'), 90)
   check(v1?.[0] === 'ok', `the backup runs (${v1?.[0]}: ${JSON.stringify(v1?.[1])})`)
@@ -216,7 +216,7 @@ try {
   check(!/x\.txt|move-me|Photos|laptop|files|meta/.test(rawNames), 'names of files and folders are encrypted')
   check(![...Object.values(raw)].some((b) => b.includes('from a device') || b.includes('device edit') || b.includes('a file that will move')), 'contents are encrypted')
   const kit = (await admin.get('/api/mirrors/vault/restore-kit')).json.config
-  check(kit.includes('type = crypt') && kit.includes('type = compress') && !kit.includes(passwords.crypt_password), 'the restore kit is an rclone config with the key obscured')
+  check(kit.includes('type = crypt') && !kit.includes(passwords.crypt_password), 'the restore kit is an rclone config with the key obscured')
   check((await admin.get('/api/mirrors/offsite/restore-kit')).status === 400, 'a replica has no restore kit')
   check(!JSON.stringify((await admin.get('/api/mirrors')).json).includes('secret password'), 'the key is not in the mirror list')
   const kitFile = path.join(tmp, 'restore.conf')
@@ -226,9 +226,6 @@ try {
   const back = tree(restored)
   files = tree(path.join(mirrorDir, 'files'))
   check(Object.keys(back).sort().join() === Object.keys(files).sort().join() && Object.entries(back).every(([k, v]) => v.equals(files[k])), `a restore through the kit gives back every file, byte for byte (${Object.keys(back).length} files)`)
-  const compressed = [...Object.values(raw)].reduce((n, b) => n + b.length, 0)
-  const original = Object.values(files).reduce((n, b) => n + b.length, 0)
-  check(compressed < original - 400_000, `the backup is compressed: the 440 KB repetitive file is stored in a fraction of that (${compressed} stored for ${original} bytes)`)
   fs.renameSync(path.join(docs, 'moved', 'moved.txt'), path.join(docs, 'moved', 'again.txt'))
   c('sync')
   const vmoved = await runAndWait('mirrors', 'vault')

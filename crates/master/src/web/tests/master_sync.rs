@@ -28,21 +28,16 @@ fn a_computer_syncs_a_master_folder_by_its_paths_below_it() {
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
-        assert_eq!(api.json(Method::POST, "/api/master-folders", json!({"path": "Music"})).await.0, StatusCode::OK);
-        api.upload("_master", "Music/a.txt", b"one").await;
-        api.upload("_master", "Music/Rock/b.txt", b"two").await;
-        api.upload("_master", "Other/x.txt", b"outside").await;
+        master_folder(&api, "Music").await;
+        master_folder(&api, "Other").await;
+        api.upload("master:Music", "a.txt", b"one").await;
+        api.upload("master:Music", "Rock/b.txt", b"two").await;
+        api.upload("master:Other", "x.txt", b"outside").await;
         let (_, made) = api.json(Method::POST, "/api/devices", json!({"name": "laptop"})).await;
         let token = made["token"].as_str().unwrap().to_string();
 
         let (events, _) = tokio::sync::broadcast::channel(8);
-        let service = Service {
-            db: api.db.clone(),
-            store: api.store.clone(),
-            updates_dir: api._dir.path().join("updates"),
-            trusted: Default::default(),
-            events,
-        };
+        let service = Service { db: api.db.clone(), store: api.store.clone(), trusted: Default::default(), events };
         let folder = "master:Music";
 
         // It lists what is in the folder, named from it, and nothing of the rest of the master files.
@@ -90,7 +85,7 @@ fn a_computer_syncs_a_master_folder_by_its_paths_below_it() {
         let committed = CommitRequest { manifest: Some(new), mtime: 1, mode: 0o644, renamed_from: String::new() };
         let version = service.commit(asking(committed, &token, folder)).await.unwrap().into_inner().version_id;
         assert!(version > 0);
-        let (_, inside) = api.get("/api/files?device=_master&path=Music/new").await;
+        let (_, inside) = api.get("/api/files?device=master:Music&path=new").await;
         assert_eq!(inside["entries"][0]["name"], "c.txt", "{inside}");
         assert!(api._dir.path().join("files/Music/new/c.txt").is_file(), "below the folder, not at the root");
         assert!(!api._dir.path().join("files/new").exists());
@@ -103,7 +98,7 @@ fn a_computer_syncs_a_master_folder_by_its_paths_below_it() {
 
         // It deletes below the folder, and only there.
         service.mark_deleted(asking(DeleteRequest { path: "a.txt".into() }, &token, folder)).await.unwrap();
-        let (_, left) = api.get("/api/files?device=_master&path=Music").await;
+        let (_, left) = api.get("/api/files?device=master:Music").await;
         let names: Vec<_> = left["entries"]
             .as_array()
             .unwrap()
@@ -111,7 +106,7 @@ fn a_computer_syncs_a_master_folder_by_its_paths_below_it() {
             .map(|e| e["name"].as_str().unwrap().to_string())
             .collect();
         assert!(!names.contains(&"a.txt".to_string()), "{names:?}");
-        let (_, rest) = api.get("/api/files?device=_master&path=Other").await;
+        let (_, rest) = api.get("/api/files?device=master:Other").await;
         assert_eq!(rest["entries"][0]["name"], "x.txt", "the rest of the master files is untouched");
 
         // A folder can be named by its stable id, for calls and for the watch (a computer keeps the id).

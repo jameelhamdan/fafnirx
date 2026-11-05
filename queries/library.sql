@@ -87,7 +87,7 @@ LEFT JOIN file_meta m ON m.root_hash = v.root_hash
 LEFT JOIN file_state s ON s.file_id = f.id AND s.user_id = :uid
 WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
   AND visible(d, :scope_user::bigint, :all::boolean)
-  AND EXISTS (SELECT 1 FROM albums a WHERE a.id = :album_id AND a.folder_device_id = f.device_id AND starts_with(f.path, a.folder_prefix))
+  AND EXISTS (SELECT 1 FROM albums a WHERE a.id = :album_id AND a.folder_device_id = f.device_id)
 ORDER BY f.path, f.id DESC LIMIT :limit;
 
 --! asset_extras : (mime?, camera_when?, camera_lat?, camera_lon?, exif?, codec?, caption?, keywords?)
@@ -210,7 +210,7 @@ DELETE FROM tags WHERE id = :id AND user_id = :uid;
 -- What a mirror keeps of the library, so that albums, tags and favorites survive losing the database.
 
 --! snapshot_albums
-SELECT a.id, a.name, a.description, a.created_at, u.name AS owner, d.folder, a.folder_prefix
+SELECT a.id, a.name, a.description, a.created_at, u.name AS owner, d.folder
 FROM albums a JOIN users u ON u.id = a.user_id JOIN devices d ON d.id = a.folder_device_id ORDER BY a.created_at, a.id;
 
 --! snapshot_tags

@@ -1,7 +1,7 @@
 import { msg } from '@/lib/i18n'
 
 /** One input of a storage preset. */
-export interface PresetField {
+interface PresetField {
   key: string
   label: string
   placeholder?: string
@@ -23,8 +23,8 @@ export interface Preset {
   pathPlaceholder: string
   /** The folder may be left empty (the bucket or the whole storage). */
   pathOptional?: boolean
-  /** A provider rather than a protocol: listed under Services, and only for a source (a mirror cannot write there). */
-  service?: boolean
+  /** Any rclone backend: its name is asked for (the field `backend`), and its settings go under the backend options. */
+  custom?: boolean
   fields: PresetField[]
 }
 
@@ -90,18 +90,15 @@ export const PRESETS: Preset[] = [
     ],
   },
   {
-    id: 'drive',
-    type: 'drive',
-    label: msg('Google Drive'),
-    hint: msg('Folders shared with a service account: paste its JSON key and the id of a shared folder.'),
+    id: 'other',
+    type: '',
+    custom: true,
+    label: msg('Other rclone backend'),
+    hint: msg('Any other storage rclone supports, such as Google Drive. Name the backend and put its settings under More backend options, one key=value per line.'),
     pathLabel: msg('Folder'),
     pathPlaceholder: 'Photos',
     pathOptional: true,
-    service: true,
-    fields: [
-      { key: 'service_account_credentials', label: msg('Service account key (JSON)'), secret: true },
-      { key: 'root_folder_id', label: msg('Folder id') },
-    ],
+    fields: [{ key: 'backend', label: msg('rclone backend'), placeholder: 'drive, onedrive, dropbox, …' }],
   },
   {
     id: 'local',

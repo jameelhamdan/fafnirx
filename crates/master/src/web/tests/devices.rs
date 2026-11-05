@@ -97,48 +97,41 @@ fn a_device_can_be_released_for_another_computer() {
 }
 
 #[test]
-fn a_mirror_holds_one_folder_chosen_from_the_tree() {
+fn a_mirror_holds_one_whole_folder_or_everything() {
     let mut api = Api::new();
     block(async {
         let bob = add_user(&mut api, "bob", "normal").await;
         api.cookie = bob.clone();
         api.json(Method::POST, "/api/folders", json!({"name": "family"})).await;
-        assert_eq!(try_upload(&api, "bob/family", "2024/trip/a.txt", b"hello").await, StatusCode::OK);
         api.cookie = login(&api).await;
+        master_folder(&api, "Photos").await;
 
-        let names = |v: &Value| -> Vec<(String, String)> {
-            v.as_array()
-                .unwrap()
-                .iter()
-                .map(|c| (c["name"].as_str().unwrap().into(), c["kind"].as_str().unwrap().into()))
-                .collect()
-        };
-        let pick = |path: &str| format!("/api/mirrors/scope?path={}", path.replace('/', "%2F"));
-        let top = names(&api.get("/api/mirrors/scope").await.1);
-        assert_eq!(top[0], ("_master".to_string(), "master".to_string()));
-        assert!(top.contains(&("bob".to_string(), "user".to_string())), "{top:?}");
-        assert_eq!(names(&api.get(&pick("bob")).await.1), [("family".to_string(), "local".to_string())]);
-        assert_eq!(names(&api.get(&pick("bob/family")).await.1), [("2024".to_string(), "folder".to_string())]);
-        assert_eq!(names(&api.get(&pick("bob/family/2024")).await.1), [("trip".to_string(), "folder".to_string())]);
-        assert!(names(&api.get(&pick("bob/family/2024/trip")).await.1).is_empty(), "a.txt is a file, not a folder");
-        assert_eq!(api.get(&pick("a/../b")).await.0, StatusCode::BAD_REQUEST);
+        let offered = api.get("/api/mirrors/folders").await.1;
+        let offered: Vec<&str> = offered.as_array().unwrap().iter().map(|f| f.as_str().unwrap()).collect();
+        assert!(offered.contains(&"master:Photos") && offered.contains(&"bob/family"), "{offered:?}");
 
-        // A mirror takes any of these; what matches nothing is refused.
-        let new = |scope: &str| json!({"name": "m", "remote": "crypt:x", "scope": scope});
-        assert_eq!(api.json(Method::POST, "/api/mirrors", new("bob/nothing")).await.0, StatusCode::BAD_REQUEST);
-        assert_eq!(api.json(Method::POST, "/api/mirrors", new("../x")).await.0, StatusCode::BAD_REQUEST);
-        assert_eq!(api.json(Method::POST, "/api/mirrors", new(" /bob/family/2024/ ")).await.0, StatusCode::OK);
-        assert_eq!(api.get("/api/mirrors").await.1[0]["detail"]["scope"], "bob/family/2024", "stored clean");
+        // A mirror takes any of these; what is not a folder is refused.
+        let new = |name: &str, folder: &str| json!({"name": name, "remote": "crypt:x", "folder": folder});
+        assert_eq!(api.json(Method::POST, "/api/mirrors", new("a", "bob/nothing")).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            api.json(Method::POST, "/api/mirrors", new("a", "bob/family/2024")).await.0,
+            StatusCode::BAD_REQUEST,
+            "no part of a folder"
+        );
+        assert_eq!(api.json(Method::POST, "/api/mirrors", new("a", " /bob/family/ ")).await.0, StatusCode::OK);
+        assert_eq!(api.json(Method::POST, "/api/mirrors", new("b", "")).await.0, StatusCode::OK);
+        assert_eq!(api.json(Method::POST, "/api/mirrors", new("b", "")).await.0, StatusCode::CONFLICT);
+        let listed = api.get("/api/mirrors").await.1;
+        assert_eq!(listed[0]["detail"]["folder"], "bob/family", "stored clean");
+        assert_eq!(listed[1]["detail"]["folder"], "", "everything");
     });
 }
 
 #[test]
-fn a_mirror_copies_only_the_files_at_or_below_its_scope() {
+fn a_mirror_copies_only_the_files_of_its_folder() {
     let db = crate::platform::db::testing::db_with_device();
     let mut c = db.get().unwrap();
     // Device 1 has the files `docs/a`, `docs/b`, `docsx/c` and `top`.
-    let folder: String = c.query_one("SELECT folder FROM devices WHERE id = 1", &[]).unwrap().get(0);
-    let user = folder.split('/').next().unwrap().to_string();
     for path in ["docs/a", "docs/b", "docsx/c", "top"] {
         let file: uuid::Uuid = c
             .query_one("INSERT INTO files (device_id, path) VALUES (1, $1) RETURNING id", &[&path])
@@ -153,11 +146,8 @@ fn a_mirror_copies_only_the_files_at_or_below_its_scope() {
             .get(0);
         c.execute("UPDATE files SET current_version_id = $1 WHERE id = $2", &[&version, &file]).unwrap();
     }
-    let paths = |c: &mut postgres::Client, scope: &str| -> Vec<String> { crate::repo::mirrors::live_files(c, scope).unwrap().into_iter().map(|f| f.path).collect() };
-    assert_eq!(paths(&mut c, "").len(), 4, "no scope is everything");
-    assert_eq!(paths(&mut c, &user), ["docs/a", "docs/b", "docsx/c", "top"]);
-    assert_eq!(paths(&mut c, &folder), ["docs/a", "docs/b", "docsx/c", "top"]);
-    assert_eq!(paths(&mut c, &format!("{folder}/docs")), ["docs/a", "docs/b"], "docsx is another folder");
-    assert!(paths(&mut c, &format!("{folder}/doc")).is_empty(), "a prefix of a name is not a folder");
-    assert!(paths(&mut c, "nobody").is_empty());
+    let paths = |c: &mut postgres::Client, folder: Option<i64>| -> Vec<String> { crate::repo::mirrors::live_files(c, folder).unwrap().into_iter().map(|f| f.path).collect() };
+    assert_eq!(paths(&mut c, None).len(), 4, "no folder is everything");
+    assert_eq!(paths(&mut c, Some(1)), ["docs/a", "docs/b", "docsx/c", "top"]);
+    assert!(paths(&mut c, Some(0)).is_empty(), "another folder holds none of them");
 }

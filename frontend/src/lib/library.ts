@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useApiMutation } from './mutation'
 import { toast } from 'sonner'
 import { api, query } from './api'
 import { count } from './format'
@@ -28,26 +29,22 @@ export interface Edit {
 export function useLibraryActions() {
   const t = useT()
   const refresh = useRefreshLibrary()
-  const failed = (e: Error) => toast.error(e.message)
 
-  const edit = useMutation({
-    mutationFn: ({ id, ...body }: Edit & { id: string }) => api.patch(`/api/library/${id}`, body),
+  const edit = useApiMutation(({ id, ...body }: Edit & { id: string }) => api.patch(`/api/library/${id}`, body), {
     onSuccess: () => void refresh(),
-    onError: failed,
+    toastError: true,
   })
-  const bulk = useMutation({
-    mutationFn: (body: { ids: string[]; favorite?: boolean; archived?: boolean; add_tags?: string[] }) =>
-      api.post<{ changed: number }>('/api/library/bulk', body),
+  const bulk = useApiMutation((body: { ids: string[]; favorite?: boolean; archived?: boolean; add_tags?: string[] }) =>
+      api.post<{ changed: number }>('/api/library/bulk', body), {
     onSuccess: () => void refresh(),
-    onError: failed,
+    toastError: true,
   })
-  const remove = useMutation({
-    mutationFn: (items: { device: string; path: string }[]) => api.post<{ deleted: number }>('/api/files/delete', { items }),
+  const remove = useApiMutation((items: { device: string; path: string }[]) => api.post<{ deleted: number }>('/api/files/delete', { items }), {
     onSuccess: (r) => {
       toast.success(t('{count} deleted. They stay in the trash until the retention period ends.', { count: count(r.deleted) }))
       void refresh()
     },
-    onError: failed,
+    toastError: true,
   })
   return { edit, bulk, remove }
 }

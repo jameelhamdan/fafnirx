@@ -1,4 +1,4 @@
-import { useMutation } from '@tanstack/react-query'
+import { useApiMutation } from '@/lib/mutation'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { FormDialog } from '@/components/form-dialog'
@@ -13,8 +13,7 @@ export function ChangePassword({ open, onClose }: { open: boolean; onClose: () =
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [again, setAgain] = useState('')
-  const change = useMutation({
-    mutationFn: () => api.post('/api/me/password', { current, new: next }),
+  const change = useApiMutation(() => api.post('/api/me/password', { current, new: next }), {
     onSuccess: () => {
       toast.success(t('Password changed. Your other logins have ended.'))
       close()

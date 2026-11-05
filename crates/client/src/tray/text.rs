@@ -217,10 +217,17 @@ mod tests {
 
     #[test]
     fn a_client_that_could_not_start_says_why_for_as_long_as_it_is_down() {
-        let stopped = daemon::Status { fatal: "no device token found; run `fafnirx enroll`".into(), updated: 1, ..Default::default() };
+        let stopped = daemon::Status {
+            fatal: "no device token found; run `fafnirx install --server <address>`".into(),
+            updated: 1,
+            ..Default::default()
+        };
         // Long after it exited: still the reason, not a bare "not running".
         let v = view(Some(&stopped), false, 1_000_000);
-        assert_eq!((v.light, v.text.as_str()), (Light::Error, "Stopped: no device token found; run `fafnirx enroll`"));
+        assert_eq!(
+            (v.light, v.text.as_str()),
+            (Light::Error, "Stopped: no device token found; run `fafnirx install --server <address>`")
+        );
         let info = describe(Some(&stopped), &v, 1_000_000);
         assert!(info.now.starts_with("The client stopped: no device token"), "{}", info.now);
         assert!(!info.error.is_empty());

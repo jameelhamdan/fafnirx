@@ -37,12 +37,14 @@ fn short_hash(root: &[u8]) -> String {
 
 /// A photo or video as the grid and the viewer need it.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Asset {
     pub id: Id,
     pub device: String,
     pub path: String,
     pub name: String,
     /// image or video
+    #[cfg_attr(test, ts(type = "'image' | 'video'"))]
     pub kind: &'static str,
     pub size: i64,
     /// The start of the content hash: a link with it never goes stale, because new content has a new hash.
@@ -136,6 +138,7 @@ fn valid_month(text: &str) -> Result<(), ApiError> {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Month {
     month: String,
     count: i64,
@@ -145,6 +148,7 @@ pub struct Month {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Buckets {
     months: Vec<Month>,
     total: i64,
@@ -214,18 +218,21 @@ pub async fn by_ids(State(state): State<Shared>, Extension(who): Extension<Acces
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct TagRef {
     id: Id,
     name: String,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct AlbumRef {
     id: Id,
     name: String,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, rename = "AssetDetail"))]
 pub struct Detail {
     #[serde(flatten)]
     asset: Asset,
@@ -242,6 +249,7 @@ pub struct Detail {
     camera_lon: Option<f64>,
     when_edited: bool,
     place_edited: bool,
+    #[cfg_attr(test, ts(type = "Record<string, string> | null"))]
     exif: serde_json::Value,
     codec: Option<String>,
     tags: Vec<TagRef>,
@@ -253,6 +261,7 @@ pub struct Detail {
     /// What the .nfo next to a video says about it (title, season, episode, plot), when there is one.
     described: Option<artwork::Described>,
     /// Work still to do on it: waiting, running or failed. Not set when everything is done.
+    #[cfg_attr(test, ts(type = "'waiting' | 'running' | 'failed' | null"))]
     work: Option<String>,
 }
 
@@ -471,7 +480,7 @@ fn apply(tx: &mut impl GenericClient, who: &Access, id: uuid::Uuid, e: &Edit) ->
 }
 
 pub async fn edit(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>, Json(e): Json<Edit>) -> Res<Done> {
-    change(&state, "library", move |tx| apply(tx, &who, id, &e)).await?;
+    change(&state, crate::platform::db::Topic::Library, move |tx| apply(tx, &who, id, &e)).await?;
     done()
 }
 
@@ -499,7 +508,7 @@ pub async fn bulk(State(state): State<Shared>, Extension(who): Extension<Access>
     }
     let new_tags = b.add_tags.as_deref().map(clean_tags).transpose()?;
     let ids = uuids(&b.ids);
-    let changed = change(&state, "library", move |tx| {
+    let changed = change(&state, crate::platform::db::Topic::Library, move |tx| {
         let (viewer, now) = (who.viewer(), unix_now());
         // The files touched by any of the changes asked for are those the user can see.
         let mut changed = 0;
@@ -520,6 +529,7 @@ pub async fn bulk(State(state): State<Shared>, Extension(who): Extension<Access>
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, rename = "TagInfo"))]
 pub struct Tag {
     id: Id,
     name: String,
@@ -542,13 +552,14 @@ pub async fn delete_tag(State(state): State<Shared>, Extension(who): Extension<A
         if !tags::delete(c, who.user_id, id)? {
             return Err(ApiError::not_found("No such tag").into());
         }
-        db::notify(c, "library", "")?;
+        db::notify(c, db::Topic::Library, "")?;
         Ok(())
     })
     .await
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct TrashEntry {
     id: Id,
     device: String,
@@ -559,11 +570,13 @@ pub struct TrashEntry {
     purge_at: i64,
     /// The version to restore: the last one the file had.
     version: i64,
+    #[cfg_attr(test, ts(type = "'image' | 'video' | null"))]
     kind: Option<&'static str>,
     hash: String,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Trash {
     entries: Vec<TrashEntry>,
     total: i64,
@@ -647,9 +660,9 @@ pub async fn purge(State(state): State<Shared>, Extension(who): Extension<Access
         settings::set(&mut tx, settings::DELETIONS_KNOWN_FROM, &known_from.to_string())?;
         sql::devices::mark_totals_stale().bind(&mut tx, &devices).map(drop)?;
         for folder in &folders {
-            db::notify(&mut tx, "files", folder)?;
+            db::notify(&mut tx, db::Topic::Files, folder)?;
         }
-        db::notify(&mut tx, "devices", "")?;
+        db::notify(&mut tx, db::Topic::Devices, "")?;
         tx.commit()?;
         Ok((Purged { files: ids.len(), bytes }, versions))
     })
@@ -681,7 +694,7 @@ pub fn snapshot(c: &mut Client) -> anyhow::Result<serde_json::Value> {
         .into_iter()
         .map(|a| {
             json!({ "user": a.owner, "name": a.name, "description": a.description, "created_at": a.created_at,
-                    "folder": { "device": a.folder, "path": a.folder_prefix.trim_end_matches('/') } })
+                    "folder": { "device": a.folder, "path": "" } })
         })
         .collect();
 

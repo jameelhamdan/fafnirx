@@ -34,7 +34,7 @@ pub struct Pending {
     pub local_size: u64,
     pub local_mtime_ns: i64,
     pub found_at: i64,
-    /// `theirs`, `mine` or `both` once answered, until the next cycle applies it.
+    /// `theirs` or `both` once answered, until the next cycle applies it.
     pub choice: Option<String>,
 }
 

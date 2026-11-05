@@ -1,7 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
 import { useState } from 'react'
-import { toast } from 'sonner'
 import { Empty, ErrorNote, PageHeader, SELECT } from '@/components/common'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -15,6 +14,7 @@ import { dateTime } from '@/lib/format'
 import { msg, useT } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
 import type { Role, UserInfo } from '@/lib/types'
+import { useApiMutation } from '@/lib/mutation'
 
 const ROLES: [Role, string, string][] = [
   ['admin', msg('Administrator'), msg('Everything: users, settings, mirrors, sources, and every user\'s files.')],
@@ -33,18 +33,16 @@ function RoleSelect({ id, value, onChange }: { id?: string; value: Role; onChang
 
 function AddUser() {
   const t = useT()
-  const client = useQueryClient()
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [role, setRole] = useState<Role>('normal')
   const [password, setPassword] = useState('')
-  const create = useMutation({
-    mutationFn: () => api.post('/api/users', { name, role, password }),
+  const create = useApiMutation(() => api.post('/api/users', { name, role, password }), {
+    invalidate: [['users']],
     onSuccess: () => {
       setOpen(false)
       setName('')
       setPassword('')
-      void client.invalidateQueries({ queryKey: ['users'] })
     },
   })
 
@@ -84,10 +82,9 @@ function ResetPassword({ user }: { user: UserInfo }) {
   const t = useT()
   const [open, setOpen] = useState(false)
   const [password, setPassword] = useState('')
-  const reset = useMutation({
-    mutationFn: () => api.patch(`/api/users/${encodeURIComponent(user.name)}`, { password }),
+  const reset = useApiMutation(() => api.patch(`/api/users/${encodeURIComponent(user.name)}`, { password }), {
+    success: t('New password set for {name}. Their logins have ended.', { name: user.name }),
     onSuccess: () => {
-      toast.success(t('New password set for {name}. Their logins have ended.', { name: user.name }))
       setOpen(false)
       setPassword('')
     },
@@ -116,11 +113,9 @@ function ResetPassword({ user }: { user: UserInfo }) {
 
 function Row({ user, me }: { user: UserInfo; me: string }) {
   const t = useT()
-  const client = useQueryClient()
-  const change = useMutation({
-    mutationFn: (body: { role?: Role; disabled?: boolean }) => api.patch(`/api/users/${encodeURIComponent(user.name)}`, body),
-    onSuccess: () => void client.invalidateQueries({ queryKey: ['users'] }),
-    onError: (e) => toast.error(e.message),
+  const change = useApiMutation((body: { role?: Role; disabled?: boolean }) => api.patch(`/api/users/${encodeURIComponent(user.name)}`, body), {
+    invalidate: [['users']],
+    toastError: true,
   })
   return (
     <TableRow className={user.disabled ? 'opacity-60' : undefined}>

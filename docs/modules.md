@@ -1,7 +1,7 @@
 # Modules
 
 The core of fafnirx is small: the master, PostgreSQL, the web app and the clients. Everything advanced is an **add-on container** that
-you start when you need it: [video](video.md) playback brings ffmpeg, [fetch](fetch.md) reads web sources, and anyone can write
+you start when you need it: [video](video.md) playback brings ffmpeg, [fetch](sources.md#web-files-and-feeds) reads web sources, and anyone can write
 more, such as a new kind of source ([Plugins](plugins.md)). A server without an add-on doesn't carry its dependencies or spend
 its CPU, and the web app doesn't offer what it would have added. The heavy work (transcoding, downloading, third-party tools)
 runs in the add-on's container, which can sit on another host and have its own resource limits. Add-ons don't know each other.
@@ -45,11 +45,11 @@ checked login and file access; modules have no users.
 | `GET /probe?p&h` | master, `probe.video` | length, size, codec, date, place |
 | `GET /poster?p&h&max[&at_ms]` | master, `poster` | JPEG ≤ `max` px (videos, HEIC/AVIF the master can't decode). A video's frame at `at_ms`; without it the module finds the first non-black frame at 10%, 20%, … and says where in `x-poster-ms` (ms), which the master stores and sends back as `at_ms` |
 | `GET /status` | master, `status` | `active`, `failed` tasks, each with `path`; other fields are the module's own |
-| `POST /fetch/list`, `POST /fetch/get` | master, `fetch.<kind>` | what a source offers; one file of it written to `<data>/tmp/…` ([fetch](fetch.md#api)). The one place a module writes; the master hashes and commits it |
+| `POST /fetch/list`, `POST /fetch/get` | master, `fetch.<kind>` | what a source offers; one file of it written to `<data>/tmp/…` ([fetch](sources.md#api)). The one place a module writes; the master hashes and commits it |
 | `GET /files/<rest>?p&h` | browser via `/api/m/<id>/<file id>/<rest>` | module-specific, per file |
 | `GET /ui/<file>` | browser via `/api/m/<id>/ui/<file>` | web part (script, style), same for everybody |
 
-`p` = path under `files/` (`users/alice/laptop/clip.mp4`, master files: `clip.mp4`). `h` = hex content hash (changed file → new
+`p` = path under `files/` (`users/alice/laptop/clip.mp4`, master folders: `Movies/clip.mp4`). `h` = hex content hash (changed file → new
 hash → no stale cache). Browser reaches only `/files/` and `/ui/`. Master drops `/status` tasks of files the user can't see.
 `ui` = `{entry, css?, sdk}`; `sdk` = `WEB_SDK` the script was built for.
 

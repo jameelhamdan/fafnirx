@@ -156,6 +156,34 @@ pub fn update_message(platform: &str, version: &str, sha256_hex: &str) -> String
     format!("fafnirx-update\n{platform}\n{version}\n{sha256_hex}")
 }
 
+/// Paths that vanished, waiting to be paired with new paths that have the same content: a rename or a move. Equal content is
+/// interchangeable, so the earliest vanished path is paired first. Whoever finds renames (the client, the mirror) pairs them
+/// this way, so that they agree.
+pub struct Vanished<K, T> {
+    by_key: std::collections::HashMap<K, std::collections::VecDeque<T>>,
+}
+
+impl<K: Eq + std::hash::Hash, T> Vanished<K, T> {
+    /// `items` are the vanished paths with their content key, in the order they are to be paired.
+    pub fn new(items: impl IntoIterator<Item = (K, T)>) -> Self {
+        let mut by_key: std::collections::HashMap<K, std::collections::VecDeque<T>> = std::collections::HashMap::new();
+        for (key, item) in items {
+            by_key.entry(key).or_default().push_back(item);
+        }
+        Self { by_key }
+    }
+
+    /// The vanished path that a new path with this content is a rename of, if there is one left.
+    pub fn take(&mut self, key: &K) -> Option<T> {
+        self.by_key.get_mut(key).and_then(std::collections::VecDeque::pop_front)
+    }
+
+    /// The vanished paths nothing was paired with (in no particular order).
+    pub fn into_remaining(self) -> Vec<T> {
+        self.by_key.into_values().flatten().collect()
+    }
+}
+
 /// The path without the `\\?\` prefix that Windows puts on canonicalized paths.
 pub fn plain_path(path: &Path) -> PathBuf {
     let s = path.to_string_lossy();
@@ -343,8 +371,6 @@ mod tests {
                 "UploadChunks",
                 "Commit",
                 "MarkDeleted",
-                "GetUpdateInfo",
-                "DownloadUpdate",
                 "ListFolders",
                 "CreateFolder",
                 "ListChanges",
@@ -352,13 +378,23 @@ mod tests {
                 "WatchFolder"
             ]
         );
-        // The only streams from the master to a device carry the client update and the shared folders.
+        // The only streams from the master to a device carry the shared folders.
         let returning_streams: Vec<&str> = proto
             .lines()
             .filter(|l| l.contains("returns (stream"))
             .map(|l| l.trim().strip_prefix("rpc ").unwrap().split('(').next().unwrap())
             .collect();
-        assert_eq!(returning_streams, ["DownloadUpdate", "ListChanges", "DownloadFolder", "WatchFolder"]);
+        assert_eq!(returning_streams, ["ListChanges", "DownloadFolder", "WatchFolder"]);
+    }
+
+    #[test]
+    fn equal_content_is_interchangeable_and_the_earliest_vanished_path_is_paired_first() {
+        let mut gone = Vanished::new([("a", "old/1"), ("b", "old/2"), ("a", "old/3")]);
+        assert_eq!(gone.take(&"a"), Some("old/1"));
+        assert_eq!(gone.take(&"a"), Some("old/3"));
+        assert_eq!(gone.take(&"a"), None, "each is paired once");
+        assert_eq!(gone.take(&"c"), None);
+        assert_eq!(gone.into_remaining(), ["old/2"]);
     }
 
     #[test]

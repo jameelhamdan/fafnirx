@@ -1,4 +1,5 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useApiMutation } from '@/lib/mutation'
 import { useState } from 'react'
 import { FormDialog } from '../form-dialog'
 import { Input } from '../ui/input'
@@ -15,17 +16,19 @@ export function RenameFolder({ folder, masterId, onClose, onRenamed }: { folder:
   const client = useQueryClient()
   const current = masterId ? (folder ?? '') : (folder?.split('/').pop() ?? '')
   const [name, setName] = useState('')
-  const rename = useMutation({
-    mutationFn: async (to: string) =>
+  const rename = useApiMutation(
+    async (to: string) =>
       masterId
         ? api.post(`/api/master-folders/${masterId}/rename`, { path: to }).then(() => ({ folder: to }))
         : api.post<{ folder: string }>(`/api/devices/${encodeURIComponent(folder ?? '')}/rename`, { name: to }),
-    onSuccess: (done) => {
-      for (const key of ['devices', 'files', 'folders', 'albums', 'album', 'sources']) void client.invalidateQueries({ queryKey: [key] })
-      setName('')
-      onRenamed(done.folder)
+    {
+      onSuccess: (done) => {
+        for (const key of ['devices', 'files', 'folders', 'albums', 'album', 'sources']) void client.invalidateQueries({ queryKey: [key] })
+        setName('')
+        onRenamed(done.folder)
+      },
     },
-  })
+  )
   return (
     <FormDialog
       open={folder !== null}

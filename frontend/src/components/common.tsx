@@ -79,7 +79,7 @@ export function StatusDot({ status, label }: { status: string; label?: string })
   )
 }
 
-const KIND: Record<string, string> = { device: msg('Device'), local: msg('Local folder'), master: msg('Master files') }
+const KIND: Record<string, string> = { device: msg('Device'), local: msg('Local folder'), master: msg('Master folder') }
 
 export function KindBadge({ kind }: { kind: string }) {
   const t = useT()

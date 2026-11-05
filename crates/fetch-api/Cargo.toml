@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-# What the master and a module that reads sources (see docs/fetch.md) say to each other. Types only, like fafnirx-module-api, which
+# What the master and a module that reads sources (see docs/sources.md) say to each other. Types only, like fafnirx-module-api, which
 # stays free of anything specific to one kind of module. A module that reads sources depends on both.
 [dependencies]
 serde.workspace = true

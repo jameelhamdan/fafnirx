@@ -5,7 +5,7 @@ database is not part of a mirror ([backups](deployment.md#backups)).
 
 | | Backup | Replica |
 |---|---|---|
-| Files | Compressed (gzip) and encrypted with your key; names too | As they are |
+| Files | Encrypted with your key; names too | As they are |
 | Use for | Cloud storage you do not control | A NAS or disk you browse, share or copy back from |
 | Restore | `rclone` with the restore kit | Copy the files, with any tool |
 | Needs | Two passwords (the key) | Nothing |
@@ -16,7 +16,7 @@ The kind is chosen when the mirror is added and cannot be changed: add another m
 
 ```text
 files/users/<user>/<device>/...  current tree per device or folder (shared or not)
-files/<path>                     master files
+files/<name>/<path>              master folders
 versions/<UTC time>/...          what that run replaced or removed
 meta/stats.json                  run stats
 meta/<user>_<device>.json        file lists (path, size, mtime, root hash)
@@ -26,10 +26,10 @@ meta/library.json                albums, tags, favorites, ratings, descriptions,
 A backup has the same tree below the encryption: every name above, `files/` and `meta/` included, is encrypted on the
 storage. `meta/library.json` is left out when the mirror holds one folder (it names files of the whole tree).
 
-**What to copy:** everything, or one folder picked by going down the tree: `_master` or `_master/<folder>`, `<user>`,
-`<user>/<device>` or `<user>/<folder>`, then any folder inside. Files keep their place below `files/`. The choice cannot be
-changed later. Renaming a folder in Files updates the scope of a mirror that holds it; the next run copies it under the new name,
-and the copy under the old name stays on the storage until you delete it there.
+**What to copy:** everything, or one whole folder (`master:<folder>`, `<user>/<folder>` or a computer, `<user>/<computer>`).
+Files keep their place below `files/`. The choice cannot be changed later. A mirror points at the folder itself, so renaming
+the folder keeps it attached; the next run copies it under the new name, and the copy under the old name stays on the storage
+until you delete it there.
 
 ## How a run works
 
@@ -49,14 +49,13 @@ and the copy under the old name stays on the storage until you delete it there.
 2. **Mirrors → Add mirror → Backup → Backblaze B2.** Enter the key ID, application key and `bucket/folder`.
 3. **Generate a key**, then **Save as file** and store it away from the master. Tick the confirmation.
 
-Compression and encryption are set up by the master; you need nothing in `rclone.conf`. The key is two passwords: rclone's
+Encryption is set up by the master; you need nothing in `rclone.conf`. The key is two passwords: rclone's
 crypt *password* and *salt*. Both are kept in the master's database in plain text (like every mirror credential), so
 protect its backups.
 
 ### Restore
 
-On the mirror's card, **Download restore kit** (administrators) gives an `rclone.conf` with the storage, the key and the
-layers. On any computer with rclone:
+On the mirror's card, **Download restore kit** (administrators) gives an `rclone.conf` with the storage and the key. On any computer with rclone:
 
 ```text
 rclone --config fafnirx-restore.conf copy fafnirx-backup:files ./restored
@@ -71,17 +70,13 @@ type = b2
 account = <key id>
 key = <application key>
 
-[crypt]
+[fafnirx-backup]
 type = crypt
 remote = storage:bucket/folder
 password = <rclone obscure of the password>
 password2 = <rclone obscure of the salt>
 filename_encryption = standard
 directory_name_encryption = true
-
-[fafnirx-backup]
-type = compress
-remote = crypt:
 ```
 
 `rclone obscure <text>` prints the form rclone wants in the file. **Without the key a backup cannot be read by anyone.**
@@ -89,11 +84,7 @@ remote = crypt:
 ### Cost and egress
 
 Backblaze charges for storage, not for uploads. Downloads (a restore) are free up to three times the stored volume per month.
-A run does listing calls only on `versions/`, so the number of paid transactions stays small. The compression layer adds a
-small `.json` file per file, so a tree of many tiny files has twice as many objects.
-
-Compression is gzip level 6 for everything: rclone stores a file as it is when it would shrink by less than 10% (videos,
-photos, archives), so these cost a little CPU and no space.
+A run does listing calls only on `versions/`, so the number of paid transactions stays small.
 
 ## Add a replica
 
@@ -109,10 +100,11 @@ restore by copying them back.
 | SFTP / SSH | `sftp` | Host, user, password, folder |
 | WebDAV / Nextcloud | `webdav` | URL, user, (app) password |
 | Folder or drive | `local` | A path on the master |
+| Other rclone backend | any | The backend's name and its settings as `key=value` lines |
 | Remote from rclone.conf | any | A remote you set up yourself, as `name:folder` |
 
-Anything else rclone supports works through **Remote from rclone.conf** or **More backend options** (`key=value` lines, as
-rclone names them in lowercase). OAuth storage (OneDrive, Dropbox) needs a token: create the remote once with `rclone config`,
+Anything else rclone supports works through **Other rclone backend** or **Remote from rclone.conf** (settings as `key=value`
+lines, as rclone names them in lowercase). OAuth storage (OneDrive, Dropbox) needs a token: create the remote once with `rclone config`,
 put the `rclone.conf` in `./config` (or `FAFNIRX_RCLONE_CONFIG`; writable by the master, readable by its owner only) and use
 it as a *remote from rclone.conf*. A backup on such a remote is layered over it too.
 

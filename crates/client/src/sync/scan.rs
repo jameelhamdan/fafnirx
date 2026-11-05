@@ -145,7 +145,7 @@ mod tests {
     use std::fs;
 
     fn folder(dir: &Path) -> Folder {
-        Folder { path: dir.to_path_buf(), name: "docs".into() }
+        Folder::computer(dir.to_path_buf(), "docs".into())
     }
 
     #[test]
@@ -188,7 +188,7 @@ mod tests {
             fs::write(d.path().join(name), "x").unwrap();
         }
         let names = |name: &str| -> Vec<String> {
-            let scan = scan_folder(&Folder { path: d.path().to_path_buf(), name: name.into() }, None).unwrap();
+            let scan = scan_folder(&Folder::computer(d.path().to_path_buf(), name.into()), None).unwrap();
             scan.entries.iter().map(|e| e.remote.clone()).collect()
         };
         assert_eq!(

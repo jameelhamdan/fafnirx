@@ -3,7 +3,7 @@
 //!
 //! A container next to the master, which puts its own login in front of it and holds the token it asks for. The service, the
 //! environment it reads (token, address, data folder, `FAFNIRX_FETCH_JOBS`, `FAFNIRX_FETCH_IDLE_SECS`) and the contract with the
-//! master are the module kit's (`fafnirx-module-kit`, docs/plugins.md, docs/fetch.md).
+//! master are the module kit's (`fafnirx-module-kit`, docs/plugins.md, docs/sources.md).
 
 mod module;
 mod settings;

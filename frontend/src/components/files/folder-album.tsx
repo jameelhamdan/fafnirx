@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useApiMutation } from '@/lib/mutation'
 import { Images } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -41,22 +42,20 @@ export function FolderAlbum({ folder, onClose }: { folder: FolderRef | null; onC
     setTyped(null)
     onClose()
   }
-  const save = useMutation({
-    mutationFn: () => (album ? api.patch(`/api/albums/${album.id}`, { name }) : api.post('/api/albums', { name: name.trim(), folder })),
+  const save = useApiMutation(() => (album ? api.patch(`/api/albums/${album.id}`, { name }) : api.post('/api/albums', { name: name.trim(), folder })), {
     onSuccess: () => { toast.success(album ? t('Album saved.') : t('The folder is an album now.')); done() },
-    onError: (e) => toast.error(e.message),
+    toastError: true,
   })
-  const end = useMutation({
-    mutationFn: () => api.delete(`/api/albums/${album?.id ?? ''}`),
+  const end = useApiMutation(() => api.delete(`/api/albums/${album?.id ?? ''}`), {
     onSuccess: () => { toast.success(t('The folder is not an album any more. Its files are as they were.')); done() },
-    onError: (e) => toast.error(e.message),
+    toastError: true,
   })
   return (
     <FormDialog
       open={folder !== null}
       onOpenChange={(o) => { if (!o) { setTyped(null); onClose() } }}
       title={album ? t('Album of this folder') : t('Show this folder as an album')}
-      description={t('An album shows everything in the folder and below it, new files included, and follows the folder if it is renamed or moved. It is yours alone.')}
+      description={t('An album shows everything in the folder, new files included, and follows the folder if it is renamed. It is yours alone.')}
       onSubmit={() => save.mutate()}
       submit={album ? t('Save') : t('Make album')}
       disabled={!name.trim()}
