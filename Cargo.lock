@@ -1213,7 +1213,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx"
-version = "5.0.0"
+version = "5.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1249,7 +1249,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx-common"
-version = "5.0.0"
+version = "5.1.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1265,7 +1265,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx-db"
-version = "5.0.0"
+version = "5.1.0"
 dependencies = [
  "cornucopia",
  "postgres",
@@ -1276,7 +1276,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx-fetch"
-version = "5.0.0"
+version = "5.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1297,7 +1297,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx-fetch-api"
-version = "5.0.0"
+version = "5.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1305,7 +1305,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx-master"
-version = "5.0.0"
+version = "5.1.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1348,7 +1348,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx-module-api"
-version = "5.0.0"
+version = "5.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1356,7 +1356,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx-module-kit"
-version = "5.0.0"
+version = "5.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1378,7 +1378,7 @@ dependencies = [
 
 [[package]]
 name = "fafnirx-video"
-version = "5.0.0"
+version = "5.1.0"
 dependencies = [
  "anyhow",
  "axum",
