@@ -213,9 +213,9 @@ export function clientIn(dir, server) {
   const cfg = path.join(dir, 'config.toml')
   const c = (...args) => run(CLIENT, ['--config', cfg, ...args])
   c.try = (...args) => run(CLIENT, ['--config', cfg, ...args], { ok: false })
-  /** Runs a command that reads the device token from standard input, as `enroll` does. */
+  /** Runs a command that reads the device token from standard input, as `install --server` does. */
   c.enroll = (token, server, { ok = true } = {}) =>
-    run(CLIENT, ['--config', cfg, 'enroll', '--no-service', '--server', server], { ok, input: `${token}\n` })
+    run(CLIENT, ['--config', cfg, 'install', '--in-place', '--no-start', '--no-path', '--server', server], { ok, input: `${token}\n` })
   return { cfg, c, server }
 }
 

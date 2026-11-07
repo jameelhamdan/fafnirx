@@ -6,12 +6,13 @@
 //! A run fetches at most `max_per_run` files and, when more are waiting, asks for another run at once: a long list
 //! arrives over several runs, and a restart or a failure loses at most the file being made.
 
-use crate::integrations::syncsource::{self, Download, Item, Listing, Rules};
-use crate::integrations::{Outcome, SourceRow};
+use crate::integrations::syncsource::{self, Item, Listing, Rules};
+use crate::integrations::SourceRun;
 use crate::modules;
 use crate::platform::db::{self, Db};
-use crate::platform::store::{hash_file, Store};
-use anyhow::{bail, Context, Result};
+use crate::platform::store::Store;
+use crate::repo::links::Due;
+use anyhow::{bail, ensure, Context, Result};
 use fafnirx_common::{clean_remote_path, unix_now};
 use fafnirx_fetch_api::FetchEntry;
 use serde_json::{json, Value};
@@ -21,11 +22,6 @@ use std::sync::Arc;
 /// How many files one run fetches unless the source says otherwise.
 const DEFAULT_PER_RUN: u64 = 25;
 const MAX_PER_RUN: u64 = 500;
-
-/// Whether sources of this kind are read by a module (every kind but the storage that rclone reads).
-pub fn is_kind(kind: &str) -> bool {
-    kind != "rclone"
-}
 
 fn per_run(config: &Value) -> Result<u64> {
     match config.get("max_per_run").filter(|v| !v.is_null()) {
@@ -82,7 +78,7 @@ fn items_of(entries: Vec<FetchEntry>) -> (Vec<Item>, HashMap<String, FetchEntry>
     (items, kept, skipped)
 }
 
-pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
+pub async fn run(db: Db, store: Arc<Store>, src: Due) -> Result<SourceRun> {
     let config: Value = serde_json::from_str(&src.config).context("source configuration is invalid")?;
     let kind = src.kind.clone();
     let limit = per_run(&config)? as usize;
@@ -94,32 +90,27 @@ pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
     let (config, entries, kind) = (&config, &entries, &kind);
     let fetch_store = store.clone();
     let source_id = src.id;
+    let device = syncsource::device_of(&src)?;
     let out = syncsource::apply(
-        db.clone(),
-        store,
-        source_id,
-        src.device,
+        syncsource::Source { db: db.clone(), store, id: source_id, device },
         Listing { items, skipped: listing.skipped + left_out },
         rules,
         |item| {
             let store = fetch_store.clone();
             async move {
                 let entry = entries.get(&item.path).context("the file is not in the listing")?;
-                let path = store.temp_path();
-                let received = async {
-                    let reported = modules::fetch_get(kind, config, entry, &path).await?;
-                    let target = path.clone();
-                    let (root, size) = tokio::task::spawn_blocking(move || hash_file(&target)).await??;
-                    if size == 0 || (reported != 0 && size != reported) {
-                        bail!("received {size} bytes, the module wrote {reported}");
-                    }
-                    Ok(Download { path: path.clone(), root, size })
-                }
-                .await;
-                if received.is_err() {
-                    let _ = tokio::fs::remove_file(&path).await;
-                }
-                received
+                syncsource::receive(
+                    &store,
+                    |path| async move { modules::fetch_get(kind, config, entry, &path).await },
+                    |reported, size| {
+                        ensure!(
+                            size != 0 && (reported == 0 || size == reported),
+                            "received {size} bytes, the module wrote {reported}"
+                        );
+                        Ok(())
+                    },
+                )
+                .await
             }
         },
     )
@@ -136,20 +127,5 @@ pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_source_shows_the_label_its_module_gave() {
-        assert_eq!(label(&json!({"label": "3 files", "x": 1})), "3 files");
-        assert_eq!(label(&json!({})), "");
-    }
-
-    #[test]
-    fn the_limit_per_run_has_bounds() {
-        assert_eq!(per_run(&json!({})).unwrap(), DEFAULT_PER_RUN);
-        assert_eq!(per_run(&json!({"max_per_run": 500})).unwrap(), 500);
-        assert!(per_run(&json!({"max_per_run": 0})).is_err());
-        assert!(per_run(&json!({"max_per_run": 501})).is_err());
-    }
-}
+#[path = "../../tests/unit/integrations/fetch_source.rs"]
+mod tests;

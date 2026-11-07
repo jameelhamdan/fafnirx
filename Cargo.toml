@@ -30,6 +30,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-normalization = "0.1"
 
+# Debug builds keep line tables only: enough for backtraces, at a fraction of the size (a full debug client is over the 200 MB the
+# updater accepts, and the target folder fills the disk).
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 lto = "thin"
 strip = true

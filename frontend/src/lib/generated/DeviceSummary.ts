@@ -15,6 +15,6 @@ user: string,
  */
 folder: string, 
 /**
- * device (a client), local (uploaded or dropped into `files/<user>/`) or source (imported by the master).
+ * device (a client), local (a folder of a user on the master) or master (a folder of the master files).
  */
 kind: 'device' | 'local' | 'master', online: boolean, revoked: boolean, created_at: number, hostname: string | null, os: string | null, ip: string | null, client_version: string | null, disk_total: number | null, disk_free: number | null, last_seen: number | null, last_collected: number | null, bytes: number, files: number, activity: Activity | null, };

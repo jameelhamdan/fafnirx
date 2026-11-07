@@ -44,7 +44,7 @@ try {
   // The enrolling above ran with the default state directory, which counts as one computer; the client of this test keeps
   // its state elsewhere, so it is another. Releasing the device lets that one take it (and exercises the release).
   check((await admin.post('/api/devices/admin%2Flaptop/release')).status === 200, 'a device can be released for another computer')
-  const plain = run(CLIENT,['--config', path.join(tmp, 'x', 'config.toml'), 'enroll', '--no-service', '--server', 'http://203.0.113.5:7443'], { ok: false, input: 'x\n' })
+  const plain = run(CLIENT,['--config', path.join(tmp, 'x', 'config.toml'), 'install', '--in-place', '--no-start', '--no-path', '--server', 'http://203.0.113.5:7443'], { ok: false, input: 'x\n' })
   check(plain.stdout.includes('plain http on a public address'), 'plain http to a public address is warned about')
 
   // --- a client that cannot start says why, where the tray looks ----------------------------------------------

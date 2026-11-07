@@ -41,7 +41,9 @@ const h = await harness('fafnirx-e2e-io-', {
 })
 const { tmp, data, schema, master } = h
 
-const status = async (table, name) => (await schema.rows(`SELECT last_status, last_message, last_run_at FROM ${table} WHERE name = $1`, [name]))[0]
+// `table` is what the script calls them: sources are the inbound links, mirrors the outbound ones.
+const status = async (table, name) =>
+  (await schema.rows("SELECT last_status, last_message, last_run_at FROM links WHERE direction = $2 AND name = $1", [name, table === 'sources' ? 'in' : 'out']))[0]
 const finished = async (table, name) => {
   const s = await status(table, name)
   return s && s[0] !== 'running' && s[0] !== null ? s : null
@@ -149,7 +151,7 @@ try {
     Object.entries(files).filter(([k]) => k.startsWith('users/admin/laptop/')).every(([k, v]) => v.length === listing.files.find((f) => `users/admin/laptop/${f.path}` === k).size),
     'file list sizes match the mirrored files',
   )
-  check(Number((await schema.rows('SELECT last_files FROM mirrors'))[0][0]) === Object.keys(files).length, 'the mirrored file count is recorded')
+  check(Number((await schema.rows("SELECT last_files FROM links WHERE direction = 'out'"))[0][0]) === Object.keys(files).length, 'the mirrored file count is recorded')
 
   // --- a mirror of one folder holds only that folder, at the same place below files/ ---------------------------------------------
   const scopedDir = path.join(tmp, 'offsite-docs')

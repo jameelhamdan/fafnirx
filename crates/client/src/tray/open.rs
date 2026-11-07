@@ -1,6 +1,6 @@
 //! Things the tray starts: editors, file managers, the browser, the client itself.
 
-use super::text::clip;
+use super::text::one_line;
 use crate::config::Config;
 use crate::daemon::requests::{self, Request};
 use crate::{service, update};
@@ -30,29 +30,25 @@ fn spawn_quiet(cmd: &mut Command) {
     let _ = quiet(cmd).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
 }
 
-/// Opens a file in a text editor, or a folder in the file manager.
+/// Opens a file in a text editor (where the system names one), or a folder in the file manager.
 pub fn open_path(path: &Path, as_text: bool) {
-    if cfg!(windows) {
-        spawn_quiet(Command::new(if as_text { "notepad.exe" } else { "explorer.exe" }).arg(path));
+    let editor = if !as_text {
+        None
+    } else if cfg!(windows) {
+        Some("notepad.exe")
     } else if cfg!(target_os = "macos") {
-        let mut c = Command::new("open");
-        if as_text {
-            c.arg("-t");
-        }
-        spawn_quiet(c.arg(path));
+        Some("TextEdit")
     } else {
-        spawn_quiet(Command::new("xdg-open").arg(path));
-    }
+        None
+    };
+    let _ = match editor {
+        Some(editor) => open::with_detached(path, editor),
+        None => open::that_detached(path),
+    };
 }
 
 pub fn open_url(url: &str) {
-    if cfg!(windows) {
-        spawn_quiet(Command::new("cmd").args(["/C", "start", ""]).arg(url));
-    } else if cfg!(target_os = "macos") {
-        spawn_quiet(Command::new("open").arg(url));
-    } else {
-        spawn_quiet(Command::new("xdg-open").arg(url));
-    }
+    let _ = open::that_detached(url);
 }
 
 /// Starts afnirx <subcommand> (of the program file as it is now) in the background; on Windows it detaches itself from the console.
@@ -74,14 +70,10 @@ pub fn start_client(config_path: &Path) {
     }
 }
 
-fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
-}
-
 /// Whether the job installed by `fafnirx install` exists for this label.
 fn launch_agent(label: &str) -> bool {
     let file = format!("{label}.plist");
-    cfg!(target_os = "macos") && (std::path::Path::new("/Library/LaunchAgents").join(&file).is_file() || home().join("Library/LaunchAgents").join(file).is_file())
+    cfg!(target_os = "macos") && (std::path::Path::new("/Library/LaunchAgents").join(&file).is_file() || crate::config::home().join("Library/LaunchAgents").join(file).is_file())
 }
 
 /// Starts a launchd job again on the program file as it is now (`kickstart -k` ends it first if it is running). This is how a
@@ -98,8 +90,7 @@ fn login_user_id() -> Option<String> {
     if let Ok(id) = std::env::var("SUDO_UID") {
         return Some(id);
     }
-    let out = Command::new("id").arg("-u").output().ok()?;
-    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    service::elevate::user_id()
 }
 
 /// Whether the trays that started at `started` have to start over: the marker of `restart` is newer.
@@ -183,7 +174,7 @@ impl Updates {
 
     fn say(&self, text: String) {
         if let Ok(mut r) = self.text.lock() {
-            *r = clip(&text);
+            *r = one_line(&text);
         }
     }
 

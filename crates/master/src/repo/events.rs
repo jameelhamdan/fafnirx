@@ -35,10 +35,19 @@ pub fn recent(c: &mut impl GenericClient, folder: Option<&str>, all: bool, user:
 }
 
 /// Appends to the change log shown in the web app.
-pub fn record(c: &mut impl GenericClient, device_id: i64, path: &str, action: &str, ts: i64, hash: Option<&str>, detail: Option<&str>) -> Result<(), Error> {
+pub fn record(c: &mut impl GenericClient, device_id: i64, e: &NewEvent) -> Result<(), Error> {
     use fafnirx_db::client::Params;
-    let params = q::InsertEventParams { device_id, path, action, ts, hash, detail };
+    let params = q::InsertEventParams { device_id, path: e.path, action: e.action, ts: e.ts, hash: e.hash, detail: e.detail };
     q::insert_event().params(c, &params).map(drop)
+}
+
+/// What is appended to the log of a device.
+pub struct NewEvent<'a> {
+    pub path: &'a str,
+    pub action: &'a str,
+    pub ts: i64,
+    pub hash: Option<&'a str>,
+    pub detail: Option<&'a str>,
 }
 
 /// The latest events of one path of a device.

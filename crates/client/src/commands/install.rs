@@ -107,7 +107,11 @@ pub async fn install(config_path: PathBuf, o: Install) -> Result<()> {
         if o.dry_run {
             println!("collect {}", folder.display());
         } else {
-            super::folder_add(config_path.clone(), vec![folder.clone()], "computer".into(), None, false, None).await?;
+            super::folder_add(
+                config_path.clone(),
+                super::FolderAdd { paths: vec![folder.clone()], target: "computer".into(), name: None, create: false, mode: None },
+            )
+            .await?;
         }
     }
     if o.no_start {
@@ -155,21 +159,7 @@ fn remove_program(program: &Path, dry: bool) -> Result<()> {
         return Ok(());
     }
     purge::stop_running(program);
-    #[cfg(windows)]
-    {
-        // A running program cannot delete its own file: a command line of its own does it after this process has ended.
-        use std::os::windows::process::CommandExt;
-        let dir = program.parent().map(|d| format!(" & rmdir \"{}\"", d.display())).unwrap_or_default();
-        let line = format!("ping -n 3 127.0.0.1 >nul & del /f /q \"{}\"{dir}", program.display());
-        Command::new("cmd")
-            .args(["/c", &line])
-            .creation_flags(0x0800_0000 | 0x0000_0008)
-            .spawn()
-            .context("remove the program")?;
-    }
-    #[cfg(not(windows))]
-    std::fs::remove_file(program).with_context(|| format!("remove {}", program.display()))?;
-    Ok(())
+    crate::service::remove_program(program)
 }
 
 /// `--purge`: the config, the token and the state of this client. Only what the client itself made is removed.
@@ -238,21 +228,14 @@ fn change_path(dir: &Path, add: bool, dry: bool) -> Result<()> {
         return Ok(());
     }
     const READ: &str = "[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue('Path','',[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)";
-    let out = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", READ])
-        .output()
-        .context("read the PATH")?;
+    let out = crate::service::powershell(READ).output().context("read the PATH")?;
     let old = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let Some(new) = (if add { path_with(&old, &dir) } else { path_without(&old, &dir) }) else { return Ok(()) };
     // Setting and then removing a variable is what tells the programs that are open that the environment changed.
     const WRITE: &str = "$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment',$true); \
         $k.SetValue('Path',$env:FAFNIRX_NEW_PATH,[Microsoft.Win32.RegistryValueKind]::ExpandString); \
         [Environment]::SetEnvironmentVariable('FAFNIRX_NOTIFY','1','User'); [Environment]::SetEnvironmentVariable('FAFNIRX_NOTIFY',$null,'User')";
-    let status = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", WRITE])
-        .env("FAFNIRX_NEW_PATH", new)
-        .status()
-        .context("write the PATH")?;
+    let status = crate::service::powershell(WRITE).env("FAFNIRX_NEW_PATH", new).status().context("write the PATH")?;
     if !status.success() {
         bail!("could not change the PATH: {status}");
     }
@@ -260,25 +243,5 @@ fn change_path(dir: &Path, add: bool, dry: bool) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_folder_is_added_to_the_path_once_and_removed_cleanly() {
-        let dir = r"C:\Users\me\AppData\Local\Programs\fafnirx";
-        assert_eq!(path_with(r"C:\Windows;C:\Tools", dir).as_deref(), Some(&*format!(r"C:\Windows;C:\Tools;{dir}")));
-        assert_eq!(path_with("", dir).as_deref(), Some(dir), "an empty PATH");
-        assert_eq!(
-            path_with(&format!("C:\\Windows;{}\\;", dir.to_uppercase()), dir),
-            None,
-            "there already, in another case and with a final backslash"
-        );
-        assert_eq!(path_without(&format!(r"C:\Windows;{dir};C:\Tools"), dir).as_deref(), Some(r"C:\Windows;C:\Tools"));
-        assert_eq!(path_without(r"C:\Windows", dir), None, "nothing to remove");
-        assert_eq!(
-            path_with(r"%USERPROFILE%\bin;C:\Windows", dir).as_deref(),
-            Some(&*format!(r"%USERPROFILE%\bin;C:\Windows;{dir}")),
-            "variables stay as they are"
-        );
-    }
-}
+#[path = "../../tests/unit/commands/install.rs"]
+mod tests;

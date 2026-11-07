@@ -92,7 +92,8 @@ SELECT kind FROM devices WHERE folder = :folder;
 SELECT id, kind FROM devices WHERE folder = :folder;
 
 --! folders_for_user (key?) : (last_collected?)
--- Every folder a user can use, whoever owns it: their own, those whose owner added them, and the master folders. `folder` is how
+-- Every folder a user can use, whoever owns it: their own, those whose owner added them, and the master folders (`visible`, the one
+-- rule for what a user sees). `folder` is how
 -- clients name it (`<owner>/<name>`, `master:<path>`). A read-only account never writes. `key` narrows it to one: the name of one's
 -- own, its full name or its stable id.
 SELECT d.id, d.public_id, d.name, d.folder, COALESCE(o.name, '') AS owner, COALESCE(d.user_id = :user_id, FALSE) AS mine,
@@ -103,8 +104,7 @@ FROM devices d
 JOIN users me ON me.id = :user_id AND me.disabled_at IS NULL
 LEFT JOIN users o ON o.id = d.user_id
 LEFT JOIN shared_members m ON m.folder_id = d.id AND m.user_id = :user_id
-WHERE d.kind IN ('local', 'master')
-  AND (d.kind = 'master' OR d.user_id = :user_id OR (m.user_id IS NOT NULL AND o.disabled_at IS NULL))
+WHERE d.kind IN ('local', 'master') AND visible(d, :user_id, false)
   AND (:key::text IS NULL OR (d.user_id = :user_id AND d.name = :key) OR d.folder = :key OR d.public_id::text = :key)
 ORDER BY d.folder;
 
@@ -112,18 +112,18 @@ ORDER BY d.folder;
 DELETE FROM device_folder_state WHERE device_id = :device_id;
 
 --! save_folder_state
-INSERT INTO device_folder_state (device_id, folder, files, bytes, last_cycle, last_error, held, failing, updated_at)
-VALUES (:device_id, :folder, :files, :bytes, :last_cycle, :last_error, :held, :failing, :now)
+INSERT INTO device_folder_state (device_id, folder, files, bytes, last_cycle, last_error, held, failing, mode, updated_at)
+VALUES (:device_id, :folder, :files, :bytes, :last_cycle, :last_error, :held, :failing, :mode, :now)
 ON CONFLICT (device_id, folder) DO UPDATE SET files = EXCLUDED.files, bytes = EXCLUDED.bytes, last_cycle = EXCLUDED.last_cycle,
-  last_error = EXCLUDED.last_error, held = EXCLUDED.held, failing = EXCLUDED.failing, updated_at = EXCLUDED.updated_at;
+  last_error = EXCLUDED.last_error, held = EXCLUDED.held, failing = EXCLUDED.failing, mode = EXCLUDED.mode, updated_at = EXCLUDED.updated_at;
 
 --! folder_states_of_device
-SELECT folder, files, bytes, last_cycle, last_error, held, failing, updated_at
+SELECT folder, files, bytes, last_cycle, last_error, held, failing, mode, updated_at
 FROM device_folder_state WHERE device_id = :device_id ORDER BY folder;
 
 --! folder_states_of_folder
 -- The computers that have a folder attached: all of them for the owner, otherwise those of `user`.
-SELECT d.folder AS computer, s.files, s.bytes, s.last_cycle, s.last_error, s.held, s.failing, s.updated_at
+SELECT d.folder AS computer, s.files, s.bytes, s.last_cycle, s.last_error, s.held, s.failing, s.mode, s.updated_at
 FROM device_folder_state s JOIN devices d ON d.id = s.device_id
 WHERE s.folder = :folder AND (:all::boolean OR d.user_id = :user::bigint)
 ORDER BY d.folder;

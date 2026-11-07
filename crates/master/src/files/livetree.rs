@@ -13,7 +13,8 @@ use crate::files::ingest::{self, Seen};
 use crate::platform::db::{self, Db, Device};
 use crate::platform::store::USERS_DIR;
 use crate::platform::store::{hash_file, Store, MASTER_PREFIX};
-use crate::repo::{alerts, devices, files, users};
+use crate::repo::devices::{self, DeviceKind};
+use crate::repo::{alerts, files, users};
 use anyhow::Result;
 use fafnirx_common::{clean_remote_path, mode_of, mtime_ns, unix_now, valid_device_name};
 use fafnirx_db::client::GenericClient;
@@ -230,7 +231,7 @@ fn device_for_folder(conn: &mut Client, store: &Store, folder: &str) -> Result<O
     // Only a local or shared folder is written to in place. What a device or a source sends is a copy of theirs and is not
     // changed from here: edits made inside such a folder are not recorded.
     if let Some((id, kind)) = devices::id_and_kind(conn, folder)? {
-        return Ok((kind == "local").then(|| Device { id, name: folder.to_string() }));
+        return Ok((kind == DeviceKind::Local).then(|| Device { id, name: folder.to_string() }));
     }
     let Some((user, name)) = folder.split_once('/') else { return Ok(None) };
     if !valid_device_name(name) || !store.live_dir(folder).is_dir() {
@@ -382,7 +383,13 @@ fn sync_subtree(conn: &mut Client, store: &Store, dev: &Device, rel: &str, settl
     let mut changed = 0;
     for (path, full) in &files {
         let renamed_from = if known.contains_key(path) { None } else { take_rename(&mut vanished, full) };
-        if check_file(conn, store, dev, path, full, Before { known: known.get(path).copied(), renamed_from }, settle)? {
+        if check_file(
+            conn,
+            store,
+            dev,
+            &Candidate { path, full, before: Before { known: known.get(path).copied(), renamed_from } },
+            settle,
+        )? {
             changed += 1;
         }
     }
@@ -421,7 +428,15 @@ fn take_rename(vanished: &mut Vec<(&str, (i64, i64))>, full: &Path) -> Option<St
 
 /// Records a file if it differs from `known` (size, mtime of its current version). Returns whether a
 /// version was added.
-fn check_file(conn: &mut Client, store: &Store, dev: &Device, path: &str, full: &Path, before: Before, settle: Duration) -> Result<bool> {
+/// A file of the live tree that is looked at: its path, where it is on disk and what was known of it.
+struct Candidate<'a> {
+    path: &'a str,
+    full: &'a Path,
+    before: Before,
+}
+
+fn check_file(conn: &mut Client, store: &Store, dev: &Device, file: &Candidate, settle: Duration) -> Result<bool> {
+    let Candidate { path, full, before } = file;
     let Ok(meta) = std::fs::metadata(full) else { return Ok(false) };
     let (size, mtime) = (meta.len(), mtime_ns(&meta));
     let age = meta.modified().ok().and_then(|t| SystemTime::now().duration_since(t).ok()).unwrap_or_default();
@@ -439,7 +454,8 @@ fn check_file(conn: &mut Client, store: &Store, dev: &Device, path: &str, full: 
         }
     };
     let seen = Seen { root, size: hashed, mtime, mode: mode_of(&meta) };
-    Ok(hashed == size && ingest::adopt_live(conn, store, dev, path, &seen, before.renamed_from.as_deref())?)
+    let found = ingest::Found { path, seen: &seen, renamed_from: before.renamed_from.as_deref() };
+    Ok(hashed == size && ingest::adopt_live(conn, store, dev, &found)?)
 }
 
 /// Every regular file under `dir` as (path with `/`, full path); `prefix` is the path of `dir` itself.
@@ -481,277 +497,5 @@ fn composed(path: &Path, name: String) -> (String, PathBuf) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::platform::db::testing;
-    use fafnirx_common::{chunk_hash, root_hash};
-    use std::fs;
-
-    fn put(store: &Store, path: &str, data: &[u8]) -> PathBuf {
-        let p = store.live_path("admin/d", path).unwrap();
-        fs::create_dir_all(p.parent().unwrap()).unwrap();
-        fs::write(&p, data).unwrap();
-        p
-    }
-
-    fn live(c: &mut Client) -> Vec<(String, Vec<u8>)> {
-        c.query(
-            "SELECT f.path, v.root_hash FROM files f JOIN versions v ON v.id = f.current_version_id
-             WHERE f.deleted_at IS NULL ORDER BY f.path",
-            &[],
-        )
-        .unwrap()
-        .iter()
-        .map(|r| (r.get(0), r.get(1)))
-        .collect()
-    }
-
-    #[test]
-    fn files_added_changed_and_removed_directly_are_tracked() {
-        let db = testing::db_with_device();
-        let mut c = db.get().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path()).unwrap();
-        let (dev, none) = (testing::device(), Duration::ZERO);
-        let root = |d: &[u8]| root_hash(&[chunk_hash(d)], d.len() as u64).to_vec();
-
-        let p = put(&store, "docs/a.txt", b"one");
-        assert_eq!(
-            sync_subtree(&mut c, &store, &dev, "", Duration::from_secs(3600)).unwrap(),
-            (0, 0),
-            "still being written"
-        );
-        assert_eq!(sync_subtree(&mut c, &store, &dev, "", none).unwrap(), (1, 0));
-        assert_eq!(live(&mut c), [("docs/a.txt".to_string(), root(b"one"))]);
-        assert_eq!(sync_subtree(&mut c, &store, &dev, "", none).unwrap(), (0, 0), "nothing changed");
-
-        fs::write(&p, b"two!").unwrap();
-        assert_eq!(sync_subtree(&mut c, &store, &dev, "", none).unwrap(), (1, 0));
-        assert_eq!(live(&mut c), [("docs/a.txt".to_string(), root(b"two!"))]);
-        let versions: i64 = c.query_one("SELECT COUNT(*) FROM versions", &[]).unwrap().get(0);
-        assert_eq!(versions, 2);
-
-        fs::remove_file(&p).unwrap();
-        assert_eq!(sync_subtree(&mut c, &store, &dev, "", none).unwrap(), (0, 1));
-        assert!(live(&mut c).is_empty());
-        let actions: Vec<String> = c.query("SELECT action FROM events ORDER BY id", &[]).unwrap().iter().map(|r| r.get(0)).collect();
-        assert_eq!(actions, ["add", "update", "delete"]);
-    }
-
-    #[test]
-    fn a_file_moved_in_a_local_folder_is_a_rename() {
-        let db = testing::db_with_device();
-        let mut c = db.get().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path()).unwrap();
-        let (dev, none) = (testing::device(), Duration::ZERO);
-        put(&store, "Show/a.txt", b"episode one");
-        assert_eq!(sync_subtree(&mut c, &store, &dev, "", none).unwrap(), (1, 0));
-
-        let from = store.live_path("admin/d", "Show/a.txt").unwrap();
-        let to = store.live_path("admin/d", "Show 2/a.txt").unwrap();
-        fs::create_dir_all(to.parent().unwrap()).unwrap();
-        fs::rename(from, to).unwrap();
-        assert_eq!(sync_subtree(&mut c, &store, &dev, "", none).unwrap(), (1, 0), "moved, not deleted");
-
-        let events: Vec<(String, Option<String>)> = c
-            .query("SELECT action, detail FROM events ORDER BY id", &[])
-            .unwrap()
-            .iter()
-            .map(|r| (r.get(0), r.get(1)))
-            .collect();
-        assert_eq!(events[1], ("rename".to_string(), Some("Show/a.txt".to_string())));
-        assert_eq!(events.len(), 2, "no delete");
-    }
-
-    #[test]
-    fn only_local_folders_are_written_to_in_place() {
-        let db = testing::db_with_device();
-        let mut c = db.get().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path()).unwrap();
-        put(&store, "a.txt", b"x");
-        assert!(
-            device_for_folder(&mut c, &store, "admin/d").unwrap().is_none(),
-            "the folder of a device is not changed from here"
-        );
-        c.execute("UPDATE devices SET kind = 'local' WHERE name = 'd'", &[]).unwrap();
-        assert!(device_for_folder(&mut c, &store, "admin/d").unwrap().is_some());
-    }
-
-    #[test]
-    fn decomposed_names_are_renamed_to_their_composed_form() {
-        let db = testing::db_with_device();
-        let mut c = db.get().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path()).unwrap();
-        put(&store, "café/menu.txt", b"x");
-        assert_eq!(sync_subtree(&mut c, &store, &testing::device(), "", Duration::ZERO).unwrap(), (1, 0));
-        let paths: Vec<String> = live(&mut c).into_iter().map(|(p, _)| p).collect();
-        assert_eq!(paths, ["café/menu.txt"]);
-        assert!(store.live_path("admin/d", "café/menu.txt").unwrap().is_file());
-    }
-
-    #[test]
-    fn an_event_for_one_path_only_looks_at_that_path() {
-        let db = testing::db_with_device();
-        let mut c = db.get().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path()).unwrap();
-        let (dev, none) = (testing::device(), Duration::ZERO);
-        put(&store, "a/x", b"1");
-        put(&store, "a/y", b"2");
-        put(&store, "b/z", b"3");
-        assert_eq!(sync_subtree(&mut c, &store, &dev, "a/x", none).unwrap(), (1, 0), "one file");
-        assert_eq!(sync_subtree(&mut c, &store, &dev, "a", none).unwrap(), (1, 0), "x is known, y is new");
-        assert_eq!(live(&mut c).len(), 2, "b/z was not looked at");
-
-        fs::remove_dir_all(store.live_path("admin/d", "a").unwrap()).unwrap();
-        assert_eq!(sync_subtree(&mut c, &store, &dev, "a", none).unwrap(), (0, 2), "a removed folder removes its files");
-        assert_eq!(sync_subtree(&mut c, &store, &dev, "", none).unwrap(), (1, 0));
-        assert_eq!(live(&mut c).len(), 1);
-    }
-
-    #[test]
-    fn events_are_mapped_to_a_path_of_the_live_tree() {
-        let root = Path::new("data").join("files");
-        assert_eq!(locate(&root, &root.join("bob").join("pc").join("a.txt")), Some("bob/pc/a.txt".into()));
-        assert_eq!(locate(&root, &root.join("scans")), Some("scans".into()));
-        assert_eq!(locate(&root, &root), None);
-        assert_eq!(locate(&root, Path::new("elsewhere/pc/a")), None);
-    }
-
-    #[test]
-    fn a_new_folder_in_a_users_folder_becomes_their_local_device_and_bad_names_are_ignored() {
-        let db = testing::db();
-        let mut c = db.get().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path()).unwrap();
-        fs::create_dir_all(store.live_dir("admin/camera")).unwrap();
-        fs::create_dir_all(store.live_dir("admin/Bad Name")).unwrap_or_default();
-        fs::create_dir_all(store.live_dir("nobody/camera")).unwrap();
-        let dev = device_for_folder(&mut c, &store, "admin/camera").unwrap().unwrap();
-        let row = c.query_one("SELECT kind, user_id FROM devices WHERE id = $1", &[&dev.id]).unwrap();
-        assert_eq!((row.get::<_, String>(0), row.get::<_, i64>(1)), ("local".into(), 1));
-        assert_eq!(
-            device_for_folder(&mut c, &store, "admin/camera").unwrap().unwrap().id,
-            dev.id,
-            "found again, not duplicated"
-        );
-        assert!(device_for_folder(&mut c, &store, "admin/Bad Name").unwrap().is_none());
-        assert!(device_for_folder(&mut c, &store, "admin/missing").unwrap().is_none());
-        assert!(device_for_folder(&mut c, &store, "nobody/camera").unwrap().is_none(), "there is no such user");
-        c.execute("UPDATE users SET role = 'readonly'", &[]).unwrap();
-        fs::create_dir_all(store.live_dir("admin/second")).unwrap();
-        assert!(
-            device_for_folder(&mut c, &store, "admin/second").unwrap().is_none(),
-            "a user who can only read has no devices"
-        );
-    }
-
-    #[test]
-    fn a_folder_of_the_master_files_is_a_master_folder() {
-        let db = testing::db();
-        let mut c = db.get().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path()).unwrap();
-        for (path, data) in [("loose.txt", &b"1"[..]), ("scans/2024/a.txt", b"2"), ("users/admin/laptop/b.txt", b"3")] {
-            let p = store.live_root().join(path);
-            fs::create_dir_all(p.parent().unwrap()).unwrap();
-            fs::write(p, data).unwrap();
-        }
-        // The folder of the user is not a master folder: its subfolder is a device of the user. A file in no folder is not recorded.
-        scan(&db, &store, Duration::ZERO).unwrap();
-        let paths: Vec<String> = live(&mut c).into_iter().map(|(p, _)| p).collect();
-        assert_eq!(paths, ["2024/a.txt", "b.txt"]);
-        let folders: Vec<String> = devices::master_devices(&mut *c).unwrap().into_iter().map(|(_, f)| f).collect();
-        assert_eq!(folders, ["master:scans"], "a top-level folder became one, `users` did not");
-
-        let (found, rel) = resolve(&mut c, &store, "scans/2024/a.txt").unwrap().unwrap();
-        assert_eq!((found.name.as_str(), rel.as_str()), ("master:scans", "2024/a.txt"));
-        assert!(
-            resolve(&mut c, &store, "users/admin").unwrap().is_none(),
-            "the folder of a user is not a master folder"
-        );
-        assert!(resolve(&mut c, &store, "loose.txt").unwrap().is_none(), "a file in no folder is not recorded");
-
-        // Not inside another master folder, nor around one.
-        fs::create_dir_all(store.live_root().join("scans/inner")).unwrap();
-        assert!(adopt_master_dir(&mut c, &store, "scans").unwrap().is_none());
-    }
-
-    #[test]
-    fn what_the_layout_leaves_out_is_reported_until_it_is_put_right() {
-        let db = testing::db();
-        let mut c = db.get().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path()).unwrap();
-        let live = store.live_root().to_path_buf();
-        let write = |path: &str| {
-            let p = live.join(path);
-            fs::create_dir_all(p.parent().unwrap()).unwrap();
-            fs::write(p, b"x").unwrap();
-        };
-        write("users/stray.txt");
-        write("users/ghost/a.txt"); // a folder that is not a user
-        write("users/admin/loose.txt"); // not in a device folder
-        write("users/admin/.DS_Store"); // hidden: not mentioned
-        write("users/admin/Bad Name/b.txt"); // a name no device can have
-        write("users/admin/camera/ok.txt"); // a device: fine
-        write("loose.txt"); // in no folder
-        scan(&db, &store, Duration::ZERO).unwrap();
-
-        let open = |c: &mut Client, kind: &str| -> Option<String> { alerts::open(c).unwrap().into_iter().find(|a| a.kind == kind).map(|a| a.message) };
-        let misplaced = open(&mut c, "misplaced_files").expect("an alert for the files outside device folders");
-        for named in ["loose.txt", "users/stray.txt", "users/ghost", "users/admin/loose.txt", "users/admin/Bad Name"] {
-            assert!(misplaced.contains(named), "{named} in: {misplaced}");
-        }
-        assert!(!misplaced.contains("camera") && !misplaced.contains("DS_Store"), "{misplaced}");
-
-        fs::remove_file(live.join("loose.txt")).unwrap();
-        fs::remove_file(live.join("users/stray.txt")).unwrap();
-        fs::remove_dir_all(live.join("users/ghost")).unwrap();
-        fs::remove_file(live.join("users/admin/loose.txt")).unwrap();
-        fs::remove_dir_all(live.join("users/admin/Bad Name")).unwrap();
-        scan(&db, &store, Duration::ZERO).unwrap();
-        assert_eq!(open(&mut c, "misplaced_files"), None);
-    }
-
-    #[test]
-    fn a_missing_device_folder_deletes_nothing() {
-        let db = testing::db_with_device();
-        let mut c = db.get().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path()).unwrap();
-        let dev = testing::device();
-        put(&store, "a", b"x");
-        sync_subtree(&mut c, &store, &dev, "", Duration::ZERO).unwrap();
-        fs::remove_dir_all(store.live_dir("admin/d")).unwrap();
-        assert_eq!(sync_subtree(&mut c, &store, &dev, "", Duration::ZERO).unwrap(), (0, 0));
-        assert_eq!(live(&mut c).len(), 1);
-    }
-
-    #[test]
-    fn files_committed_by_a_client_are_left_alone() {
-        let db = testing::db_with_device();
-        let mut c = db.get().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path()).unwrap();
-        let dev = testing::device();
-        let staged = store.temp_path();
-        fs::write(&staged, b"from a client").unwrap();
-        let v = ingest::NewVersion {
-            device: &dev,
-            path: "c.txt",
-            root: root_hash(&[chunk_hash(b"from a client")], 13),
-            size: 13,
-            mtime: 1_700_000_000_000_000_000,
-            mode: 0,
-            renamed_from: None,
-        };
-        ingest::commit_version(&mut c, &store, &staged, &v).unwrap();
-        assert_eq!(sync_subtree(&mut c, &store, &dev, "", Duration::ZERO).unwrap(), (0, 0));
-        let versions: i64 = c.query_one("SELECT COUNT(*) FROM versions", &[]).unwrap().get(0);
-        assert_eq!(versions, 1);
-    }
-}
+#[path = "../../tests/unit/files/livetree.rs"]
+mod tests;

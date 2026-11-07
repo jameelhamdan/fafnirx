@@ -1,7 +1,7 @@
 //! Doing something that needs an administrator (root) from a process that is not one. The system-wide client belongs to the
 //! computer, not to a user, so installing it, changing its config and replacing its program take more than a user has.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -59,8 +59,14 @@ pub fn is_admin() -> bool {
             .status()
             .is_ok_and(|s| s.success())
     } else {
-        Command::new("id").arg("-u").output().is_ok_and(|o| o.stdout.trim_ascii() == b"0")
+        user_id().as_deref() == Some("0")
     }
+}
+
+/// The id of the user of this process (Linux, macOS).
+pub fn user_id() -> Option<String> {
+    let out = Command::new("id").arg("-u").output().ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 fn facts() -> Facts {
@@ -117,14 +123,7 @@ fn by_hand(line: &[OsString]) -> String {
 pub fn run(program: &str, args: &[&str]) -> Result<()> {
     let args: Vec<OsString> = args.iter().map(OsString::from).collect();
     let (program, args) = as_root(OsStr::new(program), &args).map_err(|by_hand| anyhow::anyhow!("this needs root and nothing here can ask for it: run `{by_hand}`"))?;
-    let status = Command::new(&program)
-        .args(&args)
-        .status()
-        .with_context(|| format!("run {}", program.to_string_lossy()))?;
-    if !status.success() {
-        bail!("{} failed with {status}", program.to_string_lossy());
-    }
-    Ok(())
+    super::run_checked(&program, &args)
 }
 
 /// Quotes a word for a Windows command line.
@@ -146,11 +145,7 @@ pub fn rerun(args: &[OsString]) -> Result<i32> {
             "$p = Start-Process -FilePath '{}' -ArgumentList '{list}' -Verb RunAs -Wait -PassThru; exit $p.ExitCode",
             exe.display().to_string().replace('\'', "''")
         );
-        let status = Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .stdin(Stdio::null())
-            .status()
-            .context("ask for administrator rights")?;
+        let status = super::powershell(&script).stdin(Stdio::null()).status().context("ask for administrator rights")?;
         return Ok(status.code().unwrap_or(1));
     }
     let (program, line) = as_root(exe.as_os_str(), args).map_err(|by_hand| anyhow::anyhow!("this needs root and nothing here can ask for it: run `{by_hand}`"))?;
@@ -158,43 +153,5 @@ pub fn rerun(args: &[OsString]) -> Result<i32> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_package_is_installed_by_whoever_can_ask_for_permission_where_they_are() {
-        let f = |root, terminal, graphical, sudo, pkexec| choose(&Facts { root, terminal, graphical, sudo, pkexec });
-        assert_eq!(f(true, false, false, false, false), Way::Direct, "root needs nobody's permission");
-        assert_eq!(f(false, true, true, true, true), Way::Sudo, "at a terminal, the terminal asks");
-        assert_eq!(f(false, false, true, true, true), Way::Pkexec, "from the tray, a window asks");
-        assert_eq!(f(false, true, false, false, true), Way::Manual, "a terminal without sudo, and no window: told");
-        assert_eq!(f(false, false, false, true, true), Way::Manual, "nothing can ask");
-        assert_eq!(f(false, false, true, true, false), Way::Manual, "no polkit");
-    }
-
-    #[test]
-    fn the_command_to_type_is_short_and_safe_for_the_shell() {
-        let line = |words: &[&str]| words.iter().map(OsString::from).collect::<Vec<_>>();
-        let default = crate::config::default_config_path();
-        let default = default.to_string_lossy();
-        assert_eq!(
-            by_hand(&line(&["/usr/local/bin/fafnirx", "--config", &default, "folder", "remove", "Documents"])),
-            "sudo fafnirx folder remove Documents",
-            "the program by its name, the usual config left out"
-        );
-        assert_eq!(
-            by_hand(&line(&["/usr/local/bin/fafnirx", "--config", "/Library/Application Support/x.toml", "folders"])),
-            "sudo fafnirx --config '/Library/Application Support/x.toml' folders",
-            "another config is kept, quoted"
-        );
-        assert_eq!(by_hand(&line(&["fafnirx", "folder", "add", "/a/it's"])), r"sudo fafnirx folder add '/a/it'\''s'");
-    }
-
-    #[test]
-    fn words_are_quoted_for_a_windows_command_line() {
-        assert_eq!(quote(OsStr::new("run")), "run");
-        assert_eq!(quote(OsStr::new(r"C:\Program Files\fafnirx")), r#""C:\Program Files\fafnirx""#);
-        assert_eq!(quote(OsStr::new(r#"a "b""#)), r#""a \"b\"""#);
-        assert_eq!(quote(OsStr::new("")), "\"\"");
-    }
-}
+#[path = "../../tests/unit/service/elevate.rs"]
+mod tests;

@@ -6,7 +6,7 @@ fn env_dir(var: &str) -> Option<PathBuf> {
     std::env::var_os(var).filter(|v| !v.is_empty()).map(PathBuf::from)
 }
 
-fn home() -> PathBuf {
+pub fn home() -> PathBuf {
     env_dir("HOME").or_else(|| env_dir("USERPROFILE")).unwrap_or_else(|| PathBuf::from("."))
 }
 

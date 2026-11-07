@@ -33,15 +33,27 @@ UPDATE links SET run_requested = 1 WHERE id = :id AND enabled = 1;
 --! toggle_link
 UPDATE links SET enabled = 1 - enabled WHERE id = :id;
 
---! claim_link
--- Takes the next run that is due: one that was asked for, or whose interval has passed (a switched off one only runs when asked
--- for), that is not running. It is running from now on.
-UPDATE links SET last_status = 'running', last_run_at = :now, run_requested = 0, last_message = ''
-WHERE id = (SELECT id FROM links
-            WHERE (run_requested = 1 OR (enabled = 1 AND (last_run_at IS NULL OR last_run_at + interval_secs <= :now)))
-              AND last_status IS DISTINCT FROM 'running'
-            ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)
-RETURNING id;
+--! schedule_link
+-- Queues the next run that is due as a job: one that was asked for, or whose interval has passed (a switched off one only runs when
+-- asked for), that is not running and has no run waiting. The job names the link; its old, finished run is forgotten.
+WITH due AS (
+    SELECT id FROM links
+    WHERE (run_requested = 1 OR (enabled = 1 AND (last_run_at IS NULL OR last_run_at + interval_secs <= :now)))
+      AND last_status IS DISTINCT FROM 'running'
+      AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.link_id = links.id AND j.status IN ('queued', 'running'))
+    ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED
+), reset AS (
+    UPDATE links SET run_requested = 0 FROM due WHERE links.id = due.id RETURNING links.id, links.direction
+), forgotten AS (
+    DELETE FROM jobs WHERE link_id IN (SELECT id FROM reset) AND status IN ('done', 'failed')
+)
+INSERT INTO jobs (kind, payload, link_id, created_at)
+SELECT CASE WHEN direction = 'in' THEN 'source' ELSE 'mirror' END, json_build_object('link', id)::text, id, :now FROM reset
+RETURNING link_id;
+
+--! start_link
+-- Its run began: it is running from now on.
+UPDATE links SET last_status = 'running', last_run_at = :now, last_message = '' WHERE id = :id;
 
 --! link_to_run : (folder_id?, folder?, owner?)
 -- A link that is due, with the folder it is about and the owner, which with the name tell it apart in logs, alerts and live events.

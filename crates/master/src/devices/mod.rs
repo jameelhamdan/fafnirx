@@ -3,6 +3,7 @@
 //! file and byte counts kept on each device row.
 
 pub mod api;
+pub mod call;
 pub mod folders;
 pub mod grpc;
 pub mod master_folders;

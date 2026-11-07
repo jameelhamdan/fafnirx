@@ -6,4 +6,5 @@ pub mod browse;
 pub mod ingest;
 pub mod livetree;
 pub mod transfer;
+pub mod upload;
 pub mod zip;

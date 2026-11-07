@@ -16,21 +16,19 @@ pub fn platform() -> String {
     format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
 }
 
-fn parse(v: &str) -> Vec<u64> {
-    v.trim().split('.').map(|p| p.parse().unwrap_or(0)).collect()
+/// A version as people write it: `1.2.3`, or with fewer parts (`1.2` is `1.2.0`).
+fn parse(v: &str) -> Option<semver::Version> {
+    let mut parts: Vec<&str> = v.trim().split('.').collect();
+    while parts.len() < 3 {
+        parts.push("0");
+    }
+    semver::Version::parse(&parts.join(".")).ok()
 }
 
 /// True if `remote` is a strictly higher version than `current` (so a replayed
-/// older release is never installed).
+/// older release is never installed). A version that cannot be read is never newer.
 pub fn newer(remote: &str, current: &str) -> bool {
-    let (a, b) = (parse(remote), parse(current));
-    for i in 0..a.len().max(b.len()) {
-        let (x, y) = (a.get(i).copied().unwrap_or(0), b.get(i).copied().unwrap_or(0));
-        if x != y {
-            return x > y;
-        }
-    }
-    false
+    matches!((parse(remote), parse(current)), (Some(a), Some(b)) if a > b)
 }
 
 /// The version an update would install, if one is available; nothing is downloaded.
@@ -147,15 +145,5 @@ fn install(tmp: &Path, version: &str) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn version_ordering() {
-        assert!(newer("0.2.0", "0.1.9"));
-        assert!(newer("1.0", "0.9.9"));
-        assert!(!newer("0.1.0", "0.1.0"));
-        assert!(!newer("0.1.0", "0.2.0")); // replayed older release
-        assert!(newer("0.1.1", "0.1"));
-    }
-}
+#[path = "../../tests/unit/update/mod.rs"]
+mod tests;

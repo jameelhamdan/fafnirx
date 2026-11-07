@@ -38,6 +38,15 @@ pub struct Pending {
     pub choice: Option<String>,
 }
 
+/// A file that could not be uploaded, as it was when it failed.
+#[derive(Clone, Copy)]
+pub struct Failure<'a> {
+    pub path: &'a str,
+    pub size: i64,
+    pub mtime_ns: i64,
+    pub error: &'a str,
+}
+
 #[derive(Debug, Clone)]
 pub struct Retry {
     pub fail_count: i64,
@@ -141,7 +150,7 @@ impl State {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, any(windows, target_os = "macos", feature = "tray")))]
     pub fn backdate_pending(&self, found_at: i64) -> Result<()> {
         self.conn.execute("UPDATE pending SET found_at = ?1", [found_at])?;
         Ok(())
@@ -337,7 +346,8 @@ impl State {
     }
 
     /// Records a failed attempt and returns the new failure count.
-    pub fn record_failure(&self, path: &str, size: i64, mtime_ns: i64, now: i64, error: &str) -> Result<i64> {
+    pub fn record_failure(&self, failure: &Failure, now: i64) -> Result<i64> {
+        let Failure { path, size, mtime_ns, error } = *failure;
         let count = self.retry(path)?.map(|r| r.fail_count).unwrap_or(0) + 1;
         let delay = BACKOFF_SECS[(count as usize - 1).min(BACKOFF_SECS.len() - 1)];
         self.conn.execute(
@@ -371,56 +381,5 @@ pub fn may_attempt(retry: &Option<Retry>, size: i64, mtime_ns: i64, now: i64) ->
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn backoff_then_skip_until_changed() {
-        let dir = tempfile::tempdir().unwrap();
-        let st = State::open(&dir.path().join("s.db")).unwrap();
-        assert!(may_attempt(&st.retry("a").unwrap(), 1, 1, 0));
-        assert_eq!(st.record_failure("a", 1, 1, 1000, "x").unwrap(), 1);
-        let r = st.retry("a").unwrap();
-        assert!(!may_attempt(&r, 1, 1, 1000 + 599));
-        assert!(may_attempt(&r, 1, 1, 1000 + 600));
-        st.record_failure("a", 1, 1, 2000, "x").unwrap();
-        assert_eq!(st.retry("a").unwrap().unwrap().next_retry, 2000 + 3600);
-        assert_eq!(st.record_failure("a", 1, 1, 3000, "x").unwrap(), 3);
-        let r = st.retry("a").unwrap();
-        assert!(!may_attempt(&r, 1, 1, i64::MAX / 2)); // skipped while unchanged
-        assert!(may_attempt(&r, 1, 2, 0)); // changed again
-        st.set_synced(&Synced { path: "a".into(), size: 1, mtime_ns: 2, root_hash: vec![0; 32] }).unwrap();
-        assert!(st.retry("a").unwrap().is_none());
-    }
-
-    #[test]
-    fn what_was_sent_only_counts_for_the_master_it_was_sent_to() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut st = State::open(&dir.path().join("s.db")).unwrap();
-        assert_eq!(st.adopt_master("one").unwrap(), 0, "a new record has nothing to clear");
-        assert!(!st.initial_sync_done());
-        st.mark_initial_sync_done().unwrap();
-        assert!(st.initial_sync_done());
-        st.set_synced(&Synced { path: "a".into(), size: 1, mtime_ns: 2, root_hash: vec![0; 32] }).unwrap();
-        st.record_failure("b", 1, 1, 1000, "x").unwrap();
-        assert_eq!(st.adopt_master("one").unwrap(), 0, "the same master: kept");
-        assert!(st.synced("a").unwrap().is_some());
-        assert_eq!(st.adopt_master("two").unwrap(), 1, "another master: everything is pending again");
-        assert!(!st.initial_sync_done(), "and the first sync is to be done again");
-        assert!(st.synced("a").unwrap().is_none() && st.retry("b").unwrap().is_none());
-        assert_eq!(st.adopt_master("two").unwrap(), 0);
-    }
-
-    #[test]
-    fn what_was_synced_only_counts_for_the_folder_it_was_synced_with() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut st = State::open(&dir.path().join("s.db")).unwrap();
-        assert_eq!(st.adopt_folder("/home/a/Family").unwrap(), 0);
-        st.set_synced(&Synced { path: "a".into(), size: 1, mtime_ns: 2, root_hash: vec![0; 32] }).unwrap();
-        st.set_meta("synced_cursor", "100").unwrap();
-        assert_eq!(st.adopt_folder("/home/a/Family").unwrap(), 0, "the same folder: kept");
-        assert!(st.synced("a").unwrap().is_some());
-        assert_eq!(st.adopt_folder("/home/a/Family2").unwrap(), 1, "another folder: nothing carries over");
-        assert!(st.synced("a").unwrap().is_none() && st.meta("synced_cursor").unwrap().is_none());
-    }
-}
+#[path = "../../tests/unit/sync/state.rs"]
+mod tests;

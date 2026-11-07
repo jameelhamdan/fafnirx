@@ -4,7 +4,7 @@ mod folder;
 mod install;
 mod status;
 
-pub use folder::{create_folder, folder_add, keep_held, list_available, resolve_waiting, set_mode, sync_folder};
+pub use folder::{change_mode, create_folder, folder_add, keep_held, list_available, resolve_waiting, set_mode, sync_folder, FolderAdd};
 pub use install::{install, uninstall, Install};
 pub use status::{release_deletes, status};
 
@@ -97,6 +97,12 @@ fn wake_client(config_path: &Path) {
     }
 }
 
+/// Collects the folder at `dir` into this computer's own namespace on the master (upload only) and returns it. The one place that
+/// does it: the command line and the service, which does it for a user's tray, both call this.
+pub fn collect_folder(config_path: &Path, dir: &Path, name: Option<&str>) -> Result<config::Folder> {
+    config::add_folder_to_file(config_path, NewFolder { dir, target: Target::Computer, name, id: None, mode: Mode::Up })
+}
+
 pub fn add_folders(config_path: &Path, paths: &[PathBuf], name: Option<&str>) -> Result<()> {
     if paths.len() > 1 && name.is_some() {
         bail!("--name only works with a single folder");
@@ -106,7 +112,7 @@ pub fn add_folders(config_path: &Path, paths: &[PathBuf], name: Option<&str>) ->
         if let Some(warning) = crate::service::disk_access::warning_for(config_path, path) {
             eprintln!("warning: {warning}");
         }
-        match config::add_folder_to_file(config_path, NewFolder { dir: path, target: Target::Computer, name, id: None, mode: Mode::Up }) {
+        match collect_folder(config_path, path, name) {
             Ok(f) => {
                 println!("collecting {} as \"{}\"", f.path.display(), f.name);
                 wake_client(config_path);

@@ -11,10 +11,10 @@ pub mod rclone_source;
 pub mod spec;
 pub mod syncsource;
 
-use crate::platform::db::{self, Db, Device};
+use crate::platform::db::{self, Db};
 use crate::platform::store::Store;
-use crate::repo::links::{self, Dir};
-use crate::repo::{alerts, mirrors};
+use crate::repo::alerts;
+use crate::repo::links::{self, Dir, Due, RunStatus, SourceKind};
 use anyhow::{anyhow, Result};
 use fafnirx_common::unix_now;
 use fafnirx_db::client::GenericClient;
@@ -26,36 +26,11 @@ use tokio::sync::Semaphore;
 /// Sources a module reads (see `fetch_source`) that run at the same time.
 const MODULE_RUNS: usize = 2;
 
-/// A source that is due. Its device is the folder it writes into, and `key` (`<owner>/<name>`) names it in logs, alerts and live events.
-pub struct SourceRow {
-    pub id: i64,
-    pub kind: String,
-    pub config: String,
-    pub device: Device,
-    pub key: String,
-}
-
-pub struct MirrorRow {
-    pub id: i64,
-    pub name: String,
-    /// `backup` (encrypted with the two passwords) or `replica` (the files as they are).
-    pub kind: String,
-    pub crypt_password: String,
-    pub crypt_salt: String,
-    pub remote_type: String,
-    pub options: String,
-    pub remote_path: String,
-    /// A remote of the rclone config file ("name:path"); when set, the type, options and path are not used.
-    pub remote: String,
-    /// The folder it holds (its id and name); none for everything.
-    pub folder_id: Option<i64>,
-    pub folder: String,
-    pub keep_runs: i64,
-}
-
+/// What one run of a source did (files collected).
 #[derive(Default, Debug)]
-pub struct Outcome {
+pub struct SourceRun {
     pub added: usize,
+    /// Changed, or moved on the source.
     pub updated: usize,
     pub deleted: usize,
     pub unchanged: usize,
@@ -65,15 +40,49 @@ pub struct Outcome {
     pub failed: Vec<String>,
 }
 
+/// What one run of a mirror did (files sent).
+#[derive(Default, Debug)]
+pub struct MirrorRun {
+    pub uploaded: usize,
+    /// Moved on the mirror.
+    pub moved: usize,
+    pub removed: usize,
+    /// Bytes uploaded.
+    pub bytes: u64,
+    /// Files the mirror holds after the run.
+    pub total_files: usize,
+    /// Problems that did not fail the run (old versions that could not be removed).
+    pub warnings: Vec<String>,
+    pub failed: Vec<String>,
+}
+
+/// What one run did; each kind says it in its own words.
+#[derive(Debug)]
+pub enum Outcome {
+    Source(SourceRun),
+    Mirror(MirrorRun),
+}
+
 impl Outcome {
     pub fn report(&self) -> JobReport {
-        let later = if self.deferred > 0 { format!(", {} left for the next run", self.deferred) } else { String::new() };
-        JobReport {
-            summary: format!(
-                "{} added, {} updated, {} deleted, {} unchanged, {} skipped{later}",
-                self.added, self.updated, self.deleted, self.unchanged, self.skipped
-            ),
-            problems: self.failed.clone(),
+        match self {
+            Outcome::Source(s) => {
+                let later = if s.deferred > 0 { format!(", {} left for the next run", s.deferred) } else { String::new() };
+                JobReport {
+                    summary: format!(
+                        "{} added, {} updated, {} deleted, {} unchanged, {} skipped{later}",
+                        s.added, s.updated, s.deleted, s.unchanged, s.skipped
+                    ),
+                    problems: s.failed.clone(),
+                }
+            }
+            Outcome::Mirror(r) => JobReport {
+                summary: format!(
+                    "{} uploaded ({} bytes), {} moved, {} removed, {} files on the mirror",
+                    r.uploaded, r.bytes, r.moved, r.removed, r.total_files
+                ),
+                problems: r.failed.iter().chain(&r.warnings).cloned().collect(),
+            },
         }
     }
 }
@@ -101,7 +110,7 @@ fn tick() -> Duration {
 pub async fn spawn(db: Db, store: Arc<Store>, data_dir: PathBuf) {
     // A restart interrupts whatever was running, and leaves the staging folders of its mirror runs behind.
     let _ = std::fs::remove_dir_all(data_dir.join("mirror-stage"));
-    let _ = db::with(&db, |c| Ok(links::fail_interrupted(c)?)).await;
+    let _ = db::with(&db, |c| Ok(links::fail_interrupted(c, unix_now())?)).await;
     // Storage reads one at a time, as they always did; what a module fetches may take hours, so it has slots of its own and
     // never holds up the rest. Mirrors upload one at a time.
     let rclone_slots = Arc::new(Semaphore::new(1));
@@ -110,21 +119,25 @@ pub async fn spawn(db: Db, store: Arc<Store>, data_dir: PathBuf) {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tick()).await;
-            while let Some(due) = blocking_claim(&db).await {
-                let (slots, id, dir, name) = match &due {
-                    Due::Source(s) => (if s.kind == "rclone" { &rclone_slots } else { &module_slots }, s.id, Dir::In, s.key.clone()),
-                    Due::Mirror(m) => (&mirror_slots, m.id, Dir::Out, m.name.clone()),
+            // What is due becomes a job in the queue (the jobs table is the one list of work); then the queued runs start.
+            while blocking(&db, schedule).await == Some(true) {}
+            while let Some((job, due)) = blocking(&db, claim).await.flatten() {
+                let slots = match (due.dir, due.source_kind()) {
+                    (Dir::Out, _) => &mirror_slots,
+                    (Dir::In, SourceKind::Rclone) => &rclone_slots,
+                    (Dir::In, SourceKind::Module(_)) => &module_slots,
                 };
+                let (id, dir, name) = (due.id, due.dir, due.key());
                 let (slots, d, s, dir_path) = (slots.clone(), db.clone(), store.clone(), data_dir.clone());
                 tokio::spawn(async move {
                     let _slot = slots.acquire_owned().await;
                     // On its own task, so that a panic fails this run instead of ending the scheduler.
                     let run = tokio::spawn({
                         let (d, s) = (d.clone(), s.clone());
-                        async move { run(&d, &s, &dir_path, due).await }
+                        async move { run(&d, &s, &dir_path, job, due).await }
                     });
                     if let Err(e) = run.await {
-                        finish_job(&d, id, dir, name, Err(anyhow!("the run panicked: {e}"))).await;
+                        record(&d, RunRef { job, id, dir, name }, Err(anyhow!("the run panicked: {e}"))).await;
                     }
                 });
             }
@@ -132,50 +145,31 @@ pub async fn spawn(db: Db, store: Arc<Store>, data_dir: PathBuf) {
     });
 }
 
-/// What is due: a source to collect or a mirror to bring up to date.
-enum Due {
-    Source(SourceRow),
-    Mirror(MirrorRow),
-}
-
-/// Claims the next due run on a blocking thread.
-async fn blocking_claim(db: &Db) -> Option<Due> {
+/// Runs `f` against the database on a blocking thread.
+async fn blocking<T: Send + 'static>(db: &Db, f: fn(&Db) -> T) -> Option<T> {
     let db = db.clone();
-    tokio::task::spawn_blocking(move || claim(&db)).await.ok().flatten()
+    tokio::task::spawn_blocking(move || f(&db)).await.ok()
 }
 
-fn claim(db: &Db) -> Option<Due> {
+/// Queues the next link that is due as a job. Whether there was one.
+fn schedule(db: &Db) -> bool {
+    let Ok(mut conn) = db.get() else { return false };
+    let c = &mut *conn;
+    let Some(id) = links::schedule(c, unix_now()).map_err(|e| tracing::error!("queue a run: {e}")).ok().flatten() else { return false };
+    if let Ok(Some(link)) = links::due(c, id) {
+        let _ = db::notify(c, db::Topic::Jobs, &notify_key(link.dir, &link.key()));
+    }
+    true
+}
+
+/// Takes the next queued run: its job, and the link it is of.
+fn claim(db: &Db) -> Option<(uuid::Uuid, Due)> {
     let mut conn = db.get().ok()?;
     let c = &mut *conn;
-    let id = links::claim(c, unix_now()).map_err(|e| tracing::error!("claim a run: {e}")).ok()??;
+    let (job, id) = links::claim_job(c, unix_now()).map_err(|e| tracing::error!("claim a run: {e}")).ok()??;
     let link = links::due(c, id).ok()??;
     let _ = db::notify(c, db::Topic::Jobs, &notify_key(link.dir, &link.key()));
-    Some(match link.dir {
-        Dir::In => Due::Source(SourceRow {
-            id,
-            key: link.key(),
-            kind: link.kind,
-            config: link.config,
-            device: Device { id: link.folder_id?, name: link.folder? },
-        }),
-        Dir::Out => {
-            let m: mirrors::Config = serde_json::from_str(&link.config).unwrap_or_default();
-            Due::Mirror(MirrorRow {
-                id,
-                name: link.name,
-                kind: link.kind,
-                crypt_password: m.crypt_password,
-                crypt_salt: m.crypt_salt,
-                remote_type: m.remote_type,
-                options: m.options,
-                remote_path: m.remote_path,
-                folder_id: link.folder_id,
-                folder: link.folder.unwrap_or_default(),
-                keep_runs: m.keep_runs,
-                remote: m.remote,
-            })
-        }
-    })
+    Some((job, link))
 }
 
 /// Who a live event about a link goes to: the owner of a source and the administrators for a mirror.
@@ -192,52 +186,64 @@ fn sentence(s: &str) -> String {
     c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
 }
 
-fn finish(conn: &mut impl GenericClient, id: i64, dir: Dir, name: &str, status: &str, message: &str) {
+/// How a run ended, for the link it was of and, if it ran as one, the job in the queue.
+struct Ended<'a> {
+    status: RunStatus,
+    message: &'a str,
+    job: Option<uuid::Uuid>,
+}
+
+fn finish(conn: &mut impl GenericClient, id: i64, dir: Dir, name: &str, ended: Ended) {
+    let Ended { status, message, job } = ended;
     let message = &sentence(message);
-    let ok_at = if status == "failed" { None } else { Some(unix_now()) };
-    let _ = links::finish(conn, id, status, message, ok_at);
-    let _ = db::notify(conn, db::Topic::Jobs, &notify_key(dir, name));
-    let _ = alerts::set(conn, dir.alert_kind(), name, (status != "ok").then_some(message));
-}
-
-async fn run(db: &Db, store: &Arc<Store>, data_dir: &std::path::Path, due: Due) {
-    match due {
-        Due::Source(src) => {
-            let (id, name) = (src.id, src.key.clone());
-            tracing::info!("source {name}: starting");
-            let result = match src.kind.as_str() {
-                "rclone" => crate::integrations::rclone_source::run(db.clone(), store.clone(), src).await.map(|o| o.report()),
-                kind if fetch_source::is_kind(kind) => fetch_source::run(db.clone(), store.clone(), src).await.map(|o| o.report()),
-                other => Err(anyhow!("unknown source kind {other:?}")),
-            };
-            finish_job(db, id, Dir::In, name, result).await;
-        }
-        Due::Mirror(m) => {
-            let (id, name) = (m.id, m.name.clone());
-            tracing::info!("mirror {name}: starting");
-            let result = crate::integrations::mirror::run(db.clone(), store.clone(), data_dir.to_path_buf(), m).await;
-            finish_job(db, id, Dir::Out, name, result.map(|o| o.report())).await;
-        }
+    let ok_at = if status == RunStatus::Failed { None } else { Some(unix_now()) };
+    let _ = links::finish(conn, id, status.as_str(), message, ok_at);
+    if let Some(job) = job {
+        let _ = links::finish_job(conn, job, status, message, unix_now());
     }
+    let _ = db::notify(conn, db::Topic::Jobs, &notify_key(dir, name));
+    let _ = alerts::set(conn, dir.alert_kind(), name, (status != RunStatus::Ok).then_some(message));
 }
 
-/// Logs how a job went and records it on its link.
-async fn finish_job(db: &Db, id: i64, dir: Dir, name: String, result: Result<JobReport>) {
+async fn run(db: &Db, store: &Arc<Store>, data_dir: &std::path::Path, job: uuid::Uuid, due: Due) {
+    let (id, dir, name, kind) = (due.id, due.dir, due.key(), due.source_kind());
+    tracing::info!("{} {name}: starting", dir.word());
+    let result = match (dir, kind) {
+        (Dir::Out, _) => mirror::run(db.clone(), store.clone(), data_dir.to_path_buf(), mirror::MirrorRow::new(due))
+            .await
+            .map(Outcome::Mirror),
+        (Dir::In, SourceKind::Rclone) => rclone_source::run(db.clone(), store.clone(), due).await.map(Outcome::Source),
+        (Dir::In, SourceKind::Module(_)) => fetch_source::run(db.clone(), store.clone(), due).await.map(Outcome::Source),
+    };
+    record(db, RunRef { job, id, dir, name }, result.map(|o| o.report())).await;
+}
+
+/// A run being recorded: its job in the queue, and the link (its id, direction and name) it was of.
+struct RunRef {
+    job: uuid::Uuid,
+    id: i64,
+    dir: Dir,
+    name: String,
+}
+
+/// Logs how a run went and records it on its link and in the queue.
+async fn record(db: &Db, of: RunRef, result: Result<JobReport>) {
     let db = db.clone();
-    let word = dir.word();
+    let word = of.dir.word();
     let done = tokio::task::spawn_blocking(move || {
         let Ok(mut conn) = db.get() else { return };
-        match result {
+        let RunRef { job, id, dir, name } = of;
+        let (status, message) = match result {
             Ok(r) => {
-                let status = if r.problems.is_empty() { "ok" } else { "partial" };
                 tracing::info!("{word} {name}: {}", r.summary);
-                finish(&mut *conn, id, dir, &name, status, &r.message());
+                (if r.problems.is_empty() { RunStatus::Ok } else { RunStatus::Partial }, r.message())
             }
             Err(e) => {
                 tracing::error!("{word} {name} failed: {e:#}");
-                finish(&mut *conn, id, dir, &name, "failed", &format!("{e:#}"));
+                (RunStatus::Failed, format!("{e:#}"))
             }
-        }
+        };
+        finish(&mut *conn, id, dir, &name, Ended { status, message: &message, job: Some(job) });
     })
     .await;
     if let Err(e) = done {
@@ -246,62 +252,5 @@ async fn finish_job(db: &Db, id: i64, dir: Dir, name: String, result: Result<Job
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::platform::db::testing;
-
-    fn db() -> Db {
-        let db = testing::db();
-        let mut c = db.get().unwrap();
-        c.execute(
-            "INSERT INTO devices (name, kind, token_hash, created_at, user_id) VALUES ('source-d', 'local', '!', 0, 1)",
-            &[],
-        )
-        .unwrap();
-        c.execute(
-            "INSERT INTO links (direction, name, kind, config, folder_id, user_id, created_at, interval_secs)
-             VALUES ('in', 'd', 'rclone', '{}', (SELECT id FROM devices WHERE name = 'source-d'), 1, 0, 3600)",
-            &[],
-        )
-        .unwrap();
-        drop(c);
-        db
-    }
-
-    #[test]
-    fn claims_never_run_then_waits_for_the_interval_or_a_request() {
-        let db = db();
-        let sql = |q: &str, p: &[&(dyn postgres::types::ToSql + Sync)]| db.get().unwrap().execute(q, p).unwrap();
-        let Some(Due::Source(first)) = claim(&db) else { panic!("never run: due immediately") };
-        assert_eq!(
-            (first.device.name.as_str(), first.key.as_str()),
-            ("admin/source-d", "admin/d"),
-            "writes in its folder, named by its owner"
-        );
-        assert!(claim(&db).is_none(), "now running");
-        sql("UPDATE links SET last_status = 'ok'", &[]);
-        assert!(claim(&db).is_none(), "ran just now, interval not over");
-        sql("UPDATE links SET run_requested = 1", &[]);
-        assert!(claim(&db).is_some(), "run now");
-        sql("UPDATE links SET last_status = 'ok', last_run_at = $1", &[&(unix_now() - 7200)]);
-        assert!(claim(&db).is_some(), "interval over");
-        sql("UPDATE links SET last_status = 'ok', last_run_at = $1, enabled = 0", &[&(unix_now() - 7200)]);
-        assert!(claim(&db).is_none(), "disabled sources only run on request");
-    }
-
-    #[test]
-    fn failures_open_an_alert_and_success_closes_it() {
-        let db = db();
-        let mut c = db.get().unwrap();
-        let c = &mut *c;
-        let id: i64 = c.query_one("SELECT id FROM links", &[]).unwrap().get(0);
-        finish(c, id, Dir::In, "d", "failed", "boom");
-        assert_eq!(testing::open_alerts(c), 1);
-        finish(c, id, Dir::In, "d", "ok", "fine");
-        assert_eq!(testing::open_alerts(c), 0);
-        let row = c.query_one("SELECT last_status, last_ok_at FROM links", &[]).unwrap();
-        let (status, ok_at): (String, Option<i64>) = (row.get(0), row.get(1));
-        assert_eq!(status, "ok");
-        assert!(ok_at.is_some());
-    }
-}
+#[path = "../../tests/unit/integrations/mod.rs"]
+mod tests;

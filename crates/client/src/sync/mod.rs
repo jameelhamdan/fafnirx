@@ -170,21 +170,21 @@ impl Engine {
         std::mem::take(&mut *self.last_issue.locked())
     }
 
-    pub fn set_activity(&self, phase: &str, current: &str, done: usize, total: usize, bytes: u64) {
+    pub fn set_activity(&self, phase: &str, current: &str, done: usize, total: usize) {
         if let Ok(mut a) = self.activity.lock() {
-            *a = Activity { phase: phase.into(), current: current.into(), done, total, bytes, ..Default::default() };
+            *a = Activity { phase: phase.into(), current: current.into(), done, total, ..Default::default() };
         }
     }
 
-    fn set_uploading(&self, file: &Candidate, n: usize, total: usize, total_bytes: u64, base_bytes: u64) {
+    fn set_uploading(&self, file: &Candidate, n: usize, batch: &Batch) {
         if let Ok(mut a) = self.activity.lock() {
             *a = Activity {
                 phase: "uploading".into(),
                 current: file.entry.remote.clone(),
                 done: n,
-                total,
-                total_bytes,
-                base_bytes,
+                total: batch.total,
+                total_bytes: batch.total_bytes,
+                base_bytes: batch.base_bytes,
                 file_size: file.hashed.size,
                 file_start: self.sent.load(Ordering::Relaxed),
                 ..Default::default()
@@ -227,7 +227,7 @@ impl Engine {
         self.check_master().await?;
         self.limiter.set(cfg.bandwidth_limit_kbps);
         self.sent.store(0, Ordering::Relaxed);
-        self.set_activity("scanning", "", 0, 0, 0);
+        self.set_activity("scanning", "", 0, 0);
         let (entries, scanned, unreadable) = self.scan(cfg).await;
         let (changed, mut vanished) = self.detect_changes(&entries, &scanned, &unreadable)?;
         let roots = cfg.computer_folders().count();
@@ -316,7 +316,7 @@ impl Engine {
                 *vanished = gone.into_remaining();
                 return Err(e);
             }
-            self.set_activity("hashing", &entry.remote, n, total, 0);
+            self.set_activity("hashing", &entry.remote, n, total);
             let Some(hashed) = self.hash_one(&entry, report).await else { continue };
             let renamed_from = if is_new { gone.take(&(hashed.root.to_vec(), hashed.size)).map(|v| v.path) } else { None };
             candidates.push(Candidate { entry, hashed, renamed_from });
@@ -341,34 +341,31 @@ impl Engine {
     /// Hashes each changed file and uploads it before moving to the next one.
     async fn hash_and_upload(&mut self, changed: Vec<Changed>, report: &mut Report) -> Result<(), SyncError> {
         let total = changed.len();
-        let total_bytes: u64 = changed.iter().map(|(e, _)| e.size).sum();
-        let mut base_bytes = 0;
+        let mut batch = Batch { total, total_bytes: changed.iter().map(|(e, _)| e.size).sum(), base_bytes: 0 };
         for (n, (entry, _)) in changed.into_iter().enumerate() {
             self.check_paused()?;
-            self.set_activity("hashing", &entry.remote, n, total, 0);
+            self.set_activity("hashing", &entry.remote, n, total);
             let Some(hashed) = self.hash_one(&entry, report).await else { continue };
             let c = Candidate { entry, hashed, renamed_from: None };
-            self.upload_step(&c, n, total, total_bytes, &mut base_bytes, report).await?;
+            self.upload_step(&c, n, &mut batch, report).await?;
         }
         Ok(())
     }
 
     async fn upload_all(&mut self, candidates: Vec<Candidate>, report: &mut Report) -> Result<(), SyncError> {
-        let total = candidates.len();
-        let total_bytes: u64 = candidates.iter().map(|c| c.hashed.size).sum();
-        let mut base_bytes = 0;
+        let mut batch = Batch { total: candidates.len(), total_bytes: candidates.iter().map(|c| c.hashed.size).sum(), base_bytes: 0 };
         for (n, c) in candidates.into_iter().enumerate() {
             self.check_paused()?;
-            self.upload_step(&c, n, total, total_bytes, &mut base_bytes, report).await?;
+            self.upload_step(&c, n, &mut batch, report).await?;
         }
         Ok(())
     }
 
     /// Uploads one file and counts it. Only a problem with the master ends the cycle; a problem with the
     /// file is recorded and the next file goes on.
-    async fn upload_step(&mut self, c: &Candidate, n: usize, total: usize, total_bytes: u64, base_bytes: &mut u64, report: &mut Report) -> Result<(), SyncError> {
-        self.set_uploading(c, n, total, total_bytes, *base_bytes);
-        *base_bytes += c.hashed.size;
+    async fn upload_step(&mut self, c: &Candidate, n: usize, batch: &mut Batch, report: &mut Report) -> Result<(), SyncError> {
+        self.set_uploading(c, n, batch);
+        batch.base_bytes += c.hashed.size;
         match self.upload(c).await {
             Ok(bytes) => {
                 report.bytes += bytes;
@@ -396,15 +393,9 @@ impl Engine {
         let now = unix_now();
         let before = self.state.holds()?;
         let since: HashMap<String, i64> = before.iter().map(|(f, (_, since))| (f.clone(), *since)).collect();
-        let plan = guard::plan(
-            self.group,
-            vanished,
-            &self.state.synced_per_folder(self.group)?,
-            &since,
-            now,
-            (cfg.delete_hold_hours * 3600) as i64,
-            release,
-        );
+        let synced = self.state.synced_per_folder(self.group)?;
+        let context = guard::Context { synced: &synced, holds: &since, now, hold_secs: (cfg.delete_hold_hours * 3600) as i64, release };
+        let plan = guard::plan(self.group, vanished, &context);
         if plan.held != before {
             self.state.set_holds(&plan.held)?;
         }
@@ -428,7 +419,10 @@ impl Engine {
     }
 
     fn fail(&self, e: &Entry, msg: &str) {
-        match self.state.record_failure(&e.remote, e.size as i64, e.mtime_ns, unix_now(), msg) {
+        match self.state.record_failure(
+            &state::Failure { path: &e.remote, size: e.size as i64, mtime_ns: e.mtime_ns, error: msg },
+            unix_now(),
+        ) {
             Ok(count) if count as usize >= BACKOFF_SECS.len() => self.report_error(format!("{}: {msg} (giving up until the file changes)", e.remote)),
             Ok(_) => self.report_error(format!("{}: {msg} (will retry)", e.remote)),
             Err(x) => self.report_error(format!("{}: {msg}; also failed to record it: {x}", e.remote)),
@@ -486,8 +480,7 @@ impl Engine {
         for g in groups {
             set.spawn(send_group(
                 self.client.clone(),
-                self.limiter.clone(),
-                self.sent.clone(),
+                Pace { limiter: self.limiter.clone(), sent: self.sent.clone() },
                 local.to_path_buf(),
                 h.clone(),
                 g,
@@ -511,8 +504,22 @@ impl Engine {
     }
 }
 
+/// What the streams of one upload share: the bandwidth limit and the count of bytes sent.
+struct Pace {
+    limiter: Arc<Limiter>,
+    sent: Arc<AtomicU64>,
+}
+
+/// Where an upload stands in its cycle: the number of files, the bytes of all of them and of those already sent.
+struct Batch {
+    total: usize,
+    total_bytes: u64,
+    base_bytes: u64,
+}
+
 /// Streams the chunks at `indexes` to the master over one gRPC stream.
-async fn send_group(mut client: Client, limiter: Arc<Limiter>, sent: Arc<AtomicU64>, path: PathBuf, h: Hashed, indexes: Vec<u32>) -> Result<u64, SyncError> {
+async fn send_group(mut client: Client, pace: Pace, path: PathBuf, h: Hashed, indexes: Vec<u32>) -> Result<u64, SyncError> {
+    let Pace { limiter, sent } = pace;
     let (tx, rx) = mpsc::channel::<pb::Chunk>(2);
     let producer = tokio::spawn(async move {
         let io = |e: std::io::Error| SyncError::File(format!("read failed: {e}"));
@@ -544,4 +551,5 @@ async fn send_group(mut client: Client, limiter: Arc<Limiter>, sent: Arc<AtomicU
 }
 
 #[cfg(test)]
+#[path = "../../tests/unit/sync/mod.rs"]
 pub(crate) mod tests;

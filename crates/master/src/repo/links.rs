@@ -4,8 +4,10 @@
 
 use fafnirx_db::client::GenericClient;
 use fafnirx_db::client::Params;
+use fafnirx_db::queries::jobs as jq;
 use fafnirx_db::queries::links as q;
 use postgres::Error;
+use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dir {
@@ -44,6 +46,56 @@ impl Dir {
         match self {
             Dir::In => "source_failed",
             Dir::Out => "mirror_failed",
+        }
+    }
+}
+
+text_enum! {
+    /// How the last run of a link went. The column is text; `Running` is set by the scheduler when it claims the link.
+    pub enum RunStatus {
+        Running = "running",
+        Ok = "ok",
+        /// It finished, with problems on some files.
+        Partial = "partial",
+        Failed = "failed",
+    }
+}
+
+text_enum! {
+    /// What a mirror holds: the files as they are, or an encrypted copy.
+    #[derive(Default, serde::Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum MirrorKind {
+        #[default]
+        Replica = "replica",
+        Backup = "backup",
+    }
+}
+
+/// How a source fetches: a storage read through rclone, or a kind a module reads (the module lists `fetch.<kind>`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(from = "String")]
+pub enum SourceKind {
+    #[default]
+    Rclone,
+    Module(String),
+}
+
+impl From<String> for SourceKind {
+    fn from(s: String) -> Self {
+        if s == "rclone" {
+            SourceKind::Rclone
+        } else {
+            SourceKind::Module(s)
+        }
+    }
+}
+
+impl SourceKind {
+    pub fn as_str(&self) -> &str {
+        match self {
+            SourceKind::Rclone => "rclone",
+            SourceKind::Module(k) => k,
         }
     }
 }
@@ -92,9 +144,15 @@ pub struct Stored {
     pub running: bool,
 }
 
+impl Stored {
+    pub fn source_kind(&self) -> SourceKind {
+        SourceKind::from(self.kind.clone())
+    }
+}
+
 pub fn for_edit(c: &mut impl GenericClient, id: i64) -> Result<Option<Stored>, Error> {
     Ok(q::link_for_edit().bind(c, &id).opt()?.map(|l| Stored {
-        running: l.last_status.as_deref() == Some("running"),
+        running: l.last_status.as_deref().and_then(RunStatus::parse) == Some(RunStatus::Running),
         name: l.name,
         kind: l.kind,
         config: l.config,
@@ -135,12 +193,33 @@ pub fn toggle(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
 }
 
 /// Takes the next run that is due; it is running from now on.
-pub fn claim(c: &mut impl GenericClient, now: i64) -> Result<Option<i64>, Error> {
-    q::claim_link().bind(c, &now).opt()
+pub fn schedule(c: &mut impl GenericClient, now: i64) -> Result<Option<i64>, Error> {
+    q::schedule_link().bind(c, &now).opt()
+}
+
+/// Takes the next queued run (a job of kind `source` or `mirror`); its link is running from now on. Returns the job and the link.
+pub fn claim_job(c: &mut impl GenericClient, now: i64) -> Result<Option<(Uuid, i64)>, Error> {
+    let Some(job) = jq::claim_link_job().bind(c, &now).opt()? else { return Ok(None) };
+    let Some(link) = job.link_id else { return Ok(None) };
+    q::start_link().bind(c, &now, &link)?;
+    Ok(Some((job.id, link)))
+}
+
+/// A run ended: its job is done (with what it found) or failed (with why).
+pub fn finish_job(c: &mut impl GenericClient, job: Uuid, status: RunStatus, message: &str, now: i64) -> Result<(), Error> {
+    let failed = status == RunStatus::Failed;
+    let (state, error, note) = (
+        if failed { "failed" } else { "done" },
+        failed.then_some(message),
+        (!failed && !message.is_empty()).then_some(message),
+    );
+    jq::finish_link_job().bind(c, &state, &now, &error, &note, &job).map(drop)
 }
 
 /// A link that is due, or about to be removed.
+#[derive(Clone)]
 pub struct Due {
+    pub id: i64,
     pub dir: Dir,
     pub kind: String,
     pub name: String,
@@ -151,6 +230,16 @@ pub struct Due {
 }
 
 impl Due {
+    /// How a source fetches (the link is a source).
+    pub fn source_kind(&self) -> SourceKind {
+        SourceKind::from(self.kind.clone())
+    }
+
+    /// What a mirror holds (the link is a mirror).
+    pub fn mirror_kind(&self) -> MirrorKind {
+        MirrorKind::parse(&self.kind).unwrap_or_default()
+    }
+
     /// What names it in logs, alerts and live events: `<owner>/<name>` of a source, the name of a mirror.
     pub fn key(&self) -> String {
         match &self.owner {
@@ -162,6 +251,7 @@ impl Due {
 
 pub fn due(c: &mut impl GenericClient, id: i64) -> Result<Option<Due>, Error> {
     Ok(q::link_to_run().bind(c, &id).opt()?.map(|l| Due {
+        id,
         dir: Dir::parse(&l.direction),
         kind: l.kind,
         name: l.name,
@@ -183,8 +273,9 @@ pub fn set_totals(c: &mut impl GenericClient, id: i64, files: i64, bytes: i64) -
 }
 
 /// Marks the runs that were going on when the master stopped as failed.
-pub fn fail_interrupted(c: &mut impl GenericClient) -> Result<(), Error> {
-    q::fail_interrupted_links().bind(c).map(drop)
+pub fn fail_interrupted(c: &mut impl GenericClient, now: i64) -> Result<(), Error> {
+    q::fail_interrupted_links().bind(c).map(drop)?;
+    jq::fail_interrupted_link_jobs().bind(c, &now).map(drop)
 }
 
 /// A file a link has copied: the device and path it is at, the remote's id for it (a source's) and the version that was copied
@@ -215,10 +306,24 @@ pub fn remember(c: &mut impl GenericClient, id: i64, device_id: i64, path: &str,
 
 /// Remembers a file by the remote's id for it, which stays when it is renamed. Brings back a file that had been removed in the
 /// web app, since it changed at the source.
-pub fn remember_remote(c: &mut impl GenericClient, id: i64, device_id: i64, path: &str, remote_id: &str, version: &str) -> Result<(), Error> {
-    q::remember_remote_item()
-        .params(c, &q::RememberRemoteItemParams { link_id: id, device_id, path, remote_id, version })
-        .map(drop)
+pub fn remember_remote(c: &mut impl GenericClient, item: &RemoteItem) -> Result<(), Error> {
+    let params = q::RememberRemoteItemParams {
+        link_id: item.link_id,
+        device_id: item.device_id,
+        path: item.path,
+        remote_id: item.remote_id,
+        version: item.version,
+    };
+    q::remember_remote_item().params(c, &params).map(drop)
+}
+
+/// A file of a source by the remote's id for it: the link, the device and path it was stored at, and the remote's version of it.
+pub struct RemoteItem<'a> {
+    pub link_id: i64,
+    pub device_id: i64,
+    pub path: &'a str,
+    pub remote_id: &'a str,
+    pub version: &'a str,
 }
 
 pub fn forget(c: &mut impl GenericClient, id: i64, device_id: i64, path: &str) -> Result<(), Error> {

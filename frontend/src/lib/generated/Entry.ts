@@ -23,7 +23,7 @@ changed: number | null,
  */
 files: number | null, versions: number | null, deleted_at: number | null, purge_at: number | null, mime: string | null, preview: boolean, width: number | null, height: number | null, taken_at: number | null, 
 /**
- * For a device entry: master, device, local or source.
+ * For a device entry: master, device or local.
  */
 device_kind: 'device' | 'local' | 'master' | null, 
 /**

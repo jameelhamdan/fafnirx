@@ -73,7 +73,7 @@ checks its `.sha256` and runs `fafnirx install`, which asks for the token, or re
 `7443`. `--folder` can be repeated. `fafnirx install --dry-run` says what it would do and changes nothing.
 
 **What `fafnirx install` does**, in this order, and the same everywhere: copies the program to `/usr/local/bin/fafnirx` (Linux, macOS; owned
-by root, because the service runs as root) or `%LocalAppData%\Programs\fafnirx` (Windows; and adds it to your `PATH`, unless
+by root, because the service runs as root; `FAFNIRX_ALLOW_UNPROTECTED_EXE=1` lifts the check for a build on the machine it was made on) or `%LocalAppData%\Programs\fafnirx` (Windows; and adds it to your `PATH`, unless
 `--no-path`); enrolls this computer with the master; collects the folders; installs the service and the tray (below) and starts them;
 removes older copies of `fafnirx` that other installs left. Run again on an enrolled computer it brings it up to date. With
 `--in-place` it does not copy the program (a package or the setup put it there); with `--no-start` it installs no service. macOS

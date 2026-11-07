@@ -717,5 +717,6 @@
   "Your computers that have it": "この共有を持つあなたのコンピューター",
   "Your files exactly as they are. Browse them, share them or copy them back with any tool.": "ファイルをそのままの形で保存します。どのツールでも閲覧・共有・コピーで戻せます。",
   "Yours": "あなたの",
-  "Yours ({count})": "あなたの ({count})"
+  "Yours ({count})": "あなたの ({count})",
+  "Mode: {mode}": "モード: {mode}"
 }

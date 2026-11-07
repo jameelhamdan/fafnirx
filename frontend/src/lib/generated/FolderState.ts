@@ -8,4 +8,8 @@ export type FolderState = { name: string, files: number, bytes: number,
 /**
  * Unix seconds, 0 before the first cycle.
  */
-last_cycle: number, last_error: string, held: number, failing: number, updated_at: number, };
+last_cycle: number, last_error: string, held: number, failing: number, 
+/**
+ * How the computer settles a file changed on both sides: `up`, `both`, `keep` or `ask`; empty when an older client did not say.
+ */
+mode: string, updated_at: number, };

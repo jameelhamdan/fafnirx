@@ -61,9 +61,24 @@ pub fn of_folder(c: &mut impl GenericClient, user_id: i64, device_id: i64) -> Re
 }
 
 /// A new album showing the folder with this device id. Returns its id.
-pub fn insert(c: &mut impl GenericClient, user_id: i64, name: &str, description: &str, folder_device_id: i64, now: i64) -> Result<Uuid, Error> {
-    let params = q::InsertAlbumParams { name, description, now, user_id, folder_device_id };
+pub fn insert(c: &mut impl GenericClient, a: &NewAlbum) -> Result<Uuid, Error> {
+    let params = q::InsertAlbumParams {
+        name: a.name,
+        description: a.description,
+        now: a.now,
+        user_id: a.user_id,
+        folder_device_id: a.folder_device_id,
+    };
     q::insert_album().params(c, &params).one()
+}
+
+/// What a new album is made of: its owner, its words, the folder it shows and when it was made.
+pub struct NewAlbum<'a> {
+    pub user_id: i64,
+    pub name: &'a str,
+    pub description: &'a str,
+    pub folder_device_id: i64,
+    pub now: i64,
 }
 
 pub fn rename(c: &mut impl GenericClient, id: Uuid, name: &str) -> Result<(), Error> {

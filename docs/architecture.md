@@ -150,7 +150,7 @@ client stopped.
 |---|---|---|
 | Offline and disk alerts, expiry of upload-error and held-deletion alerts | master, every minute | |
 | Retention, version pruning, stale uploads, cache cleaning | master, hourly | Removes files with their records |
-| Sources, mirrors | master | Both are `links` (interval, enabled, last status), claimed with `FOR UPDATE SKIP LOCKED` by one loop. Mirrors and rclone sources run one at a time; sources a module reads, two at a time. A run fetches at most `max_per_run` files and asks for another while more wait |
+| Sources, mirrors | master | Both are `links` (interval, enabled, last status). A tick of one loop queues each link that is due as a job (`source` or `mirror`, in the same `jobs` table as `meta` and `thumb`) and then starts the queued runs, claimed with `FOR UPDATE SKIP LOCKED`. Mirrors and rclone sources run one at a time; sources a module reads, two at a time. A restart fails the runs it interrupted; the link queues again when it is due. A run fetches at most `max_per_run` files and asks for another while more wait |
 | Metadata (`meta`) | master, table `jobs` | 3 attempts; videos are probed by a module; a job can leave a note shown in Processing |
 | Thumbnails (`thumb`) | master | Queued by the first request for a picture, answered `202`, announced when done. Workers scale with cores; newest request first. Kept in `cache/thumbs/` |
 | Segments, subtitles | video module | On request; in memory |
@@ -206,7 +206,7 @@ the run/toggle/delete handlers and the run list are written once. A link points 
 patching of links.
 
 Other tables: `sessions`, `shared_members`, `device_folder_state` (what each computer says about its
-folders, replaced with every heartbeat), `device_activity`, `alerts`, `settings`, `links`, `link_items`, `schema_migrations`. The schema is `crates/master/migrations/` (`0001_schema.sql`, `0002_folders.sql`); the master applies migrations it
+folders, replaced with every heartbeat), `device_activity`, `alerts`, `settings`, `links`, `link_items`, `schema_migrations`. The schema is `crates/master/migrations/` (`0001_schema.sql` and later files); the master applies migrations it
 has not applied when it starts, once, under a lock, and refuses a database newer than itself. Events are kept 90 days.
 
 Device totals (files, bytes, deleted) are kept on the device row, marked stale by writes and recomputed when the device
@@ -215,7 +215,7 @@ finishes syncing, or within a minute for devices that do not report.
 ## Web API
 
 JSON under `/api` behind the login cookie (random token, hash stored, `SameSite=Strict`, `HttpOnly`); changing calls need
-`x-requested-with`. Every route and the role it needs is listed in `crates/master/src/web/mod.rs` and pinned by `web/tests/routes.rs`.
+`x-requested-with`. Every route and the role it needs is listed in `crates/master/src/web/mod.rs` and pinned by `crates/master/tests/unit/web/api/routes.rs`.
 Files, folders, library, albums, sources, mirrors, queue, settings and module routes each live with their app (see
 [Development](development.md#code-layout)).
 

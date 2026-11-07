@@ -2,11 +2,12 @@
 //! remove and fetch. A source only lists (`Item`s) and fetches one file; the rest is here.
 
 use crate::files::ingest::{self, NewVersion};
-use crate::integrations::Outcome;
+use crate::integrations::SourceRun;
 use crate::platform::db::{self, Db, Device};
-use crate::platform::store::Store;
-use crate::repo::{links, sources};
-use anyhow::Result;
+use crate::platform::store::{hash_file, Store};
+use crate::repo::links::{self, Due};
+use crate::repo::sources;
+use anyhow::{Context, Result};
 use fafnirx_common::HASH_LEN;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -31,11 +32,40 @@ impl Item {
     }
 }
 
+/// The folder a source writes into.
+pub fn device_of(link: &Due) -> Result<Device> {
+    Ok(Device {
+        id: link.folder_id.context("the source has no folder")?,
+        name: link.folder.clone().context("the folder of the source is gone")?,
+    })
+}
+
 /// A complete file in a temporary location.
 pub struct Download {
     pub path: PathBuf,
     pub root: [u8; HASH_LEN],
     pub size: u64,
+}
+
+/// Receives one file in a temporary place: `fetch` writes it there and says what it reports about it, `check` compares that and
+/// the size that was hashed. A file that did not arrive whole is removed.
+pub async fn receive<T, Fut>(store: &Store, fetch: impl FnOnce(PathBuf) -> Fut, check: impl FnOnce(T, u64) -> Result<()>) -> Result<Download>
+where
+    Fut: Future<Output = Result<T>>,
+{
+    let path = store.temp_path();
+    let received = async {
+        let reported = fetch(path.clone()).await?;
+        let target = path.clone();
+        let (root, size) = tokio::task::spawn_blocking(move || hash_file(&target)).await??;
+        check(reported, size)?;
+        Ok(Download { path: path.clone(), root, size })
+    }
+    .await;
+    if received.is_err() {
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+    received
 }
 
 /// What a run has to do, decided from the listing and what was imported before.
@@ -98,7 +128,15 @@ fn plan<'a>(items: &'a [Item], known: &Known, live: &HashSet<String>, removed: &
     plan
 }
 
-fn commit(conn: &mut postgres::Client, store: &Store, source_id: i64, device: &Device, item: &Item, content: Download) -> Result<()> {
+/// Where a source's files are stored: the master's store, the source and the device (folder) it writes into.
+struct Target<'a> {
+    store: &'a Store,
+    source_id: i64,
+    device: &'a Device,
+}
+
+fn commit(conn: &mut postgres::Client, to: &Target, item: &Item, content: Download) -> Result<()> {
+    let Target { store, source_id, device } = *to;
     let version = NewVersion {
         device,
         path: &item.path,
@@ -109,7 +147,16 @@ fn commit(conn: &mut postgres::Client, store: &Store, source_id: i64, device: &D
         renamed_from: None,
     };
     ingest::commit_version(conn, store, &content.path, &version)?;
-    links::remember_remote(conn, source_id, device.id, &item.path, item.id(), &item.marker)?;
+    links::remember_remote(
+        conn,
+        &links::RemoteItem {
+            link_id: source_id,
+            device_id: device.id,
+            path: &item.path,
+            remote_id: item.id(),
+            version: &item.marker,
+        },
+    )?;
     Ok(())
 }
 
@@ -123,7 +170,7 @@ pub struct Listing {
 #[derive(Clone, Copy)]
 pub struct Rules {
     /// At most this many files are fetched (each is committed as soon as it is there); the rest are counted in
-    /// `Outcome::deferred` for the caller to schedule.
+    /// `SourceRun::deferred` for the caller to schedule.
     pub limit: usize,
     /// Whether files missing from the listing are deleted. Off when the listing may be incomplete.
     pub removals: bool,
@@ -134,12 +181,21 @@ impl Rules {
     pub const ALL: Rules = Rules { limit: usize::MAX, removals: true };
 }
 
+/// A source being run: the database and store, the source and the device (folder) it writes into.
+pub struct Source {
+    pub db: Db,
+    pub store: Arc<Store>,
+    pub id: i64,
+    pub device: Device,
+}
+
 /// Applies a listing: `fetch` downloads one file of it to a temporary place.
-pub async fn apply<F, Fut>(db: Db, store: Arc<Store>, source_id: i64, device: Device, listing: Listing, rules: Rules, fetch: F) -> Result<Outcome>
+pub async fn apply<F, Fut>(src: Source, listing: Listing, rules: Rules, fetch: F) -> Result<SourceRun>
 where
     F: Fn(Item) -> Fut,
     Fut: Future<Output = Result<Download>>,
 {
+    let Source { db, store, id: source_id, device } = src;
     let device_id = device.id;
     let (known, live, removed): (Known, HashSet<String>, HashSet<String>) = db::with(&db, move |c| {
         let known = known_of(links::items(c, source_id)?.into_iter().map(|i| (i.remote_id, i.path, i.version)));
@@ -155,7 +211,7 @@ where
     if !rules.removals {
         plan.removals.clear();
     }
-    let mut out = Outcome { skipped, unchanged: plan.unchanged, ..Default::default() };
+    let mut out = SourceRun { skipped, unchanged: plan.unchanged, ..Default::default() };
     let mut failed = |what: &str, e: anyhow::Error| {
         tracing::warn!("source {}: {what}: {e:#}", device.name);
         out.failed.push(format!("{what}: {e:#}"));
@@ -183,7 +239,16 @@ where
         let (stored, store, device, from) = (item.clone(), store.clone(), device.clone(), from);
         let moved = db::with(&db, move |c| {
             ingest::move_path(c, &store, &device, &from, &stored.path)?;
-            links::remember_remote(c, source_id, device.id, &stored.path, stored.id(), &stored.marker)?;
+            links::remember_remote(
+                c,
+                &links::RemoteItem {
+                    link_id: source_id,
+                    device_id: device.id,
+                    path: &stored.path,
+                    remote_id: stored.id(),
+                    version: &stored.marker,
+                },
+            )?;
             Ok(())
         })
         .await;
@@ -203,7 +268,7 @@ where
             let content = fetch(item.clone()).await?;
             let (stored, store, device) = (item.clone(), store.clone(), device.clone());
             db::with(&db, move |c| {
-                commit(c, &store, source_id, &device, &stored, content)?;
+                commit(c, &Target { store: &store, source_id, device: &device }, &stored, content)?;
                 // Made again under another name (another format): the file it replaces goes.
                 if let Some(old) = leaves {
                     ingest::mark_deleted(c, &store, &device, &old, false)?;
@@ -223,83 +288,5 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn item(path: &str, marker: &str) -> Item {
-        Item { path: path.into(), key: None, marker: marker.into(), size: 0, mtime_ns: 0 }
-    }
-
-    fn keyed(key: &str, path: &str, marker: &str) -> Item {
-        Item { key: Some(key.into()), ..item(path, marker) }
-    }
-
-    /// What was imported, by path (a file without a key is remembered by its path).
-    fn known(rows: &[(&str, &str)]) -> Known {
-        known_of(rows.iter().map(|(path, marker)| (path.to_string(), path.to_string(), marker.to_string())))
-    }
-
-    fn live(paths: &[&str]) -> HashSet<String> {
-        paths.iter().map(|p| p.to_string()).collect()
-    }
-
-    #[test]
-    fn plan_classifies_every_kind_of_change() {
-        let items = [item("d/same.txt", "m1"), item("d/edited.txt", "m2"), item("d/new.txt", "m6")];
-        let known = known(&[("d/same.txt", "m1"), ("d/edited.txt", "old"), ("d/gone.txt", "m7")]);
-        let live = live(&["d/same.txt", "d/edited.txt", "d/gone.txt"]);
-        let p = plan(&items, &known, &live, &HashSet::new());
-
-        assert_eq!(p.unchanged, 1);
-        let fetch: Vec<_> = p.fetch.iter().map(|(i, update, _)| (i.path.as_str(), *update)).collect();
-        assert_eq!(fetch, [("d/edited.txt", true), ("d/new.txt", false)]);
-        assert_eq!(p.removals, [("d/gone.txt".to_string(), "d/gone.txt".to_string())]);
-    }
-
-    #[test]
-    fn a_file_with_a_key_is_the_same_file_under_another_name_or_format() {
-        let before = known_of([("id1".to_string(), "d/Old name.mp4".to_string(), "mp4".to_string())]);
-        let here = live(&["d/Old name.mp4"]);
-
-        // Only the name changed: moved, nothing fetched.
-        let renamed = [keyed("id1", "d/New name.mp4", "mp4")];
-        let p = plan(&renamed, &before, &here, &HashSet::new());
-        assert_eq!((p.fetch.len(), p.removals.len(), p.renames.len()), (0, 0, 1));
-        assert_eq!((p.renames[0].0.path.as_str(), p.renames[0].1.as_str()), ("d/New name.mp4", "d/Old name.mp4"));
-
-        // The format changed: made again at the new path, and the old one goes once that worked.
-        let other = [keyed("id1", "d/Old name.mkv", "mkv")];
-        let p = plan(&other, &before, &here, &HashSet::new());
-        assert_eq!((p.fetch.len(), p.removals.len(), p.renames.len()), (1, 0, 0));
-        assert_eq!(p.fetch[0].2.as_deref(), Some("d/Old name.mp4"));
-
-        // Deleted in the web app, then renamed at the source: it stays deleted.
-        let p = plan(&renamed, &before, &live(&[]), &live(&["d/Old name.mp4"]));
-        assert_eq!((p.unchanged, p.fetch.len(), p.renames.len()), (1, 0, 0));
-
-        // A key that is no longer listed is a file that left the source.
-        let p = plan(&[], &before, &here, &HashSet::new());
-        assert_eq!(p.removals, [("id1".to_string(), "d/Old name.mp4".to_string())]);
-    }
-
-    #[test]
-    fn plan_refetches_what_the_master_no_longer_has() {
-        // Same marker, but the file was purged (or never committed): download it again.
-        let items = [item("d/a.txt", "m1")];
-        let known = known(&[("d/a.txt", "m1")]);
-        let p = plan(&items, &known, &live(&[]), &live(&[]));
-        assert_eq!((p.unchanged, p.fetch.len()), (0, 1));
-    }
-
-    #[test]
-    fn plan_leaves_what_was_deleted_in_the_web_app_until_it_changes() {
-        let known = known(&[("d/a.txt", "m1")]);
-        let gone = live(&["d/a.txt"]);
-        let same = [item("d/a.txt", "m1")];
-        let p = plan(&same, &known, &live(&[]), &gone);
-        assert_eq!((p.unchanged, p.fetch.len()), (1, 0));
-        let edited = [item("d/a.txt", "m2")];
-        let p = plan(&edited, &known, &live(&[]), &gone);
-        assert_eq!(p.fetch.len(), 1, "changed on the remote: fetched again");
-    }
-}
+#[path = "../../tests/unit/integrations/syncsource.rs"]
+mod tests;

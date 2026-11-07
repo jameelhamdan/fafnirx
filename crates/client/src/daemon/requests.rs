@@ -5,16 +5,21 @@
 //! The control folder is writable by every user, so the service trusts nothing in a request but its owner (the user who made
 //! the file) and only changes folders that belong to that user.
 
+#[cfg(feature = "tray")]
 use super::status::{read_status, Status};
 use crate::commands;
-use crate::config::{self, control_dir, Config, Mode, NewFolder, Target};
+use crate::config::{self, control_dir, Config};
 use anyhow::{bail, Context, Result};
+#[cfg(feature = "tray")]
 use fafnirx_common::unix_now;
 use serde::{Deserialize, Serialize};
+#[cfg(any(feature = "tray", test))]
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
+#[cfg(feature = "tray")]
+use std::time::SystemTime;
 use tokio::sync::Notify;
 
 /// A request is a small file; anything larger is not one.
@@ -22,6 +27,7 @@ const MAX_REQUEST_BYTES: u64 = 64 << 10;
 /// Answers nobody collected are removed after this long (a user cannot remove the service's files from the synced folder).
 const ANSWER_KEEP: Duration = Duration::from_secs(300);
 /// How long the one who asks waits for the answer.
+#[cfg(feature = "tray")]
 const ANSWER_WAIT: Duration = Duration::from_secs(60);
 
 /// What the tray asks for; the same as the commands of the same name.
@@ -53,6 +59,7 @@ pub enum Request {
 
 impl Request {
     /// The command line that does the same.
+    #[cfg(any(feature = "tray", test))]
     pub fn args(&self) -> Vec<OsString> {
         match self {
             Self::AddFolder { paths } => ["folder".into(), "add".into()]
@@ -80,6 +87,7 @@ impl Request {
     }
 }
 
+#[cfg(any(feature = "tray", test))]
 fn request_file(control: &Path, id: &str) -> PathBuf {
     control.join(format!("request.{id}"))
 }
@@ -89,6 +97,7 @@ fn answer_file(control: &Path, id: &str) -> PathBuf {
 }
 
 /// The answer file starts with `ok` or `error`, then the text.
+#[cfg(any(feature = "tray", test))]
 fn parse_answer(text: &str) -> Result<String> {
     match text.split_once('\n') {
         Some(("ok", rest)) => Ok(rest.trim().to_string()),
@@ -98,6 +107,7 @@ fn parse_answer(text: &str) -> Result<String> {
 }
 
 /// Asks the service to make a change and waits for its answer. Blocks, as the command it replaces does.
+#[cfg(feature = "tray")]
 pub fn submit(state_dir: &Path, request: &Request) -> Result<String> {
     if !read_status(state_dir).is_some_and(|s: Status| unix_now() - s.updated < 30) {
         bail!("the client is not running: start it from the menu first");
@@ -157,7 +167,7 @@ async fn apply(config_path: &Path, request: Request, mine: &(dyn Fn(&Path) -> bo
         Request::AddFolder { paths } => {
             let (mut added, mut failed) = (0, Vec::new());
             for path in &paths {
-                match own_directory(path, mine).and_then(|p| config::add_folder_to_file(config_path, NewFolder { dir: &p, target: Target::Computer, name: None, id: None, mode: Mode::Up })) {
+                match own_directory(path, mine).and_then(|p| commands::collect_folder(config_path, &p, None)) {
                     Ok(_) => added += 1,
                     Err(e) => failed.push(format!("{}: {e:#}", path.display())),
                 }
@@ -169,11 +179,7 @@ async fn apply(config_path: &Path, request: Request, mine: &(dyn Fn(&Path) -> bo
         }
         Request::RemoveFolder { name } => {
             let cfg = Config::load(config_path)?;
-            let folder = cfg
-                .attached_folders()
-                .find(|f| config::names_synced(&f.name, &name))
-                .or_else(|| cfg.computer_folders().find(|f| f.name == name))
-                .with_context(|| format!("no folder named \"{name}\""))?;
+            let folder = cfg.folder_named(&name).with_context(|| format!("no folder named \"{name}\""))?;
             if !mine(&folder.path) {
                 bail!("\"{name}\" is not yours; ask an administrator to remove it with `sudo fafnirx folder remove`");
             }
@@ -190,9 +196,7 @@ async fn apply(config_path: &Path, request: Request, mine: &(dyn Fn(&Path) -> bo
             if !mine(&cfg.attached_named(&name)?.path) {
                 bail!("\"{name}\" is not yours; ask an administrator to change it with `sudo fafnirx folder mode`");
             }
-            // The question is shown by the tray, which is on a screen: no need to look for one here.
-            mode.check_available()?;
-            config::set_mode_in_file(config_path, &name, mode, None)?;
+            commands::change_mode(config_path, &name, mode, None)?;
             Ok(String::new())
         }
         Request::Resolve { name, keep, path } => {
@@ -296,100 +300,5 @@ pub fn spawn(config_path: PathBuf, state_dir: PathBuf, wake: Arc<Notify>) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn config_in(dir: &Path) -> PathBuf {
-        let path = dir.join("config.toml");
-        std::fs::write(&path, "server = \"http://master:7443\"\n").unwrap();
-        path
-    }
-
-    #[test]
-    fn a_user_changes_only_what_is_theirs() {
-        assert!(may_change(Some(501), Some(501)));
-        assert!(!may_change(Some(501), Some(502)), "another user's folder");
-        assert!(!may_change(Some(501), None), "a folder that is not there");
-        assert!(!may_change(None, None), "an owner that cannot be told is not trusted");
-        assert!(may_change(Some(0), Some(502)), "root may change anything");
-    }
-
-    #[test]
-    fn a_request_is_the_command_it_stands_for() {
-        let words = |r: Request| r.args().iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
-        let add = Request::AddFolder { paths: vec!["C:/a b".into(), "D:/c".into()] };
-        assert_eq!(words(add), ["folder", "add", "C:/a b", "D:/c"], "one command for all the folders");
-        assert_eq!(words(Request::RemoveFolder { name: "docs".into() }), ["folder", "remove", "docs"]);
-        let attach = Request::AttachSynced { name: "ana/family".into(), path: "/f".into(), create: true };
-        assert_eq!(words(attach), ["folder", "add", "/f", "--target", "ana/family", "--create"]);
-        let set = Request::SetMode { name: "family".into(), mode: crate::config::Mode::Keep };
-        assert_eq!(words(set), ["folder", "mode", "family", "keep"]);
-        let one = Request::Resolve { name: "family".into(), keep: "both".into(), path: Some("a b.txt".into()) };
-        assert_eq!(words(one), ["folder", "resolve", "family", "both", "--", "a b.txt"]);
-        let all = Request::Resolve { name: "family".into(), keep: "theirs".into(), path: None };
-        assert_eq!(words(all), ["folder", "resolve", "family", "theirs"]);
-    }
-
-    #[test]
-    fn a_request_survives_the_file() {
-        let request = Request::AttachSynced { name: "docs".into(), path: "/a b".into(), create: false };
-        let text = serde_json::to_string(&request).unwrap();
-        assert!(text.contains(r#""op":"attach-synced""#), "{text}");
-        assert_eq!(serde_json::from_str::<Request>(&text).unwrap(), request);
-        assert!(
-            serde_json::from_str::<Request>(r#"{"op":"enroll"}"#).is_err(),
-            "only folder changes can be asked for"
-        );
-    }
-
-    #[test]
-    fn answers_are_ok_or_an_error_with_the_text() {
-        assert_eq!(parse_answer("ok\n2 folders added\n").unwrap(), "2 folders added");
-        assert_eq!(parse_answer("error\nnot yours\n").unwrap_err().to_string(), "not yours");
-        assert!(parse_answer("").is_err());
-    }
-
-    #[tokio::test]
-    async fn folders_are_added_and_removed_for_their_owner_only() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = config_in(dir.path());
-        let (docs, other) = (dir.path().join("docs"), dir.path().join("other"));
-        std::fs::create_dir_all(&docs).unwrap();
-        std::fs::create_dir_all(&other).unwrap();
-        let only_docs = |p: &Path| p.ends_with("docs");
-
-        let add = |paths: Vec<PathBuf>| Request::AddFolder { paths };
-        apply(&config, add(vec![docs.clone()]), &only_docs).await.unwrap();
-        assert_eq!(Config::load(&config).unwrap().folders[0].name, "docs");
-
-        let e = apply(&config, add(vec![other.clone()]), &only_docs).await.unwrap_err();
-        assert!(format!("{e:#}").contains("is not yours"), "{e:#}");
-        assert_eq!(Config::load(&config).unwrap().folders.len(), 1, "the folder of another user is not collected");
-
-        let remove = Request::RemoveFolder { name: "docs".into() };
-        let e = apply(&config, remove, &|_| false).await.unwrap_err();
-        assert!(format!("{e:#}").contains("is not yours"), "{e:#}");
-        assert_eq!(Config::load(&config).unwrap().folders.len(), 1, "nor is it removed by someone else");
-
-        apply(&config, Request::RemoveFolder { name: "docs".into() }, &only_docs).await.unwrap();
-        assert!(Config::load(&config).unwrap().folders.is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_request_file_is_answered_and_taken_away() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = config_in(dir.path());
-        let control = dir.path().join("control");
-        std::fs::create_dir_all(&control).unwrap();
-
-        std::fs::write(request_file(&control, "1-2"), r#"{"op":"remove-folder","name":"nothing"}"#).unwrap();
-        assert!(!serve_one(&config, &control, "request.1-2").await, "no such folder");
-        assert!(!request_file(&control, "1-2").exists(), "taken, so it is not answered twice");
-        let text = std::fs::read_to_string(answer_file(&control, "1-2")).unwrap();
-        assert!(parse_answer(&text).unwrap_err().to_string().contains("no folder named"), "{text}");
-
-        std::fs::write(request_file(&control, "3-4"), "not json").unwrap();
-        assert!(!serve_one(&config, &control, "request.3-4").await);
-        assert!(std::fs::read_to_string(answer_file(&control, "3-4")).unwrap().starts_with("error\nnot a request"));
-    }
-}
+#[path = "../../tests/unit/daemon/requests.rs"]
+mod tests;

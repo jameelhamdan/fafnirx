@@ -24,29 +24,16 @@ pub struct Config {
     pub keep_runs: i64,
 }
 
-/// What restoring a backup mirror needs to know besides the storage's own credentials.
+/// What restoring a backup mirror needs to know besides the storage's own credentials: its kind and its settings.
 pub struct Key {
-    pub kind: String,
-    pub remote: String,
-    pub remote_type: String,
-    pub options: String,
-    pub remote_path: String,
-    pub crypt_password: String,
-    pub crypt_salt: String,
+    pub kind: super::links::MirrorKind,
+    pub config: Config,
 }
 
 pub fn key(c: &mut impl GenericClient, name: &str) -> Result<Option<Key>, Error> {
-    Ok(q::mirror_key().bind(c, &name).opt()?.map(|m| {
-        let config: Config = serde_json::from_str(&m.config).unwrap_or_default();
-        Key {
-            kind: m.kind,
-            remote: config.remote,
-            remote_type: config.remote_type,
-            options: config.options,
-            remote_path: config.remote_path,
-            crypt_password: config.crypt_password,
-            crypt_salt: config.crypt_salt,
-        }
+    Ok(q::mirror_key().bind(c, &name).opt()?.map(|m| Key {
+        kind: super::links::MirrorKind::parse(&m.kind).unwrap_or_default(),
+        config: serde_json::from_str(&m.config).unwrap_or_default(),
     }))
 }
 

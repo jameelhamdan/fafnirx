@@ -14,6 +14,7 @@ mod plugins;
 pub mod users;
 
 #[cfg(test)]
+#[path = "../../tests/unit/web/api/mod.rs"]
 mod tests;
 
 pub use events::listen;
@@ -45,7 +46,7 @@ pub struct AppState {
     /// The proxies whose word about a client's address is believed (`FAFNIRX_TRUSTED_PROXY`).
     pub trusted: crate::platform::proxy::Trusted,
     /// Upload sessions that are being filled.
-    pub uploads: Mutex<HashMap<String, crate::files::transfer::Upload>>,
+    pub uploads: Mutex<HashMap<String, crate::files::upload::Upload>>,
     /// At most this many files are streamed at once, so that transfers cannot starve everything else.
     pub streams: Arc<Semaphore>,
     /// The modules that are set up (see `modules`).
@@ -245,14 +246,14 @@ fn heavy() -> Router<Shared> {
         .route("/api/queue/cancel", post(monitoring::queue::cancel))
         .route("/api/queue/rebuild", post(monitoring::queue::rebuild))
         .route("/api/files/zip", post(files::transfer::zip))
-        .route("/api/uploads", post(files::transfer::start_upload))
+        .route("/api/uploads", post(files::upload::start_upload))
         .route(
             "/api/uploads/:id",
-            get(files::transfer::upload_status)
-                .put(files::transfer::upload_chunk)
-                .delete(files::transfer::abort_upload),
+            get(files::upload::upload_status)
+                .put(files::upload::upload_chunk)
+                .delete(files::upload::abort_upload),
         )
-        .route("/api/uploads/:id/finish", post(files::transfer::finish_upload))
+        .route("/api/uploads/:id/finish", post(files::upload::finish_upload))
         .layer(DefaultBodyLimit::disable())
 }
 

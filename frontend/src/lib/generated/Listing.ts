@@ -3,7 +3,7 @@ import type { Entry } from "./Entry";
 
 export type Listing = { device: string | null, 
 /**
- * What the device is (master, device, local or source) and whether the web app may change its files.
+ * What the device is (master, device or local) and whether the web app may change its files.
  */
 device_kind: 'device' | 'local' | 'master' | null, writable: boolean, path: string, entries: Array<Entry>, 
 /**

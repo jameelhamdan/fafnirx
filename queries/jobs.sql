@@ -1,4 +1,4 @@
--- The queue of background work: reading metadata and making pictures.
+-- The queue of background work: reading metadata, making pictures, and the runs of sources and mirrors.
 -- A job that worked stays as 'done' for a day (`purge_done_jobs`), so the queue can show what happened lately.
 --
 -- The queries that list jobs take the same numbers for who is looking as the library ones (see library.sql): a job names
@@ -19,14 +19,14 @@ SELECT CASE WHEN status IN ('queued', 'running') THEN status
 FROM jobs WHERE kind = :kind AND payload = :payload ORDER BY seq DESC LIMIT 1;
 
 --! requeue_running_jobs
--- A restart interrupts whatever was running: it runs again.
-UPDATE jobs SET status = 'queued' WHERE status = 'running';
+-- A restart interrupts whatever was running: it runs again. (A run of a source or a mirror fails instead, see `fail_interrupted_link_jobs`.)
+UPDATE jobs SET status = 'queued' WHERE status = 'running' AND kind IN ('meta', 'thumb');
 
 --! claim_job
 -- Picks one queued job that is due and marks it running. One statement, so a job is only claimed once.
 UPDATE jobs SET status = 'running', attempts = attempts + 1, started_at = :now
 WHERE id = (SELECT id FROM jobs
-            WHERE status = 'queued' AND run_after <= :now
+            WHERE kind IN ('meta', 'thumb') AND status = 'queued' AND run_after <= :now
             ORDER BY seq LIMIT 1 FOR UPDATE SKIP LOCKED)
 RETURNING id, kind, payload, attempts;
 
@@ -37,6 +37,23 @@ WHERE id = (SELECT id FROM jobs
             WHERE kind = 'thumb' AND status = 'queued' AND run_after <= :now
             ORDER BY seq DESC LIMIT 1 FOR UPDATE SKIP LOCKED)
 RETURNING id, kind, payload, attempts;
+
+--! claim_link_job : (link_id?)
+-- The next run of a source or a mirror that was queued, marked running.
+UPDATE jobs SET status = 'running', attempts = attempts + 1, started_at = :now
+WHERE id = (SELECT id FROM jobs
+            WHERE kind IN ('source', 'mirror') AND status = 'queued' AND run_after <= :now
+            ORDER BY seq LIMIT 1 FOR UPDATE SKIP LOCKED)
+RETURNING id, link_id;
+
+--! finish_link_job (error?, note?)
+-- A run ended: failed with why, or done with what it found. Nothing is tried again; the next run is the link's next one.
+UPDATE jobs SET status = :status, finished_at = :now, error = :error, note = :note WHERE id = :id;
+
+--! fail_interrupted_link_jobs
+-- A restart interrupts a run of a source or a mirror: it shows as failed until the link runs again.
+UPDATE jobs SET status = 'failed', error = 'interrupted by a restart', finished_at = :now
+WHERE kind IN ('source', 'mirror') AND status = 'running';
 
 --! complete_job (note?)
 UPDATE jobs SET status = 'done', finished_at = :now, error = NULL, note = :note WHERE id = :id;
@@ -50,18 +67,20 @@ DELETE FROM jobs WHERE status = 'done' AND finished_at < :before;
 
 --! queue_counts
 -- How many jobs there are of each kind in each state (the ones done since `since` count as done).
-SELECT j.kind, j.status, COUNT(*) AS n FROM jobs j
+SELECT j.kind, j.status, COUNT(*) AS n FROM jobs j LEFT JOIN links l ON l.id = j.link_id
 WHERE (j.status <> 'done' OR j.finished_at >= :since)
-  AND (:all::boolean OR (j.payload::jsonb ->> 'device') IN
+  AND (:all::boolean OR l.user_id = :scope_user::bigint OR (j.payload::jsonb ->> 'device') IN
        (SELECT d.folder FROM devices d WHERE visible(d, :scope_user::bigint, false)))
 GROUP BY j.kind, j.status;
 
---! queue_items : (started_at?, finished_at?, error?, note?)
--- What is running, failed and waiting, then what was done lately; at most `limit` jobs.
-SELECT j.id, j.kind, j.status, j.attempts, j.run_after, j.created_at, j.started_at, j.finished_at, j.error, j.note, j.payload
-FROM jobs j
+--! queue_items : (started_at?, finished_at?, error?, note?, link_name?, link_owner?, link_folder?, link_kind?)
+-- What is running, failed and waiting, then what was done lately; at most `limit` jobs. A run of a source or a mirror says which
+-- (`link_*`): a source is a user's own, a mirror is for the administrators.
+SELECT j.id, j.kind, j.status, j.attempts, j.run_after, j.created_at, j.started_at, j.finished_at, j.error, j.note, j.payload,
+       l.name AS link_name, u.name AS link_owner, d.folder AS link_folder, l.kind AS link_kind
+FROM jobs j LEFT JOIN links l ON l.id = j.link_id LEFT JOIN users u ON u.id = l.user_id LEFT JOIN devices d ON d.id = l.folder_id
 WHERE (j.status <> 'done' OR j.finished_at >= :since)
-  AND (:all::boolean OR (j.payload::jsonb ->> 'device') IN
+  AND (:all::boolean OR l.user_id = :scope_user::bigint OR (j.payload::jsonb ->> 'device') IN
        (SELECT d.folder FROM devices d WHERE visible(d, :scope_user::bigint, false)))
 ORDER BY CASE j.status WHEN 'running' THEN 0 WHEN 'failed' THEN 1 WHEN 'queued' THEN 2 ELSE 3 END,
          CASE WHEN j.status = 'done' THEN -j.finished_at ELSE j.seq END
@@ -73,8 +92,9 @@ UPDATE jobs SET status = 'queued', attempts = 0, run_after = 0, error = NULL
 WHERE status = 'failed' AND (:id::uuid IS NULL OR id = :id);
 
 --! drop_jobs (id?)
--- Jobs of one state (failed, or queued and not started) are forgotten: one, or all of them.
-DELETE FROM jobs WHERE status = :status AND (:id::uuid IS NULL OR id = :id);
+-- Jobs of one state (failed, or queued and not started) are forgotten: one, or all of them. A run of a source or a mirror that
+-- waits is not cancelled: its link would queue it again at once.
+DELETE FROM jobs WHERE status = :status AND (status <> 'queued' OR kind IN ('meta', 'thumb')) AND (:id::uuid IS NULL OR id = :id);
 
 --! media_to_read (after?)
 -- The live photos and videos to read again: those never read, videos read without details (before the video module was
@@ -93,10 +113,3 @@ SELECT j.kind, j.status FROM jobs j
 WHERE j.status IN ('queued', 'running', 'failed')
   AND j.payload::jsonb ->> 'device' = :device AND j.payload::jsonb ->> 'path' = :path;
 
---! link_runs : (last_status?, last_message?, last_run_at?, owner?, folder?)
--- The last run of each source and mirror, to show with the rest of the work: a user's own sources, or all; mirrors belong to the
--- administrators.
-SELECT l.id, l.direction, l.name, l.kind, u.name AS owner, d.folder, l.last_status, l.last_message, l.last_run_at
-FROM links l LEFT JOIN users u ON u.id = l.user_id LEFT JOIN devices d ON d.id = l.folder_id
-WHERE l.last_status IS NOT NULL AND (:all::boolean OR l.user_id = :user::bigint)
-ORDER BY l.last_run_at DESC NULLS LAST;

@@ -21,6 +21,7 @@ export function FolderStateList({ rows, folders = false }: { rows: FolderState[]
               {folders ? <Link to={folderLink(r.name)} className="font-medium hover:underline">{r.name}</Link> : <span className="font-medium">{r.name}</span>}
               {r.last_cycle === 0 ? <Badge variant="outline">{t('Not synced yet')}</Badge> : trouble ? <Badge variant="destructive">{t('Needs attention')}</Badge> : <Badge variant="secondary">{t('In step')}</Badge>}
               <span className="text-muted-foreground">{t('{files} files, {size}', { files: count(r.files), size: bytes(r.bytes) })}</span>
+              {r.mode !== '' && <span className="text-muted-foreground">{t('Mode: {mode}', { mode: r.mode })}</span>}
               {r.last_cycle > 0 && <span className="text-muted-foreground">{t('Synced {when}', { when: ago(r.last_cycle, now) })}</span>}
             </div>
             {note && <p className="text-xs text-muted-foreground">{note}</p>}

@@ -68,6 +68,7 @@ pub async fn send_heartbeat(client: &mut Client, cfg: &Config, errors: &Mutex<Ve
                 last_error: s.last_error.chars().take(300).collect(),
                 held: s.held as u32,
                 failing: s.failing as u32,
+                mode: s.mode.clone(),
             })
             .collect(),
     };
@@ -466,8 +467,13 @@ async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Res
 
         hub.status.edit(|s| s.syncing = true);
         let mut result = engine.cycle(&cfg).await;
-        sync_attached(&mut attached, &cfg, &token, &state_dir, &hub, &mut result).await;
-        engine.set_activity("idle", "", 0, 0, 0);
+        sync_attached(
+            &mut attached,
+            &Session { cfg: &cfg, token: &token, state_dir: &state_dir, daemon: &hub },
+            &mut result,
+        )
+        .await;
+        engine.set_activity("idle", "", 0, 0);
         let (mut synced_files, mut synced_bytes) = engine.state.totals().unwrap_or((0, 0));
         let mut failing = engine.state.pending_failures().unwrap_or(0);
         let synced_status: Vec<SyncedStatus> = attached.iter().map(|a| a.status()).collect();
@@ -501,9 +507,19 @@ async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Res
 /// How often a computer with synced folders asks the master what the others changed.
 const SYNCED_POLL: Duration = Duration::from_secs(60);
 
+/// What a sync cycle works with: the configuration, the device token, the state folder and the hub of the daemon.
+#[derive(Clone, Copy)]
+struct Session<'a> {
+    cfg: &'a Config,
+    token: &'a str,
+    state_dir: &'a Path,
+    daemon: &'a Hub,
+}
+
 /// Syncs the synced folders attached to this computer, both ways, after the device's own folders. A problem with one
 /// folder is shown and the next one goes on; a master that cannot be reached ends the cycle.
-async fn sync_attached(attached: &mut Vec<crate::synced::Attached>, cfg: &Config, token: &str, state_dir: &Path, daemon: &Hub, result: &mut Result<Report, SyncError>) {
+async fn sync_attached(attached: &mut Vec<crate::synced::Attached>, on: &Session<'_>, result: &mut Result<Report, SyncError>) {
+    let Session { cfg, token, state_dir, daemon } = *on;
     attached.retain(|a| cfg.attached_folders().any(|s| a.is(s)));
     if matches!(result, Err(SyncError::Offline(_) | SyncError::Paused)) {
         return;

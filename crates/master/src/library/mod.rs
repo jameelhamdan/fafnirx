@@ -7,3 +7,4 @@ pub mod artwork;
 pub mod embedded;
 pub mod meta;
 pub mod photos;
+mod xml;

@@ -1,6 +1,7 @@
 //! What a mirror or a source keeps its files in, and what a mirror is made of, with the checks on them (the API checks the name).
 
 use crate::integrations::api::hours_to_secs;
+use crate::repo::links::MirrorKind;
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -18,7 +19,7 @@ pub fn rclone_config() -> PathBuf {
 pub struct MirrorSpec {
     pub name: String,
     /// `replica`: the files as they are. `backup`: encrypted with the two passwords below.
-    pub kind: String,
+    pub kind: MirrorKind,
     pub crypt_password: String,
     pub crypt_salt: String,
     /// A remote of the rclone config file, as `name:path`. When set, the three fields below are not used.
@@ -90,13 +91,12 @@ const MIN_PASSWORD: usize = 12;
 
 impl MirrorSpec {
     pub fn normalize(&mut self) -> Result<()> {
-        self.kind = self.kind.trim().to_lowercase();
-        match self.kind.as_str() {
-            "replica" => {
+        match self.kind {
+            MirrorKind::Replica => {
                 self.crypt_password.clear();
                 self.crypt_salt.clear();
             }
-            "backup" => {
+            MirrorKind::Backup => {
                 for (what, v) in [("password", &self.crypt_password), ("salt", &self.crypt_salt)] {
                     if v.chars().count() < MIN_PASSWORD || v.contains(['\0', '\n', '\r']) {
                         bail!("the encryption {what} needs at least {MIN_PASSWORD} characters on one line");
@@ -106,7 +106,6 @@ impl MirrorSpec {
                     bail!("the encryption password and salt must differ");
                 }
             }
-            _ => bail!("kind must be replica or backup"),
         }
         normalize_storage(&mut self.remote, &mut self.remote_type, &mut self.remote_path, &mut self.options)?;
         self.folder = self.folder.trim().trim_matches('/').to_string();
@@ -119,71 +118,5 @@ impl MirrorSpec {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn spec() -> MirrorSpec {
-        MirrorSpec {
-            name: "m".into(),
-            kind: "replica".into(),
-            crypt_password: "ignored".into(),
-            crypt_salt: String::new(),
-            remote: String::new(),
-            remote_type: "S3".into(),
-            remote_path: " bucket/x ".into(),
-            options: [("Access-Key".to_string(), Value::from(1))].into(),
-            interval_hours: 72.0,
-            folder: " /ana/laptop/ ".into(),
-            keep_runs: 3,
-        }
-    }
-
-    #[test]
-    fn remotes_are_a_name_and_a_path() {
-        assert!(valid_remote("b2crypt:") && valid_remote("my remote:bucket/x"));
-        assert!(!valid_remote("no-colon") && !valid_remote("-x:y") && !valid_remote("a:b\nc"));
-    }
-
-    #[test]
-    fn a_backend_spelled_out_is_normalized() {
-        let mut m = spec();
-        m.normalize().unwrap();
-        assert_eq!((m.remote_type.as_str(), m.remote_path.as_str()), ("s3", "bucket/x"));
-        assert_eq!(m.options["access_key"], Value::from("1"));
-        assert_eq!(m.folder, "ana/laptop");
-        let mut bad = spec();
-        bad.keep_runs = 0;
-        assert!(bad.normalize().is_err());
-        let mut none = spec();
-        none.remote_type.clear();
-        assert!(none.normalize().is_err());
-    }
-
-    #[test]
-    fn a_backup_needs_a_key_and_a_replica_has_none() {
-        let mut replica = spec();
-        replica.normalize().unwrap();
-        assert!(replica.crypt_password.is_empty(), "a replica is not encrypted");
-        let mut backup = spec();
-        backup.kind = "Backup".into();
-        assert!(backup.normalize().is_err(), "no key");
-        backup.crypt_password = "short".into();
-        backup.crypt_salt = "another long salt".into();
-        assert!(backup.normalize().is_err(), "too short");
-        backup.crypt_password = "a long enough password".into();
-        backup.normalize().unwrap();
-        backup.crypt_salt = backup.crypt_password.clone();
-        assert!(backup.normalize().is_err(), "salt equals password");
-        let mut other = spec();
-        other.kind = "snapshot".into();
-        assert!(other.normalize().is_err());
-    }
-
-    #[test]
-    fn a_named_remote_replaces_the_backend() {
-        let mut m = spec();
-        m.remote = "vault:fafnirx".into();
-        m.normalize().unwrap();
-        assert!(m.remote_type.is_empty() && m.options.is_empty());
-    }
-}
+#[path = "../../tests/unit/integrations/spec.rs"]
+mod tests;

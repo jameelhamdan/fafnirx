@@ -6,8 +6,9 @@ use crate::files::ingest;
 use crate::library::meta;
 use crate::monitoring::api::Recent;
 use crate::platform::db::{self, Device};
+use crate::repo::devices::{self, DeviceKind};
 use crate::repo::listing::{self, Listed, Page, Sort};
-use crate::repo::{devices, events, files, settings};
+use crate::repo::{events, files, settings};
 use crate::web::access::Access;
 use crate::web::input;
 use crate::web::{act, run, ApiError, Done, Res, Shared};
@@ -76,9 +77,9 @@ pub struct Entry {
     width: Option<i64>,
     height: Option<i64>,
     taken_at: Option<i64>,
-    /// For a device entry: master, device, local or source.
+    /// For a device entry: master, device or local.
     #[cfg_attr(test, ts(type = "'device' | 'local' | 'master' | null"))]
-    device_kind: Option<String>,
+    device_kind: Option<DeviceKind>,
     /// For a photo or video: its details have not been read yet, so it is still being processed.
     processing: bool,
     /// For a device entry: whether the web app may add, change or delete files there.
@@ -89,9 +90,9 @@ pub struct Entry {
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Listing {
     device: Option<String>,
-    /// What the device is (master, device, local or source) and whether the web app may change its files.
+    /// What the device is (master, device or local) and whether the web app may change its files.
     #[cfg_attr(test, ts(type = "'device' | 'local' | 'master' | null"))]
-    device_kind: Option<String>,
+    device_kind: Option<DeviceKind>,
     writable: bool,
     path: String,
     entries: Vec<Entry>,
@@ -99,12 +100,6 @@ pub struct Listing {
     total: i64,
     searching: bool,
     retention_days: i64,
-}
-
-/// Whether the web app changes the files of a device of this kind: the master files, local folders and shared folders. What
-/// a device or a source sends is theirs to change; here it can be read, downloaded and brought back from the trash.
-pub fn editable_kind(kind: &str) -> bool {
-    matches!(kind, "local" | "master")
 }
 
 /// The device with this folder, if `who` may look at it: a device someone else owns does not exist for them.
@@ -182,7 +177,7 @@ fn top_level(c: &mut Client, who: &Access, path: String, retention_days: i64) ->
             kind: "device",
             // Named by its location (`user/name`), as it is when opened.
             name: d.folder.clone(),
-            writable: editable_kind(&d.kind) && who.can_write(&d.folder),
+            writable: d.kind.editable() && who.can_write(&d.folder),
             device_kind: Some(d.kind),
             device: d.folder,
             files: Some(d.files),
@@ -233,7 +228,7 @@ fn file_entry(f: Listed, strip: usize, device: &str, retention_days: i64) -> Ent
 fn inside_device(c: &mut Client, who: &Access, device_name: String, view: View, retention_days: i64) -> anyhow::Result<Listing> {
     let dev = find_device(c, who, &device_name)?;
     let kind = devices::kind_of(c, dev.id)?;
-    let writable = editable_kind(&kind) && who.can_write(&device_name);
+    let writable = kind.editable() && who.can_write(&device_name);
     // SQL counts characters, not bytes.
     let names_start = view.prefix.chars().count() as i32 + 1;
     let below = db::like_prefix(&view.prefix);
@@ -346,12 +341,21 @@ pub struct Info {
 
 /// Where the content of a version is on disk: the live file for the current version of a live file,
 /// otherwise the folder of the version.
-pub fn version_file(store: &crate::platform::store::Store, dev: &str, path: &str, version: i64, current: Option<i64>, deleted: bool) -> anyhow::Result<PathBuf> {
-    if Some(version) == current && !deleted {
-        store.live_path(dev, path)
+pub fn version_file(store: &crate::platform::store::Store, v: &VersionAt) -> anyhow::Result<PathBuf> {
+    if Some(v.version) == v.current && !v.deleted {
+        store.live_path(v.device, v.path)
     } else {
-        store.version_path(version, dev, path)
+        store.version_path(v.version, v.device, v.path)
     }
+}
+
+/// A version of a file, and whether it is the live one: the current version of a path that is not deleted.
+pub struct VersionAt<'a> {
+    pub device: &'a str,
+    pub path: &'a str,
+    pub version: i64,
+    pub current: Option<i64>,
+    pub deleted: bool,
 }
 
 pub async fn info(State(state): State<Shared>, Extension(who): Extension<Access>, Query(r): Query<FileRef>) -> Res<Info> {
@@ -368,7 +372,11 @@ pub async fn info(State(state): State<Shared>, Extension(who): Extension<Access>
         let versions = files::versions(c, file_id)?
             .into_iter()
             .map(|v| {
-                let available = version_file(&store, &dev.name, &path, v.id, current, deleted_at.is_some()).is_ok_and(|p| p.is_file());
+                let available = version_file(
+                    &store,
+                    &VersionAt { device: &dev.name, path: &path, version: v.id, current, deleted: deleted_at.is_some() },
+                )
+                .is_ok_and(|p| p.is_file());
                 VersionInfo {
                     id: v.id,
                     created_at: v.created_at,
@@ -484,10 +492,13 @@ pub async fn restore(State(state): State<Shared>, Extension(who): Extension<Acce
         }
         // What a device or a source sends is theirs to change: here it can be brought back from the trash, not edited.
         let kind = devices::kind_of(c, dev.id)?;
-        if !editable_kind(&kind) && deleted_at.is_none() {
+        if !kind.editable() && deleted_at.is_none() {
             return Err(ApiError::conflict("Files sent by a device cannot be changed here. Download the version instead.").into());
         }
-        let from = version_file(&store, &dev.name, &path, r.version, current, deleted_at.is_some())?;
+        let from = version_file(
+            &store,
+            &VersionAt { device: &dev.name, path: &path, version: r.version, current, deleted: deleted_at.is_some() },
+        )?;
         if !from.is_file() {
             return Err(ApiError::not_found("The content of that version is no longer stored").into());
         }
@@ -533,7 +544,7 @@ pub async fn move_files(State(state): State<Shared>, Extension(who): Extension<A
     let store = state.store.clone();
     let moved = run(&state, move |c| {
         let dev = find_device_to_change(c, &who, &b.device)?;
-        if !editable_kind(&devices::kind_of(c, dev.id)?) {
+        if !devices::kind_of(c, dev.id)?.editable() {
             return Err(ApiError::conflict("Files sent by a device or a source cannot be moved here").into());
         }
         move_tree(c, &store, &dev, &input::path_inside(&b.from)?, &input::path_inside(&b.to)?)

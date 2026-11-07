@@ -54,6 +54,8 @@ pub struct SyncedStatus {
     pub conflicts: Vec<ConflictInfo>,
     /// The folder can be read but not changed by this user: nothing is sent from here.
     pub read_only: bool,
+    /// How this computer settles a file changed on both sides (`up`, `both`, `keep` or `ask`).
+    pub mode: String,
 }
 
 /// A file that waits for a decision: what each side has.
@@ -228,14 +230,5 @@ pub fn update_result_file(state_dir: &Path) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_folder_that_can_only_be_read_says_so() {
-        let folder = SyncedStatus { last_cycle: 1_000, files: 3, read_only: true, ..Default::default() };
-        assert_eq!(folder.summary(1_030), "in step, read only, 3 files, synced 30s ago");
-        let own = SyncedStatus { read_only: false, ..folder };
-        assert_eq!(own.summary(1_030), "in step, 3 files, synced 30s ago");
-    }
-}
+#[path = "../../tests/unit/daemon/status.rs"]
+mod tests;

@@ -2,7 +2,8 @@
 
 use crate::monitoring::api::{recent, Recent};
 use crate::platform::db;
-use crate::repo::{alerts, devices, settings};
+use crate::repo::devices::{self, AddDevice, DeviceKind};
+use crate::repo::{alerts, settings};
 use crate::web::access::Access;
 use crate::web::input;
 use crate::web::{act, run, ApiError, Done, Res, Shared};
@@ -37,9 +38,9 @@ pub struct DeviceSummary {
     pub user: String,
     /// `<user>/<name>`: how the files API, the library and the live updates name the device.
     pub folder: String,
-    /// device (a client), local (uploaded or dropped into `files/<user>/`) or source (imported by the master).
+    /// device (a client), local (a folder of a user on the master) or master (a folder of the master files).
     #[cfg_attr(test, ts(type = "'device' | 'local' | 'master'"))]
-    pub kind: String,
+    pub kind: DeviceKind,
     pub online: bool,
     pub revoked: bool,
     created_at: i64,
@@ -67,7 +68,8 @@ pub fn device_summaries(c: &mut Client, who: &Access, folder: Option<&str>) -> R
         .into_iter()
         .map(|r| {
             let revoked = r.revoked_at.is_some();
-            let online = r.kind == "device" && !revoked && r.last_seen.is_some_and(|t| now - t <= offline_after);
+            let kind = DeviceKind::from_db(&r.kind);
+            let online = kind == DeviceKind::Device && !revoked && r.last_seen.is_some_and(|t| now - t <= offline_after);
             let fresh = r.activity_at.is_some_and(|t| now - t <= ACTIVITY_FRESH_SECS);
             DeviceSummary {
                 name: r.name,
@@ -95,7 +97,7 @@ pub fn device_summaries(c: &mut Client, who: &Access, folder: Option<&str>) -> R
                     bytes_total: r.bytes_total.unwrap_or_default(),
                     speed_bps: r.speed_bps.unwrap_or_default(),
                 }),
-                kind: r.kind,
+                kind,
             }
         })
         .collect())
@@ -103,7 +105,7 @@ pub fn device_summaries(c: &mut Client, who: &Access, folder: Option<&str>) -> R
 
 /// The devices page lists computers and the user's own folders; the master folders have their place in the list of folders.
 pub fn computers_and_folders(c: &mut Client, who: &Access) -> Result<Vec<DeviceSummary>, postgres::Error> {
-    Ok(device_summaries(c, who, None)?.into_iter().filter(|d| d.kind != "master").collect())
+    Ok(device_summaries(c, who, None)?.into_iter().filter(|d| d.kind != DeviceKind::Master).collect())
 }
 
 pub async fn list(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Vec<DeviceSummary>> {
@@ -172,7 +174,11 @@ pub async fn create(State(state): State<Shared>, Extension(who): Extension<Acces
 /// Adds a computer to a user (who must have a workspace), with a token that is shown once, and tells whoever is looking.
 fn add_device(c: &mut Client, who: &Access, user_id: i64, name: &str) -> anyhow::Result<DeviceDetail> {
     let token = db::new_token();
-    let Some(folder) = devices::insert(c, user_id, name, "device", &db::hash_token(&token), unix_now())? else {
+    let Some(folder) = devices::insert(
+        c,
+        &AddDevice { user_id, name, kind: DeviceKind::Device, token_hash: &db::hash_token(&token), now: unix_now() },
+    )?
+    else {
         return Err(ApiError::conflict(format!("There is already a device or folder named {name} for this user")).into());
     };
     db::notify(c, db::Topic::Devices, &folder)?;

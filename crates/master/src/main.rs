@@ -31,13 +31,14 @@
 
 #![allow(clippy::result_large_err)] // tonic::Status is large and is the error type of every RPC helper
 
+#[macro_use]
+mod platform;
 mod devices;
 mod files;
 mod integrations;
 mod library;
 mod modules;
 mod monitoring;
-mod platform;
 mod repo;
 mod web;
 

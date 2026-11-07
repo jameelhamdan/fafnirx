@@ -24,23 +24,23 @@ tray = ["dep:tray-icon", "dep:tao", "dep:rfd", "dep:resvg"]
 [dependencies]
 fafnirx-common = { path = "../common" }
 anyhow.workspace = true
-base64.workspace = true
 clap.workspace = true
 hex.workspace = true
 ignore = "0.4"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 notify = "6"
+open = "5"
 rpassword = "7"
 rusqlite.workspace = true
 self-replace = "1"
+semver = "1"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 gethostname = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "time"] }
 tokio-stream.workspace = true
-toml = "0.8"
-toml_edit = "0.22"
+toml_edit = { version = "0.22", features = ["serde"] }
 tonic.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

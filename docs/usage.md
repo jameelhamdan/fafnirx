@@ -77,7 +77,7 @@ The queue of background work for **photos and videos only**; other files are nev
 
 `meta` runs when a file arrives. A job is tried 3 times, then fails; done jobs stay a day. Users see the jobs of
 devices they can see. Administrators can **Pause**, **Retry** or **Clear** failed jobs, **Cancel** waiting ones, and **Process
-missing**. Runs of sources and mirrors and what modules are doing (files being fetched, segments being cut) are in the same list, each with the module that does it. **Settings → Thumbnails and previews** off: none are made.
+missing**. Runs of sources and mirrors (jobs of their own: a failed run stays until the next one, **Retry** runs it again; a waiting one cannot be cancelled, its schedule would queue it again) and what modules are doing (files being fetched, segments being cut) are in the same list, each with the module that does it. **Settings → Thumbnails and previews** off: none are made.
 
 ## The change log
 
@@ -254,5 +254,7 @@ own file and restarts. Config, token and state stay, so nothing is sent again. `
   until the client runs again. `fafnirx restart` restarts the client and the tray.
 - A `.deb` install (under `/usr`) is updated through `dpkg` (`sudo` or `pkexec` asks); the background check only reports.
 - An install stops and removes older copies of `fafnirx` in the usual places and on the `PATH`, so one version stays.
+
+`FAFNIRX_UPDATE_URL` replaces the address of the releases API (a fork, or a test server).
 
 Releases are checked by checksum, which guards against bad downloads, not against someone who can publish releases.

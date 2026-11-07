@@ -9,6 +9,7 @@ docker run -d --name fx-test-pg -e POSTGRES_PASSWORD=test -p 55432:5432 postgres
 export FAFNIRX_TEST_DATABASE_URL=postgresql://postgres:test@localhost:55432/postgres
 (cd frontend && npm ci)
 cargo build --workspace
+cargo sweep --time 1                  # drops build output unused for a day (cargo install cargo-sweep)
 
 export FAFNIRX_DATABASE_URL=$FAFNIRX_TEST_DATABASE_URL FAFNIRX_DATA=./data FAFNIRX_ADMIN_PASSWORD=pw
 cargo run -p fafnirx-master            # devices :7443, web app and API :8080
@@ -35,12 +36,15 @@ cargo run -p fafnirx -- install --in-place --no-start --server http://127.0.0.1:
 | E2E: delete and retention | `node e2e-retention.mjs` | ~2 min |
 | E2E: synced folders (several clients, two users) | `node e2e-folders.mjs` | Built binaries, test DB |
 
-Database tests use a schema of their own, so they run in parallel. `crates/master/src/web/tests/` drives the real router in
+**Where tests live.** Never in the code they test: each crate keeps them in `<crate>/tests/unit/`, with the same path as the module (`src/library/embedded.rs` → `tests/unit/library/embedded.rs`). The module declares them with
+`#[cfg(test)] #[path = "../../tests/unit/library/embedded.rs"] mod tests;`, so they stay its child and reach its private items. A new test goes in that file; a module without one gets the file and the three lines. Real integration tests of a public API are top-level files of `<crate>/tests/` (`module-api/tests/rules.rs`). Logic versus tests, in lines, is printed by `scripts/check-layout.sh`.
+
+Database tests use a schema of their own, so they run in parallel. `crates/master/tests/unit/web/api/` drives the real router in
 memory; `routes.rs` pins the access rule of every route. Video parts need ffmpeg, which tests do not: they check parsing and
-the contract with the module (a stand-in module in `web/tests/library.rs`, stand-in programs in `e2e-video.mjs`). E2E scripts start the real master and client (binaries from `target/debug` or `$FAFNIRX_BIN_DIR`);
+the contract with the module (a stand-in module in `web/api/modules.rs`, stand-in programs in `e2e-video.mjs`). E2E scripts start the real master and client (binaries from `target/debug` or `$FAFNIRX_BIN_DIR`);
 run them on a normal disk (Docker Desktop bind mounts report no file events). Unit tests never wait on the clock.
 
-Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cd frontend && npx tsc -b && npx oxlint`.
+Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings` (also `-p fafnirx --no-default-features`, the client without the tray), `cargo machete`, `bash scripts/check-layout.sh`, `cd frontend && npx tsc -b && npx oxlint`. CI runs the same. The client's tests link only where the Windows SDK has `rc.exe`; run them in Linux (Docker) otherwise.
 
 ## Conventions
 
@@ -48,6 +52,9 @@ Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targ
   semicolons, single quotes; `src/components/ui` stays as generated. UI text: short sentences, sentence case.
 - A behaviour change comes with a test; no dead code; update the docs it touches.
 - Log each change once and accurately: a rename is `rename`, never `delete`.
+- **Layout rules** (`scripts/check-layout.sh`, CI): no test block inside a source file; no logic file over 600 lines (it becomes a folder: `mod.rs` plus files by job, children reach the private items of their parent); no function with more than five parameters (a small struct says what they are, `clippy.toml`).
+- **Kinds are enums, not strings.** The database column stays text, the enum owns the spelling (`as_str`/`parse`): `RunStatus`, `MirrorKind`, `SourceKind` in `repo/links.rs`, `JobKind` and `JobStatus` in `repo/jobs.rs`, `DeviceKind` in `repo/devices.rs`. A new kind is a new variant and the compiler lists every `match` to change.
+- **Errors cross a boundary as a type.** The device API's handlers return `CallError` (`devices/call.rs`): a `Status`, a refusal the web app gives too, or something internal that is logged and not told. The web side has `ApiError`.
 
 ## Code layout
 
@@ -68,9 +75,11 @@ Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targ
 New endpoints go in the app's `api.rs` and are registered in `web/mod.rs`. Apps use `platform` and each other's public
 functions; `platform` knows no app. SQL lives only in `queries/*.sql` (typed, generated); no ORM.
 
+**Links.** A source (`in`) and a mirror (`out`) are rows of one `links` table (`repo/links.rs`). The scheduler (`integrations/mod.rs`) queues a link that is due as a job (`links::schedule`; the `jobs` table is the one queue, with `meta` and `thumb`), claims queued runs (`links::claim_job`), runs each (`mirror::run`, `rclone_source::run`, `fetch_source::run`) and records how it ended: the run returns an `Outcome`, `Source(SourceRun)` or `Mirror(MirrorRun)`, each saying its own counts, and `finish` stores a `RunStatus`.
+
 **Core vs add-ons.** Core: client, `common`, and in the master `devices`, `files`, `monitoring`, `platform`, `repo` (minus
 library), `web`, mirrors. Add-ons: the library, and the [modules](modules.md) (separate services; the master asks them for capabilities and works without them). Add-ons use the core, not the reverse; known
-exceptions: `ingest.rs` queues metadata jobs and calls `repo::albums::follow_folder_move`; `browse.rs`/`transfer.rs` use
+exceptions: `ingest.rs` queues metadata jobs; `browse.rs`/`transfer.rs` use
 `library::meta`; `repo/files.rs` and `repo/jobs.rs` hold library queries; `monitoring/jobs.rs` cleans the library cache.
 
 ## Typed queries
@@ -93,12 +102,12 @@ Synchronous `postgres` behind an `r2d2` pool.
   (`ingest::commit_version` is the model).
 - A rename is `commit_version` with `renamed_from` (clients), `adopt_live` with `renamed_from` (watcher) or
   `move_path` (web app; only `local` and `master` devices). Each logs one `rename`, calls `files::vacate_renamed` (never
-  `delete_path`) and `albums::follow_folder_move`.
+  `delete_path`). Albums show a whole folder, so a rename needs nothing more.
 - A job returns `Ok(Some(note))` to show a note in Processing.
 
 ## Changing things
 
-**Schema.** `crates/master/migrations/0001_schema.sql` is the schema of 4.0.0. Add `NNNN_name.sql` next to it and an entry at
+**Schema.** `crates/master/migrations/` holds the schema as numbered files (`0001` and `0002` shipped in 5.0.0). Add `NNNN_name.sql` next to them and an entry at
 the end of `ALL` in `platform/migrations.rs`. Applied on start, in order, in one transaction behind an advisory lock, with a
 checksum. Never edit a released migration; a newer database than the master is refused. Avoid long locks, and test on populated
 data.
@@ -107,7 +116,7 @@ Update the [diagram](architecture.md#database).
 **API.** Handler in the app, registered in `light()` or `heavy()` (moves file contents) in `web/mod.rs`; a response struct gets
 `#[cfg_attr(test, derive(ts_rs::TS), ts(export))]`, and `cargo test -p fafnirx-master` regenerates its TypeScript type in
 `frontend/src/lib/generated/` (commit it; CI checks it; `types.ts` re-exports it); a
-test in `web/tests/`; a line in `ROUTES` (`routes.rs`). Errors are `ApiError` (`bad`, `not_found`, `conflict`) →
+test in `tests/unit/web/api/`; a line in `ROUTES` (`routes.rs`). Errors are `ApiError` (`bad`, `not_found`, `conflict`) →
 `{ "error": "..." }`. Every handler takes `Extension<Access>` and limits itself to the role: `check_see`/`check_write(folder)`
 (others' devices answer 404), `viewer()`/`scope_args()` for file queries, `require_admin()`, `require_workspace()`. Parse ids
 with `Id` and check visibility like any input. Test each role.
@@ -118,7 +127,7 @@ and the folders the user syncs (shared, master and own); any other call that rea
 
 **A source.** Model: `integrations/rclone_source.rs` (a file is known by its path). A source is a `links` row (direction `in`,
 shared with mirrors: `repo/links.rs`) whose `folder_id` is the folder it writes into (from the `folder` of the request, checked by
-`integrations/api.rs`; a source without one gets a `local` folder `source-<name>`). `integrations::claim` takes it when due and
+`integrations/api/source.rs`; a source without one gets a `local` folder `source-<name>`). The scheduler queues it when due and
 dispatches by `kind`. A source lists its files as
 `syncsource::Item`s (path, optional key, marker) and fetches one; `syncsource::apply` compares the listing with its `link_items` (by
 key, else path) and the live `files` of the folder, moves a file whose key has a new name (`ingest::move_path`), downloads the

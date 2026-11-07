@@ -90,15 +90,51 @@ pub fn user_for_device(c: &mut impl GenericClient, name: &str) -> Result<Option<
     Ok(q::user_for_device().bind(c, &name).opt()?.map(|u| (u.id, u.role)))
 }
 
+text_enum! {
+    /// What a `devices` row is (the column is text with a CHECK for these three).
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum DeviceKind {
+        /// A computer that syncs: it has a token.
+        Device = "device",
+        /// A folder of a user on the master, which the web app changes.
+        Local = "local",
+        /// A folder of the master files: it has no owner.
+        Master = "master",
+    }
+}
+
+impl DeviceKind {
+    /// A stored value; the database only holds the three.
+    pub fn from_db(s: &str) -> DeviceKind {
+        DeviceKind::parse(s).unwrap_or(DeviceKind::Device)
+    }
+
+    /// Whether the web app changes the files of a device of this kind: the master files and local folders. What a device or
+    /// a source sends is theirs to change; here it can be read, downloaded and brought back from the trash.
+    pub fn editable(self) -> bool {
+        matches!(self, DeviceKind::Local | DeviceKind::Master)
+    }
+}
+
 /// Adds a device to a user. Returns its folder, or `None` when the user already has a device of that name.
-pub fn insert(c: &mut impl GenericClient, user_id: i64, name: &str, kind: &str, token_hash: &str, now: i64) -> Result<Option<String>, Error> {
-    q::insert_device().bind(c, &name, &kind, &token_hash, &now, &user_id).opt()
+pub fn insert(c: &mut impl GenericClient, d: &AddDevice) -> Result<Option<String>, Error> {
+    q::insert_device().bind(c, &d.name, &d.kind.as_str(), &d.token_hash, &d.now, &d.user_id).opt()
+}
+
+/// A device or folder to add to a user.
+pub struct AddDevice<'a> {
+    pub user_id: i64,
+    pub name: &'a str,
+    pub kind: DeviceKind,
+    pub token_hash: &'a str,
+    pub now: i64,
 }
 
 /// Adds a folder to a user. It has no token (no computer is it). Returns its folder, or `None` when the user already has a device
 /// or folder of that name.
 pub fn create_folder(c: &mut impl GenericClient, owner: i64, name: &str, now: i64) -> Result<Option<String>, Error> {
-    insert(c, owner, name, "local", "!", now)
+    insert(c, &AddDevice { user_id: owner, name, kind: DeviceKind::Local, token_hash: "!", now })
 }
 
 /// A new token for a client; ends a revocation and frees the device for whichever computer connects next.
@@ -154,8 +190,8 @@ pub fn mark_stale(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
 }
 
 /// device, local, source or master.
-pub fn kind_of(c: &mut impl GenericClient, id: i64) -> Result<String, Error> {
-    q::device_kind().bind(c, &id).one()
+pub fn kind_of(c: &mut impl GenericClient, id: i64) -> Result<DeviceKind, Error> {
+    Ok(DeviceKind::from_db(&q::device_kind().bind(c, &id).one()?))
 }
 
 /// The id and folder of the device with this folder name.
@@ -164,8 +200,11 @@ pub fn by_folder(c: &mut impl GenericClient, folder: &str) -> Result<Option<(i64
 }
 
 /// The id and kind of the device with this folder name.
-pub fn id_and_kind(c: &mut impl GenericClient, folder: &str) -> Result<Option<(i64, String)>, Error> {
-    Ok(q::device_id_and_kind_by_folder().bind(c, &folder).opt()?.map(|d| (d.id, d.kind)))
+pub fn id_and_kind(c: &mut impl GenericClient, folder: &str) -> Result<Option<(i64, DeviceKind)>, Error> {
+    Ok(q::device_id_and_kind_by_folder()
+        .bind(c, &folder)
+        .opt()?
+        .map(|d| (d.id, DeviceKind::from_db(&d.kind))))
 }
 
 /// A folder a user can use, whoever owns it, as the web app shows it. The same thing is a folder of the user, one another user shared
@@ -265,6 +304,8 @@ pub struct FolderState {
     pub last_error: String,
     pub held: i64,
     pub failing: i64,
+    /// How the computer settles a file changed on both sides: `up`, `both`, `keep` or `ask`; empty when an older client did not say.
+    pub mode: String,
     pub updated_at: i64,
 }
 
@@ -272,7 +313,19 @@ pub struct FolderState {
 pub fn save_folder_state(c: &mut impl GenericClient, device_id: i64, reported: &[FolderState], now: i64) -> Result<(), Error> {
     q::clear_folder_state().bind(c, &device_id)?;
     for s in reported {
-        q::save_folder_state().bind(c, &device_id, &s.name, &s.files, &s.bytes, &s.last_cycle, &s.last_error, &s.held, &s.failing, &now)?;
+        q::save_folder_state().bind(
+            c,
+            &device_id,
+            &s.name,
+            &s.files,
+            &s.bytes,
+            &s.last_cycle,
+            &s.last_error,
+            &s.held,
+            &s.failing,
+            &s.mode,
+            &now,
+        )?;
     }
     Ok(())
 }
@@ -291,6 +344,7 @@ pub fn folder_states_of_device(c: &mut impl GenericClient, device_id: i64) -> Re
             last_error: r.last_error,
             held: r.held,
             failing: r.failing,
+            mode: r.mode,
             updated_at: r.updated_at,
         })
         .collect())
@@ -310,6 +364,7 @@ pub fn folder_states_of_folder(c: &mut impl GenericClient, folder: &str, all: bo
             last_error: r.last_error,
             held: r.held,
             failing: r.failing,
+            mode: r.mode,
             updated_at: r.updated_at,
         })
         .collect())

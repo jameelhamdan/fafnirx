@@ -4,11 +4,12 @@
 //! file is known by its path: a rename downloads the file again. A file counts as changed when its size or its
 //! modification time differs from the last run.
 
-use crate::integrations::syncsource::{self, Download, Item, Listing, Rules};
-use crate::integrations::{mirror, Outcome, SourceRow};
+use crate::integrations::syncsource::{self, Item, Listing, Rules};
+use crate::integrations::{mirror, SourceRun};
 use crate::platform::db::Db;
-use crate::platform::store::Store;
-use anyhow::{bail, Context, Result};
+use crate::platform::store::{RemoveOnDrop, Store};
+use crate::repo::links::Due;
+use anyhow::{ensure, Context, Result};
 use fafnirx_common::clean_remote_path;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -61,7 +62,7 @@ fn items_of(listing: &str) -> Result<(Vec<Item>, usize)> {
     Ok((items, skipped))
 }
 
-pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
+pub async fn run(db: Db, store: Arc<Store>, src: Due) -> Result<SourceRun> {
     let cfg: Config = serde_json::from_str(&src.config).context("source configuration is invalid")?;
     let empty_config = store.temp_path();
     std::fs::write(&empty_config, b"")?;
@@ -84,61 +85,25 @@ pub async fn run(db: Db, store: Arc<Store>, src: SourceRow) -> Result<Outcome> {
     let (items, skipped) = items_of(&listing)?;
     let (rc, base) = (&rc, &base);
     let fetch_store = store.clone();
-    syncsource::apply(db, store, src.id, src.device, Listing { items, skipped }, Rules::ALL, |item| {
+    let source = syncsource::Source { db, store, id: src.id, device: syncsource::device_of(&src)? };
+    syncsource::apply(source, Listing { items, skipped }, Rules::ALL, |item| {
         let store = fetch_store.clone();
         async move {
-            let path = store.temp_path();
-            let received = async {
-                let from = mirror::join(base, &item.path);
-                rc.run(&["copyto", &from, &path.to_string_lossy(), "--stats", "0", "--retries", "3"], &[]).await?;
-                let target = path.clone();
-                let (root, size) = tokio::task::spawn_blocking(move || crate::platform::store::hash_file(&target)).await??;
-                if size != item.size {
-                    bail!("received {size} bytes, the remote lists {}", item.size);
-                }
-                Ok(Download { path: path.clone(), root, size })
-            }
-            .await;
-            if received.is_err() {
-                let _ = tokio::fs::remove_file(&path).await;
-            }
-            received
+            let from = mirror::join(base, &item.path);
+            syncsource::receive(
+                &store,
+                |path| async move { rc.run(&["copyto", &from, &path.to_string_lossy(), "--stats", "0", "--retries", "3"], &[]).await },
+                |_, size| {
+                    ensure!(size == item.size, "received {size} bytes, the remote lists {}", item.size);
+                    Ok(())
+                },
+            )
+            .await
         }
     })
     .await
 }
 
-struct RemoveOnDrop(std::path::PathBuf);
-
-impl Drop for RemoveOnDrop {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_listing_becomes_items_and_skips_what_cannot_be_kept() {
-        let json = r#"[
-            {"Path":"a/b.txt","Name":"b.txt","Size":12,"ModTime":"2024-05-01T10:00:00.5Z","IsDir":false},
-            {"Path":"a","Name":"a","Size":-1,"ModTime":"2024-05-01T10:00:00Z","IsDir":true},
-            {"Path":"unknown","Name":"unknown","Size":-1,"ModTime":"2024-05-01T10:00:00Z","IsDir":false},
-            {"Path":"../escape","Name":"escape","Size":1,"ModTime":"2024-05-01T10:00:00Z","IsDir":false}
-        ]"#;
-        let (items, skipped) = items_of(json).unwrap();
-        assert_eq!(skipped, 2, "an unknown size and a path that leaves the folder");
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].path, "a/b.txt");
-        assert_eq!(items[0].marker, "12:1714557600500000000");
-        assert!(items_of("not json").is_err());
-    }
-
-    #[test]
-    fn rfc3339_to_unix_nanoseconds() {
-        assert_eq!(parse_time_ns("1970-01-01T00:00:01.5Z"), 1_500_000_000);
-        assert_eq!(parse_time_ns("garbage"), 0);
-    }
-}
+#[path = "../../tests/unit/integrations/rclone_source.rs"]
+mod tests;

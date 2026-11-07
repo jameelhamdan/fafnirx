@@ -111,27 +111,39 @@ pub async fn sync_folder(config_path: PathBuf, name: String, dir: PathBuf, creat
     Ok(())
 }
 
+/// The name and the saved state of the synced folder `name` of this computer.
+fn attached_state(config_path: &Path, name: &str) -> Result<(String, state::State)> {
+    let cfg = Config::load(config_path)?;
+    let synced = cfg.attached_named(name)?;
+    let state = state::State::open(&crate::synced::state_file(&cfg.state_dir(config_path), synced.key()))?;
+    Ok((synced.name.clone(), state))
+}
+
 /// Keeps the files of a synced folder whose deletion on the master is held back, instead of deleting them here. They are sent
 /// again at the next cycle. Only what other computers deleted is ever held: deletions in the web app are applied at once.
 pub fn keep_held(config_path: &Path, name: &str) -> Result<()> {
-    let cfg = Config::load(config_path)?;
-    let dir = cfg.state_dir(config_path);
-    let synced = cfg.attached_named(name)?;
-    let state = state::State::open(&crate::synced::state_file(&dir, synced.key()))?;
+    let (folder, state) = attached_state(config_path, name)?;
     let Some((files, _)) = state.pull_hold()? else {
-        println!("no deletions of the master are held for \"{}\"", synced.name);
+        println!("no deletions of the master are held for \"{folder}\"");
         return Ok(());
     };
     state.request_keep()?;
     wake_client(config_path);
     println!(
         "keeping the {files} files of \"{}\" that were deleted on the master: they stay here, and are sent again at the next cycle",
-        synced.name
+        folder
     );
     Ok(())
 }
 
 /// Shows the mode of a synced folder, or sets it (and with `ask` how long a file waits for an answer).
+/// Sets how a synced folder settles conflicts, after checking that this computer can ask (a mode that asks needs a screen). Returns
+/// the name of the folder in full. The command line and the service (for a user's tray) both call this.
+pub fn change_mode(config_path: &Path, name: &str, mode: Mode, ask_timeout_hours: Option<u64>) -> Result<String> {
+    mode.check_available()?;
+    config::set_mode_in_file(config_path, name, mode, ask_timeout_hours)
+}
+
 pub fn set_mode(config_path: &Path, name: &str, mode: Option<Mode>, ask_timeout_hours: Option<u64>) -> Result<()> {
     let cfg = Config::load(config_path)?;
     let synced = cfg.attached_named(name)?;
@@ -140,8 +152,7 @@ pub fn set_mode(config_path: &Path, name: &str, mode: Option<Mode>, ask_timeout_
         return Ok(());
     }
     let mode = mode.unwrap_or(synced.mode);
-    mode.check_available()?;
-    let full = config::set_mode_in_file(config_path, name, mode, ask_timeout_hours)?;
+    let full = change_mode(config_path, name, mode, ask_timeout_hours)?;
     println!("\"{full}\" is synced \"{}\"", mode.name());
     wake_client(config_path);
     Ok(())
@@ -149,23 +160,32 @@ pub fn set_mode(config_path: &Path, name: &str, mode: Option<Mode>, ask_timeout_
 
 /// Answers for the files of a synced folder that wait for a decision. The client applies the answer at its next cycle.
 pub fn resolve_waiting(config_path: &Path, name: &str, keep: &str, path: Option<&str>) -> Result<()> {
-    let cfg = Config::load(config_path)?;
-    let dir = cfg.state_dir(config_path);
-    let synced = cfg.attached_named(name)?;
-    let state = state::State::open(&crate::synced::state_file(&dir, synced.key()))?;
+    let (folder, state) = attached_state(config_path, name)?;
     let answered = state.answer_pending(path, keep)?;
     if answered == 0 {
-        println!("no file of \"{}\" is waiting for a decision", synced.name);
+        println!("no file of \"{folder}\" is waiting for a decision");
         return Ok(());
     }
     wake_client(config_path);
-    println!("{answered} files of \"{}\": keeping {keep}", synced.name);
+    println!("{answered} files of \"{folder}\": keeping {keep}");
     Ok(())
+}
+
+/// What `folder add` is asked for.
+pub struct FolderAdd {
+    pub paths: Vec<PathBuf>,
+    pub target: String,
+    /// The name in this computer's own namespace (target "computer" only).
+    pub name: Option<String>,
+    /// Make the folder on the master if there is none (a folder of the user).
+    pub create: bool,
+    pub mode: Option<Mode>,
 }
 
 /// Adds a folder of this computer with a target: `computer` (this computer's own namespace on the master, upload only), a master
 /// folder (`master:<path>`), or a folder of the user (`<owner>/<name>`, or the name of one of their own).
-pub async fn folder_add(config_path: PathBuf, paths: Vec<PathBuf>, target: String, name: Option<String>, create: bool, mode: Option<Mode>) -> Result<()> {
+pub async fn folder_add(config_path: PathBuf, add: FolderAdd) -> Result<()> {
+    let FolderAdd { paths, target, name, create, mode } = add;
     if target == "computer" {
         if mode.is_some_and(|m| m != Mode::Up) {
             bail!("a folder collected into this computer's own namespace is uploaded only; pick a master or user folder as the target to sync both ways");

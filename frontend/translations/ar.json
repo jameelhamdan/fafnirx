@@ -717,5 +717,6 @@
   "Your computers that have it": "أجهزتك التي تحتويه",
   "Your files exactly as they are. Browse them, share them or copy them back with any tool.": "ملفاتك كما هي تمامًا. تصفحها أو شاركها أو انسخها مجددًا بأي أداة.",
   "Yours": "خاص بك",
-  "Yours ({count})": "الخاصة بك ({count})"
+  "Yours ({count})": "الخاصة بك ({count})",
+  "Mode: {mode}": "الوضع: {mode}"
 }

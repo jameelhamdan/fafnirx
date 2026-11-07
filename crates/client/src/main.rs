@@ -254,7 +254,7 @@ fn run(cli: Cli) -> Result<()> {
             tokio_main(commands::update_now(config_path, check))
         }
         Cmd::Folder(FolderCmd { action }) => match action {
-            FolderAction::Add { paths, target, name, mode, create } => tokio_main(commands::folder_add(config_path, paths, target, name, create, mode)),
+            FolderAction::Add { paths, target, name, mode, create } => tokio_main(commands::folder_add(config_path, commands::FolderAdd { paths, target, name, create, mode })),
             FolderAction::List { available: false } => commands::list_folders(&config_path),
             FolderAction::List { available: true } => tokio_main(commands::list_available(config_path)),
             FolderAction::Create { name } => tokio_main(commands::create_folder(config_path, name)),

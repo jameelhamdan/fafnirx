@@ -73,6 +73,7 @@ message FolderState {
   string last_error = 5;       // empty when the last cycle went well
   uint32 held = 6;             // deletions held back
   uint32 failing = 7;          // files waiting for a retry
+  string mode = 8;             // how this computer settles conflicts: up | both | keep | ask (empty from an older client)
 }
 
 message IdentifyRequest {}

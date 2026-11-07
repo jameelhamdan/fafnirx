@@ -74,15 +74,16 @@ try {
 
   check(desktop.c('folder', 'mode', 'family').stdout.includes('both,'), 'the other computer keeps its own setting')
   laptop.c('folder', 'mode', 'family', 'keep')
-  write(dirL, 'a.txt', 'L')
-  write(dirD, 'a.txt', 'D')
+  // Other words than before: writing the content the master already has is no change.
+  write(dirL, 'a.txt', 'L2')
+  write(dirD, 'a.txt', 'D2')
   desktop.c('sync')
   const both = laptop.c('sync').stdout
   const kept = names(dirL).filter((n) => n.includes('(conflict '))
-  check(read(dirL, 'a.txt') === 'D' && kept.length === 1 && read(dirL, kept[0]) === 'L', `both: a file changed on both sides keeps both (${kept})`)
-  check(both.includes('1 conflicts') && stored('alice/family', kept[0]) === 'L', 'the copy of this computer is sent like a new file')
+  check(read(dirL, 'a.txt') === 'D2' && kept.length === 1 && read(dirL, kept[0]) === 'L2', `both: a file changed on both sides keeps both (${kept})`)
+  check(both.includes('1 conflicts') && stored('alice/family', kept[0]) === 'L2', 'the copy of this computer is sent like a new file')
   desktop.c('sync')
-  check(read(dirD, kept[0]) === 'L', 'and reaches the other computer')
+  check(read(dirD, kept[0]) === 'L2', 'and reaches the other computer')
 
   // ask needs a screen: where there is none it is refused, where there is one the file waits for the answer
   const askSet = run(CLIENT, ['--config', laptop.cfg, 'folder', 'mode', 'family', 'ask'], { ok: false })
@@ -167,7 +168,7 @@ try {
   await schema.rows("INSERT INTO settings (key, value) VALUES ('deletions_known_from', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", [String(Math.floor(Date.now() / 1000) + 100)])
   const away = laptop.c('sync').stdout
   check(read(dirL, 'old.txt') === null && away.includes('1 deleted'), `the computer that was away still learns of the deletion (${away.trim()})`)
-  check(read(dirL, 'a.txt') === 'D', 'and keeps every file that is still there')
+  check(read(dirL, 'a.txt') === 'D2', 'and keeps every file that is still there')
 
   // --- a large deletion on the master is held until a person decides ------------------------------------------------------------------------------------
   const lot = (dir, n) => Array.from({ length: n }, (_, i) => `${dir}/${i}.txt`)
@@ -258,10 +259,10 @@ try {
   check((await api.bob.get('/api/files?device=alice/family')).status === 200, 'in the web app too')
   phone.c('folder', 'add', dirB, '--target', 'alice/family')
   phone.c('sync')
-  check(read(dirB, 'a.txt') === 'D' && read(dirB, 'd.txt') !== null, 'and receive its files')
+  check(read(dirB, 'a.txt') === 'D2' && read(dirB, 'd.txt') !== null, 'and receive its files')
   write(dirB, 'bobs.txt', 'not allowed yet')
-  const refused = phone.c.try('sync')
-  check(`${refused.stdout}${refused.stderr}`.includes('read only'), 'a change from a read-only member is refused, and says why')
+  const blocked = phone.c.try('sync')
+  check(`${blocked.stdout}${blocked.stderr}`.includes('read only'), 'a change from a read-only member is blocked, and says why')
   check(stored('alice/family', 'bobs.txt') === null, 'nothing of theirs reached the folder')
   check((await api.alice.post('/api/folders/family/members', { user: 'bob', can_write: true })).status === 200, 'the owner lets them change it')
   check(phone.c('sync').stdout.includes('1 uploaded') && stored('alice/family', 'bobs.txt') === 'not allowed yet', 'and their file goes up')
@@ -270,7 +271,7 @@ try {
   check((await api.alice.delete('/api/folders/family/members/bob')).status === 200, 'the owner removes them')
   check(phone.c.try('sync').code !== 0 && !phone.c('folder', 'list', '--available').stdout.includes('alice/family'), 'they lose it at once')
   phone.c('folder', 'remove', 'alice/family')
-  check(read(dirB, 'a.txt') === 'D', 'detaching keeps the files they have')
+  check(read(dirB, 'a.txt') === 'D2', 'detaching keeps the files they have')
 
   // --- deletions held back can be kept instead (last for the desktop: files deleted in the web app cannot come back from here) ----------------------------
   for (const p of lot('keep', 12)) write(dirL, p, `file ${p}`)
@@ -316,7 +317,7 @@ try {
   check(phone.c.try('folder', 'add', path.join(tmp, 'nope'), '--target', 'computer', '--mode', 'both').code !== 0, 'the computer target is up only')
   for (const who of [phone, desktop, laptop]) who.c('folder', 'remove', 'master:Music')
   const musicId = (await api.alice.get('/api/folders')).json.find((f) => f.master).public_id
-  check((await admin.delete(`/api/master-folders/${musicId}`)).status === 200 && fs.existsSync(path.join(data, 'files', 'Music', 'song.txt')), 'removing the entry keeps the files')
+  check((await admin.delete(`/api/master-folders/${musicId}`)).status === 409 && fs.existsSync(path.join(data, 'files', 'Music', 'song.txt')), 'a master folder that still has files is not removed, and its files stay')
 
   // --- delete the files, then the folder ------------------------------------------------------------------------------------------------------------------
   check((await api.alice.delete('/api/folders/family')).status === 409, 'a folder with files cannot be deleted')
@@ -328,7 +329,7 @@ try {
   check(gone.code !== 0 && `${gone.stdout}${gone.stderr}`.includes('no folder called'), 'a computer that still has it attached is told it is gone')
   const detached = laptop.c('folder', 'remove', 'family').stdout
   check(detached.includes('"alice/family"'), `detaching by the short name says which folder it was (${detached.trim()})`)
-  check(read(dirL, 'a.txt') === 'D', 'and keeps its files when it lets go')
+  check(read(dirL, 'a.txt') === 'D2', 'and keeps its files when it lets go')
 
   console.log(`\nall ${passedChecks()} checks passed`)
 } finally {
