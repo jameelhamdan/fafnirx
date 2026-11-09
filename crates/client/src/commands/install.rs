@@ -49,7 +49,14 @@ fn place_program(from: &Path, to: &Path, dry: bool) -> Result<()> {
     let next = to.with_extension("new");
     std::fs::copy(from, &next).with_context(|| format!("copy to {}", next.display()))?;
     #[cfg(unix)]
-    std::fs::set_permissions(&next, std::os::unix::fs::PermissionsExt::from_mode(0o755))?;
+    {
+        std::fs::set_permissions(&next, std::os::unix::fs::PermissionsExt::from_mode(0o755))?;
+        // macOS copies the owner of the source along with the data (the downloaded file belongs to the user who ran the
+        // installer), and the service refuses a program that is not root's.
+        if crate::service::elevate::is_admin() {
+            std::os::unix::fs::chown(&next, Some(0), Some(0)).with_context(|| format!("make root the owner of {}", next.display()))?;
+        }
+    }
     std::fs::rename(&next, to).with_context(|| format!("replace {}", to.display()))?;
     Ok(())
 }
