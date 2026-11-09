@@ -1,22 +1,20 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useApiMutation } from '@/lib/mutation'
-import { Check, Copy, FolderOpen, FolderSync, LogOut, MoreHorizontal, Pencil, Plus, Server, Trash2, UserPlus, X } from 'lucide-react'
+import { Check, Copy, DownloadCloud, FolderOpen, FolderSync, LogOut, MoreHorizontal, Pencil, Plus, Server, Trash2, UserPlus, X } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Confirm } from '@/components/confirm'
 import { RenameFolder } from '@/components/files/rename-folder'
-import { AddMasterFolder } from '@/components/master-folders'
 import { NewFolder } from '@/components/new-folder'
 import { FolderStateList } from '@/components/folder-state'
-import { Empty, ErrorNote, PageHeader, SELECT } from '@/components/common'
+import { SELECT } from '@/components/common'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
-import { Skeleton } from '@/components/ui/skeleton'
 import { useNow } from '@/hooks/use-now'
 import { api } from '@/lib/api'
 import { ago, bytes, count } from '@/lib/format'
@@ -27,7 +25,7 @@ import { useRole, useSession } from '@/lib/session'
 import { cn } from '@/lib/utils'
 import type { Folder } from '@/lib/types'
 
-type Show = 'all' | 'mine' | 'others' | 'master'
+type Show = 'all' | 'mine' | 'others' | 'master' | 'sourced'
 type Person = { name: string; can_write: boolean }
 
 /** Refetches the folders after a change. */
@@ -66,8 +64,21 @@ function syncBadge(folder: Folder, t: ReturnType<typeof useT>) {
   return <Badge variant="secondary">{t('In step')}</Badge>
 }
 
+/** Marks a folder that a source fills: its files come from there, not from a computer. */
+export function SourceBadge({ folder }: { folder: Folder }) {
+  const t = useT()
+  const sources = folder.rules.sources
+  if (sources.length === 0) return null
+  const failed = sources.some((s) => s.status === 'failed')
+  return (
+    <Badge variant={failed ? 'destructive' : 'outline'} className="gap-1" title={failed ? t('A source copies files into this folder on a schedule. Its last run failed.') : t('A source copies files into this folder on a schedule.')}>
+      <DownloadCloud className="size-3" />{t('Source: {name}', { name: sources.map((s) => s.key).join(', ') })}
+    </Badge>
+  )
+}
+
 /** The button that makes a folder; the next step, sharing it and attaching it to a computer, is in the panel that opens. */
-function AddFolder({ onMade }: { onMade: (folder: string) => void }) {
+export function AddFolder({ onMade }: { onMade: (folder: string) => void }) {
   const t = useT()
   const [open, setOpen] = useState(false)
   return (
@@ -196,7 +207,7 @@ function AttachHint({ folder }: { folder: Folder }) {
 }
 
 /** Everything about one folder: who has it, which computers keep it, and the ways to end it. */
-function FolderPanel({ folder, onClose }: { folder: Folder | undefined; onClose: () => void }) {
+export function FolderPanel({ folder, onClose }: { folder: Folder | undefined; onClose: () => void }) {
   const t = useT()
   const refresh = useRefreshFolders()
   const admin = useRole() === 'admin'
@@ -333,6 +344,7 @@ function Row({ folder, onOpen }: { folder: Folder; onOpen: () => void }) {
           {!folder.mine && !folder.master && <Badge variant="secondary">{t('Shared with you')}</Badge>}
           {!folder.mine && !folder.can_write && <Badge variant="outline">{t('Read only')}</Badge>}
           {folder.mine && folder.shared && <Badge variant="outline">{t('Shared')}</Badge>}
+          <SourceBadge folder={folder} />
         </span>
         <span className="block text-xs text-muted-foreground"><Summary folder={folder} /></span>
       </button>
@@ -366,55 +378,42 @@ function Row({ folder, onOpen }: { folder: Folder; onOpen: () => void }) {
   )
 }
 
-export default function Folders() {
+/** Every folder the user can see, with filters; `onOpen` shows one in the panel. */
+export function FoldersSection({ folders, onOpen }: { folders: Folder[]; onOpen: (folder: string) => void }) {
   const t = useT()
   const [show, setShow] = useState<Show>('all')
   const [search, setSearch] = useState('')
-  const [opened, setOpened] = useState<string | null>(null)
-  const admin = useRole() === 'admin'
-  const { data, error } = useQuery({ queryKey: ['folders'], queryFn: () => api.get<Folder[]>('/api/folders') })
   const shown = useMemo(() => {
     const word = search.trim().toLowerCase()
-    const wanted = (f: Folder) => show === 'all' || (show === 'master' ? f.master : show === 'mine' ? f.mine : !f.mine && !f.master)
-    return (data ?? []).filter((f) => wanted(f) && (word === '' || f.folder.toLowerCase().includes(word)))
-  }, [data, show, search])
-  const mine = data?.filter((f) => f.mine).length ?? 0
-  const master = data?.filter((f) => f.master).length ?? 0
+    const wanted = (f: Folder) =>
+      show === 'all' || (show === 'master' ? f.master : show === 'mine' ? f.mine : show === 'sourced' ? f.rules.sources.length > 0 : !f.mine && !f.master)
+    return folders.filter((f) => wanted(f) && (word === '' || f.folder.toLowerCase().includes(word)))
+  }, [folders, show, search])
+  const mine = folders.filter((f) => f.mine).length
+  const master = folders.filter((f) => f.master).length
+  const sourced = folders.filter((f) => f.rules.sources.length > 0).length
   const filters: { id: Show; label: string }[] = [
-    { id: 'all', label: t('All ({count})', { count: data?.length ?? 0 }) },
+    { id: 'all', label: t('All ({count})', { count: folders.length }) },
     { id: 'mine', label: t('Yours ({count})', { count: mine }) },
-    { id: 'others', label: t('Shared with you ({count})', { count: (data?.length ?? 0) - mine - master }) },
+    { id: 'others', label: t('Shared with you ({count})', { count: folders.length - mine - master }) },
     { id: 'master', label: t('Master folders ({count})', { count: master }) },
+    ...(sourced > 0 || show === 'sourced' ? [{ id: 'sourced' as Show, label: t('From a source ({count})', { count: sourced }) }] : []),
   ]
   return (
-    <div>
-      <PageHeader
-        title={t('Folders')}
-        description={t('Folders that belong to you, or to the master files, not to one computer. Attach one to a folder of each computer and it stays the same on all of them. Other users can use one of yours only when you add them here.')}
-        actions={<div className="flex flex-wrap gap-2">{admin && <AddMasterFolder />}<AddFolder onMade={setOpened} /></div>}
-      />
-      {error ? <ErrorNote error={error} /> : !data ? (
-        <Skeleton className="h-48" />
-      ) : data.length === 0 ? (
-        <Empty title={t('No folders')}>{t('Make one, then attach a folder of each computer to it.')}</Empty>
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Input className="w-full sm:w-56" type="search" aria-label={t('Search folders')} placeholder={t('Search')} value={search} onChange={(e) => setSearch(e.target.value)} />
+        {filters.map((f) => (
+          <Button key={f.id} size="sm" variant={show === f.id ? 'secondary' : 'ghost'} onClick={() => setShow(f.id)}>{f.label}</Button>
+        ))}
+      </div>
+      {shown.length === 0 ? (
+        <p className="text-sm text-muted-foreground">{t('No folder matches.')}</p>
       ) : (
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <Input className="w-full sm:w-56" type="search" aria-label={t('Search folders')} placeholder={t('Search')} value={search} onChange={(e) => setSearch(e.target.value)} />
-            {filters.map((f) => (
-              <Button key={f.id} size="sm" variant={show === f.id ? 'secondary' : 'ghost'} onClick={() => setShow(f.id)}>{f.label}</Button>
-            ))}
-          </div>
-          {shown.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{t('No folder matches.')}</p>
-          ) : (
-            <ul className="divide-y rounded-lg border bg-card">
-              {shown.map((f) => <Row key={f.folder} folder={f} onOpen={() => setOpened(f.folder)} />)}
-            </ul>
-          )}
-        </div>
+        <ul className="divide-y rounded-lg border bg-card">
+          {shown.map((f) => <Row key={f.folder} folder={f} onOpen={() => onOpen(f.folder)} />)}
+        </ul>
       )}
-      <FolderPanel folder={data?.find((f) => f.folder === opened)} onClose={() => setOpened(null)} />
     </div>
   )
 }

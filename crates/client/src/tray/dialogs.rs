@@ -243,6 +243,39 @@ pub(super) fn cli_change(config_path: &Path, request: &Request) -> anyhow::Resul
     change_folders(config_path, request).map(drop).map_err(anyhow::Error::msg)
 }
 
+/// Stops syncing folders that were deleted on the server and are empty here; the client found them on its last cycle.
+pub(super) fn remove_deleted_dialog(config_path: &Path, names: &[String]) {
+    let text = format!(
+        "These synced folders no longer exist on the server, and their folders here are empty:
+
+{}
+
+Stop syncing them on this computer?",
+        names.join(
+            "
+"
+        )
+    );
+    confirm_then(text, || {
+        let failed: Vec<String> = names
+            .iter()
+            .filter_map(|name| {
+                cli_change(config_path, &Request::RemoveFolder { name: name.clone() })
+                    .err()
+                    .map(|e| format!("{name}: {e:#}"))
+            })
+            .collect();
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(failed.join(
+                "
+"
+            )))
+        }
+    });
+}
+
 pub(super) fn remove_folder_dialog(config_path: &Path, name: &str) {
     let text = format!("Stop syncing \"{name}\" on this computer?\n\nNothing is deleted: the files stay in the folder and on the server.");
     confirm_then(text, || cli_change(config_path, &Request::RemoveFolder { name: name.into() }));

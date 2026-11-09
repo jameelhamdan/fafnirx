@@ -217,20 +217,7 @@ fn spawn_heartbeat(hub: Hub, mut client: Client, config_path: PathBuf, identity:
                         }
                         // The list of synced folders changes rarely: it is asked for every third beat.
                         if beats.is_multiple_of(3) {
-                            if let Ok(listed) = client.list_folders(pb::ListFoldersRequest {}).await {
-                                let listed = listed.into_inner();
-                                let names = listed.names.iter().map(|n| (n.clone(), listed.mine.contains(n))).collect();
-                                hub.status.edit(|s| {
-                                    s.synced_on_master = names;
-                                    s.synced_readonly = listed.readonly.clone();
-                                });
-                                // A folder renamed on the master is renamed here: it is attached by its id.
-                                let by_id: Vec<(String, String)> = listed.names.iter().cloned().zip(listed.ids.iter().cloned()).collect();
-                                match crate::config::follow_renames_in_file(&config_path, &by_id) {
-                                    Ok(changes) => changes.iter().for_each(|(old, new)| tracing::info!("{old} is now called {new} on the master")),
-                                    Err(e) => tracing::warn!("cannot follow a rename in the config: {e:#}"),
-                                }
-                            }
+                            refresh_master_folders(&hub, &mut client, &config_path).await;
                         }
                         beats = beats.wrapping_add(1);
                         hub.status.edit(|s| {
@@ -267,6 +254,24 @@ fn spawn_heartbeat(hub: Hub, mut client: Client, config_path: PathBuf, identity:
             }
         }
     });
+}
+
+/// Asks the master which synced folders this user can use and notes them in the status; false when it could not be asked.
+async fn refresh_master_folders(hub: &Hub, client: &mut Client, config_path: &Path) -> bool {
+    let Ok(listed) = client.list_folders(pb::ListFoldersRequest {}).await else { return false };
+    let listed = listed.into_inner();
+    let names = listed.names.iter().map(|n| (n.clone(), listed.mine.contains(n))).collect();
+    hub.status.edit(|s| {
+        s.synced_on_master = names;
+        s.synced_readonly = listed.readonly.clone();
+    });
+    // A folder renamed on the master is renamed here: it is attached by its id.
+    let by_id: Vec<(String, String)> = listed.names.iter().cloned().zip(listed.ids.iter().cloned()).collect();
+    match crate::config::follow_renames_in_file(config_path, &by_id) {
+        Ok(changes) => changes.iter().for_each(|(old, new)| tracing::info!("{old} is now called {new} on the master")),
+        Err(e) => tracing::warn!("cannot follow a rename in the config: {e:#}"),
+    }
+    true
 }
 
 /// Keeps a call open that tells when another computer changed one of the synced folders attached here, and wakes the sync
@@ -438,6 +443,8 @@ async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Res
     let mut attached: Vec<crate::synced::Attached> = Vec::new();
     let mut _watcher: Option<notify::RecommendedWatcher> = None;
     let mut delay = Duration::from_secs(1);
+    // When the master's folders were last asked for, and whether that gave a list (without one nothing is called gone).
+    let (mut listed_at, mut listed): (Option<std::time::Instant>, bool) = (None, false);
     tracing::info!("fafnirx {} running, config {}", update::VERSION, config_path.display());
     loop {
         tokio::select! {
@@ -453,9 +460,20 @@ async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Res
             delay = Duration::from_secs(30);
             continue;
         }
+        // Every cycle (so "Sync now" too) looks at what the master has, before the config is read: a rename it reports is followed
+        // first, and a folder that is gone from the list is then really gone.
+        // Not more than every few seconds: a busy folder wakes a cycle for each change.
+        if listed_at.is_none_or(|at| at.elapsed() >= LIST_EVERY) {
+            listed = refresh_master_folders(&hub, &mut client.clone(), &config_path).await;
+            listed_at = Some(std::time::Instant::now());
+        }
         match Config::load(&config_path) {
             Ok(c) => cfg = c,
             Err(e) => hub.status.edit(|s| s.last_error = format!("config: {e:#}")),
+        }
+        if listed {
+            let gone = crate::synced::deleted_and_empty(cfg.attached_folders(), &hub.status.snapshot().synced_on_master);
+            hub.status.edit(|s| s.deleted_on_master = gone);
         }
         let folders: Vec<PathBuf> = cfg.paths().map(|(_, p)| p.to_path_buf()).collect();
         if cfg.watch && folders != watched {
@@ -504,6 +522,9 @@ async fn serve(config_path: PathBuf, mut cfg: Config, state_dir: PathBuf) -> Res
         record_cycle(&hub, result);
     }
 }
+
+/// The least time between two looks at the master's list of folders in the main loop.
+const LIST_EVERY: Duration = Duration::from_secs(10);
 
 /// How often a computer with synced folders asks the master what the others changed.
 const SYNCED_POLL: Duration = Duration::from_secs(60);

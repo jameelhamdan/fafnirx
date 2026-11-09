@@ -47,6 +47,8 @@ enum Action {
     AddFolders,
     /// Stop syncing a folder of this computer, collected or attached to a folder of the master.
     RemoveFolder(String),
+    /// Stop syncing the attached folders that were deleted on the master and are empty here.
+    RemoveDeleted(Vec<String>),
     /// Sync a local folder, to be chosen, with this existing synced folder.
     AttachSynced(String),
     /// Make a synced folder from a local folder, to be chosen.
@@ -114,7 +116,7 @@ struct Menus {
     /// The line of each folder attached to a folder of the master that says how it is doing.
     synced_states: Vec<(String, Line)>,
     /// The folders and the folders of the master that are not attached, as the submenu shows them.
-    shown_folders: (Vec<Folder>, Vec<(String, bool)>),
+    shown_folders: (Vec<Folder>, Vec<(String, bool)>, Vec<String>),
 }
 
 impl Menus {
@@ -151,7 +153,7 @@ impl Menus {
         ];
 
         let folders = Submenu::new("Folders", true);
-        let (folder_actions, synced_states) = fill_folders_menu(&folders, &add_folders, &cfg.folders, &[]);
+        let (folder_actions, synced_states) = fill_folders_menu(&folders, &add_folders, &cfg.folders, &[], &[]);
         let sep = PredefinedMenuItem::separator;
         let menu = Menu::new();
         menu.append_items(&[
@@ -201,7 +203,7 @@ impl Menus {
             actions,
             folder_actions,
             synced_states,
-            shown_folders: (cfg.folders.clone(), Vec::new()),
+            shown_folders: (cfg.folders.clone(), Vec::new(), Vec::new()),
         })
     }
 
@@ -234,15 +236,16 @@ impl Menus {
     }
 
     /// Rebuilds the folder list when the config or the master's list of folders changed (by the tray, the CLI or by hand).
-    fn sync_folders(&mut self, folders: &[Folder], on_master: &[(String, bool)]) {
+    fn sync_folders(&mut self, folders: &[Folder], on_master: &[(String, bool)], deleted: &[String]) {
         let available: Vec<(String, bool)> = on_master
             .iter()
             .filter(|(n, _)| !folders.iter().any(|f| !f.is_computer() && &f.name == n))
             .cloned()
             .collect();
-        if (folders, available.as_slice()) != (self.shown_folders.0.as_slice(), self.shown_folders.1.as_slice()) {
-            (self.folder_actions, self.synced_states) = fill_folders_menu(&self.folders, &self.add_folders, folders, &available);
-            self.shown_folders = (folders.to_vec(), available);
+        let shown = &self.shown_folders;
+        if (folders, available.as_slice(), deleted) != (shown.0.as_slice(), shown.1.as_slice(), shown.2.as_slice()) {
+            (self.folder_actions, self.synced_states) = fill_folders_menu(&self.folders, &self.add_folders, folders, &available, deleted);
+            self.shown_folders = (folders.to_vec(), available, deleted.to_vec());
         }
     }
 
@@ -264,7 +267,7 @@ impl Menus {
 
 /// Fills the "Folders" submenu: one entry per folder of this computer (⇄ for one synced with a folder of the master), the folders of
 /// the master that are not synced here yet, and the ways to add one.
-fn fill_folders_menu(menu: &Submenu, add_item: &MenuItem, folders: &[Folder], available: &[(String, bool)]) -> (Actions, Vec<(String, Line)>) {
+fn fill_folders_menu(menu: &Submenu, add_item: &MenuItem, folders: &[Folder], available: &[(String, bool)], deleted: &[String]) -> (Actions, Vec<(String, Line)>) {
     for _ in 0..menu.items().len() {
         menu.remove_at(0);
     }
@@ -309,6 +312,20 @@ fn fill_folders_menu(menu: &Submenu, add_item: &MenuItem, folders: &[Folder], av
     actions.push((new.id().clone(), Action::NewSynced));
     let _ = menu.append(&new);
     let _ = menu.append(add_item);
+    // Only while the last "Sync now" (or cycle) found folders that the master dropped and that hold nothing here.
+    if !deleted.is_empty() {
+        let item = MenuItem::new(
+            if deleted.len() == 1 {
+                "Remove the folder deleted on the server...".to_string()
+            } else {
+                format!("Remove {} folders deleted on the server...", deleted.len())
+            },
+            true,
+            None,
+        );
+        actions.push((item.id().clone(), Action::RemoveDeleted(deleted.to_vec())));
+        let _ = menu.append(&item);
+    }
     (actions, states)
 }
 
@@ -381,6 +398,7 @@ impl Env {
                 }
             }
             Action::RemoveFolder(name) => remove_folder_dialog(&self.config_path, &name),
+            Action::RemoveDeleted(names) => remove_deleted_dialog(&self.config_path, &names),
             Action::AttachSynced(name) => {
                 let read_only = daemon::read_status(&self.state_dir).is_some_and(|s| s.synced_readonly.contains(&name));
                 attach_existing_synced(&self.config_path, &name, read_only);
@@ -512,7 +530,8 @@ pub fn run(config_path: PathBuf) -> Result<()> {
             if let Some(c) = &cfg_now {
                 let readonly = status.as_ref().map(|s| s.synced_readonly.as_slice()).unwrap_or_default();
                 let on_master: Vec<(String, bool)> = env.on_master.locked().iter().map(|(n, _)| (n.clone(), readonly.contains(n))).collect();
-                menus.sync_folders(&c.folders, &on_master);
+                let deleted = status.as_ref().map(|s| s.deleted_on_master.as_slice()).unwrap_or_default();
+                menus.sync_folders(&c.folders, &on_master, deleted);
             }
             menus.show_synced_state(status.as_ref(), unix);
             ask_about_conflicts(&config_path, status.as_ref());

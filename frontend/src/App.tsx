@@ -19,7 +19,6 @@ const Mirrors = lazy(() => import('./pages/mirrors.tsx'))
 const Settings = lazy(() => import('./pages/settings.tsx'))
 const Queue = lazy(() => import('./pages/queue.tsx'))
 const Sources = lazy(() => import('./pages/sources.tsx'))
-const Folders = lazy(() => import('./pages/folders.tsx'))
 const Timeline = lazy(() => import('./pages/timeline.tsx'))
 const Albums = lazy(() => import('./pages/albums.tsx'))
 const Album = lazy(() => import('./pages/album.tsx'))
@@ -78,7 +77,7 @@ export default function App() {
             <Route path="/devices" element={<Only allow="workspace" role={role}><Devices /></Only>} />
             <Route path="/devices/:name" element={<Only allow="workspace" role={role}><DeviceDetailPage /></Only>} />
             <Route path="/queue" element={<Queue />} />
-            <Route path="/folders" element={<Only allow="workspace" role={role}><Folders /></Only>} />
+            <Route path="/folders" element={<Navigate to="/devices" replace />} />
             <Route path="/sources" element={<Only allow="workspace" role={role}><Sources /></Only>} />
             <Route path="/mirrors" element={<Only allow="admin" role={role}><Mirrors /></Only>} />
             <Route path="/settings" element={<Only allow="admin" role={role}><Settings /></Only>} />

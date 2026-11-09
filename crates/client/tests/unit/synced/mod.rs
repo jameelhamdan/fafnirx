@@ -338,3 +338,30 @@ async fn the_state_of_a_folder_says_how_it_is_doing() {
 }
 
 mod held;
+
+#[test]
+fn only_a_folder_gone_from_the_master_and_empty_here_can_be_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = |name: &str, files: &[&str]| {
+        let path = dir.path().join(name.replace('/', "_"));
+        std::fs::create_dir_all(&path).unwrap();
+        for f in files {
+            std::fs::write(path.join(f), b"x").unwrap();
+        }
+        Folder {
+            path,
+            name: name.into(),
+            target: crate::config::Target::Folder,
+            id: None,
+            mode: Mode::Both,
+            ask_timeout_hours: 0,
+        }
+    };
+    let (gone, kept, still_there) = (folder("me/gone", &[]), folder("me/kept", &["a.txt"]), folder("me/there", &[]));
+    let mut missing = folder("me/missing", &[]);
+    std::fs::remove_dir(&missing.path).unwrap();
+    missing.path = dir.path().join("not-mounted");
+    let on_master = vec![("me/there".to_string(), true)];
+    let all = [gone, kept, still_there, missing];
+    assert_eq!(deleted_and_empty(all.iter(), &on_master), vec!["me/gone".to_string()]);
+}

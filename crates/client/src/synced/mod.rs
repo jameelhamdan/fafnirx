@@ -147,6 +147,16 @@ pub fn status_of(synced: &Folder, state: &State) -> SyncedStatus {
     }
 }
 
+/// The attached folders that the master no longer lists and that hold nothing here (no file, no folder): their registration can
+/// go without losing anything. A folder that is missing or cannot be read is left alone (it may be a disk that is not mounted).
+pub fn deleted_and_empty<'a>(attached: impl Iterator<Item = &'a Folder>, on_master: &[(String, bool)]) -> Vec<String> {
+    let empty = |path: &Path| std::fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_none());
+    attached
+        .filter(|f| !on_master.iter().any(|(n, _)| *n == f.name) && empty(&f.path))
+        .map(|f| f.name.clone())
+        .collect()
+}
+
 impl Attached {
     pub fn open(cfg: &Config, token: &str, state_dir: &Path, synced: &Folder, errors: Arc<Mutex<Vec<String>>>) -> Result<Self> {
         let client = net::synced_client(cfg, token, &crate::service::instance::client_id(state_dir), synced.key())?;

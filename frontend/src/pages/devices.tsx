@@ -1,9 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
-import { Plus } from 'lucide-react'
-import { useState } from 'react'
+import { ChevronRight, Plus } from 'lucide-react'
+import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { ActivityView, Empty, ErrorNote, KindBadge, PageHeader, StatusDot } from '@/components/common'
+import { ActivityView, Empty, ErrorNote, PageHeader, StatusDot } from '@/components/common'
 import { EnrollDialog } from '@/components/enroll-dialog'
+import { AddFolder, FolderPanel, FoldersSection, SourceBadge } from '@/components/folders-section'
+import { AddMasterFolder } from '@/components/master-folders'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { FormDialog } from '@/components/form-dialog'
 import { Input } from '@/components/ui/input'
@@ -13,11 +16,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { useNow } from '@/hooks/use-now'
 import { api } from '@/lib/api'
 import { ago, bytes, count } from '@/lib/format'
-import type { DeviceDetail, DeviceSummary } from '@/lib/types'
+import type { DeviceDetail, DeviceSummary, Folder, UserInfo } from '@/lib/types'
 import { useT } from '@/lib/i18n'
-import { filesLink } from '@/lib/links'
-import { deviceAddress, useSession } from '@/lib/session'
-import type { UserInfo } from '@/lib/types'
+import { folderLink } from '@/lib/links'
+import { deviceAddress, useRole, useSession } from '@/lib/session'
 import { useApiMutation } from '@/lib/mutation'
 
 function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail) => void }) {
@@ -69,29 +71,77 @@ function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail) => voi
   )
 }
 
-function Row({ d, now, showUser }: { d: DeviceSummary; now: number; showUser: boolean }) {
+/** The root folders of a computer, as it last said, with what each one is: shared, filled by a source, read only. */
+function DeviceFolders({ device, folders, onOpen }: { device: DeviceDetail['device']; folders: Folder[]; onOpen: (folder: string) => void }) {
   const t = useT()
+  const now = useNow()
+  const { data, error } = useQuery({ queryKey: ['device', device.folder], queryFn: () => api.get<DeviceDetail>(`/api/devices/${deviceAddress(device.folder)}`) })
+  if (error) return <ErrorNote error={error} />
+  if (!data) return <Skeleton className="h-10" />
+  if (data.folders.length === 0) return <p className="text-sm text-muted-foreground">{t('No folder is attached to this computer yet.')}</p>
   return (
-    <TableRow>
-      <TableCell>
-        <div className="flex items-center gap-2">
-          <Link to={d.kind === 'device' ? `/devices/${deviceAddress(d.folder)}` : filesLink(d.folder)} className="font-medium hover:underline">{showUser ? d.folder : d.name}</Link>
-          <KindBadge kind={d.kind} />
-        </div>
-        {d.activity && <div className="mt-2 max-w-sm"><ActivityView activity={d.activity} /></div>}
-      </TableCell>
-      <TableCell>
-        {d.kind === 'device' ? (
-          <StatusDot status={d.revoked ? 'revoked' : d.online ? 'online' : 'offline'} label={d.revoked ? t('Revoked') : d.online ? t('Online') : t('Offline')} />
-        ) : (
-          <span className="text-muted-foreground">—</span>
-        )}
-      </TableCell>
-      <TableCell className="hidden md:table-cell text-muted-foreground">{d.os ?? '—'}</TableCell>
-      <TableCell className="text-right tabular-nums">{count(d.files)}</TableCell>
-      <TableCell className="text-right tabular-nums">{bytes(d.bytes)}</TableCell>
-      <TableCell className="hidden sm:table-cell text-muted-foreground">{d.kind === 'device' ? ago(d.last_seen, now) : ago(d.last_collected, now)}</TableCell>
-    </TableRow>
+    <ul className="divide-y">
+      {data.folders.map((r) => {
+        const folder = folders.find((f) => f.folder === r.name)
+        const trouble = r.last_error !== '' || r.failing > 0
+        return (
+          <li key={r.name} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm">
+            <Link to={folderLink(r.name)} className="font-medium hover:underline">{folder?.mine ? folder.name : r.name}</Link>
+            {r.last_cycle === 0 ? <Badge variant="outline">{t('Not synced yet')}</Badge> : trouble ? <Badge variant="destructive">{t('Needs attention')}</Badge> : <Badge variant="secondary">{t('In step')}</Badge>}
+            {folder && <SourceBadge folder={folder} />}
+            {folder?.shared && <Badge variant="outline">{t('Shared')}</Badge>}
+            {folder && !folder.can_write && <Badge variant="outline">{t('Read only')}</Badge>}
+            <span className="text-muted-foreground">{t('{files} files, {size}', { files: count(r.files), size: bytes(r.bytes) })}</span>
+            {r.last_cycle > 0 && <span className="text-muted-foreground">{t('Synced {when}', { when: ago(r.last_cycle, now) })}</span>}
+            {folder && <Button size="sm" variant="ghost" className="ms-auto" onClick={() => onOpen(folder.folder)}>{t('Details')}</Button>}
+            {r.last_error && <p className="basis-full text-xs text-destructive">{r.last_error}</p>}
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
+function Row({ d, now, showUser, folders, onOpen }: { d: DeviceSummary; now: number; showUser: boolean; folders: Folder[]; onOpen: (folder: string) => void }) {
+  const t = useT()
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <TableRow>
+        <TableCell>
+          <div className="flex items-center gap-2">
+            <Button size="icon" variant="ghost" className="size-7" aria-expanded={open} aria-label={open ? t('Hide folders') : t('Show folders')} onClick={() => setOpen(!open)}>
+              <ChevronRight className={`size-4 transition-transform ${open ? 'rotate-90' : 'rtl:rotate-180'}`} />
+            </Button>
+            <Link to={`/devices/${deviceAddress(d.folder)}`} className="font-medium hover:underline">{showUser ? d.folder : d.name}</Link>
+          </div>
+          {d.activity && <div className="mt-2 max-w-sm ps-9"><ActivityView activity={d.activity} /></div>}
+        </TableCell>
+        <TableCell><StatusDot status={d.revoked ? 'revoked' : d.online ? 'online' : 'offline'} label={d.revoked ? t('Revoked') : d.online ? t('Online') : t('Offline')} /></TableCell>
+        <TableCell className="hidden md:table-cell text-muted-foreground">{d.os ?? '—'}</TableCell>
+        <TableCell className="text-right tabular-nums">{count(d.files)}</TableCell>
+        <TableCell className="text-right tabular-nums">{bytes(d.bytes)}</TableCell>
+        <TableCell className="hidden sm:table-cell text-muted-foreground">{ago(d.last_seen, now)}</TableCell>
+      </TableRow>
+      {open && (
+        <TableRow className="hover:bg-transparent">
+          <TableCell colSpan={6} className="bg-muted/30 ps-11"><DeviceFolders device={d} folders={folders} onOpen={onOpen} /></TableCell>
+        </TableRow>
+      )}
+    </>
+  )
+}
+
+/** The heading of one of the two lists on the page, with the buttons that add to it. */
+function SectionHeader({ title, description, actions }: { title: string; description: string; actions: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h2 className="text-xl font-semibold tracking-tight">{title}</h2>
+        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{description}</p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">{actions}</div>
+    </div>
   )
 }
 
@@ -99,38 +149,60 @@ export default function Devices() {
   const t = useT()
   const now = useNow()
   const [made, setMade] = useState<DeviceDetail | null>(null)
-  const { data, error } = useQuery({ queryKey: ['devices'], queryFn: () => api.get<DeviceSummary[]>('/api/devices') })
-  // An administrator sees the devices of every user, so a device is named with its user.
-  const showUser = useSession()?.user?.role === 'admin'
+  const [opened, setOpened] = useState<string | null>(null)
+  const admin = useRole() === 'admin'
+  const devices = useQuery({ queryKey: ['devices'], queryFn: () => api.get<DeviceSummary[]>('/api/devices') })
+  const folders = useQuery({ queryKey: ['folders'], queryFn: () => api.get<Folder[]>('/api/folders') })
+  // The folders that live on the master (local and master files) are listed below; this list is the computers.
+  const computers = devices.data?.filter((d) => d.kind === 'device')
+  const all = folders.data ?? []
 
   return (
-    <div>
-      <PageHeader
-        title={t('Devices')}
-        description={t('Computers and phones that send their folders here, and local folders that live on the master itself.')}
-        actions={<AddDeviceDialog onCreated={setMade} />}
-      />
-      {error ? <ErrorNote error={error} /> : !data ? (
-        <Skeleton className="h-48" />
-      ) : data.length === 0 ? (
-        <Empty title={t('No devices yet')}>{t('Add a device to get a token and the command that connects it.')}</Empty>
-      ) : (
-        <div className="rounded-lg border bg-card">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t('Name')}</TableHead>
-                <TableHead>{t('Status')}</TableHead>
-                <TableHead className="hidden md:table-cell">{t('System')}</TableHead>
-                <TableHead className="text-right">{t('Files')}</TableHead>
-                <TableHead className="text-right">{t('Size')}</TableHead>
-                <TableHead className="hidden sm:table-cell">{t('Last seen')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>{data.map((d) => <Row key={d.folder} d={d} now={now} showUser={showUser} />)}</TableBody>
-          </Table>
-        </div>
-      )}
+    <div className="space-y-10">
+      <PageHeader title={t('Devices & folders')} />
+      <section className="-mt-4 space-y-4">
+        <SectionHeader
+          title={t('Devices')}
+          description={t('Computers and phones that send their folders here. Open one to see its folders.')}
+          actions={<AddDeviceDialog onCreated={setMade} />}
+        />
+        {devices.error ? <ErrorNote error={devices.error} /> : !computers ? (
+          <Skeleton className="h-48" />
+        ) : computers.length === 0 ? (
+          <Empty title={t('No devices yet')}>{t('Add a device to get a token and the command that connects it.')}</Empty>
+        ) : (
+          <div className="rounded-lg border bg-card">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t('Name')}</TableHead>
+                  <TableHead>{t('Status')}</TableHead>
+                  <TableHead className="hidden md:table-cell">{t('System')}</TableHead>
+                  <TableHead className="text-right">{t('Files')}</TableHead>
+                  <TableHead className="text-right">{t('Size')}</TableHead>
+                  <TableHead className="hidden sm:table-cell">{t('Last seen')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>{computers.map((d) => <Row key={d.folder} d={d} now={now} showUser={admin} folders={all} onOpen={setOpened} />)}</TableBody>
+            </Table>
+          </div>
+        )}
+      </section>
+      <section className="space-y-4">
+        <SectionHeader
+          title={t('Folders')}
+          description={t('Folders that belong to you, or to the master files, not to one computer. Attach one to a folder of each computer and it stays the same on all of them. Other users can use one of yours only when you add them here.')}
+          actions={<>{admin && <AddMasterFolder />}<AddFolder onMade={setOpened} /></>}
+        />
+        {folders.error ? <ErrorNote error={folders.error} /> : !folders.data ? (
+          <Skeleton className="h-32" />
+        ) : all.length === 0 ? (
+          <Empty title={t('No folders')}>{t('Make one, then attach a folder of each computer to it.')}</Empty>
+        ) : (
+          <FoldersSection folders={all} onOpen={setOpened} />
+        )}
+      </section>
+      <FolderPanel folder={all.find((f) => f.folder === opened)} onClose={() => setOpened(null)} />
       <EnrollDialog name={made?.device.folder ?? ''} token={made?.token ?? null} onClose={() => setMade(null)} />
     </div>
   )

@@ -157,6 +157,9 @@ pub struct Status {
     pub synced_on_master: Vec<(String, bool)>,
     /// Those of them the user can read but not change: they are received here and nothing is sent.
     pub synced_readonly: Vec<String>,
+    /// Attached folders the master no longer lists (deleted there, or no longer shared) whose folder here is empty: the tray
+    /// offers to stop syncing them. Checked on every cycle, so "Sync now" brings it up to date.
+    pub deleted_on_master: Vec<String>,
     pub updated: i64,
 }
 

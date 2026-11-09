@@ -8,9 +8,8 @@ menu (top right), which also logs you out. Pages update live.
 | Dashboard | Alerts, totals, disk, online devices, activity, recent changes |
 | Timeline, Favorites, Archive, Albums, Trash | Photos and videos by month and day; grouped; deleted files |
 | Files | Browse, search, preview, download, upload, move, delete |
-| Folders | Yours, shared with you, and master folders: make, share, rename, delete |
 | Processing | Background work |
-| Devices, Sources, Mirrors | Computers that send; storage that is read; offsite copies |
+| Devices, Sources, Mirrors | Computers that send, with their folders and your other folders; storage that is read; offsite copies |
 | Users, Settings | Administrators only |
 
 ## Users and roles
@@ -85,7 +84,11 @@ The Dashboard and device pages list what happened to files, kept 90 days: `add`,
 `delete`. A rename is one event and not a delete: the old path is hidden, not in the Trash, and removed when retention ends.
 Metadata work, retention and sign-ins are not logged.
 
-## Devices
+## Devices and folders
+
+The **Devices** page lists the computers; open a row to see the folders attached to it (state, size, last sync). Below it are all
+folders: yours, shared with you, and master folders (make, share, rename, delete). A folder that a source fills carries a
+**Source: name** badge, and there is a filter for them.
 
 **Add device** gives a name and a token (shown once). **Rotate token** replaces it. **Revoke** stops uploads and keeps the data.
 **Release** lets another computer take the device over.
@@ -149,7 +152,9 @@ deletions are sent, or send them now with `fafnirx release-deletes`.
 
 Green is online, red an error, amber paused, grey not running. The menu shows what is happening and has pause/resume, sync now,
 **Check for updates**, **Folders** (those of this computer, and the folders of the master you can sync), and links to the config, log,
-client data folder and web app. On macOS and Linux the folder entries need no password: the tray leaves a request and the
+client data folder and web app. Every sync (**Sync now** too, at most every 10 s) asks the master for its folders; when a folder attached here is gone from
+the master (deleted, or no longer shared with you) and its folder on this computer is empty, **Folders** gets the entry
+**Remove N folders deleted on the server**, which stops syncing them after you confirm. A folder that still holds files is never offered. On macOS and Linux the folder entries need no password: the tray leaves a request and the
 service applies it, only for folders owned by the user who asked.
 
 ## Folders: sync both ways
@@ -176,7 +181,7 @@ fafnirx folder keep ana/family               # keep files whose deletion is held
 fafnirx folder resolve ana/family theirs     # answer files waiting under "ask"
 ```
 
-The tray does the same from **Folders**. A folder is named `<owner>/<name>` (or `master:<folder>`) everywhere; the short
+The tray does the same from its **Folders** menu. A folder is named `<owner>/<name>` (or `master:<folder>`) everywhere; the short
 name works when it is unambiguous. Files the client creates in an attached folder belong to the folder's owner.
 
 - **Cycle.** Receive, then send. The master tells running clients about changes (within seconds); a poll every minute is the
@@ -193,7 +198,7 @@ name works when it is unambiguous. Files the client creates in an attached folde
 - **Deletes.** Web app deletes apply on every computer; the Trash keeps a version. Deletes by other computers pass the delete
   guard; a held one waits until `release-deletes` or `folder keep`, and raises **Deletions held back**.
 - **Status.** `fafnirx status` shows each folder (in step or not, last sync, held deletions, last problem), also with the client
-  stopped. The **Folders** page shows the same per computer, and the command to attach it.
+  stopped. The **Devices** page shows the same per computer, and the command to attach it.
 - **Access.** The owner adds users (read-only or read and change) and removes them; a member can leave. A computer attached to a folder its user can only read receives it and sends nothing (the tray and `folder list` mark it read-only). Removing a member ends
   their access at once; their local files stay.
 - **Deleting a folder.** Delete its files first; then the folder, its trash and history go. Attached computers keep their files;
