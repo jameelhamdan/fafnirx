@@ -6,6 +6,7 @@ import { Input } from './ui/input'
 import { Label } from './ui/label'
 import { toast } from 'sonner'
 import { copyText } from '@/lib/clipboard'
+import { INSTALL_SCRIPT } from '@/lib/links'
 import { useT } from '@/lib/i18n'
 
 /** Where devices reach the master: the gRPC port on this host, or this host itself behind an https proxy. */
@@ -60,7 +61,10 @@ export function EnrollDialog({ name, token, onClose }: { name: string; token: st
           </div>
           <div className="space-y-2">
             <Label>{t('Command')}</Label>
-            <CopyBox text={`fafnirx enroll --server ${server}`} />
+            <p className="text-xs text-muted-foreground">macOS, Ubuntu</p>
+            <CopyBox text={`curl -fsSL ${INSTALL_SCRIPT} | sh -s -- --server ${server}`} />
+            <p className="text-xs text-muted-foreground">Windows</p>
+            <CopyBox text={`fafnirx install --server ${server}`} />
           </div>
           <div className="space-y-2">
             <Label>{t('Token')}</Label>

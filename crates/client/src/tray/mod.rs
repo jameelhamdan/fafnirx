@@ -433,7 +433,11 @@ pub fn run(config_path: PathBuf) -> Result<()> {
     let marker = daemon::paused_marker(&state_dir);
     let (restart_marker, started) = (daemon::restart_tray_marker(&state_dir), std::time::SystemTime::now());
 
-    let event_loop = EventLoopBuilder::new().build();
+    let mut builder = EventLoopBuilder::new();
+    // A menu-bar program: no Dock icon and no app menu, and it is not taken for an app that must be brought to the front.
+    #[cfg(target_os = "macos")]
+    tao::platform::macos::EventLoopBuilderExtMacOS::with_activation_policy(&mut builder, tao::platform::macos::ActivationPolicy::Accessory);
+    let event_loop = builder.build();
     let mut tray: Option<TrayIcon> = None;
     let mut shown: Option<(Light, bool)> = None;
     let mut current = View { light: Light::Stopped, text: String::new(), syncing: false, stopped: true };

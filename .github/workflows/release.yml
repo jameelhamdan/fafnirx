@@ -17,7 +17,10 @@
 #                 meanwhile, and then nothing else is published: run it again), the image goes to Docker Hub (<version>,
 #                 <major>.<minor>, latest), then the tag and the GitHub Release with the client files, then (if ticked)
 #                 the Homebrew formula
-#   6. cleanup    the temporary branch is deleted, whatever happened
+#   6. branch     a release that was published KEEPS its branch release/X.Y.Z, pointing at the released commit: check it out
+#                 to go back to that version, or branch from it for a fix. A branch of a run that did not publish is deleted
+#
+# (Between steps 2 and 5 the branch is temporary: every job builds that commit. It becomes permanent only when step 5 is done.)
 #
 # A run that fails before step 5 leaves nothing behind. If step 5 fails halfway, run it again with the same version:
 # the version commit is on master by then, so the rerun has nothing to commit and releases master as it is.
@@ -309,16 +312,28 @@ jobs:
       version: ${{ needs.validate.outputs.version }}
     secrets: inherit
 
-  # The temporary branch is not needed any more, or never will be (a failed run, a dry run).
-  cleanup:
-    if: ${{ always() && needs.prepare.outputs.bumped == 'true' }}
+  # The branch release/X.Y.Z stays for a release that was published (also when Cargo.toml already had the version and no
+  # commit, hence no branch, was made); a run that did not publish leaves no branch behind.
+  branch:
+    if: ${{ always() && needs.prepare.result == 'success' }}
     needs: [validate, prepare, ci, image, client, approve, land, publish-image, release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Delete the temporary branch
+      - name: Keep or delete the branch of this release
         env:
           GH_TOKEN: ${{ github.token }}
           BRANCH: release/${{ needs.validate.outputs.version }}
-        run: gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/$BRANCH" || true
+          SHA: ${{ needs.prepare.outputs.sha }}
+          BUMPED: ${{ needs.prepare.outputs.bumped }}
+          RELEASED: ${{ needs.release.result }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ "$RELEASED" = success ]; then
+            gh api -X POST "repos/$REPO/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$SHA" >/dev/null 2>&1 \
+              || gh api -X PATCH "repos/$REPO/git/refs/heads/$BRANCH" -f sha="$SHA" -F force=true >/dev/null
+            echo "kept $BRANCH at $SHA"
+          elif [ "$BUMPED" = true ]; then
+            gh api -X DELETE "repos/$REPO/git/refs/heads/$BRANCH" || true
+          fi

@@ -48,9 +48,12 @@ pub fn client_plist(exe: &Path, config: &Path) -> String {
     launchd_plist("io.fafnirx.client", exe, config, &["run", "--log-file"], true)
 }
 
-/// The LaunchAgent of the tray icon, which is not restarted when the user quits it.
+/// The LaunchAgent of the tray icon, which is not restarted when the user quits it. It belongs in the graphical session only (a
+/// menu-bar icon has nowhere to go in an SSH login), and what it prints is kept for when it does not appear.
 pub fn tray_plist(exe: &Path, config: &Path) -> String {
-    launchd_plist("io.fafnirx.tray", exe, config, &["tray"], false)
+    let extra = "<key>LimitLoadToSessionType</key><string>Aqua</string>\n<key>ProcessType</key><string>Interactive</string>\n\
+                 <key>StandardErrorPath</key><string>/tmp/fafnirx-tray.log</string>\n</dict></plist>\n";
+    launchd_plist("io.fafnirx.tray", exe, config, &["tray"], false).replace("</dict></plist>\n", extra)
 }
 
 pub fn tray_desktop_entry(exe: &Path, config: &Path) -> String {
@@ -141,6 +144,34 @@ fn console_user() -> Option<String> {
     let out = Command::new("stat").args(["-f", "%u", "/dev/console"]).output().ok()?;
     let uid = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (!uid.is_empty() && uid != "0").then_some(uid)
+}
+
+/// Makes sure the tray starts when a user logs in: writes its LaunchAgent (macOS) or autostart entry (Linux) when it is missing or
+/// belongs to another program file, and on a Mac loads it for the user at the console. An update replaces only the program file,
+/// so a computer that got here from a version without the entry would otherwise never have a tray. Only the service (root) does
+/// this. Best effort.
+pub fn ensure_login_start(config: &Path) {
+    if !cfg!(feature = "tray") || !super::elevate::is_admin() || !crate::config::is_system_config(config) {
+        return;
+    }
+    let exe = fafnirx_common::plain_path(&super::program());
+    let (path, content) = if cfg!(target_os = "macos") {
+        (MAC_TRAY, tray_plist(&exe, config))
+    } else {
+        (LINUX_TRAY, tray_desktop_entry(&exe, config))
+    };
+    if std::fs::read_to_string(path).is_ok_and(|current| current == content) {
+        return;
+    }
+    if let Err(e) = std::fs::create_dir_all(Path::new(path).parent().unwrap_or(Path::new("/"))).and_then(|()| std::fs::write(path, content)) {
+        tracing::warn!("could not make the tray start when you log in ({path}): {e}");
+        return;
+    }
+    if cfg!(target_os = "macos") {
+        if let Some(uid) = console_user() {
+            let _ = Command::new("launchctl").args(["asuser", &uid, "launchctl", "load", "-w", MAC_TRAY]).status();
+        }
+    }
 }
 
 /// Installs the service and the tray of every user, and starts the service. Needs an administrator; the config of the computer

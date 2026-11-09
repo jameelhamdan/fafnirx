@@ -6,8 +6,9 @@
 #
 # Writes `sha` (the commit to build, test and release) and `bumped` (whether a commit was made) to $GITHUB_OUTPUT.
 #
-# The commit is pushed to the temporary branch release/<version>, not to master: every job of the release checks out
-# that exact commit, so what is tested is what is released, and master is not touched until all of it has passed. If the
+# The commit is pushed to the branch release/<version>, not to master: every job of the release checks out that exact
+# commit, so what is tested is what is released, and master is not touched until all of it has passed. The workflow keeps
+# the branch once the release is published and deletes it if it is not. If the
 # version is already the one in Cargo.toml there is nothing to commit and the commit to release from is the one given.
 set -euo pipefail
 

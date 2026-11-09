@@ -158,7 +158,7 @@ Actions → **Release** → Run workflow on `master` with `X.Y.Z` (*dry_run* reh
 1. **Check:** version is `X.Y.Z`, newer than all releases, unused, not below `Cargo.toml`; publishing secrets exist; Docker Hub login works.
 2. **Version commit** by `prepare-release.sh` (`Cargo.toml`, `Cargo.lock`) on branch `release/X.Y.Z`; every later job tests that commit.
 3. **Verify:** CI; client builds for Windows, macOS, Linux (installer, `.deb`, and the plain `fafnirx-X.Y.Z-<os>-<arch>` + `.sha256` clients update from); Docker image started on amd64 and arm64.
-4. **Publish, only if all passed:** fast-forward `master`, push the image (`<version>`, `<major>.<minor>`, `latest`), tag and GitHub Release, then Homebrew. The temporary branch is deleted.
+4. **Publish, only if all passed:** fast-forward `master`, push the image (`<version>`, `<major>.<minor>`, `latest`), tag and GitHub Release, then Homebrew. `release/X.Y.Z` stays at the released commit (check it out to go back to that version, or branch from it for a fix); a run that did not publish deletes it.
 
 A failure before step 4 leaves `master` untouched; if `master` moved, nothing is published: run again. If publishing fails
 halfway, run again with the same version. Secrets (repository, not environment): `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` (access

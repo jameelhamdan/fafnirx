@@ -50,6 +50,29 @@ pub fn install_service(config: &Path, exe: &Path, dry: bool) -> Result<()> {
     Ok(())
 }
 
+/// Makes sure the client (and the tray) start at login, adding the entries that are missing. An update replaces only the program
+/// file, so a computer that got here from a version that started the client another way (a Windows service, an older entry)
+/// would otherwise never start it again after a restart. Best effort: the client runs without it.
+pub fn ensure_login_start(config: &Path) {
+    let (client, tray) = user_commands(&fafnirx_common::plain_path(&super::program()), config);
+    let mut entries = vec![("fafnirx", client)];
+    if cfg!(feature = "tray") {
+        entries.push(("fafnirx-tray", tray));
+    }
+    for (name, command) in entries {
+        let reg = |args: &[&str]| {
+            Command::new("reg")
+                .args(args)
+                .creation_flags(CREATE_NO_WINDOW)
+                .output()
+                .is_ok_and(|o| o.status.success())
+        };
+        if !reg(&["query", WINDOWS_USER_RUN_KEY, "/v", name]) && !reg(&["add", WINDOWS_USER_RUN_KEY, "/v", name, "/t", "REG_SZ", "/d", &command, "/f"]) {
+            tracing::warn!("could not make {name} start when you log in");
+        }
+    }
+}
+
 /// Removes the entries that start the client and the tray at login.
 pub fn uninstall(config_path: &Path, dry: bool) -> Result<()> {
     for name in ["fafnirx", "fafnirx-tray"] {

@@ -97,7 +97,7 @@ Check with `fafnirx status` and `fafnirx folder list`; the device shows online w
 
 A folder is stored as `<you>/<device>/<name>/`; the name defaults to the folder's own (a second `photos` becomes `photos-2`) or
 use `--name`. Names are compared ignoring case and accents; `folder add` refuses a clash. **Address:** on a LAN/VPN
-`http://<master>:7443`; over the internet an `https://` address in front of the master (`enroll` warns about plain `http://`).
+`http://<master>:7443`; over the internet an `https://` address in front of the master (`install` warns about plain `http://`).
 
 **Uninstall:** `sudo fafnirx uninstall` (Windows: `fafnirx uninstall`, or *Apps* → *fafnirx*; Debian: `sudo apt remove fafnirx`) stops the
 client and the tray and removes the program; `--purge` also removes the config, the token and the state of this client. Data on the master
@@ -107,9 +107,9 @@ stays. **From source:** [Development](development.md#build-and-run).
 
 | Symptom | Likely cause |
 |---|---|
-| `enroll`: `could not reach ...` | Wrong address/port, firewall, master down. The device is enrolled and connects once fixed |
+| `install`: `could not reach ...` | Wrong address/port, firewall, master down. The device is enrolled and connects once fixed |
 | `not sending: device in use ...` | Another computer uses the token: **Release** on the device page, or wait 90 s |
-| `unknown or revoked device token` | Token rotated or device revoked: enroll again |
+| `unknown or revoked device token` | Token rotated or device revoked: run `fafnirx install --server <master>` again with the new token |
 | `status` says holding deletions | A large part of a folder vanished: [delete guard](usage.md#the-delete-guard) |
 | `folder add`: `... overlaps ... collect one of them` | A folder cannot sit inside, or contain, another collected folder. To share a folder inside one you collect, `folder remove` the outer one and `folder add` its other subfolders (the master keeps its data) |
 | macOS: `cannot replace the file: Operation not permitted` (or the tray says `Needs Full Disk Access`) | The client lacks Full Disk Access for a folder in Documents, Desktop, Downloads, iCloud Drive or another volume: *Privacy & Security* → *Full Disk Access* → add `/usr/local/bin/fafnirx`, then `sudo fafnirx restart`. If it is not that: the file is locked (`ls -lO` shows `uchg`; `sudo chflags nouchg <file>`) |

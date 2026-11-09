@@ -392,6 +392,7 @@ pub async fn run(config_path: PathBuf) -> Result<()> {
         println!("fafnirx is already running for {}", config_path.display());
         return Ok(());
     }
+    crate::service::ensure_login_start(&config_path);
     let result = serve(config_path, cfg, state_dir.clone()).await;
     if let Err(e) = &result {
         StatusFile::new(status_file(&state_dir)).edit(|s| s.fatal = format!("{e:#}"));

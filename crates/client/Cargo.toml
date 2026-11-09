@@ -52,10 +52,6 @@ rfd = { version = "0.15", features = ["common-controls-v6"], optional = true }
 tray-icon = { version = "0.19", optional = true }
 resvg = { version = "0.48.1", default-features = false, optional = true }
 
-# The Windows service: runs under the Service Control Manager, and is started, stopped and removed through it.
-[target.'cfg(windows)'.dependencies]
-windows-service = "0.8"
-
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

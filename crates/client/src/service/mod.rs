@@ -19,6 +19,7 @@ use unix as os;
 #[cfg(windows)]
 use windows as os;
 
+pub use os::ensure_login_start;
 #[cfg(windows)]
 pub use os::spawn_detached;
 #[cfg(feature = "tray")]

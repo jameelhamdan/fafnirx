@@ -1,5 +1,8 @@
 export const REPO = 'https://github.com/jameelhamdan/fafnirx'
 
+/** The installer for Linux and macOS (downloads the client, checks it, runs `fafnirx install`). */
+export const INSTALL_SCRIPT = `${REPO.replace('https://github.com/', 'https://raw.githubusercontent.com/')}/master/installer/get.sh`
+
 /** A page of the documentation on GitHub, optionally at a heading. */
 export const docs = (page: string, heading?: string) => `${REPO}/blob/master/docs/${page}.md${heading ? `#${heading}` : ''}`
 

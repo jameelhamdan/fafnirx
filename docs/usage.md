@@ -109,7 +109,7 @@ fafnirx uninstall [--purge]                     # remove the service, the progra
 fafnirx tray
 ```
 
-The config is a TOML file made by `enroll` (`--config` selects another): `%LocalAppData%\fafnirx\config.toml` on Windows, `/etc/fafnirx/config.toml` on Linux,
+The config is a TOML file made by `fafnirx install --server <master>` (`--config` selects another): `%LocalAppData%\fafnirx\config.toml` on Windows, `/etc/fafnirx/config.toml` on Linux,
 `/Library/Application Support/fafnirx/config.toml` on macOS. The token is in the OS keychain. On macOS and Linux commands that
 change the config ask for `sudo`; on Windows they do not.
 
@@ -124,7 +124,9 @@ web_url = "http://nas.lan:8080" # the tray's link to the web app
 ```
 
 `[[folders]]` tables are written by `folder add`: each has a `path`, a `name` and a `target` (`computer`, the default, or `folder`,
-a folder of the master) and, for the second, a `mode`.
+a folder of the master) and, for the second, a `mode` (`both`, the default, `up`, `keep` or `ask`; a `computer` folder is always `up`)
+and an `id`, set when attaching. With `ask`, `ask_timeout_hours` (default 24, 0 = for ever) is how long a file waits for an answer
+before both versions are kept.
 
 **Service.** On Windows the client belongs to your user: it and the tray start when you log in. On Linux and macOS it is a
 service of the computer (systemd, launchd) that runs as root, starts at boot, is restarted on failure, and reads every user's
