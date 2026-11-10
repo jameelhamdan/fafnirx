@@ -135,7 +135,7 @@ function People({ folder }: { folder: Folder }) {
   return (
     <section className="space-y-3">
       <h3 className="text-sm font-medium">{t('People with access')}</h3>
-      <ul className="divide-y rounded-lg border">
+      <ul className="divide-y rounded-md border">
         <li className="flex items-center gap-3 px-3 py-2">
           <Avatar name={me} />
           <span className="min-w-0 flex-1 truncate text-sm font-medium">{me} <span className="font-normal text-muted-foreground">({t('You')})</span></span>
@@ -410,7 +410,7 @@ export function FoldersSection({ folders, onOpen }: { folders: Folder[]; onOpen:
       {shown.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t('No folder matches.')}</p>
       ) : (
-        <ul className="divide-y rounded-lg border bg-card">
+        <ul className="divide-y rounded-md border bg-card">
           {shown.map((f) => <Row key={f.folder} folder={f} onOpen={() => onOpen(f.folder)} />)}
         </ul>
       )}

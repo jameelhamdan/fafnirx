@@ -7,7 +7,7 @@ import type { Recent } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 const ACTION: Record<string, string> = { add: msg('add'), update: msg('update'), delete: msg('delete'), rename: msg('rename') }
-const COLOUR: Record<string, string> = { delete: 'text-destructive', update: 'text-warning', rename: 'text-foreground' }
+const COLOUR: Record<string, string> = { delete: 'text-destructive', update: 'text-warning', rename: 'text-info' }
 
 /** Recent changes to files, newest first, each linking to the file; `showFolder` names the folder in front of the path. */
 export function EventList({ events, empty, showFolder = false, folder }: { events: Recent[]; empty: string; showFolder?: boolean; folder?: string }) {
@@ -17,12 +17,12 @@ export function EventList({ events, empty, showFolder = false, folder }: { event
   return (
     <ul className="divide-y">
       {events.map((e) => (
-        <li key={e.id} className="flex items-center gap-3 py-2 text-sm">
-          <span className={cn('w-16 shrink-0 text-xs font-medium uppercase', COLOUR[e.action] ?? 'text-success')}>{t(ACTION[e.action] ?? e.action)}</span>
-          <Link to={filesLink(folder ?? e.device, '', e.path)} className="min-w-0 flex-1 truncate hover:underline" title={e.path}>
+        <li key={e.id} className="flex items-baseline gap-2 py-1 text-[13px]">
+          <span className={cn('num w-14 shrink-0 text-[11px] uppercase', COLOUR[e.action] ?? 'text-success')}>{t(ACTION[e.action] ?? e.action)}</span>
+          <Link to={filesLink(folder ?? e.device, '', e.path)} className="num min-w-0 flex-1 text-[12px] [overflow-wrap:anywhere] hover:underline" title={e.path}>
             {showFolder && <span className="text-muted-foreground">{e.device}/</span>}{e.path}
           </Link>
-          <span className="shrink-0 text-xs text-muted-foreground">{ago(e.ts, now)}</span>
+          <span className="num shrink-0 text-[11px] text-muted-foreground">{ago(e.ts, now)}</span>
         </li>
       ))}
     </ul>

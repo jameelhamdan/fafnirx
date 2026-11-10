@@ -1,7 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Empty, ErrorNote, PageHeader, SELECT } from '@/components/common'
+import { DataTable, TableToolbar } from '@/components/data-table'
+import { matches, useTableView, type TableView } from '@/lib/table-view'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { FormDialog } from '@/components/form-dialog'
@@ -94,7 +96,7 @@ function ResetPassword({ user }: { user: UserInfo }) {
     <FormDialog
       open={open}
       onOpenChange={(o) => { setOpen(o); reset.reset() }}
-      trigger={<Button size="sm" variant="outline">{t('New password')}</Button>}
+      trigger={<Button size="xs" variant="outline">{t('New password')}</Button>}
       title={t('New password for {name}', { name: user.name })}
       onSubmit={() => reset.mutate()}
       submit={t('Set password')}
@@ -111,7 +113,7 @@ function ResetPassword({ user }: { user: UserInfo }) {
   )
 }
 
-function Row({ user, me }: { user: UserInfo; me: string }) {
+function Row({ user, me, view }: { user: UserInfo; me: string; view: TableView }) {
   const t = useT()
   const change = useApiMutation((body: { role?: Role; disabled?: boolean }) => api.patch(`/api/users/${encodeURIComponent(user.name)}`, body), {
     invalidate: [['users']],
@@ -120,17 +122,17 @@ function Row({ user, me }: { user: UserInfo; me: string }) {
   return (
     <TableRow className={user.disabled ? 'opacity-60' : undefined}>
       <TableCell>
-        <span className="font-medium">{user.name}</span>
+        <span className="num text-[13px] font-medium">{user.name}</span>
         {user.name === me && <Badge variant="secondary" className="ms-2">{t('You')}</Badge>}
         {user.disabled && <Badge variant="outline" className="ms-2">{t('Disabled')}</Badge>}
       </TableCell>
       <TableCell><RoleSelect value={user.role} onChange={(role) => change.mutate({ role })} /></TableCell>
-      <TableCell className="hidden sm:table-cell text-right tabular-nums">{user.devices}</TableCell>
-      <TableCell className="hidden md:table-cell text-muted-foreground">{dateTime(user.created_at)}</TableCell>
+      {view.show('devices') && <TableCell className="num hidden text-end sm:table-cell">{user.devices}</TableCell>}
+      {view.show('added') && <TableCell className="num hidden text-[12px] text-muted-foreground md:table-cell">{dateTime(user.created_at)}</TableCell>}
       <TableCell>
         <div className="flex justify-end gap-2">
           <ResetPassword user={user} />
-          <Button size="sm" variant="outline" disabled={change.isPending} onClick={() => change.mutate({ disabled: !user.disabled })}>
+          <Button size="xs" variant="outline" disabled={change.isPending} onClick={() => change.mutate({ disabled: !user.disabled })}>
             {user.disabled ? t('Enable') : t('Disable')}
           </Button>
         </div>
@@ -143,6 +145,11 @@ export default function Users() {
   const t = useT()
   const me = useSession()?.user?.name ?? ''
   const { data, error } = useQuery({ queryKey: ['users'], queryFn: () => api.get<UserInfo[]>('/api/users') })
+  const [filter, setFilter] = useState('')
+  const [role, setRole] = useState('')
+  const columns = useMemo(() => [{ id: 'name', label: t('Name'), locked: true }, { id: 'role', label: t('Role'), locked: true }, { id: 'devices', label: t('Devices') }, { id: 'added', label: t('Added') }], [t])
+  const view = useTableView('users', columns)
+  const shown = (data ?? []).filter((u) => (role === '' || u.role === role) && matches(filter, u.name))
   return (
     <div>
       <PageHeader
@@ -155,20 +162,33 @@ export default function Users() {
       ) : data.length === 0 ? (
         <Empty title={t('No users')}>{t('Add a user to share this master.')}</Empty>
       ) : (
-        <div className="rounded-lg border bg-card">
+        <DataTable
+          view={view}
+          toolbar={
+            <TableToolbar view={view} filter={filter} onFilter={setFilter} placeholder={t('Filter users')} shown={shown.length} total={data.length}>
+              <select className="h-7 rounded-md border border-input bg-background px-1.5 text-[13px] focus-visible:border-ring focus-visible:outline-none" value={role} onChange={(e) => setRole(e.target.value)} aria-label={t('Role')}>
+                <option value="">{t('Any role')}</option>
+                {ROLES.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
+              </select>
+            </TableToolbar>
+          }
+        >
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>{t('Name')}</TableHead>
                 <TableHead>{t('Role')}</TableHead>
-                <TableHead className="hidden sm:table-cell text-right">{t('Devices')}</TableHead>
-                <TableHead className="hidden md:table-cell">{t('Added')}</TableHead>
+                {view.show('devices') && <TableHead className="hidden text-end sm:table-cell">{t('Devices')}</TableHead>}
+                {view.show('added') && <TableHead className="hidden md:table-cell">{t('Added')}</TableHead>}
                 <TableHead />
               </TableRow>
             </TableHeader>
-            <TableBody>{data.map((u) => <Row key={u.name} user={u} me={me} />)}</TableBody>
+            <TableBody>
+              {shown.length === 0 && <TableRow className="hover:bg-transparent"><TableCell colSpan={5} className="py-6 text-center text-muted-foreground">{t('No user matches.')}</TableCell></TableRow>}
+              {shown.map((u) => <Row key={u.name} user={u} me={me} view={view} />)}
+            </TableBody>
           </Table>
-        </div>
+        </DataTable>
       )}
     </div>
   )

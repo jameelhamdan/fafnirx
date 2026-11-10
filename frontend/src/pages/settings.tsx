@@ -77,7 +77,7 @@ function LibraryForm({ data }: { data: SettingsData }) {
       </CardHeader>
       <CardContent>
         <form onSubmit={submit} className="space-y-4">
-          <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
+          <div className="flex items-start justify-between gap-4 rounded-md border p-3">
             <div className="space-y-1">
               <Label htmlFor="thumbnails">{t('Thumbnails and previews')}</Label>
               <p className="text-sm text-muted-foreground">
@@ -86,7 +86,7 @@ function LibraryForm({ data }: { data: SettingsData }) {
             </div>
             <Switch id="thumbnails" checked={thumbnails} onCheckedChange={setThumbnails} />
           </div>
-          <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
+          <div className="flex items-start justify-between gap-4 rounded-md border p-3">
             <div className="space-y-1">
               <Label htmlFor="photos">{t('Photo pages')}</Label>
               <p className="text-sm text-muted-foreground">

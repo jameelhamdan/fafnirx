@@ -25,7 +25,7 @@ export default function Albums() {
         <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
           {albums.data.map((a) => (
             <li key={a.id}>
-              <Link to={`/albums/${a.id}`} className="group block overflow-hidden rounded-xl border bg-card transition-shadow hover:shadow-md focus-visible:ring-2 focus-visible:ring-ring">
+              <Link to={`/albums/${a.id}`} className="group block overflow-hidden rounded-md border bg-card transition-shadow hover:shadow-md focus-visible:ring-2 focus-visible:ring-ring">
                 <div className="relative aspect-square bg-muted">
                   {a.cover ? (
                     <Thumb src={mediaUrl(a.cover, 'thumb')} className="size-full transition-transform group-hover:scale-105" fallback={<Images className="size-8 text-muted-foreground" />} />

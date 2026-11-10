@@ -53,7 +53,7 @@ export function FileList({
   const all = entries.length > 0 && entries.every((e) => selected.has(entryKey(e)))
 
   return (
-    <div className="overflow-hidden rounded-lg border bg-card">
+    <div className="overflow-hidden rounded-md border bg-card">
       <div className={cn('grid items-center gap-2 border-b bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground', COLUMNS)}>
         <Checkbox checked={all} onCheckedChange={onToggleAll} aria-label={t('Select all')} />
         <SortHeader field="name" label={t('Name')} {...{ sort, order, onSort }} />

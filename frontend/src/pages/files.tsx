@@ -173,7 +173,7 @@ export default function Files() {
       className="relative"
     >
       {dragging && (
-        <div className="pointer-events-none fixed inset-3 z-30 grid place-items-center rounded-xl border-2 border-dashed border-primary bg-primary/10 backdrop-blur-sm">
+        <div className="pointer-events-none fixed inset-3 z-30 grid place-items-center rounded-md border-2 border-dashed border-primary bg-primary/10 backdrop-blur-sm">
           <p className="text-lg font-medium">{t('Drop to upload to {target}', { target: device + (path ? `/${path}` : '') })}</p>
         </div>
       )}
@@ -245,7 +245,7 @@ export default function Files() {
       </div>
 
       {chosen.length > 0 && (
-        <div className="sticky top-16 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-lg border bg-popover p-2 shadow-sm">
+        <div className="sticky top-16 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-md border bg-popover p-2 shadow-sm">
           <Button variant="ghost" size="icon" className="size-8" aria-label={t('Clear selection')} onClick={() => setSelected(new Set())}><X className="size-4" /></Button>
           <span className="text-sm font-medium">{t('{count} selected', { count: chosen.length })}</span>
           <div className="ml-auto flex gap-2">

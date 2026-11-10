@@ -59,7 +59,7 @@ function Choice({ selected, onSelect, icon, title, children }: { selected: boole
       role="radio"
       aria-checked={selected}
       onClick={onSelect}
-      className={cn('flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-colors hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring', selected && 'border-primary bg-primary/5 ring-1 ring-primary')}
+      className={cn('flex flex-col items-start gap-1 rounded-md border p-3 text-left transition-colors hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring', selected && 'border-primary bg-primary/5 ring-1 ring-primary')}
     >
       <span className="flex items-center gap-2 font-medium">{icon}{title}{selected && <Check className="ml-auto size-4 text-primary" />}</span>
       <span className="text-xs text-muted-foreground">{children}</span>
@@ -232,7 +232,7 @@ function AddMirror() {
 function Guide({ open }: { open: boolean }) {
   const t = useT()
   return (
-    <details open={open} className="mb-6 rounded-lg border bg-card p-4 text-sm">
+    <details open={open} className="mb-6 rounded-md border bg-card p-4 text-sm">
       <summary className="flex cursor-pointer items-center gap-2 font-medium"><BookOpen className="size-4" />{t('How mirrors work')}</summary>
       <div className="mt-3 grid gap-4 sm:grid-cols-2">
         <div className="space-y-1">

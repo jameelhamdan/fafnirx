@@ -1,18 +1,19 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Archive, ChevronDown, Cog, FolderOpen, GalleryVerticalEnd, HardDrive, Heart, Images, KeyRound, LayoutDashboard, LogOut, Menu, Monitor, Moon, Settings, Sun, Trash2, UploadCloud, UserRound, Users } from 'lucide-react'
+import { ChevronDown, KeyRound, LogOut, Menu, Monitor, Moon, Search, Sun, UserRound } from 'lucide-react'
 import { useTheme } from 'next-themes'
-import { useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { msg, useI18n } from '@/lib/i18n'
 import { useLive } from '@/lib/live-state'
-import { hasWorkspace, usePhotos, useRole, useSession } from '@/lib/session'
-import type { Role } from '@/lib/types'
+import { usePhotos, useRole, useSession } from '@/lib/session'
 import { cn } from '@/lib/utils'
 import { ChangePassword } from './change-password'
+import { CommandPalette } from './command-palette'
 import { UploadPanel } from './files/upload-panel'
 import { LanguageMenu } from './language-menu'
+import { visibleNav } from './nav'
 import { PluginAlert } from './plugin-alert'
 import { Button } from './ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu'
@@ -21,54 +22,15 @@ import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 import { REPO } from '@/lib/links'
 import { useModuleScripts } from '@/lib/module-loader'
 
-/** Who sees an entry: everybody, the roles with a workspace of their own (not read-only), or administrators. */
-type Audience = 'all' | 'workspace' | 'admin'
-
-const NAV: { title: string; items: { to: string; label: string; icon: typeof Images; end?: boolean; for: Audience; photo?: true }[] }[] = [
-  {
-    title: msg('Photos'),
-    items: [
-      { to: '/timeline', label: msg('Timeline'), icon: Images, for: 'all', photo: true },
-      { to: '/favorites', label: msg('Favorites'), icon: Heart, for: 'workspace', photo: true },
-      { to: '/albums', label: msg('Albums'), icon: GalleryVerticalEnd, for: 'workspace', photo: true },
-      { to: '/archive', label: msg('Archive'), icon: Archive, for: 'workspace', photo: true },
-      { to: '/trash', label: msg('Trash'), icon: Trash2, for: 'workspace' },
-    ],
-  },
-  {
-    title: msg('Storage'),
-    items: [
-      { to: '/', label: msg('Dashboard'), icon: LayoutDashboard, end: true, for: 'all' },
-      { to: '/files', label: msg('Files'), icon: FolderOpen, for: 'all' },
-      { to: '/devices', label: msg('Devices & folders'), icon: Monitor, for: 'workspace' },
-      { to: '/sources', label: msg('Sources'), icon: UploadCloud, for: 'workspace' },
-      { to: '/queue', label: msg('Processing'), icon: Cog, for: 'all' },
-      { to: '/mirrors', label: msg('Mirrors'), icon: HardDrive, for: 'admin' },
-      { to: '/users', label: msg('Users'), icon: Users, for: 'admin' },
-      { to: '/settings', label: msg('Settings'), icon: Settings, for: 'admin' },
-    ],
-  },
-]
-
-const allowed = (audience: Audience, role: Role) => audience === 'all' || (audience === 'workspace' ? hasWorkspace(role) : role === 'admin')
-
-/** The menu without the photo pages: what is left of their group (the trash) goes after Files in the storage group. */
-function withoutPhotos(nav: typeof NAV): typeof NAV {
-  const [photos, storage] = nav
-  const kept = photos.items.filter((i) => !i.photo)
-  const at = storage.items.findIndex((i) => i.to === '/files') + 1
-  return [{ ...storage, items: [...storage.items.slice(0, at), ...kept, ...storage.items.slice(at)] }]
-}
-
+/** The labelled menu, for the narrow screens where the dock is not shown. */
 function Nav({ onNavigate }: { onNavigate?: () => void }) {
   const { t } = useI18n()
-  const role = useRole()
-  const groups = usePhotos() ? NAV : withoutPhotos(NAV)
+  const groups = visibleNav(useRole(), usePhotos())
   return (
-    <nav className="flex flex-col gap-4 p-3" aria-label={t('Main')}>
-      {groups.map(({ title, items: all }) => ({ title, items: all.filter((i) => allowed(i.for, role)) })).filter((g) => g.items.length > 0).map(({ title, items }) => (
-        <div key={title} className="flex flex-col gap-1">
-          <p className="px-3 pb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">{t(title)}</p>
+    <nav className="flex flex-col gap-3 p-2" aria-label={t('Main')}>
+      {groups.map(({ title, items }) => (
+        <div key={title} className="flex flex-col gap-0.5">
+          <p className="px-2.5 pb-1 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{t(title)}</p>
           {items.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
@@ -77,8 +39,8 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
               onClick={onNavigate}
               className={({ isActive }) =>
                 cn(
-                  'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
-                  isActive ? 'bg-sidebar-accent text-foreground' : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
+                  'flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors',
+                  isActive ? 'bg-sidebar-accent font-medium text-foreground' : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
                 )
               }
             >
@@ -87,6 +49,46 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
             </NavLink>
           ))}
         </div>
+      ))}
+    </nav>
+  )
+}
+
+/** The permanent icon rail: one icon per page, its name in a tooltip, groups divided by a hairline. */
+function Dock() {
+  const { t } = useI18n()
+  const groups = visibleNav(useRole(), usePhotos())
+  return (
+    <nav className="flex flex-col items-center gap-1 py-2" aria-label={t('Main')}>
+      {groups.map(({ title, items }, g) => (
+        <Fragment key={title}>
+          {g > 0 && <hr className="my-1 w-6 border-sidebar-border" />}
+          {items.map(({ to, label, icon: Icon, end }) => (
+            <Tooltip key={to}>
+              {/* The tooltip trigger is a wrapper: a Slot would turn NavLink's className function into text. */}
+              <TooltipTrigger asChild>
+                <span className="flex">
+                <NavLink
+                  to={to}
+                  end={end}
+                  aria-label={t(label)}
+                  className={({ isActive }) =>
+                    cn(
+                      'relative flex size-8 items-center justify-center rounded-md transition-colors',
+                      isActive
+                        ? 'bg-sidebar-accent text-foreground before:absolute before:-start-2 before:h-4 before:w-0.5 before:bg-foreground'
+                        : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
+                    )
+                  }
+                >
+                  <Icon className="size-[18px]" />
+                </NavLink>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="right" sideOffset={8}>{t(label)}</TooltipContent>
+            </Tooltip>
+          ))}
+        </Fragment>
       ))}
     </nav>
   )
@@ -102,9 +104,9 @@ function GitHubMark({ className }: { className?: string }) {
 
 function Brand() {
   return (
-    <div className="flex h-14 items-center gap-2 border-b px-4">
-      <img src="/favicon.svg" alt="" className="size-7" />
-      <span className="font-semibold tracking-tight">fafnirx</span>
+    <div className="flex h-10 items-center gap-2 border-b px-3">
+      <img src="/favicon.svg" alt="" className="size-5" />
+      <span className="num text-sm font-medium">fafnirx</span>
     </div>
   )
 }
@@ -119,7 +121,7 @@ function ThemeButton() {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button variant="ghost" size="icon" onClick={() => setTheme(next)} aria-label={t('Theme: {theme}', { theme: t(THEME[theme ?? 'system']) })}>
+        <Button variant="ghost" size="icon-sm" onClick={() => setTheme(next)} aria-label={t('Theme: {theme}', { theme: t(THEME[theme ?? 'system']) })}>
           <Icon className="size-4" />
         </Button>
       </TooltipTrigger>
@@ -133,10 +135,23 @@ export function AppShell({ children }: { children: ReactNode }) {
   const client = useQueryClient()
   const live = useLive()
   const [open, setOpen] = useState(false)
+  const [palette, setPalette] = useState(false)
   const [passwordOpen, setPasswordOpen] = useState(false)
   const session = useSession()
   useModuleScripts()
   const version = session?.version
+  const mac = typeof navigator !== 'undefined' && /mac|iphone|ipad/i.test(navigator.platform)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setPalette((p) => !p)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   async function logout() {
     try {
@@ -153,26 +168,38 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-svh">
-      <aside className="sticky top-0 hidden h-svh w-56 shrink-0 flex-col border-r bg-sidebar md:flex">
-        <Brand />
-        <Nav />
+      <aside className="sticky top-0 hidden h-svh w-12 shrink-0 flex-col border-e bg-sidebar md:flex">
+        <div className="flex h-10 items-center justify-center border-b">
+          <img src="/favicon.svg" alt="fafnirx" className="size-5" />
+        </div>
+        <Dock />
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex h-14 items-center gap-2 border-b bg-background/80 px-3 backdrop-blur md:px-6">
-          <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setOpen(true)} aria-label={t('Menu')}>
-            <Menu className="size-5" />
+        <header className="sticky top-0 z-20 flex h-10 items-center gap-1.5 border-b bg-background/90 px-2 backdrop-blur md:px-4">
+          <Button variant="ghost" size="icon-sm" className="md:hidden" onClick={() => setOpen(true)} aria-label={t('Menu')}>
+            <Menu className="size-4" />
           </Button>
+          <button
+            type="button"
+            onClick={() => setPalette(true)}
+            className="flex h-7 w-full max-w-md items-center gap-2 rounded-md border bg-card px-2 text-start text-[13px] text-muted-foreground transition-colors hover:border-ring focus-visible:border-ring focus-visible:outline-none"
+            aria-label={t('Go to')}
+          >
+            <Search className="size-3.5 shrink-0" />
+            <span className="flex-1 truncate">{t('Go to a page, device or folder…')}</span>
+            <kbd className="num hidden rounded-sm border px-1 text-[10px] sm:inline">{mac ? '⌘K' : 'Ctrl K'}</kbd>
+          </button>
           <div className="flex-1" />
           {version && (
-            <span className="text-xs text-muted-foreground tabular-nums" title={t('Master version')}>
+            <span className="num hidden text-xs text-muted-foreground sm:inline" title={t('Master version')}>
               v{version}
             </span>
           )}
           <Tooltip>
             <TooltipTrigger asChild>
-              <span className="flex items-center gap-2 px-2 text-xs text-muted-foreground">
-                <span className={cn('size-2 rounded-full', live ? 'bg-success' : 'bg-warning')} />
-                {live ? t('Live') : t('Reconnecting')}
+              <span className="flex items-center gap-1.5 px-2 text-xs text-muted-foreground">
+                <span className={cn('size-1.5 rounded-full', live ? 'bg-success' : 'animate-pulse bg-warning')} />
+                <span className="hidden sm:inline">{live ? t('Live') : t('Reconnecting')}</span>
               </span>
             </TooltipTrigger>
             <TooltipContent>{live ? t('Changes appear as they happen') : t('Updates paused; reconnecting')}</TooltipContent>
@@ -181,7 +208,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <ThemeButton />
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" asChild>
+              <Button variant="ghost" size="icon-sm" asChild>
                 <a href={REPO} target="_blank" rel="noreferrer" aria-label={t('fafnirx on GitHub')}><GitHubMark className="size-4" /></a>
               </Button>
             </TooltipTrigger>
@@ -191,7 +218,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="sm" className="gap-1.5 px-2" aria-label={t('Logged in as {name}', { name: session?.user?.name ?? '' })}>
                 <UserRound className="size-4" />
-                <span className="hidden max-w-32 truncate text-xs sm:inline">{session?.user?.name}</span>
+                <span className="num hidden max-w-32 truncate text-xs sm:inline">{session?.user?.name}</span>
                 <ChevronDown className="size-3.5 text-muted-foreground" />
               </Button>
             </DropdownMenuTrigger>
@@ -209,13 +236,13 @@ export function AppShell({ children }: { children: ReactNode }) {
             </DropdownMenuContent>
           </DropdownMenu>
         </header>
-        <main className="min-w-0 flex-1 p-3 md:p-6">
+        <main className="min-w-0 flex-1 p-3 md:p-4">
           <PluginAlert />
           {children}
         </main>
       </div>
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent side="left" className="w-64 p-0">
+        <SheetContent side="left" className="w-60 p-0">
           <SheetHeader className="sr-only">
             <SheetTitle>{t('Menu')}</SheetTitle>
           </SheetHeader>
@@ -223,6 +250,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Nav onNavigate={() => setOpen(false)} />
         </SheetContent>
       </Sheet>
+      <CommandPalette open={palette} onOpenChange={setPalette} />
       <ChangePassword open={passwordOpen} onClose={() => setPasswordOpen(false)} />
       <UploadPanel />
     </div>

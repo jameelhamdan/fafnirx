@@ -27,7 +27,7 @@ export function SelectionBar({ selected, onClear }: { selected: Asset[]; onClear
   }
 
   return (
-    <div role="toolbar" aria-label={t('Selection')} className="flex items-center gap-1 rounded-lg border bg-popover p-1.5 shadow-md">
+    <div role="toolbar" aria-label={t('Selection')} className="flex items-center gap-1 rounded-md border bg-popover p-1.5 shadow-md">
       <Button variant="ghost" size="icon" className="size-8" aria-label={t('Clear selection')} onClick={onClear}><X className="size-4" /></Button>
       <span className="mr-auto px-1 text-sm font-medium">{t('{count} selected', { count: selected.length })}</span>
       {mine && (

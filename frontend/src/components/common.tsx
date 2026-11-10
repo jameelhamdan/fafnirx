@@ -12,7 +12,7 @@ import { STATUS } from '@/lib/status'
 export function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="min-w-0">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dt className="text-[11px] tracking-wider text-muted-foreground uppercase">{label}</dt>
       <dd className="mt-0.5 break-words text-sm">{children === null || children === undefined || children === '' ? '—' : children}</dd>
     </div>
   )
@@ -21,17 +21,17 @@ export function Fact({ label, children }: { label: string; children: ReactNode }
 const PHASE: Record<string, string> = { scanning: msg('Scanning'), hashing: msg('Hashing'), uploading: msg('Uploading') }
 
 /** The look of a native `<select>` in forms. */
-export const SELECT = 'h-9 rounded-md border bg-background px-2 text-sm'
+export const SELECT = 'h-8 rounded-md border border-input bg-background px-2 text-sm focus-visible:border-ring focus-visible:outline-none'
 
 export function PageHeader({ title, description, actions }: { title: string; description?: ReactNode; actions?: ReactNode }) {
   useEffect(() => {
     document.title = `${title} · fafnirx`
   }, [title])
   return (
-    <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
+    <div className="mb-4 flex flex-wrap items-end justify-between gap-3 border-b pb-3">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-        {description && <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{description}</p>}
+        <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
+        {description && <p className="mt-0.5 max-w-3xl text-[13px] text-muted-foreground">{description}</p>}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
@@ -40,7 +40,7 @@ export function PageHeader({ title, description, actions }: { title: string; des
 
 export function Empty({ title, children }: { title: string; children?: ReactNode }) {
   return (
-    <div className="flex flex-col items-center gap-1 rounded-lg border border-dashed py-12 text-center">
+    <div className="flex flex-col items-center gap-1 rounded-md border border-dashed py-10 text-center">
       <p className="font-medium">{title}</p>
       {children && <p className="max-w-md text-sm text-muted-foreground">{children}</p>}
     </div>
@@ -50,7 +50,7 @@ export function Empty({ title, children }: { title: string; children?: ReactNode
 export function ErrorNote({ error }: { error: unknown }) {
   const t = useT()
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+    <div className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
       <AlertTriangle className="size-4 shrink-0" />
       {error instanceof Error ? error.message : t('Something went wrong')}
     </div>
@@ -62,7 +62,7 @@ const DOT: Record<string, string> = {
   online: 'bg-success',
   partial: 'bg-warning',
   paused: 'bg-warning',
-  running: 'bg-primary animate-pulse',
+  running: 'bg-info animate-pulse',
   failed: 'bg-destructive',
   offline: 'bg-muted-foreground/50',
   revoked: 'bg-destructive',
@@ -72,8 +72,8 @@ const DOT: Record<string, string> = {
 export function StatusDot({ status, label }: { status: string; label?: string }) {
   const t = useT()
   return (
-    <span className="inline-flex items-center gap-2 text-sm">
-      <span className={cn('size-2 rounded-full', DOT[status] ?? 'bg-muted-foreground/50')} />
+    <span className="inline-flex items-center gap-1.5 text-[13px]">
+      <span className={cn('size-1.5 rounded-full', DOT[status] ?? 'bg-muted-foreground/50')} />
       {label ?? t(STATUS[status] ?? status)}
     </span>
   )
@@ -100,7 +100,7 @@ export function ActivityView({ activity, compact = false }: { activity: Activity
           {activity.files_total > 0 && ` ${Math.min(activity.files_done + 1, activity.files_total)}/${activity.files_total}`}
           {!compact && activity.file && `: ${activity.file}`}
         </span>
-        <span className="shrink-0 tabular-nums">
+        <span className="num shrink-0">
           {pct !== null && `${pct}%`}
           {activity.speed_bps > 0 && ` · ${bytes(activity.speed_bps)}/s`}
           {left !== null && left > 0 && ` · ${t('{time} left', { time: duration(left) })}`}
