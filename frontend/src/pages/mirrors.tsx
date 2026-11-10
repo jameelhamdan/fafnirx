@@ -1,13 +1,15 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, Check, Copy, Download, FolderOpen, KeyRound, Lock, Plus, RefreshCw, RotateCcw } from 'lucide-react'
+import { BookOpen, Copy, Download, FolderOpen, KeyRound, Lock, Plus, RefreshCw, RotateCcw } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { ErrorNote, PageHeader, SELECT } from '@/components/common'
+import { Picker, ErrorNote, PageHeader } from '@/components/common'
 import { Confirm } from '@/components/confirm'
 import { JobList } from '@/components/job-list'
 import { StorageForm } from '@/components/storage-form'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { RadioCard, RadioGroup } from '@/components/ui/radio-group'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FormDialog } from '@/components/form-dialog'
 import { Input } from '@/components/ui/input'
@@ -51,22 +53,15 @@ function saveText(name: string, text: string) {
   URL.revokeObjectURL(url)
 }
 
-/** A big, labelled radio button. */
-function Choice({ selected, onSelect, icon, title, children }: { selected: boolean; onSelect: () => void; icon: ReactNode; title: string; children: ReactNode }) {
+/** A big, labelled radio choice. */
+function KindCard({ value, icon, title, children }: { value: Kind; icon: ReactNode; title: string; children: ReactNode }) {
   return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      onClick={onSelect}
-      className={cn('flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-colors hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring', selected && 'border-primary bg-primary/5 ring-1 ring-primary')}
-    >
-      <span className="flex items-center gap-2 font-medium">{icon}{title}{selected && <Check className="ml-auto size-4 text-primary" />}</span>
+    <RadioCard value={value} className="flex flex-col items-start gap-1 p-3">
+      <span className="flex items-center gap-2 font-medium">{icon}{title}</span>
       <span className="text-xs text-muted-foreground">{children}</span>
-    </button>
+    </RadioCard>
   )
 }
-
 function Step({ n, title, children }: { n: number; title: string; children: ReactNode }) {
   return (
     <section className="space-y-3">
@@ -134,10 +129,13 @@ function FolderChoice({ value, onChange }: { value: string; onChange: (folder: s
   const { data, error } = useQuery({ queryKey: ['mirrors', 'folders'], queryFn: () => api.get<string[]>('/api/mirrors/folders') })
   return (
     <div className="space-y-1.5">
-      <select aria-label={t('Folder to mirror')} className={`${SELECT} w-full`} value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">{t('Everything')}</option>
-        {(data ?? []).map((f) => <option key={f} value={f}>{f}</option>)}
-      </select>
+      <Picker
+        label={t('Folder to mirror')}
+        className="w-full"
+        value={value}
+        onChange={onChange}
+        options={[['', t('Everything')], ...(data ?? []).map((f): [string, string] => [f, f])]}
+      />
       {error && <p role="alert" className="text-sm text-destructive">{error.message}</p>}
       <p className="text-xs text-muted-foreground">
         {value === '' ? t('Mirrors everything: the master files and every user.') : t('Mirrors {folder} and everything in it.', { folder: value })}
@@ -187,14 +185,14 @@ function AddMirror() {
       footer={<p className={cn('text-xs', blocked ? 'text-muted-foreground' : 'text-success')}>{blocked ?? t('Ready to add.')}</p>}
     >
       <Step n={1} title={t('What kind of copy?')}>
-        <div role="radiogroup" aria-label={t('Kind of mirror')} className="grid gap-2 sm:grid-cols-2">
-          <Choice selected={form.kind === 'backup'} onSelect={() => set({ kind: 'backup' })} icon={<Lock className="size-4" />} title={t('Backup')}>
+        <RadioGroup aria-label={t('Kind of mirror')} className="sm:grid-cols-2" value={form.kind} onValueChange={(kind) => set({ kind: kind as Kind })}>
+          <KindCard value="backup" icon={<Lock className="size-4" />} title={t('Backup')}>
             {t('Encrypted with your key. Safe on storage you do not control. Restored with rclone.')}
-          </Choice>
-          <Choice selected={form.kind === 'replica'} onSelect={() => set({ kind: 'replica' })} icon={<FolderOpen className="size-4" />} title={t('Replica')}>
+          </KindCard>
+          <KindCard value="replica" icon={<FolderOpen className="size-4" />} title={t('Replica')}>
             {t('Your files exactly as they are. Browse them, share them or copy them back with any tool.')}
-          </Choice>
-        </div>
+          </KindCard>
+        </RadioGroup>
       </Step>
 
       <Step n={2} title={t('What to copy')}>
@@ -232,8 +230,9 @@ function AddMirror() {
 function Guide({ open }: { open: boolean }) {
   const t = useT()
   return (
-    <details open={open} className="mb-6 rounded-lg border bg-card p-4 text-sm">
-      <summary className="flex cursor-pointer items-center gap-2 font-medium"><BookOpen className="size-4" />{t('How mirrors work')}</summary>
+    <Collapsible defaultOpen={open} className="mb-6 rounded-md border bg-card p-4 text-sm">
+      <CollapsibleTrigger className="flex items-center gap-2 font-medium"><BookOpen className="size-4" />{t('How mirrors work')}</CollapsibleTrigger>
+      <CollapsibleContent>
       <div className="mt-3 grid gap-4 sm:grid-cols-2">
         <div className="space-y-1">
           <p className="flex items-center gap-2 font-medium"><Lock className="size-4" />{t('Backup')}</p>
@@ -250,7 +249,8 @@ function Guide({ open }: { open: boolean }) {
         <li>{t('Keep the key of a backup away from the master: a disk that fails takes the key with it.')}</li>
       </ul>
       <a className="mt-3 inline-block text-primary hover:underline" href={docs('mirrors')} target="_blank" rel="noreferrer">{t('Read the full guide')} →</a>
-    </details>
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 

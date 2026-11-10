@@ -9,6 +9,8 @@ import { FolderPlace } from '@/components/folder-place'
 import { JobList } from '@/components/job-list'
 import { StorageForm } from '@/components/storage-form'
 import { Button } from '@/components/ui/button'
+import { RadioCard, RadioGroup } from '@/components/ui/radio-group'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { FormDialog } from '@/components/form-dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -21,10 +23,6 @@ import { bytes, count } from '@/lib/format'
 import type { JobState } from '@/lib/types'
 import { useT } from '@/lib/i18n'
 import { useSourceKinds } from '@/sdk/registry'
-import { cn } from '@/lib/utils'
-
-const CARD = 'rounded-md border px-3 py-2 text-left text-sm transition-colors hover:bg-accent/50'
-const CARD_ON = 'border-primary bg-primary/5 ring-1 ring-primary'
 
 function AddSource() {
   const t = useT()
@@ -85,29 +83,23 @@ function AddSource() {
         <Label htmlFor="ss-name">{t('Name')}</Label>
         <Input id="ss-name" placeholder="nextcloud" value={name} onChange={(e) => setName(e.target.value)} />
       </div>
-      {kinds.length > 0 && <div role="tablist" className="flex gap-1 border-b">
-        {[[false, t('Storage')], [true, t('Services')]].map(([s, label]) => (
-          <button
-            key={String(s)}
-            type="button"
-            role="tab"
-            aria-selected={services === s}
-            onClick={() => pick(s as boolean)}
-            className={`-mb-px border-b-2 px-3 py-1.5 text-sm ${services === s ? 'border-primary font-medium' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
-          >
-            {label as string}
-          </button>
-        ))}
-      </div>}
+      {kinds.length > 0 && (
+        <Tabs value={services ? 'services' : 'storage'} onValueChange={(v) => pick(v === 'services')}>
+          <TabsList>
+            <TabsTrigger value="storage">{t('Storage')}</TabsTrigger>
+            <TabsTrigger value="services">{t('Services')}</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      )}
       {services && (
-        <div role="radiogroup" aria-label={t('Services')} className="grid gap-2 sm:grid-cols-3">
+        <RadioGroup aria-label={t('Services')} className="sm:grid-cols-3" value={choice} onValueChange={setChoice}>
           {kinds.map(({ kind, ready }) => (
-            <button key={kind.id} type="button" role="radio" aria-checked={choice === kind.id} disabled={!ready} onClick={() => setChoice(kind.id)} className={cn(CARD, choice === kind.id && CARD_ON, 'disabled:cursor-not-allowed disabled:opacity-50')}>
+            <RadioCard key={kind.id} value={kind.id} disabled={!ready}>
               {t(kind.label)}
               {!ready && <span className="block text-xs text-muted-foreground">{t('Needs setting up')}</span>}
-            </button>
+            </RadioCard>
           ))}
-        </div>
+        </RadioGroup>
       )}
       {current ? (
         <current.form value={value} onChange={(next) => setValues((all) => ({ ...all, [current.id]: next }))} />

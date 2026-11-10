@@ -1,4 +1,4 @@
-import { SELECT } from '@/components/common'
+import { Picker } from '@/components/common'
 import { Label } from '@/components/ui/label'
 import { useT } from '@/lib/i18n'
 import { SCHEDULES } from '@/lib/mirror-presets'
@@ -10,9 +10,7 @@ export function ScheduleField({ id, hours, onChange }: { id: string; hours: stri
   return (
     <div className="space-y-1.5">
       <Label htmlFor={id}>{t('How often')}</Label>
-      <select id={id} className={`${SELECT} w-full`} value={hours} onChange={(e) => onChange(e.target.value)}>
-        {options.map(([h, label]) => <option key={h} value={h}>{t(label)}</option>)}
-      </select>
+      <Picker id={id} className="w-full" value={hours} onChange={onChange} options={options.map(([h, label]) => [h, t(label)])} />
     </div>
   )
 }

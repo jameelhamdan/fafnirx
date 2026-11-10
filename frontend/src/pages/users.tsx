@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { Empty, ErrorNote, PageHeader, SELECT } from '@/components/common'
+import { Picker, Empty, ErrorNote, PageHeader } from '@/components/common'
 import { DataTable, TableToolbar } from '@/components/data-table'
 import { matches, useTableView, type TableView } from '@/lib/table-view'
 import { Badge } from '@/components/ui/badge'
@@ -27,9 +27,7 @@ const ROLES: [Role, string, string][] = [
 function RoleSelect({ id, value, onChange }: { id?: string; value: Role; onChange: (role: Role) => void }) {
   const t = useT()
   return (
-    <select id={id} className={SELECT} value={value} onChange={(e) => onChange(e.target.value as Role)}>
-      {ROLES.map(([role, label]) => <option key={role} value={role}>{t(label)}</option>)}
-    </select>
+    <Picker id={id} value={value} onChange={(v) => onChange(v as Role)} options={ROLES.map(([role, label]) => [role, t(label)])} />
   )
 }
 
@@ -166,10 +164,13 @@ export default function Users() {
           view={view}
           toolbar={
             <TableToolbar view={view} filter={filter} onFilter={setFilter} placeholder={t('Filter users')} shown={shown.length} total={data.length}>
-              <select className="h-7 rounded-md border border-input bg-background px-1.5 text-[13px] focus-visible:border-ring focus-visible:outline-none" value={role} onChange={(e) => setRole(e.target.value)} aria-label={t('Role')}>
-                <option value="">{t('Any role')}</option>
-                {ROLES.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
-              </select>
+              <Picker
+                size="sm"
+                label={t('Role')}
+                value={role}
+                onChange={setRole}
+                options={[['', t('Any role')], ...ROLES.map(([value, label]): [string, string] => [value, t(label)])]}
+              />
             </TableToolbar>
           }
         >

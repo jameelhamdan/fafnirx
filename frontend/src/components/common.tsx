@@ -6,6 +6,7 @@ import type { Activity } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { Badge } from './ui/badge'
 import { Progress } from './ui/progress'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { STATUS } from '@/lib/status'
 
 /** A small label over a value, for a list of facts about one thing; an empty value shows as a dash. */
@@ -20,8 +21,34 @@ export function Fact({ label, children }: { label: string; children: ReactNode }
 
 const PHASE: Record<string, string> = { scanning: msg('Scanning'), hashing: msg('Hashing'), uploading: msg('Uploading') }
 
-/** The look of a native `<select>` in forms. */
-export const SELECT = 'h-9 rounded-md border border-input bg-background px-2 text-sm focus-visible:border-ring focus-visible:outline-none'
+const EMPTY = '__empty__'
+
+/**
+ * A dropdown over `[value, label]` pairs, for forms and table toolbars. The empty string is a valid value (the "any" or default
+ * choice); with none of that value among the options it shows `placeholder` instead.
+ */
+export function Picker({ value, onChange, options, id, label, placeholder, size, className }: {
+  value: string
+  onChange: (value: string) => void
+  options: [value: string, label: ReactNode][]
+  id?: string
+  label?: string
+  placeholder?: string
+  size?: 'sm' | 'default'
+  className?: string
+}) {
+  const has = options.some(([v]) => v === '')
+  return (
+    <Select value={value === '' && has ? EMPTY : value} onValueChange={(v) => onChange(v === EMPTY ? '' : v)}>
+      <SelectTrigger id={id} aria-label={label} size={size} className={className}>
+        <SelectValue placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map(([v, text]) => <SelectItem key={v || EMPTY} value={v === '' ? EMPTY : v}>{text}</SelectItem>)}
+      </SelectContent>
+    </Select>
+  )
+}
 
 export function PageHeader({ title, description, actions }: { title: string; description?: ReactNode; actions?: ReactNode }) {
   useEffect(() => {

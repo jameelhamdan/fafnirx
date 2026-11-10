@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { SELECT } from '@/components/common'
+import { Picker } from '@/components/common'
 import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
 import { useT } from '@/lib/i18n'
@@ -16,11 +16,14 @@ export function FolderPlace({ value, onChange, own }: { value: string; onChange:
   return (
     <div className="space-y-1.5">
       <Label htmlFor="place-device">{t('Where the files go')}</Label>
-      <select id="place-device" className={`${SELECT} w-full`} value={value} onChange={(e) => onChange(e.target.value)}>
-        {own && <option value="">{t('A new folder of its own')}</option>}
-        {!own && !value && <option value="" disabled>{t('Choose a folder')}</option>}
-        {folders.map((f) => <option key={f.device} value={f.device}>{f.device}</option>)}
-      </select>
+      <Picker
+        id="place-device"
+        className="w-full"
+        value={value}
+        onChange={onChange}
+        placeholder={t('Choose a folder')}
+        options={[...(own ? [['', t('A new folder of its own')] as [string, string]] : []), ...folders.map((f): [string, string] => [f.device, f.device])]}
+      />
       <p className="text-xs text-muted-foreground">{t('Files it collected before are put in the Trash if you change this later; it then collects everything again into the new folder.')}</p>
     </div>
   )

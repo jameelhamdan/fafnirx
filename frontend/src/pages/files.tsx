@@ -19,7 +19,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
-import { ToggleGroup } from '@/components/files/toggle-group'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useNow } from '@/hooks/use-now'
 import { api, downloadZip, query } from '@/lib/api'
@@ -236,11 +236,10 @@ export default function Files() {
         </label>
         <div className="ml-auto flex items-center gap-2">
           {device && !path && hasWorkspace(role) && !showDeleted && <FolderAlbumButton folder={{ device, path }} />}
-          <ToggleGroup
-            value={view}
-            onChange={(v) => go({ view: v === 'grid' ? 'grid' : null }, true)}
-            options={[{ value: 'list', label: t('List'), icon: List }, { value: 'grid', label: t('Grid'), icon: Grid2x2 }]}
-          />
+          <ToggleGroup value={view} onValueChange={(v) => v && go({ view: v === 'grid' ? 'grid' : null }, true)}>
+            <ToggleGroupItem value="list" aria-label={t('List')} title={t('List')}><List /></ToggleGroupItem>
+            <ToggleGroupItem value="grid" aria-label={t('Grid')} title={t('Grid')}><Grid2x2 /></ToggleGroupItem>
+          </ToggleGroup>
         </div>
       </div>
 

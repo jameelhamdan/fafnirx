@@ -1,5 +1,7 @@
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { RadioCard, RadioGroup } from '@/components/ui/radio-group'
 import { Textarea } from '@/components/ui/textarea'
 import { useT } from '@/lib/i18n'
 import { PRESETS } from '@/lib/mirror-presets'
@@ -13,20 +15,9 @@ export function StorageForm({ value, onChange }: { value: Storage; onChange: (ne
   const set = (patch: Partial<Storage>) => onChange({ ...value, ...patch })
   return (
     <div className="space-y-3">
-      <div role="radiogroup" aria-label={t('Storage')} className="grid gap-2 sm:grid-cols-3">
-        {PRESETS.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            role="radio"
-            aria-checked={p.id === value.preset}
-            onClick={() => set({ preset: p.id, values: {} })}
-            className={cn('rounded-md border px-3 py-2 text-left text-sm transition-colors hover:bg-accent/50', p.id === value.preset && 'border-primary bg-primary/5 ring-1 ring-primary')}
-          >
-            {t(p.label)}
-          </button>
-        ))}
-      </div>
+      <RadioGroup aria-label={t('Storage')} className="sm:grid-cols-3" value={value.preset} onValueChange={(preset) => set({ preset, values: {} })}>
+        {PRESETS.map((p) => <RadioCard key={p.id} value={p.id}>{t(p.label)}</RadioCard>)}
+      </RadioGroup>
       <p className="text-xs text-muted-foreground">{t(preset.hint)}</p>
       <div className="grid gap-3 sm:grid-cols-2">
         {preset.fields.map((f) => (
@@ -40,11 +31,13 @@ export function StorageForm({ value, onChange }: { value: Storage; onChange: (ne
           <Input id="st-path" placeholder={preset.pathPlaceholder} value={value.path} onChange={(e) => set({ path: e.target.value })} />
         </div>
       </div>
-      <details className="text-sm">
-        <summary className="cursor-pointer text-muted-foreground hover:text-foreground">{t('More backend options')}</summary>
-        <Textarea rows={3} className="mt-2 font-mono text-xs" placeholder="key=value" value={value.advanced} onChange={(e) => set({ advanced: e.target.value })} />
-        <p className="mt-1 text-xs text-muted-foreground">{t('One key=value per line, as rclone names them. Stored on the master and never shown again.')}</p>
-      </details>
+      <Collapsible className="text-sm">
+        <CollapsibleTrigger className="text-muted-foreground hover:text-foreground">{t('More backend options')}</CollapsibleTrigger>
+        <CollapsibleContent>
+          <Textarea rows={3} className="mt-2 font-mono text-xs" placeholder="key=value" value={value.advanced} onChange={(e) => set({ advanced: e.target.value })} />
+          <p className="mt-1 text-xs text-muted-foreground">{t('One key=value per line, as rclone names them. Stored on the master and never shown again.')}</p>
+        </CollapsibleContent>
+      </Collapsible>
     </div>
   )
 }

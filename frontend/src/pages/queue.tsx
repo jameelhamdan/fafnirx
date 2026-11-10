@@ -3,7 +3,7 @@ import { useApiMutation } from '@/lib/mutation'
 import { Pause, Play, RefreshCw, RotateCcw, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { Empty, ErrorNote, PageHeader, StatusDot } from '@/components/common'
+import { Picker, Empty, ErrorNote, PageHeader, StatusDot } from '@/components/common'
 import { DataTable, SelectAll, SelectRow, TableToolbar } from '@/components/data-table'
 import { matches, useSelection, useTableView, type Selection, type TableView } from '@/lib/table-view'
 import { Badge } from '@/components/ui/badge'
@@ -200,10 +200,13 @@ export default function Queue() {
                     </>
                   }
                 >
-                  <select className="h-7 rounded-md border border-input bg-background px-1.5 text-[13px] focus-visible:border-ring focus-visible:outline-none" value={state} onChange={(e) => setState(e.target.value)} aria-label={t('State')}>
-                    <option value="">{t('Any state')}</option>
-                    {Object.entries(STATE).map(([k, label]) => <option key={k} value={k}>{t(label)}</option>)}
-                  </select>
+                  <Picker
+                    size="sm"
+                    label={t('State')}
+                    value={state}
+                    onChange={setState}
+                    options={[['', t('Any state')], ...Object.entries(STATE).map(([k, label]): [string, string] => [k, t(label)])]}
+                  />
                 </TableToolbar>
               }
             >

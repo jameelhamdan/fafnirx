@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { FormDialog } from '../form-dialog'
+import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { plural } from '@/lib/format'
 import { useLibraryActions, useTags } from '@/lib/library'
@@ -39,7 +40,7 @@ export function TagDialog({ open, ids, onClose, onDone }: { open: boolean; ids: 
       {tags.data && tags.data.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {tags.data.slice(0, 30).map((tag) => (
-            <button key={tag.id} type="button" onClick={() => add(tag.name)} className="rounded-full border px-2.5 py-0.5 text-xs hover:bg-accent">{tag.name}</button>
+            <Button key={tag.id} type="button" variant="outline" size="xs" onClick={() => add(tag.name)}>{tag.name}</Button>
           ))}
         </div>
       )}

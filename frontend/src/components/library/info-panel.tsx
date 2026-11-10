@@ -95,7 +95,7 @@ function Tags({ id, tags, suggested }: { id: string; tags: { id: string; name: s
       {names.length > 0 && (
         <ul className="flex flex-wrap gap-1.5">
           {tags.map((tag) => (
-            <li key={tag.id} className="flex items-center gap-1 rounded-full border bg-secondary py-0.5 pr-1 pl-2.5 text-xs">
+            <li key={tag.id} className="flex items-center gap-1 rounded-md border bg-secondary py-0.5 pr-1 pl-2.5 text-xs">
               {tag.name}
               <button type="button" aria-label={t('Remove tag {name}', { name: tag.name })} onClick={() => edit.mutate({ id, tags: names.filter((n) => n !== tag.name) })} className="grid size-4 place-items-center rounded-full hover:bg-accent">
                 <X className="size-3" />
@@ -109,7 +109,7 @@ function Tags({ id, tags, suggested }: { id: string; tags: { id: string; name: s
           <p className="mb-1 text-xs text-muted-foreground">{t('Keywords in the file, click to add')}</p>
           <ul className="flex flex-wrap gap-1.5">
             {suggested.filter((n) => !names.some((x) => x.toLowerCase() === n.toLowerCase())).map((n) => (
-              <li key={n}><button type="button" onClick={() => edit.mutate({ id, tags: [...names, n] })} className="rounded-full border border-dashed px-2.5 py-0.5 text-xs hover:bg-accent">{n}</button></li>
+              <li key={n}><Button type="button" variant="outline" size="xs" className="border-dashed" onClick={() => edit.mutate({ id, tags: [...names, n] })}>{n}</Button></li>
             ))}
           </ul>
         </div>
@@ -258,7 +258,7 @@ export default function InfoPanel({ id, onClose, embedded }: { id: string; onClo
             <section>
               <h3 className="mb-1.5 text-xs text-muted-foreground">{t('In albums')}</h3>
               <ul className="flex flex-wrap gap-1.5">
-                {d.albums.map((a) => <li key={a.id}><Link to={`/albums/${a.id}`} className="rounded-full border px-2.5 py-0.5 text-xs hover:bg-accent">{a.name}</Link></li>)}
+                {d.albums.map((a) => <li key={a.id}><Link to={`/albums/${a.id}`} className="rounded-md border px-2.5 py-0.5 text-xs hover:bg-accent">{a.name}</Link></li>)}
               </ul>
             </section>
           )}

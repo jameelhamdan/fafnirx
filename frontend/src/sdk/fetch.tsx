@@ -3,6 +3,7 @@
  * `fetch-limits.ts`. A module's form adds what is its own.
  */
 import type { ReactNode } from 'react'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { msg, useT } from '@/lib/i18n'
@@ -47,7 +48,7 @@ export function FileLimitsFields({ idPrefix, value, onChange, placeholder, child
 export function AcknowledgeField({ checked, onChange, children }: { checked: boolean; onChange: (checked: boolean) => void; children: ReactNode }) {
   return (
     <label className="flex items-start gap-2 text-sm">
-      <input type="checkbox" className="mt-0.5 size-4" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <Checkbox className="mt-0.5" checked={checked} onCheckedChange={(v) => onChange(v === true)} />
       <span>{children}</span>
     </label>
   )

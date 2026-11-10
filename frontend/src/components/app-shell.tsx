@@ -140,7 +140,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <button
             type="button"
             onClick={() => setPalette(true)}
-            className="flex h-10 min-w-0 flex-1 max-w-xl items-center gap-2.5 rounded-full bg-muted px-4 text-start text-sm text-muted-foreground transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
+            className="flex h-10 min-w-0 flex-1 max-w-xl items-center gap-2.5 rounded-md bg-muted px-4 text-start text-sm text-muted-foreground transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
             aria-label={t('Go to')}
           >
             <Search className="size-4 shrink-0" />

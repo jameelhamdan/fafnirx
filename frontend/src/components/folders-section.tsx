@@ -8,7 +8,7 @@ import { Confirm } from '@/components/confirm'
 import { RenameFolder } from '@/components/files/rename-folder'
 import { NewFolder } from '@/components/new-folder'
 import { FolderStateList } from '@/components/folder-state'
-import { SELECT } from '@/components/common'
+import { Picker } from '@/components/common'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -39,10 +39,12 @@ function useRefreshFolders() {
 function AccessSelect({ canWrite, onChange, label }: { canWrite: boolean; onChange: (canWrite: boolean) => void; label: string }) {
   const t = useT()
   return (
-    <select className={SELECT} aria-label={label} value={canWrite ? 'write' : 'read'} onChange={(e) => onChange(e.target.value === 'write')}>
-      <option value="write">{t('Read and change')}</option>
-      <option value="read">{t('Read only')}</option>
-    </select>
+    <Picker
+      label={label}
+      value={canWrite ? 'write' : 'read'}
+      onChange={(v) => onChange(v === 'write')}
+      options={[['write', t('Read and change')], ['read', t('Read only')]]}
+    />
   )
 }
 
@@ -164,14 +166,15 @@ function People({ folder }: { folder: Folder }) {
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-xs text-muted-foreground">{t('Users on this server:')}</span>
             {suggestions.map((p) => (
-              <button
+              <Button
                 key={p.name}
                 type="button"
-                className="rounded-full border px-2 py-0.5 text-xs hover:bg-accent"
+                variant="outline"
+                size="xs"
                 onClick={() => setNames((n) => (n.split(/[\s,;]+/).includes(p.name) ? n : n.trim() ? `${n.trim().replace(/,$/, '')}, ${p.name}` : p.name))}
               >
                 {p.name}
-              </button>
+              </Button>
             ))}
           </div>
         )}

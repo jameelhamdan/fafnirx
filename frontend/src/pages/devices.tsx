@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { ChevronRight, Plus } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { ActivityView, Empty, ErrorNote, PageHeader, StatusDot } from '@/components/common'
+import { ActivityView, Picker, Empty, ErrorNote, PageHeader, StatusDot } from '@/components/common'
 import { DataTable, TableToolbar } from '@/components/data-table'
 import { matches, useTableView, type TableView } from '@/lib/table-view'
 import { EnrollDialog } from '@/components/enroll-dialog'
@@ -62,10 +62,16 @@ function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail) => voi
         {isAdmin && users.data && (
           <div className="space-y-2 pt-2">
             <Label htmlFor="device-owner">{t('For user')}</Label>
-            <select id="device-owner" className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm" value={owner} onChange={(e) => setOwner(e.target.value)}>
-              <option value="">{t('Me ({name})', { name: session?.user?.name ?? '' })}</option>
-              {users.data.filter((u) => !u.disabled && u.role !== 'readonly' && u.name !== session?.user?.name).map((u) => <option key={u.name} value={u.name}>{u.name}</option>)}
-            </select>
+            <Picker
+              id="device-owner"
+              className="w-full"
+              value={owner}
+              onChange={setOwner}
+              options={[
+                ['', t('Me ({name})', { name: session?.user?.name ?? '' })],
+                ...users.data.filter((u) => !u.disabled && u.role !== 'readonly' && u.name !== session?.user?.name).map((u): [string, string] => [u.name, u.name]),
+              ]}
+            />
           </div>
         )}
       </div>
@@ -196,12 +202,13 @@ export default function Devices() {
             view={view}
             toolbar={
               <TableToolbar view={view} filter={filter} onFilter={setFilter} placeholder={t('Filter by name, system or address')} shown={shown.length} total={computers.length}>
-                <select className="h-7 rounded-md border border-input bg-background px-1.5 text-[13px] focus-visible:border-ring focus-visible:outline-none" value={only} onChange={(e) => setOnly(e.target.value)} aria-label={t('Status')}>
-                  <option value="">{t('Any status')}</option>
-                  <option value="online">{t('Online')}</option>
-                  <option value="offline">{t('Offline')}</option>
-                  <option value="revoked">{t('Revoked')}</option>
-                </select>
+                <Picker
+                  size="sm"
+                  label={t('Status')}
+                  value={only}
+                  onChange={setOnly}
+                  options={[['', t('Any status')], ['online', t('Online')], ['offline', t('Offline')], ['revoked', t('Revoked')]]}
+                />
               </TableToolbar>
             }
           >
