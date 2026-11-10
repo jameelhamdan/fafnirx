@@ -13,7 +13,7 @@ export function LanguageMenu() {
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon-sm" aria-label={label}>
+            <Button variant="ghost" size="icon" aria-label={label}>
               <Languages className="size-4" />
             </Button>
           </DropdownMenuTrigger>

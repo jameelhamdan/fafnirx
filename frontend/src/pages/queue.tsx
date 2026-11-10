@@ -51,7 +51,7 @@ const steered = (kind: string) => kind === 'meta' || kind === 'thumb'
 function Counts({ queued, running, failed, done }: { queued: number; running: number; failed: number; done: number }) {
   const t = useT()
   const parts: [number, string, string][] = [
-    [running, t('running'), running > 0 ? 'text-info' : 'text-muted-foreground'],
+    [running, t('running'), running > 0 ? 'text-primary' : 'text-muted-foreground'],
     [queued, t('waiting'), queued > 0 ? '' : 'text-muted-foreground'],
     [failed, t('failed'), failed > 0 ? 'text-destructive' : 'text-muted-foreground'],
     [done, t('done today'), 'text-muted-foreground'],
@@ -168,12 +168,12 @@ export default function Queue() {
       {data && (
         <>
           {data.paused && <p role="status" className="rounded-md border border-warning/50 bg-warning/10 px-3 py-1.5 text-[13px]">{t('Paused: nothing new is started. What is running now finishes.')}</p>}
-          <section className="flex flex-wrap overflow-hidden rounded-md border bg-card" aria-label={t('Work by kind')}>
+          <section className="flex flex-wrap overflow-hidden rounded-xl border bg-card" aria-label={t('Work by kind')}>
             {cards.map((kind) => {
               const s = data.summary.find((x) => x.kind === kind) ?? { kind, queued: 0, running: 0, failed: 0, done: 0 }
               return (
-                <div key={kind} className="min-w-52 flex-1 border-e px-3 py-2" title={WHAT[kind] ? t(WHAT[kind]) : undefined}>
-                  <p className="text-[11px] tracking-wider text-muted-foreground uppercase">{t(KIND[kind] ?? kind)}</p>
+                <div key={kind} className="min-w-52 flex-1 border-e px-4 py-3" title={WHAT[kind] ? t(WHAT[kind]) : undefined}>
+                  <p className="text-xs font-medium text-muted-foreground">{t(KIND[kind] ?? kind)}</p>
                   <Counts {...s} />
                 </div>
               )

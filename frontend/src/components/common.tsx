@@ -12,7 +12,7 @@ import { STATUS } from '@/lib/status'
 export function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="min-w-0">
-      <dt className="text-[11px] tracking-wider text-muted-foreground uppercase">{label}</dt>
+      <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
       <dd className="mt-0.5 break-words text-sm">{children === null || children === undefined || children === '' ? '—' : children}</dd>
     </div>
   )
@@ -21,7 +21,7 @@ export function Fact({ label, children }: { label: string; children: ReactNode }
 const PHASE: Record<string, string> = { scanning: msg('Scanning'), hashing: msg('Hashing'), uploading: msg('Uploading') }
 
 /** The look of a native `<select>` in forms. */
-export const SELECT = 'h-8 rounded-md border border-input bg-background px-2 text-sm focus-visible:border-ring focus-visible:outline-none'
+export const SELECT = 'h-9 rounded-md border border-input bg-background px-2 text-sm focus-visible:border-ring focus-visible:outline-none'
 
 export function PageHeader({ title, description, actions }: { title: string; description?: ReactNode; actions?: ReactNode }) {
   useEffect(() => {
@@ -62,7 +62,7 @@ const DOT: Record<string, string> = {
   online: 'bg-success',
   partial: 'bg-warning',
   paused: 'bg-warning',
-  running: 'bg-info animate-pulse',
+  running: 'bg-primary animate-pulse',
   failed: 'bg-destructive',
   offline: 'bg-muted-foreground/50',
   revoked: 'bg-destructive',

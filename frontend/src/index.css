@@ -1,70 +1,61 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "@fontsource-variable/geist";
-@import "@fontsource/ibm-plex-mono/400.css";
-@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource-variable/overpass";
 @import "./theme.css";
 
-/*
- * A control-room palette. Neutrals carry the structure; colour is kept for states someone can act on:
- * red = critical, amber = warning, green = nominal, cobalt = information. The primary action is the
- * inverse of the page (ink on paper, paper on ink), so it never competes with a state colour.
- */
 :root {
-  --radius: 0.25rem;
-  --background: #f3f4f6;
-  --foreground: #14161b;
-  --card: #ffffff;
-  --card-foreground: #14161b;
-  --popover: #ffffff;
-  --popover-foreground: #14161b;
-  --primary: #14161b;
-  --primary-foreground: #f3f4f6;
-  --secondary: #e8eaee;
-  --secondary-foreground: #14161b;
-  --muted: #eceef2;
-  --muted-foreground: #5f6573;
-  --accent: #e4e7ec;
-  --accent-foreground: #14161b;
-  --destructive: #c8372f;
-  --border: #d7dae1;
-  --input: #c4c8d1;
-  --ring: #3b6fe0;
-  --success: #2f8a5c;
-  --warning: #b87a0c;
-  --info: #2f60d0;
-  --sidebar: #ffffff;
-  --sidebar-foreground: #14161b;
-  --sidebar-accent: #e4e7ec;
-  --sidebar-border: #d7dae1;
+  --radius: 0.75rem;
+  --background: oklch(0.985 0 0);
+  --foreground: oklch(0.205 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.205 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.205 0 0);
+  --primary: oklch(0.72 0.17 150);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.96 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.96 0 0);
+  --muted-foreground: oklch(0.5 0 0);
+  --accent: oklch(0.955 0.02 150);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27);
+  --border: oklch(0.915 0 0);
+  --input: oklch(0.915 0 0);
+  --ring: oklch(0.72 0.17 150);
+  --success: oklch(0.6 0.16 150);
+  --warning: oklch(0.72 0.16 75);
+  --sidebar: oklch(1 0 0);
+  --sidebar-foreground: oklch(0.205 0 0);
+  --sidebar-accent: oklch(0.955 0.02 150);
+  --sidebar-border: oklch(0.915 0 0);
 }
 
 .dark {
-  --background: #0d0e12;
-  --foreground: #e3e5ea;
-  --card: #16171d;
-  --card-foreground: #e3e5ea;
-  --popover: #1a1c23;
-  --popover-foreground: #e3e5ea;
-  --primary: #e3e5ea;
-  --primary-foreground: #0d0e12;
-  --secondary: #1f2128;
-  --secondary-foreground: #e3e5ea;
-  --muted: #1b1d24;
-  --muted-foreground: #8a8f9c;
-  --accent: #24272f;
-  --accent-foreground: #e3e5ea;
-  --destructive: #e5534b;
-  --border: #262830;
-  --input: #34373f;
-  --ring: #5b8cf5;
-  --success: #5fae86;
-  --warning: #e0a33a;
-  --info: #5b8cf5;
-  --sidebar: #101116;
-  --sidebar-foreground: #e3e5ea;
-  --sidebar-accent: #24272f;
-  --sidebar-border: #262830;
+  --background: oklch(0.16 0 0);
+  --foreground: oklch(0.97 0 0);
+  --card: oklch(0.2 0 0);
+  --card-foreground: oklch(0.97 0 0);
+  --popover: oklch(0.22 0 0);
+  --popover-foreground: oklch(0.97 0 0);
+  --primary: oklch(0.72 0.17 150);
+  --primary-foreground: oklch(0.14 0 0);
+  --secondary: oklch(0.26 0 0);
+  --secondary-foreground: oklch(0.97 0 0);
+  --muted: oklch(0.26 0 0);
+  --muted-foreground: oklch(0.7 0 0);
+  --accent: oklch(0.28 0.04 150);
+  --accent-foreground: oklch(0.97 0 0);
+  --destructive: oklch(0.65 0.21 25);
+  --border: oklch(1 0 0 / 11%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.72 0.17 150);
+  --success: oklch(0.72 0.17 150);
+  --warning: oklch(0.8 0.15 80);
+  --sidebar: oklch(0.19 0 0);
+  --sidebar-foreground: oklch(0.97 0 0);
+  --sidebar-accent: oklch(0.28 0.04 150);
+  --sidebar-border: oklch(1 0 0 / 11%);
 }
 
 @layer base {
@@ -73,28 +64,14 @@
   }
   html {
     color-scheme: light dark;
-    /* One step under the browser default: the screens are tables and feeds, not articles. */
-    font-size: 14px;
   }
   body {
     @apply bg-background text-foreground font-sans antialiased;
-    font-feature-settings: "ss01", "cv11";
   }
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]) {
     cursor: pointer;
   }
-  /* Numbers, times and paths line up in columns. */
-  .num {
-    font-family: var(--font-mono);
-    font-variant-numeric: tabular-nums;
-    letter-spacing: -0.01em;
-  }
-  /* Table density, set by the toolbar on the element that wraps the table. */
-  [data-density="compact"] td { padding-block: 0.125rem; }
-  [data-density="compact"] th { height: 1.75rem; }
-  [data-density="comfortable"] td { padding-block: 0.75rem; }
-  [data-density="comfortable"] th { height: 2.5rem; }
 }
 
 /* Subtitles of the video player: a dark box behind the text, readable on any picture. */
@@ -105,3 +82,14 @@ video::cue {
   font-size: clamp(14px, 2.2vw, 28px);
   line-height: 1.35;
 }
+
+/* Figures line up in columns. */
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Table density, set by the toolbar on the element that wraps the table. Not in a layer, so it wins over the cell padding utilities. */
+[data-density="compact"] td { padding-block: 0.125rem; }
+[data-density="compact"] th { height: 1.75rem; }
+[data-density="comfortable"] td { padding-block: 0.75rem; }
+[data-density="comfortable"] th { height: 2.75rem; }

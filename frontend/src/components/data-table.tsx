@@ -52,10 +52,10 @@ export function TableToolbar({
   const picked = selection?.selected.size ?? 0
   const optional = view.columns.filter((c) => !c.locked)
   return (
-    <div className="flex min-h-10 flex-wrap items-center gap-2 border-b px-2 py-1.5">
+    <div className="flex min-h-10 flex-wrap items-center gap-2 border-b px-3 py-2">
       <div className="relative w-64 max-w-full">
         <Search className="pointer-events-none absolute start-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input className="h-7 ps-7 pe-6 text-[13px]" value={filter} placeholder={placeholder} aria-label={placeholder} onChange={(e) => onFilter(e.target.value)} />
+        <Input className="h-8 ps-8 pe-7 text-[13px]" value={filter} placeholder={placeholder} aria-label={placeholder} onChange={(e) => onFilter(e.target.value)} />
         {filter && (
           <button type="button" className="absolute end-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" aria-label={t('Clear filter')} onClick={() => onFilter('')}>
             <X className="size-3.5" />
@@ -108,7 +108,7 @@ export function TableToolbar({
 /** A table with its toolbar in one bordered frame; the density applies to the rows inside. */
 export function DataTable({ view, toolbar, children, className }: { view: TableView; toolbar: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <div data-density={view.density} className={cn('overflow-hidden rounded-md border bg-card', className)}>
+    <div data-density={view.density} className={cn('overflow-hidden rounded-xl border bg-card', className)}>
       {toolbar}
       {children}
     </div>

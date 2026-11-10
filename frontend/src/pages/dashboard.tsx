@@ -36,9 +36,9 @@ const KIND = { device: msg('Device'), local: msg('Local folder'), master: msg('M
 /** A titled block of the page: a hairline-framed panel with a header strip, not a card. */
 function Panel({ title, aside, children, className }: { title: string; aside?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <section className={cn('min-w-0 overflow-hidden rounded-md border bg-card', className)}>
-      <header className="flex h-8 items-center justify-between gap-2 border-b px-3">
-        <h2 className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{title}</h2>
+    <section className={cn('min-w-0 overflow-hidden rounded-xl border bg-card', className)}>
+      <header className="flex h-10 items-center justify-between gap-2 border-b px-4">
+        <h2 className="text-sm font-semibold">{title}</h2>
         {aside && <div className="num text-[11px] text-muted-foreground">{aside}</div>}
       </header>
       {children}
@@ -49,9 +49,9 @@ function Panel({ title, aside, children, className }: { title: string; aside?: R
 /** One figure of the summary strip: a label over a mono value. */
 function Figure({ label, value, note, tone }: { label: string; value: string; note?: string; tone?: 'warning' | 'critical' }) {
   return (
-    <div className="min-w-0 px-3 py-2">
-      <p className="text-[11px] tracking-wider text-muted-foreground uppercase">{label}</p>
-      <p className={cn('num text-xl leading-tight font-medium', tone === 'warning' && 'text-warning', tone === 'critical' && 'text-destructive')}>{value}</p>
+    <div className="min-w-0 px-4 py-3">
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <p className={cn('num text-2xl leading-tight font-semibold', tone === 'warning' && 'text-warning', tone === 'critical' && 'text-destructive')}>{value}</p>
       {note && <p className="num truncate text-[11px] text-muted-foreground">{note}</p>}
     </div>
   )
@@ -69,10 +69,10 @@ function DiskBar({ data }: { data: DashboardData }) {
   const pct = (n: number) => `${(100 * n) / disk.total}%`
   const hot = disk.percent >= 90 ? 'critical' : disk.percent >= 80 ? 'warning' : 'ok'
   // Steps of one grey, so no device looks more important than another; the bar's colour only changes when the disk is filling up.
-  const tone = hot === 'critical' ? 'var(--destructive)' : hot === 'warning' ? 'var(--warning)' : 'var(--foreground)'
+  const tone = hot === 'critical' ? 'var(--destructive)' : hot === 'warning' ? 'var(--warning)' : 'var(--primary)'
   return (
-    <div className="px-3 pt-1 pb-3">
-      <div className="relative h-3 overflow-hidden rounded-sm bg-muted" role="img" aria-label={t('{free} free of {total}', { free: bytes(disk.free), total: bytes(disk.total) })}>
+    <div className="px-4 pt-1 pb-4">
+      <div className="relative h-3 overflow-hidden rounded-full bg-muted" role="img" aria-label={t('{free} free of {total}', { free: bytes(disk.free), total: bytes(disk.total) })}>
         <div className="flex h-full">
           {shown.map((d, i) => (
             <div key={d.folder} className="h-full border-e border-card" style={{ width: pct(d.bytes), background: tone, opacity: 0.9 - i * 0.12 }} title={`${d.folder}: ${bytes(d.bytes)}`} />
@@ -98,7 +98,7 @@ function ActivityChart({ days }: { days: DashboardData['activity'] }) {
   const peak = Math.max(1, ...totals)
   const busiest = totals.indexOf(Math.max(...totals))
   const day = (n: number) => new Date(n * 86400_000).toLocaleDateString(locale(), { month: 'short', day: 'numeric', timeZone: 'UTC' })
-  const LEGEND: [string, string][] = [[t('Added'), 'bg-info'], [t('Updated'), 'bg-info/45'], [t('Renamed'), 'bg-muted-foreground/60'], [t('Deleted'), 'bg-destructive']]
+  const LEGEND: [string, string][] = [[t('Added'), 'bg-primary'], [t('Updated'), 'bg-primary/55'], [t('Renamed'), 'bg-muted-foreground/60'], [t('Deleted'), 'bg-destructive']]
   return (
     <div className="px-3 py-3">
       <div className="flex gap-2">
@@ -116,8 +116,8 @@ function ActivityChart({ days }: { days: DashboardData['activity'] }) {
                 {total > 0 && i === busiest && <span className="num absolute -top-4 start-1/2 -translate-x-1/2 text-[10px] text-muted-foreground rtl:translate-x-1/2">{count(total)}</span>}
                 {total > 0 && (
                   <div className="flex flex-col-reverse overflow-hidden rounded-t-[1px]" style={{ height: `${(100 * total) / peak}%` }}>
-                    <div className="bg-info" style={{ flex: d.added }} />
-                    <div className="bg-info/45" style={{ flex: d.updated }} />
+                    <div className="bg-primary" style={{ flex: d.added }} />
+                    <div className="bg-primary/55" style={{ flex: d.updated }} />
                     <div className="bg-muted-foreground/60" style={{ flex: d.renamed }} />
                     <div className="bg-destructive" style={{ flex: d.deleted }} />
                   </div>
@@ -187,13 +187,13 @@ function DevicesTable({ data }: { data: DashboardData }) {
                     {!device && <span className="ms-2 text-[11px] text-muted-foreground">{t(KIND[d.kind])}</span>}
                   </TableCell>
                   <TableCell>{device ? <StatusDot status={d.revoked ? 'revoked' : d.online ? 'online' : 'offline'} label={d.revoked ? t('Revoked') : d.online ? t('Online') : t('Offline')} /> : <span className="text-muted-foreground">—</span>}</TableCell>
-                  {view.show('activity') && <TableCell className="hidden w-64 lg:table-cell">{d.activity ? <ActivityView activity={d.activity} compact /> : <span className="text-muted-foreground">—</span>}</TableCell>}
+                  {view.show('activity') && <TableCell className="hidden w-48 lg:table-cell">{d.activity ? <ActivityView activity={d.activity} compact /> : <span className="text-muted-foreground">—</span>}</TableCell>}
                   {view.show('files') && <TableCell className="num text-end">{count(d.files)}</TableCell>}
                   {view.show('size') && <TableCell className="num text-end">{bytes(d.bytes)}</TableCell>}
                   {view.show('share') && (
                     <TableCell className="hidden md:table-cell">
                       <div className="flex items-center gap-2">
-                        <div className="h-1 w-16 overflow-hidden rounded-sm bg-muted"><div className="h-full bg-muted-foreground" style={{ width: `${share}%` }} /></div>
+                        <div className="h-1.5 w-12 overflow-hidden rounded-full bg-muted"><div className="h-full bg-muted-foreground" style={{ width: `${share}%` }} /></div>
                         <span className="num w-9 text-[11px] text-muted-foreground">{share < 1 && share > 0 ? '<1' : Math.round(share)}%</span>
                       </div>
                     </TableCell>
@@ -241,7 +241,7 @@ export default function Dashboard() {
       <PageHeader title={t('Dashboard')} description={t('What the master holds, who is sending it, and anything that needs attention.')} />
 
       {data.alerts.length > 0 && (
-        <ul className="overflow-hidden rounded-md border border-warning/50 bg-warning/5" aria-label={t('Alerts')}>
+        <ul className="overflow-hidden rounded-xl border border-warning/50 bg-warning/10" aria-label={t('Alerts')}>
           {data.alerts.map((a) => (
             <li key={a.id} className="flex items-start gap-2 border-b border-warning/25 px-3 py-1.5 text-[13px] last:border-b-0">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" />
@@ -256,7 +256,7 @@ export default function Dashboard() {
         </ul>
       )}
 
-      <section className="overflow-hidden rounded-md border bg-card" aria-label={t('Summary')}>
+      <section className="overflow-hidden rounded-xl border bg-card" aria-label={t('Summary')}>
         <div className="grid grid-cols-2 divide-x divide-border rtl:divide-x-reverse sm:grid-cols-4">
           <Figure label={t('Devices online')} value={`${data.online}/${clients.length}`} note={offline > 0 ? t('{count} offline', { count: offline }) : clients.length === 0 ? t('none added') : undefined} tone={offline > 0 ? 'warning' : undefined} />
           <Figure label={t('Files')} value={count(data.totals.files)} note={data.totals.marked_deleted ? t('{count} deleted, waiting for retention', { count: count(data.totals.marked_deleted) }) : undefined} />
@@ -266,7 +266,7 @@ export default function Dashboard() {
         <DiskBar data={data} />
       </section>
 
-      <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_24rem]">
+      <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="min-w-0 space-y-3">
           <DevicesTable data={data} />
           <Panel title={t('Changes, last 14 days')} aside={`${count(data.activity.reduce((n, d) => n + d.added + d.updated + d.renamed + d.deleted, 0))}`}>

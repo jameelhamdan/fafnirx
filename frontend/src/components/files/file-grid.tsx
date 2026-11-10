@@ -29,7 +29,7 @@ export function FileGrid({
         const key = entryKey(e)
         const on = selected.has(key)
         return (
-          <div key={key} className={cn('group relative overflow-hidden rounded-md border bg-card transition-colors', on && 'border-primary ring-2 ring-primary/40')}>
+          <div key={key} className={cn('group relative overflow-hidden rounded-lg border bg-card transition-colors', on && 'border-primary ring-2 ring-primary/40')}>
             <button type="button" onClick={() => onOpen(e)} className="block w-full text-left" title={e.name}>
               <div className="grid aspect-square place-items-center bg-muted/40">
                 {e.kind === 'file' && e.preview ? (

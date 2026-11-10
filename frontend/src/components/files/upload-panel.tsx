@@ -25,7 +25,7 @@ export function UploadPanel() {
   const sent = items.reduce((n, i) => n + (i.status === 'done' ? i.size : i.sent), 0)
 
   return (
-    <div className="fixed right-3 bottom-3 z-40 w-[min(22rem,calc(100vw-1.5rem))] rounded-md border bg-popover text-popover-foreground shadow-lg">
+    <div className="fixed right-3 bottom-3 z-40 w-[min(22rem,calc(100vw-1.5rem))] rounded-lg border bg-popover text-popover-foreground shadow-lg">
       <div className="flex items-center gap-2 border-b px-3 py-2">
         {active.length > 0 ? <Loader2 className="size-4 animate-spin text-primary" /> : failed ? <AlertCircle className="size-4 text-destructive" /> : <Check className="size-4 text-success" />}
         <p className="flex-1 text-sm font-medium">
