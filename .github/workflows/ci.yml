@@ -85,8 +85,8 @@ jobs:
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 12
     env:
       FAFNIRX_TEST_DATABASE_URL: postgresql://postgres:test@localhost:5432/postgres
-      RCLONE_VERSION: 1.75.2
-      RCLONE_SHA256: 349ac8fba6ff65d6247043f1750cdcb518ec5d500ef91463a10d37c0ccdf3702
+      PINNED_RCLONE_VERSION: 1.75.2
+      PINNED_RCLONE_SHA256: 349ac8fba6ff65d6247043f1750cdcb518ec5d500ef91463a10d37c0ccdf3702
     steps:
       - uses: actions/checkout@v4
         with:
@@ -100,8 +100,8 @@ jobs:
       # The rclone the image ships (docker/Dockerfile.master), checked against its checksum.
       - name: rclone
         run: |
-          curl -fsSLo "$RUNNER_TEMP/rclone.zip" "https://downloads.rclone.org/v$RCLONE_VERSION/rclone-v$RCLONE_VERSION-linux-amd64.zip"
-          echo "$RCLONE_SHA256  $RUNNER_TEMP/rclone.zip" | sha256sum -c -
+          curl -fsSLo "$RUNNER_TEMP/rclone.zip" "https://downloads.rclone.org/v$PINNED_RCLONE_VERSION/rclone-v$PINNED_RCLONE_VERSION-linux-amd64.zip"
+          echo "$PINNED_RCLONE_SHA256  $RUNNER_TEMP/rclone.zip" | sha256sum -c -
           unzip -qj "$RUNNER_TEMP/rclone.zip" "*/rclone" -d "$RUNNER_TEMP/rclone"
           echo "FAFNIRX_RCLONE=$RUNNER_TEMP/rclone/rclone" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
