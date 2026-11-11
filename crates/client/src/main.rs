@@ -217,7 +217,9 @@ fn main() -> Result<()> {
 fn run(cli: Cli) -> Result<()> {
     let config_path = cli.config.clone().unwrap_or_else(default_config_path);
     // The system-wide install belongs to the computer: what changes it, or reads its token, is done by an administrator.
-    let system = config::is_system_config(&config_path) || (!cfg!(windows) && matches!(cli.cmd, Cmd::Install { .. } | Cmd::Uninstall { .. }));
+    // An install that only writes the config it was given (the program stays, no service) touches nothing of the computer's.
+    let own_config_only = matches!(cli.cmd, Cmd::Install { in_place: true, no_start: true, .. });
+    let system = config::is_system_config(&config_path) || (!cfg!(windows) && !own_config_only && matches!(cli.cmd, Cmd::Install { .. } | Cmd::Uninstall { .. }));
     if cli.cmd.needs_admin() && system && !service::elevate::is_admin() {
         use std::io::IsTerminal;
         let mut args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
