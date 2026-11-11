@@ -65,7 +65,8 @@ export function JobList({
             </div>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
-            <div className="text-muted-foreground">{summary(j)}</div>
+            {/* Paths and addresses are long words: they wrap anywhere rather than push the page sideways. */}
+            <div className="text-muted-foreground [overflow-wrap:anywhere]">{summary(j)}</div>
             {j.message && <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap">{j.message}</pre>}
           </CardContent>
         </Card>

@@ -1,0 +1,7 @@
+# `cargo deny check advisories` (CI): fails on a known vulnerability or a yanked crate anywhere in the tree, and on an
+# unmaintained crate that this workspace depends on directly. Unmaintained crates deeper down (those of the tray's toolkit:
+# tao's `instant`, gtk 0.18's `proc-macro-error`, rfd's D-Bus `zvariant`) are fixed by their users' releases, not here.
+[advisories]
+version = 2
+unmaintained = "workspace"
+yanked = "deny"

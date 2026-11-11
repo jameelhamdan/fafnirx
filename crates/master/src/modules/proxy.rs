@@ -40,7 +40,7 @@ pub async fn proxy(State(state): State<Shared>, Extension(who): Extension<Access
         .await
         .map_err(|e| {
             tracing::warn!("module {}: {e}", module.id());
-            ApiError(StatusCode::BAD_GATEWAY, format!("The {} module cannot be reached", module.id()))
+            ApiError(StatusCode::BAD_GATEWAY, format!("The {module} module cannot be reached", module = module.id()))
         })?;
     pass_on(&module, upstream).await
 }
@@ -54,7 +54,7 @@ pub async fn ui(State(state): State<Shared>, Path((module, file)): Path<(String,
     }
     let upstream = module.get(&format!("{}/{file}", fafnirx_module_api::UI_PREFIX)).send().await.map_err(|e| {
         tracing::warn!("module {}: {e}", module.id());
-        ApiError(StatusCode::BAD_GATEWAY, format!("The {} module cannot be reached", module.id()))
+        ApiError(StatusCode::BAD_GATEWAY, format!("The {module} module cannot be reached", module = module.id()))
     })?;
     pass_on(&module, upstream).await
 }
@@ -66,7 +66,10 @@ async fn pass_on(module: &super::Module, upstream: reqwest::Response) -> Result<
         // Say what the module said (it names the problem: not a video, ffmpeg failed), but never its token or paths.
         let message = upstream.text().await.unwrap_or_default();
         let (code, message) = if status == StatusCode::UNAUTHORIZED {
-            (StatusCode::BAD_GATEWAY, format!("The {} module refused the master's token", module.id()))
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("The {module} module refused the master's token", module = module.id()),
+            )
         } else {
             (status, message.chars().take(300).collect())
         };

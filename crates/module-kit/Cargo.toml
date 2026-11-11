@@ -11,7 +11,7 @@ repository.workspace = true
 # It depends on the contract crates and fafnirx-common only, like the modules that use it.
 [dependencies]
 anyhow.workspace = true
-axum = "0.7"
+axum = "0.8"
 fafnirx-common = { path = "../common", features = ["server"] }
 fafnirx-fetch-api = { path = "../fetch-api" }
 fafnirx-module-api = { path = "../module-api" }

@@ -47,3 +47,33 @@ SELECT password_hash FROM users WHERE id = :id;
 
 --! user_who_can_have_devices
 SELECT id FROM users WHERE name = :name AND disabled_at IS NULL AND role <> 'readonly';
+
+--! devices_of_user : (id, kind, folder)
+-- Everything a user has: their computers (`device`) and their folders (`local`).
+SELECT id, kind, folder FROM devices WHERE user_id = :id ORDER BY id;
+
+--! sources_of_user
+SELECT name FROM links WHERE direction = 'in' AND user_id = :id ORDER BY name;
+
+--! links_on_folders_of_user : (name, folder)
+-- What else uses the user's folders: a mirror that holds one, another user's source that writes into one.
+SELECT l.name, d.folder FROM links l JOIN devices d ON d.id = l.folder_id WHERE d.user_id = :id ORDER BY d.folder, l.name LIMIT 1;
+
+--! delete_memberships_of_user
+DELETE FROM shared_members WHERE user_id = :id;
+
+--! delete_file_state_of_user
+DELETE FROM file_state WHERE user_id = :id;
+
+--! delete_tags_of_user
+DELETE FROM tags WHERE user_id = :id;
+
+--! delete_albums_of_user
+DELETE FROM albums WHERE user_id = :id;
+
+--! resolve_alerts_of_user
+-- Alerts about the user's computers, folders and sources are keyed `<user>/<name>`.
+UPDATE alerts SET resolved_at = :now WHERE resolved_at IS NULL AND starts_with(key, :prefix);
+
+--! delete_user
+DELETE FROM users WHERE id = :id;

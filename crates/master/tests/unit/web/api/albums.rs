@@ -33,6 +33,7 @@ fn a_folder_is_an_album_and_what_comes_into_it_is_in_the_album() {
         };
         let (_, detail) = api.get(&format!("/api/albums/{id}")).await;
         assert_eq!(names(&detail), ["S1/Episode 2.png", "S1/Episode 10.png"], "Episode 2 comes before Episode 10");
+        assert_eq!(detail["more"], false, "all of it is in the answer");
 
         // Asking again gives the same album, and a new file in the folder is in it without doing anything.
         let (_, again) = api.json(Method::POST, "/api/albums", json!({"name": "", "folder": folder})).await;

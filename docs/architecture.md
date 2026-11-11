@@ -104,7 +104,8 @@ new `files/users/<user>/<name>` becomes a folder. The whole tree is also compare
 device folder deletes nothing.
 
 **Live updates.** Changes `NOTIFY` inside their transaction, so it arrives on commit. One `LISTEN` connection feeds browsers
-over SSE; the web app maps topics to stale queries and refetches once per burst. A slow stream is told to resync.
+over SSE; the web app maps topics to stale queries and refetches once per burst. A slow stream is told to resync. Each
+stream rereads its login every minute: lost access stops its events, and an ended session closes it.
 
 ## Folders
 
@@ -219,8 +220,8 @@ JSON under `/api` behind the login cookie (random token, hash stored, `SameSite=
 Files, folders, library, albums, sources, mirrors, queue, settings and module routes each live with their app (see
 [Development](development.md#code-layout)).
 
-Browser uploads are chunked: pieces are `PUT` at an offset (409 with the expected offset if misaligned); `finish` verifies the
-hash and commits through the device path.
+Browser uploads are chunked: pieces are `PUT` at an offset (409 with the expected offset if misaligned); `finish` checks that every
+byte arrived, hashes the file and commits it through the device path.
 
 ## Security model
 
@@ -228,9 +229,9 @@ hash and commits through the device path.
 |---|---|
 | Stolen device token | Adds data to its own device, and reads and writes the folders of its user (replaced files stay as versions); revoke it. A second computer is refused while the first is connected, and the owner is alerted |
 | Compromised device | Cannot read, list or delete anything but the folders of its user, those shared with them and the master folders |
-| Stolen password | Guesses rate-limited per address and user; sessions end on disable, new password, logout. Add Access or a VPN |
-| A user reaching another's files | Queries and downloads are limited to the role's devices; others' devices answer 404. Ids are random but never trusted: access is checked on every call |
-| Compromised master | Cannot ship a client update: clients update from GitHub releases |
+| Stolen password | Five wrong guesses per minute per address (counted before the check, so parallel guesses do not slip through); a name guessed from many addresses is slowed to one check a second, not locked, so its owner still logs in. Sessions end on disable, new password, logout. Add Access or a VPN |
+| A user reaching another's files | Queries and downloads are limited to the role's devices; others' devices answer 404. Ids are random but never trusted: access is checked on every call. **Sources are the exception:** any user can add one, and it reads with the master's rights (a folder on the master, a remote of `rclone.conf`, any address for the fetch module). fafnirx is for people who trust each other |
+| Compromised master | Cannot ship a client update: clients update from GitHub releases (signed, when `UPDATE_SIGNING_KEY` is set) |
 | Path tricks | Validated on arrival and again when mapped to disk |
 | Stored HTML/SVG opened in a browser | Always a download with `nosniff` |
 | Tampered chunk, bit rot | Verified on arrival and before install; re-hashed before mirroring (a mismatch fails that file) |

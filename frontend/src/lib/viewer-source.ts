@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect } from 'react'
 import { useLocation, useNavigate, type Location } from 'react-router-dom'
 import type { Asset } from '@/lib/types'
 
@@ -14,18 +14,13 @@ export interface ViewerSource {
   onEdge?: (direction: 'prev' | 'next') => void
 }
 
-interface Holder {
+export interface Holder {
   source: ViewerSource | null
   set: (source: ViewerSource | null) => void
 }
 
-const Context = createContext<Holder>({ source: null, set: () => {} })
-
-export function ViewerSourceProvider({ children }: { children: ReactNode }) {
-  const [source, set] = useState<ViewerSource | null>(null)
-  const value = useMemo(() => ({ source, set }), [source])
-  return <Context.Provider value={value}>{children}</Context.Provider>
-}
+/** Held by `ViewerSourceProvider` (components/viewer-source-provider). */
+export const Context = createContext<Holder>({ source: null, set: () => {} })
 
 /** The files the open page lets the viewer step through, if any. */
 export const useCurrentSource = () => useContext(Context).source

@@ -1,3 +1,5 @@
+import { translateServer } from './i18n'
+
 export class ApiError extends Error {
   status: number
   body: unknown
@@ -25,7 +27,8 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
     let parsed: unknown
     try {
       parsed = await res.json()
-      message = (parsed as { error?: string }).error ?? message
+      // The master writes English; shown in the language of the app.
+      message = translateServer((parsed as { error?: string }).error ?? message)
     } catch {
       /* the body was not JSON */
     }

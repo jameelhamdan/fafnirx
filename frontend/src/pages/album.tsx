@@ -58,7 +58,7 @@ export default function Album() {
   const id = useParams().id ?? ""
   const navigate = useNavigate()
   const refresh = useRefreshLibrary()
-  const { data, error } = useQuery({ queryKey: ['album', id], queryFn: () => api.get<{ album: AlbumInfo; assets: Asset[] }>(`/api/albums/${id}`), enabled: id !== "" })
+  const { data, error } = useQuery({ queryKey: ['album', id], queryFn: () => api.get<{ album: AlbumInfo; assets: Asset[]; more: boolean }>(`/api/albums/${id}`), enabled: id !== "" })
   const [selected, setSelected] = useState<Map<string, Asset>>(new Map())
   const openMedia = useOpenMedia()
   const [dialog, setDialog] = useState<'edit' | 'delete' | null>(null)
@@ -130,6 +130,11 @@ export default function Album() {
           <FolderGrid assets={shown} root={folder.path} src={(a) => mediaUrl(a.id, 'thumb', a.hash)} selected={ids} onOpen={(a) => openMedia(a.id)} onToggle={toggle} />
           {assets && assets.length > shown.length && (
             <div className="py-4 text-center"><Button variant="outline" onClick={() => setShowAll(true)}>{t('Show all {count}', { count: assets.length.toLocaleString() })}</Button></div>
+          )}
+          {data.more && assets && assets.length === shown.length && (
+            <p className="py-4 text-center text-sm text-muted-foreground">
+              {t('Only the first {count} are shown here; the folder has them all.', { count: assets.length.toLocaleString() })}
+            </p>
           )}
         </>
       )}

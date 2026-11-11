@@ -99,9 +99,9 @@ fn only_versions_without_a_record_are_swept() {
     for id in [1, 2] {
         fs::create_dir_all(store.versions.join(id.to_string())).unwrap();
     }
-    let known = [1].into_iter().collect();
-    assert_eq!(store.sweep_versions(&known, Duration::from_secs(3600)), 0, "too new: a commit may be running");
-    assert_eq!(store.sweep_versions(&known, Duration::ZERO), 1);
+    let known = |ids: &[i64]| Ok::<_, ()>(ids.iter().copied().filter(|id| *id == 1).collect());
+    assert_eq!(store.sweep_versions(Duration::from_secs(3600), known), Ok(0), "too new: a commit may be running");
+    assert_eq!(store.sweep_versions(Duration::ZERO, known), Ok(1));
     assert!(store.versions.join("1").is_dir() && !store.versions.join("2").exists());
 }
 

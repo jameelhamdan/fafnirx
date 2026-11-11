@@ -59,6 +59,40 @@ export function translate(lang: Lang, text: string, vars?: Vars): string {
   return vars ? found.replace(/\{(\w+)\}/g, (m, k: string) => (k in vars ? String(vars[k]) : m)) : found
 }
 
+/** The English strings with placeholders, as patterns that find them in a message the master wrote. Made when first needed. */
+let templates: { pattern: RegExp; names: string[]; key: string }[] | null = null
+
+/**
+ * A message of the master (an error) in the current language. The master writes English; its messages are keys of
+ * translations/en.json (`npm run i18n` collects them from crates/master), and one made with `format!` is found by its
+ * template: "There is no user named bob" is `There is no user named {user}` with `user` = bob. Anything else stays as it is.
+ */
+export function translateServer(message: string): string {
+  if (message in LANGUAGES.en.strings) return tr(message)
+  templates ??= Object.keys(LANGUAGES.en.strings)
+    .filter((key) => /\{\w+\}/.test(key))
+    .map((key) => {
+      const names: string[] = []
+      const source = key
+        .split(/(\{\w+\})/)
+        .map((part) => {
+          const name = /^\{(\w+)\}$/.exec(part)?.[1]
+          if (!name) return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+          names.push(name)
+          return '(.+?)'
+        })
+        .join('')
+      return { pattern: new RegExp(`^${source}$`, 's'), names, key }
+    })
+    // The most fixed text first: "Only 5 of 10 bytes arrived" is `Only {received} of {size} bytes arrived`, not `{n} of {total}`.
+    .sort((a, b) => b.key.replace(/\{\w+\}/g, '').length - a.key.replace(/\{\w+\}/g, '').length)
+  for (const { pattern, names, key } of templates) {
+    const found = pattern.exec(message)
+    if (found) return tr(key, Object.fromEntries(names.map((name, i) => [name, found[i + 1]])))
+  }
+  return message
+}
+
 export interface I18n {
   lang: Lang
   setLang: (lang: Lang) => void

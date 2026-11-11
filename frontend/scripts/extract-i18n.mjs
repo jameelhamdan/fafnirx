@@ -18,6 +18,22 @@ for (const file of walk(join(root, 'src'))) {
   if (file.endsWith('i18n.ts')) continue // its comments show examples
   for (const m of readFileSync(file, 'utf8').matchAll(call)) keys.add(unescape(m[1] ?? m[2] ?? m[3]))
 }
+// The master's error messages (what `ApiError` says, shown as it comes): the web app translates them on arrival
+// (`translateServer` in src/lib/i18n.ts). A `format!` message is a template: its `{name}` parts are the placeholders.
+const rust = (dir) =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? rust(join(dir, e.name)) : e.name.endsWith('.rs') ? [join(dir, e.name)] : [],
+  )
+const serverCall =
+  /(?:ApiError::(?:bad|not_found|conflict)\(|\(\s*StatusCode::\w+,|\bforbidden\(|\bconflict\()\s*(?:format!\(\s*)?"((?:[^"\\]|\\.)*)"|\bconst \w+_RULE: &str = "((?:[^"\\]|\\.)*)"/g
+for (const file of rust(join(root, '..', 'crates', 'master', 'src'))) {
+  for (const m of readFileSync(file, 'utf8').matchAll(serverCall)) {
+    const text = unescape(m[1] ?? m[2]).replace(/\{(\w+):[^}]*\}/g, '{$1}')
+    // A message that is only what something else said is not ours to translate, and only named parts ({name}) are placeholders.
+    if (!/^\{\w+\}$/.test(text) && !/\{(?!\w+\})/.test(text)) keys.add(text)
+  }
+}
+
 const sorted = [...keys].sort((a, b) => a.localeCompare(b, 'en'))
 const next = JSON.stringify(Object.fromEntries(sorted.map((k) => [k, k])), null, 2) + '\n'
 const enPath = join(root, 'translations', 'en.json')

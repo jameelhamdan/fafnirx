@@ -1,7 +1,7 @@
 //! Moving file contents out: download (with ranges, so video and photos stream), previews and bulk zip. The way in is `upload`.
 
 use crate::files::browse::VersionAt;
-use crate::files::browse::{expand, find_device, version_file, FileRef};
+use crate::files::browse::{find_device, version_file, FileRef};
 use crate::library::{artwork, meta};
 use crate::platform::id::Id;
 use crate::repo::files;
@@ -110,6 +110,18 @@ fn parse_range(header: &str, size: u64) -> Option<(u64, u64)> {
     (start <= end && start < size).then_some((start, end))
 }
 
+/// Whether a well-formed single range starts at or after the end (or asks for the last 0 bytes): nothing of the file can answer
+/// it. A range that is not understood is ignored instead, and the whole file is sent.
+fn past_the_end(header: &str, size: u64) -> bool {
+    let Some((from, to)) = header.strip_prefix("bytes=").filter(|s| !s.contains(',')).and_then(|s| s.split_once('-')) else {
+        return false;
+    };
+    match (from.trim(), to.trim()) {
+        ("", suffix) => suffix.parse::<u64>().is_ok_and(|n| n == 0 || size == 0),
+        (from, _) => from.parse::<u64>().is_ok_and(|start| start >= size),
+    }
+}
+
 pub async fn download(State(state): State<Shared>, Extension(who): Extension<Access>, Query(q): Query<FileQuery>, headers: HeaderMap) -> Result<Response, ApiError> {
     let stored = run(&state, stored_version(&state, who, &q)).await?;
     let etag = format!("\"{}\"", hex::encode(&stored.root));
@@ -138,7 +150,11 @@ async fn send_file(state: &Shared, headers: &HeaderMap, f: SendFile<'_>) -> Resu
         .await
         .map_err(|_| ApiError::not_found("The content of this version is no longer stored"))?;
     let size = file.metadata().await.map(|m| m.len()).unwrap_or(f.size);
-    let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok()).and_then(|v| parse_range(v, size));
+    let asked = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    let range = asked.and_then(|v| parse_range(v, size));
+    if asked.is_some_and(|v| range.is_none() && past_the_end(v, size)) {
+        return Ok((StatusCode::RANGE_NOT_SATISFIABLE, [(header::CONTENT_RANGE, format!("bytes */{size}"))]).into_response());
+    }
     let (status, start, len) = match range {
         Some((a, b)) => (StatusCode::PARTIAL_CONTENT, a, b - a + 1),
         None => (StatusCode::OK, 0, size),
@@ -341,8 +357,8 @@ pub async fn zip(State(state): State<Shared>, Extension(who): Extension<Access>,
             let selected = item.path.trim_matches('/');
             // Names inside the zip start at the selected folder (or file), not at the device root.
             let parent = selected.rfind('/').map_or(0, |i| i + 1);
-            for path in expand(c, &dev, selected, false)? {
-                let mtime = secs_of_ns(sql::files::current_mtime().bind(c, &dev.id, &path).one()?);
+            for (path, mtime) in files::expand_with_mtime(c, dev.id, selected)? {
+                let mtime = secs_of_ns(mtime);
                 let inner = &path[parent.min(path.len())..];
                 let name = if several || selected.is_empty() { format!("{}/{inner}", dev.name) } else { inner.to_string() };
                 entries.push(super::zip::Entry { name, path: store.live_path(&dev.name, &path)?, mtime });

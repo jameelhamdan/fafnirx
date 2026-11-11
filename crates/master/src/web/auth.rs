@@ -17,13 +17,15 @@ use fafnirx_db::client::GenericClient;
 use fafnirx_db::queries as sql;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 const COOKIE: &str = "fx_session";
 const SESSION_SECS: i64 = 7 * 86400;
 const LOGIN_WINDOW: Duration = Duration::from_secs(60);
 const LOGIN_MAX: usize = 5;
+/// How long each check of a user name waits once more than `LOGIN_MAX` guesses were made at it within the window.
+const SLOW_LOGIN: Duration = Duration::from_secs(1);
 pub const MIN_PASSWORD: usize = 8;
 
 fn argon() -> Argon2<'static> {
@@ -125,6 +127,13 @@ pub fn is_secure(headers: &HeaderMap) -> bool {
         .is_some_and(|v| v.eq_ignore_ascii_case("https"))
 }
 
+/// The lock that lets one password check of a user name run at a time. Gates nobody waits on are dropped.
+fn gate(state: &Shared, username: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let mut gates = state.login_gates.locked();
+    gates.retain(|_, g| Arc::strong_count(g) > 1);
+    gates.entry(username.to_string()).or_default().clone()
+}
+
 fn wrong() -> ApiError {
     ApiError(StatusCode::UNAUTHORIZED, "Wrong username or password".into())
 }
@@ -132,12 +141,17 @@ fn wrong() -> ApiError {
 pub async fn login(State(state): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Json(body): Json<Login>) -> Result<impl IntoResponse, ApiError> {
     // The connection itself, unless it comes from a proxy the master was told to trust (`FAFNIRX_TRUSTED_PROXY`): then the
     // address the proxy saw. Otherwise forwarding headers are not believed, anyone who can reach the port could forge them.
-    // Guesses are counted per address and per user name, so that neither one address trying many names nor many
-    // addresses trying one name gets far.
+    // Guesses are limited per address and per user name at that address: a blocked address cannot try more, and nobody can
+    // lock someone else out by guessing their name. Many addresses trying one name are slowed instead (see `gate`).
     let username = body.username.trim().to_lowercase();
     let forwarded = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
-    let keys = [state.trusted.client_ip(peer.ip(), forwarded).to_string(), format!("user:{username}")];
-    {
+    let ip = state.trusted.client_ip(peer.ip(), forwarded).to_string();
+    let keys = [ip.clone(), format!("user:{username}@{ip}")];
+    let name_key = format!("user:{username}");
+    // The attempt counts from here on, before the password is checked: guesses sent at the same time cannot all slip in
+    // before the first of them is counted. A right password takes its attempt back.
+    let attempt = Instant::now();
+    let slow = {
         let mut failures = state.login_failures.locked();
         // Forget keys that have been quiet, so the table cannot grow without bound.
         failures.retain(|_, times| {
@@ -147,6 +161,16 @@ pub async fn login(State(state): State<Shared>, ConnectInfo(peer): ConnectInfo<S
         if keys.iter().any(|k| failures.get(k).is_some_and(|times| times.len() >= LOGIN_MAX)) {
             return Err(ApiError(StatusCode::TOO_MANY_REQUESTS, "Too many attempts, wait a minute".into()));
         }
+        for key in keys.iter().chain([&name_key]) {
+            failures.entry(key.clone()).or_default().push(attempt);
+        }
+        failures.get(&name_key).is_some_and(|times| times.len() > LOGIN_MAX)
+    };
+    let gate = gate(&state, &username);
+    let _turn = gate.lock().await;
+    if slow {
+        // A name that many addresses are guessing at: one check a second, so it can still log in but cannot be guessed fast.
+        tokio::time::sleep(SLOW_LOGIN).await;
     }
 
     let name = username.clone();
@@ -160,16 +184,15 @@ pub async fn login(State(state): State<Shared>, ConnectInfo(peer): ConnectInfo<S
         .await
         .map_err(|e| ApiError::from(anyhow::Error::from(e)))?;
     let Some(id) = id.filter(|_| matched) else {
-        let mut failures = state.login_failures.locked();
-        for key in keys {
-            failures.entry(key).or_default().push(Instant::now());
-        }
         return Err(wrong());
     };
     {
         let mut failures = state.login_failures.locked();
         for key in &keys {
             failures.remove(key);
+        }
+        if let Some(times) = failures.get_mut(&name_key) {
+            times.retain(|t| *t != attempt);
         }
     }
 

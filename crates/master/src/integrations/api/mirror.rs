@@ -119,7 +119,8 @@ pub async fn create_mirror(State(state): State<Shared>, Extension(who): Extensio
             interval_secs: secs,
         };
         if links::add(c, &new, unix_now())?.is_none() {
-            return Err(ApiError::conflict(format!("A mirror named {} already exists", mirror.name)).into());
+            let name = &mirror.name;
+            return Err(ApiError::conflict(format!("A mirror named {name} already exists")).into());
         }
         db::notify(c, db::Topic::Jobs, "mirrors")?;
         Ok(())

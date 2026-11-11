@@ -207,3 +207,7 @@ ORDER BY l.name;
 --! folder_album
 -- The album of the user that is a shortcut to the folder.
 SELECT id, name FROM albums WHERE folder_device_id = :id AND user_id = :user::bigint LIMIT 1;
+
+--! delete_device
+-- Its folder state, members and albums go with it.
+DELETE FROM devices WHERE id = :id;

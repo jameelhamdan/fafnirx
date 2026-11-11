@@ -8,19 +8,30 @@ fn release() -> Value {
             {"name": "fafnirx-3.1.0-linux-x86_64.tar.gz", "browser_download_url": "https://x/tar", "size": 9},
             {"name": "fafnirx-3.1.0-linux-x86_64", "browser_download_url": "https://x/bin", "size": 7},
             {"name": "fafnirx-3.1.0-linux-x86_64.sha256", "browser_download_url": "https://x/sum", "size": 90},
+            {"name": "fafnirx-3.1.0-linux-x86_64.sha256.sig", "browser_download_url": "https://x/sig", "size": 64},
+            {"name": "fafnirx-3.1.0-linux-aarch64", "browser_download_url": "https://x/arm", "size": 7},
+            {"name": "fafnirx-3.1.0-linux-aarch64.sha256", "browser_download_url": "https://x/arm.sum", "size": 90},
             {"name": "fafnirx-3.1.0-windows-x86_64.exe", "browser_download_url": "https://x/exe", "size": 5},
         ]
     })
 }
 
 #[test]
-fn the_executable_and_its_checksum_are_found_for_the_platform() {
+fn the_executable_its_checksum_and_signature_are_found_for_the_platform() {
     let f = pick(&release(), "linux-x86_64").unwrap();
     assert_eq!(
-        (f.version.as_str(), f.binary_url.as_str(), f.checksum_url.as_str(), f.size),
-        ("3.1.0", "https://x/bin", "https://x/sum", 7)
+        (
+            f.version.as_str(),
+            f.binary_url.as_str(),
+            f.checksum_url.as_str(),
+            f.signature_url.as_deref(),
+            f.size
+        ),
+        ("3.1.0", "https://x/bin", "https://x/sum", Some("https://x/sig"), 7)
     );
     assert!(pick(&release(), "windows-x86_64").is_none(), "no checksum, so nothing is installed");
+    let unsigned = pick(&release(), "linux-aarch64").expect("an unsigned release is checked by its checksum");
+    assert_eq!(unsigned.signature_url, None);
     assert!(pick(&release(), "macos-aarch64").is_none());
     assert!(pick(&json!({"message": "Not Found"}), "linux-x86_64").is_none());
 }
@@ -32,6 +43,7 @@ fn the_debian_package_and_its_checksum_are_found_for_the_architecture() {
         "assets": [
             {"name": "fafnirx_3.1.0-1_amd64.deb", "browser_download_url": "https://x/deb", "size": 11},
             {"name": "fafnirx_3.1.0-1_amd64.deb.sha256", "browser_download_url": "https://x/deb.sum", "size": 90},
+            {"name": "fafnirx_3.1.0-1_amd64.deb.sha256.sig", "browser_download_url": "https://x/deb.sig", "size": 64},
             {"name": "fafnirx_3.1.0-1_arm64.deb", "browser_download_url": "https://x/arm", "size": 12},
         ]
     });
@@ -48,6 +60,28 @@ fn the_debian_package_and_its_checksum_are_found_for_the_architecture() {
 fn names_follow_the_release_workflow() {
     assert_eq!(asset_name("3.1.0", "windows-x86_64"), "fafnirx-3.1.0-windows-x86_64.exe");
     assert_eq!(asset_name("3.1.0", "macos-aarch64"), "fafnirx-3.1.0-macos-aarch64");
+}
+
+/// `openssl pkeyutl -sign -rawin` of "test\n" with the release key, as the release workflow signs a checksum.
+const SIGNED_BY_THE_RELEASE_KEY: &str = "eab28473e407082d0dac5737b5749d3514b1a83fcb03ce9439bf03097f83b782ea4cc9c4e0e508f32131541805ad33714e427da9453ce8bfe3e1f090039dec0b";
+
+#[test]
+fn only_a_checksum_signed_with_the_release_key_is_accepted() {
+    let signature = hex::decode(SIGNED_BY_THE_RELEASE_KEY).unwrap();
+    assert!(
+        signed_by(UPDATE_KEY, b"test\n", &signature),
+        "the key in the program is the one the workflow signs with"
+    );
+    assert!(!signed_by(UPDATE_KEY, b"tesT\n", &signature), "a changed checksum");
+    assert!(!signed_by(UPDATE_KEY, b"test\n", &[0; 64]), "a made-up signature");
+    assert!(!signed_by(UPDATE_KEY, b"test\n", &signature[..63]));
+
+    // Signed with another key: refused.
+    use ring::signature::{Ed25519KeyPair, KeyPair};
+    let other = Ed25519KeyPair::from_seed_unchecked(&[7; 32]).unwrap();
+    let theirs = other.sign(b"test\n");
+    assert!(signed_by(&hex::encode(other.public_key()), b"test\n", theirs.as_ref()));
+    assert!(!signed_by(UPDATE_KEY, b"test\n", theirs.as_ref()));
 }
 
 #[test]
@@ -92,6 +126,7 @@ fn a_check_finds_a_newer_release_and_downloads_nothing() {
         "assets": [
             {"name": "fafnirx-9.9.9-test-x86_64", "browser_download_url": "http://127.0.0.1:1/bin", "size": 7},
             {"name": "fafnirx-9.9.9-test-x86_64.sha256", "browser_download_url": "http://127.0.0.1:1/sum", "size": 90},
+            {"name": "fafnirx-9.9.9-test-x86_64.sha256.sig", "browser_download_url": "http://127.0.0.1:1/sig", "size": 64},
         ]
     })
     .to_string();

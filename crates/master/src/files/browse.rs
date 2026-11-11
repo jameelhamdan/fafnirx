@@ -564,14 +564,35 @@ pub fn move_tree(c: &mut Client, store: &crate::platform::store::Store, dev: &De
         return Err(ApiError::not_found("No such file or folder").into());
     }
     let targets: Vec<(String, String)> = paths.into_iter().map(|p| (format!("{to}{}", &p[from.len()..]), p)).collect();
+    // Every new path, and every folder above one, must be free: in the database and on the disk.
+    let mut wanted: Vec<String> = targets
+        .iter()
+        .flat_map(|(new, _)| new.match_indices('/').map(|(i, _)| new[..i].to_string()).chain([new.clone()]))
+        .collect();
+    wanted.sort_unstable();
+    wanted.dedup();
+    if let Some(taken) = files::first_live_of(c, dev.id, &wanted)? {
+        return Err(ApiError::conflict(format!("{taken} exists already")).into());
+    }
     for (new, _) in &targets {
-        let parents = new.match_indices('/').map(|(i, _)| &new[..i]);
-        if parents.chain([new.as_str()]).any(|p| files::live_content(c, dev.id, p).ok().flatten().is_some()) {
+        if std::fs::symlink_metadata(store.live_path(&dev.name, new)?).is_ok() {
             return Err(ApiError::conflict(format!("{new} exists already")).into());
         }
     }
-    for (new, old) in &targets {
-        ingest::move_path(c, store, dev, old, new)?;
+    let mut moved: Vec<&(String, String)> = Vec::new();
+    for pair in &targets {
+        let (new, old) = pair;
+        if let Err(e) = ingest::move_path(c, store, dev, old, new) {
+            // Nothing half done: what moved goes back where it was.
+            for (new, old) in moved.into_iter().rev() {
+                if let Err(back) = ingest::move_path(c, store, dev, new, old) {
+                    tracing::error!("could not move {new} back to {old} in {}: {back:#}", dev.name);
+                }
+            }
+            db::notify(c, db::Topic::Files, &dev.name)?;
+            return Err(e);
+        }
+        moved.push(pair);
     }
     db::notify(c, db::Topic::Files, &dev.name)?;
     Ok(targets.len())

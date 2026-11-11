@@ -171,15 +171,19 @@ fn find_folder(c: &mut postgres::Client, who: &Access, folder: &Folder) -> anyho
 pub struct AlbumAssets {
     album: AlbumInfo,
     assets: Vec<Asset>,
+    /// The album holds more than one answer carries (`MAX_ASSETS`); the rest is in its folder.
+    more: bool,
 }
 
 /// An album and what is in it, in the order of the files' names, in which "Episode 2" comes before "Episode 10".
 pub async fn detail(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>) -> Res<AlbumAssets> {
     let out = run(&state, move |c| {
         let album = load_album(c, &who, id)?;
-        let mut assets: Vec<Asset> = library::album_assets(c, who.viewer(), id, MAX_ASSETS)?.into_iter().map(Asset::from).collect();
+        let mut assets: Vec<Asset> = library::album_assets(c, who.viewer(), id, MAX_ASSETS + 1)?.into_iter().map(Asset::from).collect();
+        let more = assets.len() as i64 > MAX_ASSETS;
+        assets.truncate(MAX_ASSETS as usize);
         assets.sort_by(|a, b| natural_cmp(&a.device, &b.device).then_with(|| natural_cmp(&a.path, &b.path)));
-        Ok(AlbumAssets { album, assets })
+        Ok(AlbumAssets { album, assets, more })
     })
     .await?;
     Ok(Json(out))

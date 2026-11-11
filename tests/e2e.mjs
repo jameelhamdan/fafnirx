@@ -1,7 +1,7 @@
 // End-to-end test: the real master, the real web API and the real client binary.
 //   cd tests && npm install && node e2e.mjs
 import { spawn } from 'node:child_process'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto'
 import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -314,23 +314,32 @@ try {
   const platform = `${{ win32: 'windows', darwin: 'macos', linux: 'linux' }[process.platform]}-x86_64`
 
   // --- update from the project's releases ---------------------------------------------------------------------------------------------
-  // A stand-in for GitHub: the API answer, the executable and its checksum, on a local port (FAFNIRX_UPDATE_URL points the client at it).
+  // A stand-in for GitHub: the API answer, the executable, its checksum and the checksum's signature, on a local port
+  // (FAFNIRX_UPDATE_URL points the client at it). The test signs with a key of its own, which a debug client takes from
+  // FAFNIRX_UPDATE_KEY.
   const newBinary = fs.readFileSync(MASTER) // any other executable will do
   const name = `fafnirx-99.0.0-${platform}${EXE}`
   const sum = createHash('sha256').update(newBinary).digest('hex')
-  let wrongSum = true
+  const ours = generateKeyPairSync('ed25519')
+  const theirs = generateKeyPairSync('ed25519')
+  const publicHex = ours.publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('hex')
+  const checksum = () => `${wrongSum ? '00'.repeat(32) : sum}  ${name}\n`
+  let wrongSum = false
+  let signer = theirs.privateKey
   const releases = http.createServer((req, res) => {
     const base = `http://127.0.0.1:${releases.address().port}`
     if (req.url === '/latest') {
       const asset = (n, size) => ({ name: n, browser_download_url: `${base}/files/${n}`, size })
-      res.end(JSON.stringify({ tag_name: 'v99.0.0', assets: [asset(name, newBinary.length), asset(`${name}.sha256`, 80)] }))
+      const assets = [asset(name, newBinary.length), asset(`${name}.sha256`, 80), asset(`${name}.sha256.sig`, 64)]
+      res.end(JSON.stringify({ tag_name: 'v99.0.0', assets }))
     } else if (req.url === `/files/${name}`) res.end(newBinary)
-    else if (req.url === `/files/${name}.sha256`) res.end(`${wrongSum ? '00'.repeat(32) : sum}  ${name}\n`)
+    else if (req.url === `/files/${name}.sha256`) res.end(checksum())
+    else if (req.url === `/files/${name}.sha256.sig`) res.end(sign(null, Buffer.from(checksum()), signer))
     else { res.statusCode = 404; res.end() }
   })
   await new Promise((ok) => releases.listen(0, '127.0.0.1', ok))
   fs.copyFileSync(CLIENT, copy)
-  const env = { FAFNIRX_UPDATE_URL: `http://127.0.0.1:${releases.address().port}/latest` }
+  const env = { FAFNIRX_UPDATE_URL: `http://127.0.0.1:${releases.address().port}/latest`, FAFNIRX_UPDATE_KEY: publicHex }
   // Not `run`: that blocks this process, which has to answer the client's requests meanwhile.
   const update = (extra, args = ['update']) => new Promise((done) => {
     const child = spawn(copy, ['--config', cfg, ...args], { env: { ...ENV, ...extra } })
@@ -342,6 +351,10 @@ try {
   // The tray's "Check for updates" only looks; "Update to <version>" then installs.
   const looked = await update(env, ['update', '--check'])
   check(looked.code === 0 && looked.stdout.trim() === 'available 99.0.0' && fs.readFileSync(copy).equals(fs.readFileSync(CLIENT)), `"update --check" names the newer version and installs nothing (${looked.stdout.trim()})`)
+  const forged = await update(env)
+  check(forged.code !== 0 && /not signed/.test(forged.stdout) && fs.readFileSync(copy).equals(fs.readFileSync(CLIENT)), `a checksum signed with another key is refused (${forged.stdout.trim()})`)
+  signer = ours.privateKey
+  wrongSum = true
   const damaged = await update(env)
   check(damaged.code !== 0 && fs.readFileSync(copy).equals(fs.readFileSync(CLIENT)), 'a download that does not match its checksum is refused')
   wrongSum = false

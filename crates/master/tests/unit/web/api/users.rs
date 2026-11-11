@@ -295,3 +295,57 @@ fn what_people_say_about_a_master_file_is_their_own() {
         assert_eq!(status, StatusCode::OK);
     });
 }
+
+async fn delete(api: &Api, user: &str) -> (StatusCode, Value) {
+    api.json(Method::DELETE, &format!("/api/users/{user}"), json!({})).await
+}
+
+#[test]
+fn a_disabled_user_is_deleted_with_what_is_theirs_once_nothing_of_value_is_left() {
+    let mut api = Api::new();
+    block(async {
+        let dave = add_user(&mut api, "dave", "normal").await;
+        let admin = api.cookie.clone();
+        api.cookie = dave;
+        assert_eq!(api.json(Method::POST, "/api/folders", json!({"name": "docs"})).await.0, StatusCode::OK);
+        assert_eq!(api.json(Method::POST, "/api/devices", json!({"name": "laptop"})).await.0, StatusCode::OK);
+        let source = json!({"name": "notes", "remote_type": "local", "remote_path": "/tmp"});
+        assert_eq!(api.json(Method::POST, "/api/sources", source).await.0, StatusCode::OK);
+        api.upload("dave/docs", "letter.txt", b"dear").await;
+        api.cookie = admin;
+
+        assert_eq!(delete(&api, "admin").await.0, StatusCode::CONFLICT, "not your own account");
+        assert_eq!(delete(&api, "nobody").await.0, StatusCode::NOT_FOUND);
+        let (status, refused) = delete(&api, "dave").await;
+        assert_eq!((status, refused["error"].as_str()), (StatusCode::CONFLICT, Some("Disable dave first")));
+
+        api.json(Method::PATCH, "/api/users/dave", json!({"disabled": true})).await;
+        let (_, refused) = delete(&api, "dave").await;
+        assert!(refused["error"].as_str().unwrap().contains("source notes"), "{refused}");
+        assert_eq!(api.json(Method::DELETE, "/api/sources/dave/notes", json!({})).await.0, StatusCode::OK);
+        let (_, refused) = delete(&api, "dave").await;
+        assert!(refused["error"].as_str().unwrap().starts_with("dave/docs still has files"), "{refused}");
+        assert!(
+            api.get("/api/users").await.1.as_array().unwrap().iter().any(|u| u["name"] == "dave"),
+            "nothing was deleted"
+        );
+
+        // Once the folder is empty (the file in its trash), the user goes with the folder and the computer.
+        let (status, body) = api
+            .json(Method::POST, "/api/files/delete", json!({"items": [{"device": "dave/docs", "path": "letter.txt"}]}))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = delete(&api, "dave").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!api.get("/api/users").await.1.as_array().unwrap().iter().any(|u| u["name"] == "dave"));
+        let (_, devices) = api.get("/api/devices").await;
+        assert!(!devices.to_string().contains("dave/"), "{devices}");
+        assert!(!api._dir.path().join("files/users/dave").exists(), "the empty folders on disk are gone");
+
+        // The name can be used again, and the new user starts with nothing.
+        let dave = add_user(&mut api, "dave", "normal").await;
+        api.cookie = dave;
+        assert_eq!(api.get("/api/sources").await.1.as_array().map(Vec::len), Some(0));
+        assert_eq!(api.json(Method::POST, "/api/folders", json!({"name": "docs"})).await.0, StatusCode::OK);
+    });
+}

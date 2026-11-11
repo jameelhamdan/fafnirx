@@ -1,9 +1,12 @@
 //! Updates from the project's GitHub releases: the default way a client updates itself. The release workflow attaches the
 //! client for every platform as a plain executable (`fafnirx-<version>-<platform>`, `.exe` on Windows) with a `.sha256`
-//! beside it, and the client takes the newest one it does not have yet.
+//! (and, when the release is signed, a `.sha256.sig`) beside it, and the client takes the newest one it does not have yet.
 //!
-//! The download is checked against that checksum, so a damaged one is never installed. The checksum comes from the same
-//! release, so this protects against a bad download, not against someone who can publish releases of the project.
+//! A download that does not match the checksum is never installed. Signing is optional: when the repository has the secret
+//! `UPDATE_SIGNING_KEY`, the release workflow signs each checksum file with it (Ed25519) and [`UPDATE_KEY`] is its public
+//! half. A release with a `.sig` is installed only if the signature is good; a release without one is checked by its
+//! checksum alone, which guards against a bad download, not against someone who can publish releases (they could leave the
+//! signature out).
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
@@ -22,6 +25,19 @@ fn api_url() -> String {
     format!("https://api.github.com/repos/{path}/releases/latest")
 }
 
+/// The public key the checksums of releases are signed with (raw Ed25519, hex). A fork that publishes its own releases
+/// puts its own here.
+pub const UPDATE_KEY: &str = "5314ce74397f6f8b0f76992099837ed0c3b5bbff7658386a33a432850308079d";
+
+/// The key updates are checked with. A debug build (the end-to-end tests) can be given another in `FAFNIRX_UPDATE_KEY`; a
+/// release build knows only [`UPDATE_KEY`].
+fn update_key() -> String {
+    match std::env::var("FAFNIRX_UPDATE_KEY") {
+        Ok(key) if cfg!(debug_assertions) => key,
+        _ => UPDATE_KEY.to_string(),
+    }
+}
+
 /// The most that is downloaded, whatever the release says it weighs.
 const MAX_BYTES: u64 = 200 * 1024 * 1024;
 
@@ -31,6 +47,8 @@ pub struct Found {
     pub version: String,
     pub binary_url: String,
     pub checksum_url: String,
+    /// The checksum's signature, when the release is signed.
+    pub signature_url: Option<String>,
     pub size: u64,
 }
 
@@ -80,13 +98,34 @@ fn pick_named(release: &Value, name_of: impl Fn(&str) -> String) -> Option<Found
     };
     let (binary_url, size) = url_of(&wanted)?;
     let (checksum_url, _) = url_of(&format!("{wanted}.sha256"))?;
-    Some(Found { version, binary_url, checksum_url, size })
+    let signature_url = url_of(&format!("{wanted}.sha256.sig")).map(|(url, _)| url);
+    Some(Found { version, binary_url, checksum_url, signature_url, size })
 }
 
 /// The hash in a `.sha256` file (`<hex>  <name>`, as `sha256sum` writes it).
 pub fn parse_checksum(text: &str) -> Option<Vec<u8>> {
     let hex_text = text.split_whitespace().next()?;
     hex::decode(hex_text).ok().filter(|h| h.len() == 32)
+}
+
+/// Whether `signature` (raw, 64 bytes) is the Ed25519 signature of `message` by the public key `key_hex`.
+pub fn signed_by(key_hex: &str, message: &[u8], signature: &[u8]) -> bool {
+    use ring::signature::{UnparsedPublicKey, ED25519};
+    let Ok(key) = hex::decode(key_hex) else { return false };
+    UnparsedPublicKey::new(&ED25519, key).verify(message, signature).is_ok()
+}
+
+/// Reads a small file of a release (a checksum, a signature), at most `limit` bytes.
+fn small(agent: &ureq::Agent, url: &str, limit: u64, what: &str) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    agent
+        .get(url)
+        .call()
+        .with_context(|| format!("download the {what}"))?
+        .into_reader()
+        .take(limit)
+        .read_to_end(&mut out)?;
+    Ok(out)
 }
 
 pub fn agent() -> ureq::Agent {
@@ -140,12 +179,21 @@ fn download_found(find: impl FnOnce(&ureq::Agent) -> Result<Option<Found>>, dest
     fetch(&agent, &found, dest)?;
     Ok(Some(found.version))
 }
-/// Downloads a release file to `dest` and checks it against the checksum published with it; a file that does not match is not kept.
+
+/// Downloads a release file to `dest` and checks it against the checksum published with it, after checking the checksum's
+/// signature when the release has one; a file that does not match is not kept.
 fn fetch(agent: &ureq::Agent, found: &Found, dest: &Path) -> Result<()> {
     if found.size > MAX_BYTES {
         bail!("the update is larger than {} MB", MAX_BYTES / 1024 / 1024);
     }
-    let checksum = agent.get(&found.checksum_url).call().context("download the checksum")?.into_string()?;
+    let checksum = small(agent, &found.checksum_url, 4096, "checksum")?;
+    if let Some(url) = &found.signature_url {
+        let signature = small(agent, url, 1024, "signature")?;
+        if !signed_by(&update_key(), &checksum, &signature) {
+            bail!("the checksum of the update is not signed with the project's key; nothing was installed");
+        }
+    }
+    let checksum = String::from_utf8_lossy(&checksum);
     let expected = parse_checksum(&checksum).ok_or_else(|| anyhow!("the checksum file is not a SHA-256"))?;
 
     let response = agent.get(&found.binary_url).call().context("download the update")?;

@@ -6,6 +6,7 @@ import { DataTable, TableToolbar } from '@/components/data-table'
 import { matches, useTableView, type TableView } from '@/lib/table-view'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Confirm } from '@/components/confirm'
 import { FormDialog } from '@/components/form-dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -117,6 +118,22 @@ function Row({ user, me, view }: { user: UserInfo; me: string; view: TableView }
     invalidate: [['users']],
     toastError: true,
   })
+  const remove = useApiMutation(() => api.delete(`/api/users/${encodeURIComponent(user.name)}`), {
+    invalidate: [['users'], ['devices']],
+    success: t('{name} is deleted.', { name: user.name }),
+    toastError: true,
+  })
+  const [deleting, setDeleting] = useState(false)
+  // A role or a lock logs the user out: asked first, with a word more when it is you.
+  const [asking, setAsking] = useState<{ role?: Role; disabled?: boolean } | null>(null)
+  const self = user.name === me
+  const label = (role: Role) => t(ROLES.find((r) => r[0] === role)?.[1] ?? role)
+  const question = asking?.role
+    ? { title: t('Make {name} {role}?', { name: user.name, role: label(asking.role) }), action: t('Change role') }
+    : { title: t('Disable {name}?', { name: user.name }), action: t('Disable') }
+  const description = self
+    ? t('This is your own account: you are logged out and may lose access to this page.')
+    : t('{name} is logged out everywhere and logs in again with the new rights.', { name: user.name })
   return (
     <TableRow className={user.disabled ? 'opacity-60' : undefined}>
       <TableCell>
@@ -124,16 +141,37 @@ function Row({ user, me, view }: { user: UserInfo; me: string; view: TableView }
         {user.name === me && <Badge variant="secondary" className="ms-2">{t('You')}</Badge>}
         {user.disabled && <Badge variant="outline" className="ms-2">{t('Disabled')}</Badge>}
       </TableCell>
-      <TableCell><RoleSelect value={user.role} onChange={(role) => change.mutate({ role })} /></TableCell>
+      <TableCell><RoleSelect value={user.role} onChange={(role) => role !== user.role && setAsking({ role })} /></TableCell>
       {view.show('devices') && <TableCell className="num hidden text-end sm:table-cell">{user.devices}</TableCell>}
       {view.show('added') && <TableCell className="num hidden text-[12px] text-muted-foreground md:table-cell">{dateTime(user.created_at)}</TableCell>}
       <TableCell>
         <div className="flex justify-end gap-2">
           <ResetPassword user={user} />
-          <Button size="xs" variant="outline" disabled={change.isPending} onClick={() => change.mutate({ disabled: !user.disabled })}>
+          <Button size="xs" variant="outline" disabled={change.isPending} onClick={() => (user.disabled ? change.mutate({ disabled: false }) : setAsking({ disabled: true }))}>
             {user.disabled ? t('Enable') : t('Disable')}
           </Button>
+          {user.disabled && !self && user.name !== 'admin' && (
+            <Button size="xs" variant="outline" disabled={remove.isPending} onClick={() => setDeleting(true)}>{t('Delete')}</Button>
+          )}
         </div>
+        <Confirm
+          open={deleting}
+          title={t('Delete {name}?', { name: user.name })}
+          description={t('Their computers go with the files they sent (the computers keep their own), and so do their tags, albums and favorites. Their folders must be empty and their sources deleted first. This cannot be undone.')}
+          action={t('Delete user')}
+          destructive
+          onCancel={() => setDeleting(false)}
+          onConfirm={() => { setDeleting(false); remove.mutate() }}
+        />
+        <Confirm
+          open={asking !== null}
+          title={question.title}
+          description={description}
+          action={question.action}
+          destructive={self || asking?.disabled === true}
+          onCancel={() => setAsking(null)}
+          onConfirm={() => { if (asking) change.mutate(asking); setAsking(null) }}
+        />
       </TableCell>
     </TableRow>
   )

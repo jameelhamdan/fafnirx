@@ -6,6 +6,7 @@
 
 use anyhow::{bail, Context, Result};
 use fafnirx_common::{file_has_root, hash_path, CHUNK_SIZE, HASH_LEN};
+use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -55,6 +56,8 @@ pub struct Store {
 
 /// A file that is never going to be a chunk index anyone sends: bounds the size of a staging file.
 const MAX_CHUNK_INDEX: u32 = 1 << 20;
+/// Version folders the sweep checks against the database at a time.
+const SWEEP_BATCH: usize = 10_000;
 
 impl Store {
     pub fn open(root: &Path) -> Result<Self> {
@@ -271,18 +274,36 @@ impl Store {
     }
 
     /// Deletes the folders of versions that no record points to (left behind when the master stopped between
-    /// the database and the disk). Folders younger than `min_age` may belong to a commit in progress.
-    pub fn sweep_versions(&self, known: &std::collections::HashSet<i64>, min_age: Duration) -> usize {
+    /// the database and the disk). Folders younger than `min_age` may belong to a commit in progress. `known` says which
+    /// of some ids have a record; it is asked about [`SWEEP_BATCH`] folders at a time, so a large store is not held in memory.
+    pub fn sweep_versions<E>(&self, min_age: Duration, mut known: impl FnMut(&[i64]) -> Result<HashSet<i64>, E>) -> Result<usize, E> {
         let now = SystemTime::now();
         let mut removed = 0;
-        for e in fs::read_dir(&self.versions).into_iter().flatten().flatten() {
-            let Some(id) = e.file_name().to_str().and_then(|n| n.parse::<i64>().ok()) else { continue };
-            let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| now.duration_since(t).ok());
-            if !known.contains(&id) && old.is_some_and(|age| age > min_age) && fs::remove_dir_all(e.path()).is_ok() {
-                removed += 1;
+        let mut batch: Vec<i64> = Vec::with_capacity(SWEEP_BATCH);
+        let mut entries = fs::read_dir(&self.versions).into_iter().flatten().flatten().peekable();
+        while entries.peek().is_some() {
+            batch.clear();
+            for e in entries.by_ref() {
+                let Some(id) = e.file_name().to_str().and_then(|n| n.parse::<i64>().ok()) else { continue };
+                let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| now.duration_since(t).ok());
+                if old.is_some_and(|age| age > min_age) {
+                    batch.push(id);
+                    if batch.len() == SWEEP_BATCH {
+                        break;
+                    }
+                }
+            }
+            if batch.is_empty() {
+                break;
+            }
+            let have = known(&batch)?;
+            for id in batch.iter().filter(|id| !have.contains(id)) {
+                if fs::remove_dir_all(self.versions.join(id.to_string())).is_ok() {
+                    removed += 1;
+                }
             }
         }
-        removed
+        Ok(removed)
     }
 
     /// Deletes uploads and downloads that nobody has touched for `max_age`.

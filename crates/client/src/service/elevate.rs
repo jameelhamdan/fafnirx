@@ -149,7 +149,21 @@ pub fn rerun(args: &[OsString]) -> Result<i32> {
         return Ok(status.code().unwrap_or(1));
     }
     let (program, line) = as_root(exe.as_os_str(), args).map_err(|by_hand| anyhow::anyhow!("this needs root and nothing here can ask for it: run `{by_hand}`"))?;
-    Ok(Command::new(&program).args(&line).status().context("run as root")?.code().unwrap_or(1))
+    let mut cmd = Command::new(&program);
+    cmd.args(&line);
+    // pkexec clears the environment, so the token of a scripted install goes in on standard input, where `read_token`
+    // looks next (an argument would be visible to the other users of the computer).
+    let token = std::env::var("FAFNIRX_TOKEN").ok().filter(|t| !t.trim().is_empty() && program == "pkexec");
+    let Some(token) = token else {
+        return Ok(cmd.status().context("run as root")?.code().unwrap_or(1));
+    };
+    let mut child = cmd.stdin(Stdio::piped()).spawn().context("run as root")?;
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        // A run that does not enroll never reads it; the pipe closing then is no error.
+        let _ = writeln!(stdin, "{}", token.trim());
+    }
+    Ok(child.wait().context("run as root")?.code().unwrap_or(1))
 }
 
 #[cfg(test)]

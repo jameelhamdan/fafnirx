@@ -167,10 +167,8 @@ fn parse_options(text: &str) -> Result<serde_json::Map<String, Value>, ApiError>
         let key = key.trim().to_lowercase().replace('-', "_");
         let ok = !key.is_empty() && key.len() <= 64 && key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
         if !line.contains('=') || !ok {
-            return Err(ApiError::bad(format!(
-                "Option {:?}: use key=value with lowercase letters, digits and _",
-                line.split('=').next().unwrap_or(line)
-            )));
+            let option = line.split('=').next().unwrap_or(line);
+            return Err(ApiError::bad(format!("Option \"{option}\": use key=value with lowercase letters, digits and _")));
         }
         opts.insert(key, Value::String(value.trim().to_string()));
     }

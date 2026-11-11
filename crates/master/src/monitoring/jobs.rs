@@ -108,8 +108,11 @@ pub fn hourly(db: &Db, store: &Store, cache_root: &Path) -> Result<()> {
     if abandoned > 0 {
         tracing::info!("removed {abandoned} abandoned uploads");
     }
-    let known: std::collections::HashSet<i64> = sql::retention::all_version_ids().bind(&mut *db.get()?).all()?.into_iter().collect();
-    let orphans = store.sweep_versions(&known, STALE_UPLOAD);
+    let mut conn = db.get()?;
+    let orphans = store.sweep_versions(STALE_UPLOAD, |ids| {
+        sql::retention::known_version_ids().bind(&mut *conn, &ids).all().map(|v| v.into_iter().collect())
+    })?;
+    drop(conn);
     if orphans > 0 {
         tracing::info!("removed {orphans} stored versions that no record points to");
     }
@@ -118,31 +121,42 @@ pub fn hourly(db: &Db, store: &Store, cache_root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Files and versions removed per transaction: a large deletion goes in short steps, so commits and scans of the same rows
+/// wait for one step at most.
+const RETENTION_BATCH: i64 = 1000;
+
 /// Removes deleted files and pruned versions older than the retention period from the database and
 /// returns the ids of the removed versions, whose stored files the caller deletes.
 fn retention(conn: &mut Client) -> Result<Vec<i64>> {
     let cutoff = unix_now() - settings::get_i64(conn, "retention_days", 30) * 86400;
-    let mut tx = conn.transaction()?;
-    // The rows are locked first: a file that came back in the meantime is no longer expired once its lock is
-    // released, so it keeps its history.
-    let (expired, device_ids) = retention::lock_expired_files(&mut tx, cutoff)?;
-    let mut removed = retention::delete_versions_of(&mut tx, &expired)?;
-    let files = retention::delete_files(&mut tx, &expired)?;
-    // Deletions before this time are no longer all known: a computer that was last in step before it has to be sent the whole
-    // list of files instead of the changes (`devices::grpc::list_changes`). It only moves forward.
-    let known_from = settings::get_i64(&mut tx, settings::DELETIONS_KNOWN_FROM, 0).max(cutoff);
-    settings::set(&mut tx, settings::DELETIONS_KNOWN_FROM, &known_from.to_string())?;
-    sql::devices::mark_totals_stale().bind(&mut tx, &device_ids).map(drop)?;
-    let pruned = sql::retention::delete_pruned_versions().bind(&mut tx, &cutoff).all()?;
-    sql::events::purge_events().bind(&mut tx, &(unix_now() - EVENT_KEEP_DAYS * 86400)).map(drop)?;
-    sql::alerts::purge_resolved_alerts()
-        .bind(&mut tx, &(unix_now() - EVENT_KEEP_DAYS * 86400))
-        .map(drop)?;
-    tx.commit()?;
-    if files > 0 || !pruned.is_empty() {
-        tracing::info!("retention removed {files} files and {} old versions", pruned.len());
+    let (mut removed, mut files, mut old_versions) = (Vec::new(), 0, 0);
+    loop {
+        let mut tx = conn.transaction()?;
+        // The rows are locked first: a file that came back in the meantime is no longer expired once its lock is
+        // released, so it keeps its history.
+        let (expired, device_ids) = retention::lock_expired_files(&mut tx, cutoff, RETENTION_BATCH)?;
+        removed.extend(retention::delete_versions_of(&mut tx, &expired)?);
+        files += retention::delete_files(&mut tx, &expired)?;
+        // Deletions before this time are no longer all known: a computer that was last in step before it has to be sent the
+        // whole list of files instead of the changes (`devices::grpc::list_changes`). It only moves forward.
+        let known_from = settings::get_i64(&mut tx, settings::DELETIONS_KNOWN_FROM, 0).max(cutoff);
+        settings::set(&mut tx, settings::DELETIONS_KNOWN_FROM, &known_from.to_string())?;
+        sql::devices::mark_totals_stale().bind(&mut tx, &device_ids).map(drop)?;
+        let pruned = sql::retention::delete_pruned_versions().bind(&mut tx, &cutoff, &RETENTION_BATCH).all()?;
+        tx.commit()?;
+        let done = (expired.len() as i64) < RETENTION_BATCH && (pruned.len() as i64) < RETENTION_BATCH;
+        old_versions += pruned.len();
+        removed.extend(pruned);
+        if done {
+            break;
+        }
     }
-    removed.extend(pruned);
+    let old = unix_now() - EVENT_KEEP_DAYS * 86400;
+    sql::events::purge_events().bind(conn, &old).map(drop)?;
+    sql::alerts::purge_resolved_alerts().bind(conn, &old).map(drop)?;
+    if files > 0 || old_versions > 0 {
+        tracing::info!("retention removed {files} files and {old_versions} old versions");
+    }
     Ok(removed)
 }
 

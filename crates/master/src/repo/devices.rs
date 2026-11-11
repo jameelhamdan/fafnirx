@@ -397,6 +397,27 @@ pub fn remove_shared_member(c: &mut impl GenericClient, folder_id: i64, user_id:
     Ok(q::remove_shared_member().bind(c, &folder_id, &user_id)? > 0)
 }
 
+/// Deletes every file of a device (live ones too), their versions and its log; returns the versions, whose stored copies
+/// the caller removes once the transaction is committed.
+pub fn delete_contents(c: &mut impl GenericClient, id: i64) -> Result<Vec<i64>, Error> {
+    let files = q::device_file_ids().bind(c, &id).all()?;
+    let versions = super::retention::delete_versions_of(c, &files)?;
+    super::retention::delete_files(c, &files)?;
+    q::delete_device_events().bind(c, &id)?;
+    clear_progress(c, id)?;
+    Ok(versions)
+}
+
+/// Removes a device row; its folder state, members and albums go with it. Call [`delete_contents`] first.
+pub fn delete(c: &mut impl GenericClient, id: i64) -> Result<(), Error> {
+    q::delete_device().bind(c, &id).map(drop)
+}
+
+/// Whether a device has files that are not deleted.
+pub fn has_live_files(c: &mut impl GenericClient, id: i64) -> Result<bool, Error> {
+    q::folder_has_live_files().bind(c, &id).one()
+}
+
 /// Removes a folder for good with everything left of it: the files in the trash, their versions and their log. Returns
 /// the versions, whose stored copies the caller removes. Refuses (returns `None`) while the folder has files that are not deleted.
 pub fn purge_folder(c: &mut postgres::Client, id: i64) -> Result<Option<Vec<i64>>, Error> {
@@ -405,11 +426,7 @@ pub fn purge_folder(c: &mut postgres::Client, id: i64) -> Result<Option<Vec<i64>
     if lock(&mut tx, id)?.is_none() || q::folder_has_live_files().bind(&mut tx, &id).one()? {
         return Ok(None);
     }
-    let files = q::device_file_ids().bind(&mut tx, &id).all()?;
-    let versions = super::retention::delete_versions_of(&mut tx, &files)?;
-    super::retention::delete_files(&mut tx, &files)?;
-    q::delete_device_events().bind(&mut tx, &id)?;
-    clear_progress(&mut tx, id)?;
+    let versions = delete_contents(&mut tx, id)?;
     // Nothing is removed when the device stays (a source writes into it): the transaction is dropped.
     if q::delete_folder_device().bind(&mut tx, &id)? != 1 {
         return Ok(None);

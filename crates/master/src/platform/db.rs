@@ -8,7 +8,7 @@ use std::time::Duration;
 /// the `postgres` crate drives its own runtime and panics when called from async code.
 pub type Db = r2d2::Pool<PostgresConnectionManager<NoTls>>;
 
-/// A device as the data path knows it: the row id and its folder (`<user>/<device>`, or `_master` for the master files).
+/// A device as the data path knows it: the row id and its folder (`<user>/<device>`, or `master:<name>` for a master folder).
 #[derive(Clone, Debug)]
 pub struct Device {
     pub id: i64,

@@ -134,13 +134,13 @@ pub fn router(app: Arc<App>) -> Router {
     let files = Router::new()
         .route("/hls/master.m3u8", get(master))
         .route("/hls/subtitles.json", get(crate::subtitles::list))
-        .route("/hls/subtitles/:file", get(crate::subtitles::track))
-        .route("/hls/:variant/index.m3u8", get(media))
-        .route("/hls/:variant/:segment", get(segment));
+        .route("/hls/subtitles/{file}", get(crate::subtitles::track))
+        .route("/hls/{variant}/index.m3u8", get(media))
+        .route("/hls/{variant}/{segment}", get(segment));
     // What only the master asks for.
     let for_master = Router::new()
         .nest(FILES_PREFIX, files)
-        .route(&format!("{UI_PREFIX}/:file"), get(ui_file))
+        .route(&format!("{UI_PREFIX}/{{file}}"), get(ui_file))
         .route(MANIFEST_PATH, get(crate::derive::manifest))
         .route("/probe", get(crate::derive::probe))
         .route("/poster", get(crate::derive::poster))

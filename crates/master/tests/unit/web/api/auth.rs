@@ -42,12 +42,57 @@ fn login_is_required_and_wrong_passwords_are_refused() {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(api.get("/api/dashboard").await.0, StatusCode::UNAUTHORIZED);
 
-        // Wrong guesses are counted per user name as well as per address, and the right password is refused meanwhile.
+        // Wrong guesses from one address are limited, and that address is refused even the right password meanwhile.
         for _ in 0..5 {
             assert_eq!(login_as(&api, "bob", "wrong").await, "");
         }
         let blocked = api.json(Method::POST, "/api/login", json!({"username": "bob", "password": "wrong"})).await;
         assert_eq!(blocked.0, StatusCode::TOO_MANY_REQUESTS);
+    });
+}
+
+/// A login request from the client address `from` (the test router trusts its proxy).
+async fn login_from(api: &Api, from: &str, username: &str, password: &str) -> StatusCode {
+    let body = Body::from(json!({"username": username, "password": password}).to_string());
+    api.send(Method::POST, "/api/login", body, &[("content-type", "application/json"), ("x-forwarded-for", from)])
+        .await
+        .0
+}
+
+#[test]
+fn guesses_sent_at_once_are_counted_before_they_are_checked() {
+    let api = Api::behind_proxy();
+    block(async {
+        let guesses = (0..20).map(|_| login_from(&api, "10.0.0.9", "admin", "wrong"));
+        let answers = futures_util::future::join_all(guesses).await;
+        let checked = answers.iter().filter(|s| **s == StatusCode::UNAUTHORIZED).count();
+        let refused = answers.iter().filter(|s| **s == StatusCode::TOO_MANY_REQUESTS).count();
+        assert_eq!((checked, refused), (5, 15), "{answers:?}");
+    });
+}
+
+#[test]
+fn guessing_someones_name_does_not_lock_them_out() {
+    let api = Api::behind_proxy();
+    block(async {
+        for _ in 0..5 {
+            assert_eq!(login_from(&api, "10.0.0.66", "admin", "wrong").await, StatusCode::UNAUTHORIZED);
+        }
+        assert_eq!(
+            login_from(&api, "10.0.0.66", "admin", "secret").await,
+            StatusCode::TOO_MANY_REQUESTS,
+            "the guessing address is stopped"
+        );
+        assert_eq!(
+            login_from(&api, "10.0.0.7", "admin", "secret").await,
+            StatusCode::OK,
+            "the owner, elsewhere, logs in"
+        );
+        assert_eq!(
+            login_from(&api, "10.0.0.7", "admin", "secret").await,
+            StatusCode::OK,
+            "a right password does not add up to a block"
+        );
     });
 }
 

@@ -1,10 +1,10 @@
-//! Users (administrators only). A user is never deleted, only disabled: the name is the folder of their files.
+//! Users (administrators only). A user is disabled first and can then be deleted with what is theirs.
 
 use super::access::{Access, Role};
 use super::auth::{self, MIN_PASSWORD};
 use super::{act, run, ApiError, Done, Res, Shared};
 use crate::platform::db;
-use crate::repo::users;
+use crate::repo::{devices, users};
 use crate::web::input::NAME_RULE;
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
@@ -47,7 +47,8 @@ pub fn ensure_dirs(conn: &mut postgres::Client, store: &crate::platform::store::
 /// Adds a user and their folder.
 pub fn add_user(c: &mut impl GenericClient, live_root: &std::path::Path, name: &str, role: Role, password_hash: &str) -> anyhow::Result<()> {
     if !valid_device_name(name) {
-        return Err(ApiError::bad(format!("User name: {}", NAME_RULE.trim_start_matches("Name: "))).into());
+        let rule = NAME_RULE.trim_start_matches("Name: ");
+        return Err(ApiError::bad(format!("User name: {rule}")).into());
     }
     let exists = users::exists(c, name)?;
     if exists {
@@ -140,6 +141,66 @@ pub async fn update(State(state): State<Shared>, Extension(who): Extension<Acces
         }
         db::notify(&mut tx, db::Topic::Users, &name)?;
         tx.commit()?;
+        Ok(())
+    })
+    .await
+}
+
+/// Deletes a disabled user. Their computers go with what they sent (the computers keep their own files), and so do their
+/// memberships, favorites, tags, albums and sessions. Their folders must be empty, and they must have no sources left, so that
+/// nothing of theirs is lost without being looked at; a mirror or another user's source on one of their folders is in the way too.
+pub async fn delete(State(state): State<Shared>, Extension(who): Extension<Access>, Path(name): Path<String>) -> Res<Done> {
+    who.require_admin()?;
+    if name == who.name {
+        return Err(ApiError::conflict("You cannot delete your own account"));
+    }
+    if name == "admin" {
+        return Err(ApiError::conflict("The first administrator, admin, cannot be deleted; disable it instead"));
+    }
+    let store = state.store.clone();
+    act(&state, move |c| {
+        let mut tx = c.transaction()?;
+        users::lock(&mut tx)?;
+        let account = users::by_name(&mut tx, &name)?.ok_or_else(|| ApiError::not_found("No such user"))?;
+        if !account.disabled {
+            return Err(ApiError::conflict(format!("Disable {name} first")).into());
+        }
+        if let Some(source) = users::sources_of(&mut tx, account.id)?.into_iter().next() {
+            return Err(ApiError::conflict(format!("{name} still has the source {source}: delete their sources first")).into());
+        }
+        if let Some((link, folder)) = users::link_on_folders_of(&mut tx, account.id)? {
+            return Err(ApiError::conflict(format!("{link} mirrors or writes into {folder}: delete it first")).into());
+        }
+        let owned = users::devices_of(&mut tx, account.id)?;
+        let mut versions = Vec::new();
+        for d in &owned {
+            devices::lock(&mut tx, d.id)?;
+            // What a computer sent is a copy of its files; a folder's files are kept only here.
+            if d.kind == "local" && devices::has_live_files(&mut tx, d.id)? {
+                let folder = &d.folder;
+                return Err(ApiError::conflict(format!("{folder} still has files: delete or move them first")).into());
+            }
+            versions.extend(devices::delete_contents(&mut tx, d.id)?);
+            devices::delete(&mut tx, d.id)?;
+        }
+        users::delete(&mut tx, account.id, &name, unix_now())?;
+        db::notify(&mut tx, db::Topic::Users, &name)?;
+        db::notify(&mut tx, db::Topic::Devices, "")?;
+        tx.commit()?;
+
+        for version in versions {
+            store.remove_version(version);
+        }
+        for d in &owned {
+            let dir = store.live_dir(&d.folder);
+            if d.kind == "device" {
+                let _ = std::fs::remove_dir_all(dir);
+            } else {
+                crate::devices::folders::remove_if_only_folders(&dir);
+            }
+        }
+        crate::devices::folders::remove_if_only_folders(&store.live_root().join(crate::platform::store::USERS_DIR).join(&name));
+        tracing::info!("deleted the user {name} with {} computers and folders", owned.len());
         Ok(())
     })
     .await

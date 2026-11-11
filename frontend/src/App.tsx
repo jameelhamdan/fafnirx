@@ -4,10 +4,15 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AppShell } from './components/app-shell.tsx'
 import { api, UNAUTHORIZED } from './lib/api.ts'
 import { LiveUpdates } from './lib/live.tsx'
-import { backgroundOf, ViewerSourceProvider } from './lib/viewer-source.tsx'
+import { backgroundOf } from './lib/viewer-source'
+import { ViewerSourceProvider } from './components/viewer-source-provider'
 import { hasWorkspace } from './lib/session.ts'
 import type { Role, Session } from './lib/types.ts'
 import { Skeleton } from './components/ui/skeleton.tsx'
+import { Button } from './components/ui/button.tsx'
+import { ErrorNote } from './components/common.tsx'
+import { useT } from './lib/i18n.ts'
+import { Loader2 } from 'lucide-react'
 import Login from './pages/login.tsx'
 
 // Each page is loaded when it is first opened, so the first screen stays small.
@@ -37,8 +42,13 @@ function Photos({ on, children }: { on: boolean; children: ReactNode }) {
   return on ? children : <Navigate to="/" replace />
 }
 
+function Centered({ children }: { children: ReactNode }) {
+  return <div className="grid min-h-svh place-items-center p-4">{children}</div>
+}
+
 /** The login page, or the app behind it. */
 export default function App() {
+  const t = useT()
   const client = useQueryClient()
   const session = useQuery({ queryKey: ['session'], queryFn: () => api.get<Session>('/api/session'), staleTime: Infinity })
 
@@ -50,7 +60,18 @@ export default function App() {
   }, [client])
 
   const location = useLocation()
-  if (session.isPending) return null
+  if (session.isPending) return <Centered><Loader2 className="size-6 animate-spin text-muted-foreground" aria-label={t('Loading')} /></Centered>
+  // The master did not answer: that is not a reason to ask for a password.
+  if (session.isError && !session.data) {
+    return (
+      <Centered>
+        <div className="max-w-sm space-y-3 text-center">
+          <ErrorNote error={new Error(t('The master cannot be reached: {why}', { why: session.error.message }))} />
+          <Button variant="outline" onClick={() => void session.refetch()} disabled={session.isFetching}>{t('Try again')}</Button>
+        </div>
+      </Centered>
+    )
+  }
   const user = session.data?.user
   if (!user) return <Login />
   const role = user.role

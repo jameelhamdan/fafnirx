@@ -94,6 +94,18 @@ WHERE device_id = :device_id AND (:path = '' OR path = :path OR path LIKE :below
   AND current_version_id IS NOT NULL AND (deleted_at IS NULL OR (:include_deleted::boolean AND deleted_by IS DISTINCT FROM 'rename'))
 ORDER BY path;
 
+--! expand_with_mtime
+-- The live files `expand_paths` gives, with the modification time of each (for a zip).
+SELECT f.path, v.mtime FROM files f JOIN versions v ON v.id = f.current_version_id
+WHERE f.device_id = :device_id AND (:path = '' OR f.path = :path OR f.path LIKE :below) AND f.deleted_at IS NULL
+ORDER BY f.path;
+
+--! first_live_of
+-- One of `paths` that is a live file of the device, if any.
+SELECT f.path FROM files f
+WHERE f.device_id = :device_id AND f.path = ANY(:paths) AND f.deleted_at IS NULL AND f.current_version_id IS NOT NULL
+ORDER BY f.path LIMIT 1;
+
 --! version_to_restore : (current_version_id?, deleted_at?)
 SELECT f.current_version_id, f.deleted_at, v.root_hash, v.size, v.mtime, v.mode
 FROM files f JOIN versions v ON v.file_id = f.id
@@ -116,9 +128,6 @@ SELECT root_hash, size FROM versions WHERE id = :version_id AND file_id = :file_
 --! file_by_id : (deleted_at?)
 SELECT d.folder, f.path, f.current_version_id, f.deleted_at, v.root_hash, v.size
 FROM files f JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id WHERE f.id = :id;
-
---! current_mtime
-SELECT v.mtime FROM files f JOIN versions v ON v.id = f.current_version_id WHERE f.device_id = :device_id AND f.path = :path;
 
 --! changes_since : (root_hash?, size?, mtime?, mode?, deleted_at?, deleted_by?)
 -- The paths of a device that were written or deleted at or after `since` (everything when 0), as they are now: for a

@@ -6,7 +6,7 @@ import { ago, bytes, plural } from '@/lib/format'
 import type { Entry } from '@/lib/types'
 import { entryKey } from '@/lib/entries'
 import { useWatchState } from '@/lib/viewer-source'
-import { cn } from '@/lib/utils'
+import { cn, HIT_AREA } from '@/lib/utils'
 import { Checkbox } from '../ui/checkbox'
 import { AccessBadge } from './access-badge'
 import { FileIcon } from './file-icon'
@@ -55,7 +55,7 @@ export function FileList({
   return (
     <div className="overflow-hidden rounded-lg border bg-card">
       <div className={cn('grid items-center gap-2 border-b bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground', COLUMNS)}>
-        <Checkbox checked={all} onCheckedChange={onToggleAll} aria-label={t('Select all')} />
+        <Checkbox checked={all} onCheckedChange={onToggleAll} aria-label={t('Select all')} className={HIT_AREA} />
         <SortHeader field="name" label={t('Name')} {...{ sort, order, onSort }} />
         <SortHeader field="size" label={t('Size')} {...{ sort, order, onSort }} className="justify-end" />
         <SortHeader field="modified" label={t('Modified')} {...{ sort, order, onSort }} className="hidden sm:flex" />
@@ -76,15 +76,16 @@ export function FileList({
                 className={cn('absolute top-0 left-0 grid w-full items-center gap-2 border-b px-3 text-sm', COLUMNS, on ? 'bg-accent' : 'hover:bg-muted/50')}
                 style={{ height: row.size, transform: `translateY(${row.start}px)` }}
               >
-                <Checkbox checked={on} onCheckedChange={() => onToggle(key)} aria-label={t('Select {name}', { name: e.name })} />
+                <Checkbox checked={on} onCheckedChange={() => onToggle(key)} aria-label={t('Select {name}', { name: e.name })} className={HIT_AREA} />
                 <div className="flex min-w-0 items-center gap-1">
                   <button type="button" onClick={() => onOpen(e)} className="flex min-w-0 flex-1 items-center gap-2.5 text-left" title={e.name}>
                     <FileIcon entry={e} />
                     <span className={cn('truncate', e.kind !== 'file' && 'font-medium', gone && 'text-muted-foreground line-through')}>{e.name}</span>
                     {e.processing && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-label={t('Still being processed')} />}
                     {gone && e.kind === 'file' && <span className="shrink-0 text-xs text-destructive">{t('deleted')}</span>}
-                    {e.kind !== 'file' && <span className="shrink-0 text-xs text-muted-foreground">{plural(e.files ?? 0, 'file')}</span>}
-                    {e.kind === 'device' && <AccessBadge writable={e.writable} kind={e.device_kind} />}
+                    {/* On a phone the name needs the room: the count and the badge show from `sm` up (and in the details). */}
+                    {e.kind !== 'file' && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{plural(e.files ?? 0, 'file')}</span>}
+                    {e.kind === 'device' && <span className="hidden shrink-0 sm:inline-flex"><AccessBadge writable={e.writable} kind={e.device_kind} /></span>}
                   </button>
                   {e.kind === 'file' && e.id && !gone && e.mime?.startsWith('video/') && (
                     <Link to={`/watch/${e.id}`} state={watch} className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={t('Open in viewer')} title={t('Open in viewer')}><Play className="size-4" /></Link>

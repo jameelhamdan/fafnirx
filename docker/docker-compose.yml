@@ -28,8 +28,9 @@ services:
         condition: service_healthy
     environment:
       FAFNIRX_DATABASE_URL: "postgresql://fafnirx:${FAFNIRX_DB_PASSWORD}@db/fafnirx"
-      # The password of the user "admin", set at the first start. Change it in the web app afterwards.
-      FAFNIRX_ADMIN_PASSWORD: "${FAFNIRX_ADMIN_PASSWORD:?set FAFNIRX_ADMIN_PASSWORD}"
+      # The password of the user "admin", read at the first start only (the master refuses to start without it then). Change it
+      # in the web app afterwards; it can then be taken out of .env.
+      FAFNIRX_ADMIN_PASSWORD: "${FAFNIRX_ADMIN_PASSWORD:-}"
       HOME: /tmp # rclone wants a writable home for its cache
       # The secret the add-on containers join with (16+ characters, `openssl rand -hex 24`). Without it no add-on may connect.
       FAFNIRX_PLUGIN_SECRET: "${FAFNIRX_PLUGIN_SECRET:-}"

@@ -21,7 +21,10 @@ menu (top right), which also logs you out. Pages update live.
 | Read only | none | read | no | no |
 
 - Master folders belong to nobody; everyone sees them.
-- Users cannot be deleted or renamed (the name is a folder). Disabling one ends their logins. One administrator always remains.
+- Users cannot be renamed (the name is a folder). Disabling one ends their logins. One administrator always remains.
+- **Delete** (on a disabled user, not yourself or `admin`) removes the account with their computers and what those sent (the
+  computers keep their files), memberships, tags, albums and favorites. Refused while one of their folders has files or they
+  have a source, or a mirror or someone else's source uses their folder. The name can then be used again.
 - A device belongs to the user who adds it; names are unique per user (`bob/laptop`, `alice/laptop`).
 - Favorites, ratings, tags, albums, corrected dates and places are per user.
 - Anyone who cannot see a file gets 404 for it.
@@ -50,7 +53,7 @@ The top level lists devices, local folders and the master folders, each named by
 A view of the same files; originals are never changed.
 
 - **Timeline** by month and day, filtered by device, kind and tag. **Viewer:** arrows or swipe, `Esc` closes, `i` info, `f`
-  favorite, **Copy link** in the menu.
+  favorite, double-click or `z` zooms a photo (arrows then pan), **Copy link** in the menu.
 - **Info:** description, rating, tags, date, place. Corrections are notes beside the file; **Use the original** reverts them.
 - **Date and place** come from EXIF (then XMP; for a video, its tags). After an update that reads more, **Processing → Read
   everything again** re-reads the library.
@@ -59,7 +62,8 @@ A view of the same files; originals are never changed.
 **Albums.** An album is a shortcut to a folder (**Show as album** on a folder in Files); it holds no files of its own. Everything
 in the folder and below is in it, new files included, in natural order (`Episode 2` before `Episode 10`). It follows the folder
 when it is renamed or moved. One per folder and user. The cover is the file you chose, else a poster image in the folder
-(`poster`, `cover`, `folder`, `thumb`), else its first video or photo.
+(`poster`, `cover`, `folder`, `thumb`), else its first video or photo. An album page shows at most 20,000 files and says
+so; the folder has the rest.
 
 **Artwork.** A video's picture comes from files beside it in the usual Jellyfin/Kodi/Plex names (`<video>-poster.jpg`, or
 `poster.jpg` in its folder or the two above); title, season, episode and plot from `<video>.nfo`. Nothing is downloaded. Without
@@ -252,7 +256,8 @@ a replica, or restore a backup with its restore kit ([Mirrors](mirrors.md#restor
 
 ## Client updates
 
-The client checks GitHub releases every 6 hours; when there is a newer one it downloads it, verifies the `.sha256`, replaces its
+The client checks GitHub releases every 6 hours; when there is a newer one it downloads it, checks the `.sha256` (and its signature, when the release is
+signed), replaces its
 own file and restarts. Config, token and state stay, so nothing is sent again. `auto_update = false` turns this off.
 
 - **Tray:** **Check for updates** looks; when something newer exists the entry becomes **Update to `<version>`**, which installs
@@ -264,4 +269,7 @@ own file and restarts. Config, token and state stay, so nothing is sent again. `
 
 `FAFNIRX_UPDATE_URL` replaces the address of the releases API (a fork, or a test server).
 
-Releases are checked by checksum, which guards against bad downloads, not against someone who can publish releases.
+Signing is optional. With the repository secret `UPDATE_SIGNING_KEY` the Release workflow signs each checksum (`.sha256.sig`,
+Ed25519), and a client installs a signed release only if the signature is by its key (`UPDATE_KEY` in
+`crates/client/src/update/release.rs`; a fork puts its own there). An unsigned release is checked by checksum alone, which
+guards against bad downloads, not against someone who can publish releases.

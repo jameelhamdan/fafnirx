@@ -252,6 +252,14 @@ fn files_and_folders_of_the_master_can_be_moved_but_not_those_of_a_device() {
             api.json(Method::POST, "/api/files/move", mv("Show/S1/a.txt", "keep.txt")).await.0,
             StatusCode::CONFLICT
         );
+        // A file the database does not know yet (just put on the disk) is in the way too, and nothing moves.
+        let stray = api.store.live_path("admin/docs", "Other/S1/b.txt").unwrap();
+        std::fs::create_dir_all(stray.parent().unwrap()).unwrap();
+        std::fs::write(&stray, b"stray").unwrap();
+        assert_eq!(api.json(Method::POST, "/api/files/move", mv("Show", "Other")).await.0, StatusCode::CONFLICT);
+        let (_, kept) = api.get("/api/files?device=admin/docs&path=Show/S1").await;
+        assert_eq!(kept["entries"].as_array().unwrap().len(), 2, "{kept}");
+        std::fs::remove_dir_all(stray.parent().unwrap().parent().unwrap()).unwrap();
         let (status, moved) = api.json(Method::POST, "/api/files/move", mv("Show", "Series/Show")).await;
         assert_eq!((status, moved["moved"].clone()), (StatusCode::OK, json!(2)));
         let (_, listing) = api.get("/api/files?device=admin/docs&path=Series/Show/S1").await;

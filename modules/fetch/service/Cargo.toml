@@ -22,7 +22,7 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-axum = "0.7"
+axum = "0.8"
 fafnirx-module-api = { path = "../../../crates/module-api" }
 fafnirx-module-kit = { path = "../../../crates/module-kit", features = ["testing"] }
 tempfile.workspace = true

@@ -43,6 +43,8 @@ pub struct AppState {
     /// Changes announced by `NOTIFY`, as JSON text, for the live event streams.
     pub events: broadcast::Sender<String>,
     pub login_failures: Mutex<HashMap<String, Vec<Instant>>>,
+    /// One password check at a time per user name (see `auth::login`).
+    pub login_gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// The proxies whose word about a client's address is believed (`FAFNIRX_TRUSTED_PROXY`).
     pub trusted: crate::platform::proxy::Trusted,
     /// Upload sessions that are being filled.
@@ -64,6 +66,7 @@ impl AppState {
             data_dir,
             events: broadcast::channel(256).0,
             login_failures: Mutex::default(),
+            login_gates: Mutex::default(),
             trusted: crate::platform::proxy::Trusted::from_env()?,
             uploads: Mutex::default(),
             streams: Arc::new(Semaphore::new(crate::platform::tuning::get("FAFNIRX_STREAMS").unwrap_or(32))),
@@ -175,25 +178,25 @@ fn light() -> Router<Shared> {
         .route("/api/plugins/register", post(plugins::register))
         .route("/api/me/password", post(auth::change_password))
         .route("/api/users", get(users::list).post(users::create))
-        .route("/api/users/:name", axum::routing::patch(users::update))
+        .route("/api/users/{name}", axum::routing::patch(users::update).delete(users::delete))
         .route("/api/dashboard", get(monitoring::api::dashboard))
-        .route("/api/alerts/:id/dismiss", post(monitoring::api::dismiss))
+        .route("/api/alerts/{id}/dismiss", post(monitoring::api::dismiss))
         .route("/api/settings", get(devices::api::settings).put(devices::api::save_settings))
         .route("/api/devices", get(devices::api::list).post(devices::api::create))
-        .route("/api/devices/:name", get(devices::api::detail))
-        .route("/api/devices/:name/token", post(devices::api::rotate_token))
-        .route("/api/devices/:name/release", post(devices::api::release))
-        .route("/api/devices/:name/rename", post(devices::api::rename))
-        .route("/api/devices/:name/revoke", post(devices::api::revoke))
+        .route("/api/devices/{name}", get(devices::api::detail))
+        .route("/api/devices/{name}/token", post(devices::api::rotate_token))
+        .route("/api/devices/{name}/release", post(devices::api::release))
+        .route("/api/devices/{name}/rename", post(devices::api::rename))
+        .route("/api/devices/{name}/revoke", post(devices::api::revoke))
         .route("/api/master-folders", post(devices::master_folders::create))
-        .route("/api/master-folders/:id", delete(devices::master_folders::delete))
-        .route("/api/master-folders/:id/rename", post(devices::master_folders::rename))
+        .route("/api/master-folders/{id}", delete(devices::master_folders::delete))
+        .route("/api/master-folders/{id}/rename", post(devices::master_folders::rename))
         .route("/api/folders", get(devices::folders::list).post(devices::folders::create))
         .route("/api/folders/leave", post(devices::folders::leave))
         .route("/api/folders/people", get(devices::folders::people))
-        .route("/api/folders/:name", delete(devices::folders::delete))
-        .route("/api/folders/:name/members", post(devices::folders::add_member))
-        .route("/api/folders/:name/members/:user", delete(devices::folders::remove_member))
+        .route("/api/folders/{name}", delete(devices::folders::delete))
+        .route("/api/folders/{name}/members", post(devices::folders::add_member))
+        .route("/api/folders/{name}/members/{user}", delete(devices::folders::remove_member))
         .route("/api/files", get(files::browse::list))
         .route("/api/files/info", get(files::browse::info))
         .route("/api/files/delete", post(files::browse::remove))
@@ -204,31 +207,31 @@ fn light() -> Router<Shared> {
         .route("/api/timeline", get(library::photos::timeline))
         .route("/api/library", get(library::photos::by_ids))
         .route("/api/library/bulk", post(library::photos::bulk))
-        .route("/api/library/:id", get(library::photos::detail).patch(library::photos::edit))
-        .route("/api/library/:id/folder", get(library::photos::folder))
+        .route("/api/library/{id}", get(library::photos::detail).patch(library::photos::edit))
+        .route("/api/library/{id}/folder", get(library::photos::folder))
         .route("/api/tags", get(library::photos::tags))
-        .route("/api/tags/:id", delete(library::photos::delete_tag))
+        .route("/api/tags/{id}", delete(library::photos::delete_tag))
         .route("/api/trash", get(library::photos::trash))
         .route("/api/trash/purge", post(library::photos::purge))
         .route("/api/albums", get(library::albums::list).post(library::albums::create))
         .route(
-            "/api/albums/:id",
+            "/api/albums/{id}",
             get(library::albums::detail).patch(library::albums::edit).delete(library::albums::delete),
         )
         .route("/api/sources", get(integrations::api::sources).post(integrations::api::create_source))
         .route(
-            "/api/sources/:user/:name",
+            "/api/sources/{user}/{name}",
             delete(integrations::api::delete_source).patch(integrations::api::edit_source),
         )
-        .route("/api/sources/:user/:name/run", post(integrations::api::run_source))
-        .route("/api/sources/:user/:name/toggle", post(integrations::api::toggle_source))
+        .route("/api/sources/{user}/{name}/run", post(integrations::api::run_source))
+        .route("/api/sources/{user}/{name}/toggle", post(integrations::api::toggle_source))
         .route("/api/mirrors", get(integrations::api::mirrors).post(integrations::api::create_mirror))
         .route("/api/mirrors/folders", get(integrations::api::mirror_folders))
-        .route("/api/mirrors/:name", delete(integrations::api::delete_mirror))
-        .route("/api/mirrors/:name/run", post(integrations::api::run_mirror))
-        .route("/api/mirrors/:name/toggle", post(integrations::api::toggle_mirror))
-        .route("/api/mirrors/:name/resync", post(integrations::api::resync_mirror))
-        .route("/api/mirrors/:name/restore-kit", get(integrations::api::mirror_restore_kit))
+        .route("/api/mirrors/{name}", delete(integrations::api::delete_mirror))
+        .route("/api/mirrors/{name}/run", post(integrations::api::run_mirror))
+        .route("/api/mirrors/{name}/toggle", post(integrations::api::toggle_mirror))
+        .route("/api/mirrors/{name}/resync", post(integrations::api::resync_mirror))
+        .route("/api/mirrors/{name}/restore-kit", get(integrations::api::mirror_restore_kit))
         .route("/api/events", get(events::stream))
 }
 
@@ -237,9 +240,9 @@ fn heavy() -> Router<Shared> {
     Router::new()
         .route("/api/files/download", get(files::transfer::download))
         .route("/api/files/thumb", get(files::transfer::thumbnail))
-        .route("/api/media/:id/:variant", get(files::transfer::media))
-        .route("/api/m/:module/ui/:file", get(crate::modules::ui))
-        .route("/api/m/:module/:id/*rest", get(crate::modules::proxy))
+        .route("/api/media/{id}/{variant}", get(files::transfer::media))
+        .route("/api/m/{module}/ui/{file}", get(crate::modules::ui))
+        .route("/api/m/{module}/{id}/{*rest}", get(crate::modules::proxy))
         .route("/api/queue", get(monitoring::queue::show))
         .route("/api/queue/pause", post(monitoring::queue::pause))
         .route("/api/queue/retry", post(monitoring::queue::retry))
@@ -248,12 +251,12 @@ fn heavy() -> Router<Shared> {
         .route("/api/files/zip", post(files::transfer::zip))
         .route("/api/uploads", post(files::upload::start_upload))
         .route(
-            "/api/uploads/:id",
+            "/api/uploads/{id}",
             get(files::upload::upload_status)
                 .put(files::upload::upload_chunk)
                 .delete(files::upload::abort_upload),
         )
-        .route("/api/uploads/:id/finish", post(files::upload::finish_upload))
+        .route("/api/uploads/{id}/finish", post(files::upload::finish_upload))
         .layer(DefaultBodyLimit::disable())
 }
 

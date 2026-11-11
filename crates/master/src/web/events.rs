@@ -5,6 +5,7 @@ use super::access::Access;
 use super::Shared;
 use crate::platform::db::{Reach, Topic, CHANNEL};
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::Extension;
 use futures_util::Stream;
@@ -12,7 +13,7 @@ use postgres::{Config, NoTls};
 use std::convert::Infallible;
 use std::time::Duration;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
-use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 use tokio_stream::StreamExt;
 
 /// Listens for notifications on a connection of its own and feeds them to the event streams.
@@ -68,14 +69,42 @@ fn is_for(who: &Access, payload: &str) -> bool {
     }
 }
 
-pub async fn stream(State(state): State<Shared>, Extension(who): Extension<Access>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let events = BroadcastStream::new(state.events.subscribe())
-        .map(|received| match received {
-            Ok(payload) => payload,
-            // This browser fell behind: tell it to refresh instead of replaying.
-            Err(BroadcastStreamRecvError::Lagged(_)) => r#"{"topic":"resync","key":""}"#.to_string(),
-        })
-        .filter(move |payload| is_for(&who, payload))
-        .map(|payload| Ok(Event::default().data(payload)));
+/// How often an open stream looks again at its login: a member taken off a folder stops hearing about it, and a stream
+/// whose session ended (logged out, disabled) closes; the browser's reconnect then meets the login check.
+const RECHECK: Duration = Duration::from_secs(60);
+
+pub async fn stream(State(state): State<Shared>, Extension(who): Extension<Access>, headers: HeaderMap) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
+    let mut changes = BroadcastStream::new(state.events.subscribe());
+    tokio::spawn(async move {
+        let mut who = who;
+        let mut recheck = tokio::time::interval_at(tokio::time::Instant::now() + RECHECK, RECHECK);
+        loop {
+            let payload = tokio::select! {
+                // The browser went away.
+                _ = tx.closed() => return,
+                _ = recheck.tick() => {
+                    let headers = headers.clone();
+                    match crate::platform::db::with(&state.db, move |c| super::auth::user_of_session(c, &headers)).await {
+                        Ok(Some(now)) => who = now,
+                        Ok(None) => return,
+                        // The database is away for a moment: the stream goes on with what it knew.
+                        Err(e) => tracing::debug!("live updates: recheck the login: {e}"),
+                    }
+                    continue;
+                }
+                received = changes.next() => match received {
+                    Some(Ok(payload)) => payload,
+                    // This browser fell behind: tell it to refresh instead of replaying.
+                    Some(Err(BroadcastStreamRecvError::Lagged(_))) => r#"{"topic":"resync","key":""}"#.to_string(),
+                    None => return,
+                },
+            };
+            if is_for(&who, &payload) && tx.send(payload).await.is_err() {
+                return;
+            }
+        }
+    });
+    let events = ReceiverStream::new(rx).map(|payload| Ok(Event::default().data(payload)));
     Sse::new(events).keep_alive(KeepAlive::default())
 }

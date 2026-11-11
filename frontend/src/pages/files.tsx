@@ -200,7 +200,8 @@ export default function Files() {
       <input ref={fileInput} type="file" multiple hidden onChange={(e) => { if (e.target.files) upload(fromInput(e.target.files)); e.target.value = '' }} />
       <input ref={folderInput} type="file" hidden {...{ webkitdirectory: '' }} onChange={(e) => { if (e.target.files) upload(fromInput(e.target.files)); e.target.value = '' }} />
 
-      <nav aria-label={t('Location')} className="mb-3 flex flex-wrap items-center gap-1 text-sm">
+      {/* At the top the page title says where you are; the trail shows from the first device down. */}
+      {device && <nav aria-label={t('Location')} className="mb-3 flex flex-wrap items-center gap-1 text-sm">
         {crumbs.map((c, i) => (
           <span key={i} className="flex items-center gap-1">
             {i > 0 && <ChevronRight className="size-3.5 text-muted-foreground" />}
@@ -212,7 +213,7 @@ export default function Files() {
         {device && listing.data && (
           <span className="ml-2"><AccessBadge writable={canUpload} kind={listing.data.pages[0]?.device_kind ?? null} /></span>
         )}
-      </nav>
+      </nav>}
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="relative min-w-48 flex-1 sm:max-w-xs">

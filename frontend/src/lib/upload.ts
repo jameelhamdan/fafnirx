@@ -94,6 +94,16 @@ async function send(item: UploadItem) {
     mtime_ms: src.file.lastModified,
   })
   const base = `/api/uploads/${started.id}`
+  try {
+    await sendChunks(item, src, base)
+  } catch (e) {
+    // Given up: the master drops what arrived instead of keeping it for a day.
+    void api.delete(base).catch(() => {})
+    throw e
+  }
+}
+
+async function sendChunks(item: UploadItem, src: Source, base: string) {
   let offset = 0
   // Failures in a row: progress (or an answer from the server about where it is) starts the count again.
   let attempt = 0

@@ -26,17 +26,18 @@ const ROUTES: &[(&str, &str, Rule)] = &[
     ("POST", "/api/me/password", Rule::Reader),
     ("GET", "/api/users", Rule::Admin),
     ("POST", "/api/users", Rule::Admin),
-    ("PATCH", "/api/users/:name", Rule::Admin),
+    ("PATCH", "/api/users/{name}", Rule::Admin),
+    ("DELETE", "/api/users/{name}", Rule::Admin),
     ("GET", "/api/settings", Rule::Admin),
     ("PUT", "/api/settings", Rule::Admin),
     ("GET", "/api/mirrors", Rule::Admin),
     ("GET", "/api/mirrors/folders", Rule::Admin),
     ("POST", "/api/mirrors", Rule::Admin),
-    ("DELETE", "/api/mirrors/:name", Rule::Admin),
-    ("POST", "/api/mirrors/:name/run", Rule::Admin),
-    ("POST", "/api/mirrors/:name/toggle", Rule::Admin),
-    ("POST", "/api/mirrors/:name/resync", Rule::Admin),
-    ("GET", "/api/mirrors/:name/restore-kit", Rule::Admin),
+    ("DELETE", "/api/mirrors/{name}", Rule::Admin),
+    ("POST", "/api/mirrors/{name}/run", Rule::Admin),
+    ("POST", "/api/mirrors/{name}/toggle", Rule::Admin),
+    ("POST", "/api/mirrors/{name}/resync", Rule::Admin),
+    ("GET", "/api/mirrors/{name}/restore-kit", Rule::Admin),
     ("POST", "/api/files/rescan", Rule::Admin),
     ("GET", "/api/plugins", Rule::Admin),
     ("POST", "/api/plugins/register", Rule::Secret),
@@ -47,20 +48,20 @@ const ROUTES: &[(&str, &str, Rule)] = &[
     ("POST", "/api/queue/rebuild", Rule::Admin),
     ("GET", "/api/sources", Rule::Workspace),
     ("POST", "/api/sources", Rule::Workspace),
-    ("DELETE", "/api/sources/:user/:name", Rule::Workspace),
-    ("PATCH", "/api/sources/:user/:name", Rule::Workspace),
-    ("POST", "/api/sources/:user/:name/run", Rule::Workspace),
-    ("POST", "/api/sources/:user/:name/toggle", Rule::Workspace),
+    ("DELETE", "/api/sources/{user}/{name}", Rule::Workspace),
+    ("PATCH", "/api/sources/{user}/{name}", Rule::Workspace),
+    ("POST", "/api/sources/{user}/{name}/run", Rule::Workspace),
+    ("POST", "/api/sources/{user}/{name}/toggle", Rule::Workspace),
     ("POST", "/api/devices", Rule::Workspace),
     ("POST", "/api/master-folders", Rule::Admin),
-    ("DELETE", "/api/master-folders/:id", Rule::Admin),
-    ("POST", "/api/master-folders/:id/rename", Rule::Admin),
+    ("DELETE", "/api/master-folders/{id}", Rule::Admin),
+    ("POST", "/api/master-folders/{id}/rename", Rule::Admin),
     ("POST", "/api/folders", Rule::Workspace),
     ("POST", "/api/folders/leave", Rule::Workspace),
     ("GET", "/api/folders/people", Rule::Workspace),
-    ("DELETE", "/api/folders/:name", Rule::Workspace),
-    ("POST", "/api/folders/:name/members", Rule::Workspace),
-    ("DELETE", "/api/folders/:name/members/:user", Rule::Workspace),
+    ("DELETE", "/api/folders/{name}", Rule::Workspace),
+    ("POST", "/api/folders/{name}/members", Rule::Workspace),
+    ("DELETE", "/api/folders/{name}/members/{user}", Rule::Workspace),
     ("POST", "/api/albums", Rule::Workspace),
     ("POST", "/api/files/delete", Rule::Workspace),
     ("POST", "/api/files/move", Rule::Workspace),
@@ -71,38 +72,38 @@ const ROUTES: &[(&str, &str, Rule)] = &[
     ("GET", "/api/events", Rule::Reader),
     ("GET", "/api/devices", Rule::Reader),
     ("GET", "/api/folders", Rule::Reader),
-    ("GET", "/api/devices/:name", Rule::Reader),
-    ("POST", "/api/devices/:name/token", Rule::Reader),
-    ("POST", "/api/devices/:name/release", Rule::Reader),
-    ("POST", "/api/devices/:name/rename", Rule::Workspace),
-    ("POST", "/api/devices/:name/revoke", Rule::Reader),
+    ("GET", "/api/devices/{name}", Rule::Reader),
+    ("POST", "/api/devices/{name}/token", Rule::Reader),
+    ("POST", "/api/devices/{name}/release", Rule::Reader),
+    ("POST", "/api/devices/{name}/rename", Rule::Workspace),
+    ("POST", "/api/devices/{name}/revoke", Rule::Reader),
     ("GET", "/api/files", Rule::Reader),
     ("GET", "/api/files/info", Rule::Reader),
     ("GET", "/api/files/download", Rule::Reader),
     ("GET", "/api/files/thumb", Rule::Reader),
     ("POST", "/api/files/zip", Rule::Reader),
-    ("GET", "/api/media/:id/:variant", Rule::Reader),
-    ("GET", "/api/m/:module/:id/*rest", Rule::Reader),
-    ("GET", "/api/m/:module/ui/:file", Rule::Reader),
-    ("GET", "/api/uploads/:id", Rule::Reader),
-    ("PUT", "/api/uploads/:id", Rule::Reader),
-    ("DELETE", "/api/uploads/:id", Rule::Reader),
-    ("POST", "/api/uploads/:id/finish", Rule::Reader),
+    ("GET", "/api/media/{id}/{variant}", Rule::Reader),
+    ("GET", "/api/m/{module}/{id}/{*rest}", Rule::Reader),
+    ("GET", "/api/m/{module}/ui/{file}", Rule::Reader),
+    ("GET", "/api/uploads/{id}", Rule::Reader),
+    ("PUT", "/api/uploads/{id}", Rule::Reader),
+    ("DELETE", "/api/uploads/{id}", Rule::Reader),
+    ("POST", "/api/uploads/{id}/finish", Rule::Reader),
     ("GET", "/api/timeline/buckets", Rule::Reader),
     ("GET", "/api/timeline", Rule::Reader),
     ("GET", "/api/library", Rule::Reader),
     ("POST", "/api/library/bulk", Rule::Reader),
-    ("GET", "/api/library/:id", Rule::Reader),
-    ("PATCH", "/api/library/:id", Rule::Reader),
-    ("GET", "/api/library/:id/folder", Rule::Reader),
+    ("GET", "/api/library/{id}", Rule::Reader),
+    ("PATCH", "/api/library/{id}", Rule::Reader),
+    ("GET", "/api/library/{id}/folder", Rule::Reader),
     ("GET", "/api/tags", Rule::Reader),
-    ("DELETE", "/api/tags/:id", Rule::Reader),
+    ("DELETE", "/api/tags/{id}", Rule::Reader),
     ("GET", "/api/trash", Rule::Reader),
     ("GET", "/api/albums", Rule::Reader),
-    ("GET", "/api/albums/:id", Rule::Reader),
-    ("PATCH", "/api/albums/:id", Rule::Reader),
-    ("DELETE", "/api/albums/:id", Rule::Reader),
-    ("POST", "/api/alerts/:id/dismiss", Rule::Reader),
+    ("GET", "/api/albums/{id}", Rule::Reader),
+    ("PATCH", "/api/albums/{id}", Rule::Reader),
+    ("DELETE", "/api/albums/{id}", Rule::Reader),
+    ("POST", "/api/alerts/{id}/dismiss", Rule::Reader),
 ];
 
 #[test]
@@ -142,12 +143,13 @@ fn every_route_has_a_rule_and_the_rule_is_kept() {
                 continue;
             }
             let uri = uri
-                .replace(":name", "x")
-                .replace(":user", "x")
-                .replace(":id", "AAAAAAAAAAAAAAAAAAAAAA")
-                .replace(":variant", "thumb")
-                .replace(":file", "index.js")
-                .replace("*rest", "a");
+                .replace("{name}", "x")
+                .replace("{user}", "x")
+                .replace("{module}", "x")
+                .replace("{id}", "AAAAAAAAAAAAAAAAAAAAAA")
+                .replace("{variant}", "thumb")
+                .replace("{file}", "index.js")
+                .replace("{*rest}", "a");
             let status = |cookie: String| {
                 let uri = uri.clone();
                 async move { api.cookie_for(&cookie, Method::from_bytes(method.as_bytes()).unwrap(), uri).await }

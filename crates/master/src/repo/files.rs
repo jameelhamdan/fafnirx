@@ -162,6 +162,22 @@ pub fn expand(c: &mut impl GenericClient, device_id: i64, path: &str, include_de
     q::expand_paths().params(c, &q::ExpandPathsParams { device_id, path, below, include_deleted }).all()
 }
 
+/// The live files [`expand`] gives, each with its modification time (unix nanoseconds).
+pub fn expand_with_mtime(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<Vec<(String, i64)>, Error> {
+    let below = crate::platform::db::like_prefix(&format!("{path}/"));
+    Ok(q::expand_with_mtime()
+        .bind(c, &device_id, &path, &below)
+        .all()?
+        .into_iter()
+        .map(|r| (r.path, r.mtime))
+        .collect())
+}
+
+/// One of `paths` that is a live file of the device, if any.
+pub fn first_live_of(c: &mut impl GenericClient, device_id: i64, paths: &[String]) -> Result<Option<String>, Error> {
+    q::first_live_of().bind(c, &device_id, &paths).opt()
+}
+
 /// The folders directly below a path (`below` is the `LIKE` pattern of the path, `from` the 1-based character
 /// position where the folder names start).
 pub fn folders_below(c: &mut impl GenericClient, device_id: i64, below: &str, include_deleted: bool, from: i32) -> Result<Vec<Folder>, Error> {

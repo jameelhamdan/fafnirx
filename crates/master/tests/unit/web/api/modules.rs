@@ -32,7 +32,7 @@ fn stand_in_module(contract: u32, core: &'static str) -> String {
             }),
         )
         .route(
-            "/files/*rest",
+            "/files/{*rest}",
             axum::routing::get(
                 move |Path(rest): Path<String>, Query(q): Query<std::collections::HashMap<String, String>>, h: HeaderMap| async move {
                     if !allowed(&h) {

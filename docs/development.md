@@ -42,9 +42,11 @@ cargo run -p fafnirx -- install --in-place --no-start --server http://127.0.0.1:
 Database tests use a schema of their own, so they run in parallel. `crates/master/tests/unit/web/api/` drives the real router in
 memory; `routes.rs` pins the access rule of every route. Video parts need ffmpeg, which tests do not: they check parsing and
 the contract with the module (a stand-in module in `web/api/modules.rs`, stand-in programs in `e2e-video.mjs`). E2E scripts start the real master and client (binaries from `target/debug` or `$FAFNIRX_BIN_DIR`);
-run them on a normal disk (Docker Desktop bind mounts report no file events). Unit tests never wait on the clock.
+run them on a normal disk (Docker Desktop bind mounts report no file events). CI runs all of them (`npm run all`, job `e2e`).
+The update test signs its stand-in release with a key of its own, which only a debug client accepts (`FAFNIRX_UPDATE_KEY`).
+Unit tests never wait on the clock.
 
-Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings` (also `-p fafnirx --no-default-features`, the client without the tray), `cargo machete`, `bash scripts/check-layout.sh`, `cd frontend && npx tsc -b && npx oxlint`. CI runs the same. The client's tests link only where the Windows SDK has `rc.exe`; run them in Linux (Docker) otherwise.
+Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings` (also `-p fafnirx --no-default-features`, the client without the tray), `cargo machete`, `cargo deny check advisories` (known vulnerabilities, `deny.toml`), `bash scripts/check-layout.sh`, `cd frontend && npx tsc -b && npx oxlint`. CI runs the same. The client's tests link only where the Windows SDK has `rc.exe`; run them in Linux (Docker) otherwise.
 
 ## Conventions
 
@@ -145,6 +147,9 @@ Vite, React 19, TypeScript, Tailwind v4, shadcn/ui, TanStack Query, React Router
   later; `tr('…')` outside components); `{name}` placeholders come from the second argument. `npm run i18n` updates
   `translations/en.json` and lists gaps; `-- --check` fails if stale or incomplete. A language is `translations/<code>.json` plus
   a line in `LANGUAGES` (`src/lib/i18n.ts`); Arabic is RTL, so use `start`/`end`, not `left`/`right`.
+- **Server messages** are English and translated when they arrive (`translateServer` in `src/lib/i18n.ts`, called by `lib/api.ts`): `npm run i18n`
+  also collects the literal and `format!` messages of `ApiError::bad/not_found/conflict`, `(StatusCode::…, "…")`, `forbidden`
+  and `*_RULE` in `crates/master/src`. Name every `format!` part (`{name}`, not `{}`): it is the placeholder.
 - **Modules:** `frontend/src/modules/<id>` is built apart (`npm run build:module -- <id>`, into `dist-modules/`) and joins the app
   only through `src/sdk` (checked by `npx oxlint`); the video module is `modules/video` (its player, `player/`, imports nothing
   from the app) with its backend in `modules/video/service`. To try one in development, build it, run its service with
@@ -157,12 +162,13 @@ Actions → **Release** → Run workflow on `master` with `X.Y.Z` (*dry_run* reh
 
 1. **Check:** version is `X.Y.Z`, newer than all releases, unused, not below `Cargo.toml`; publishing secrets exist; Docker Hub login works.
 2. **Version commit** by `prepare-release.sh` (`Cargo.toml`, `Cargo.lock`) on branch `release/X.Y.Z`; every later job tests that commit.
-3. **Verify:** CI; client builds for Windows, macOS, Linux (installer, `.deb`, and the plain `fafnirx-X.Y.Z-<os>-<arch>` + `.sha256` clients update from); Docker image started on amd64 and arm64.
+3. **Verify:** CI; client builds for Windows, macOS, Linux (installer, `.deb`, and the plain `fafnirx-X.Y.Z-<os>-<arch>` + `.sha256` clients update from, the checksums signed before publishing when `UPDATE_SIGNING_KEY` is set); Docker image started on amd64 and arm64.
 4. **Publish, only if all passed:** fast-forward `master`, push the image (`<version>`, `<major>.<minor>`, `latest`), tag and GitHub Release, then Homebrew. `release/X.Y.Z` stays at the released commit (check it out to go back to that version, or branch from it for a fix); a run that did not publish deletes it.
 
 A failure before step 4 leaves `master` untouched; if `master` moved, nothing is published: run again. If publishing fails
 halfway, run again with the same version. Secrets (repository, not environment): `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` (access
-token), `HOMEBREW_TAP_TOKEN`; optional variable `DOCKERHUB_IMAGE`. The bot must be able to push to a protected `master`; add
+token), `HOMEBREW_TAP_TOKEN`; optional `UPDATE_SIGNING_KEY` (Ed25519 private key, PEM; step 1 checks it is the one in
+`crates/client/src/update/release.rs`, whose clients refuse a signature by another key); optional variable `DOCKERHUB_IMAGE`. The bot must be able to push to a protected `master`; add
 reviewers to the `release` environment for a manual gate. `.github/scripts/smoke-image.sh <image>` runs the image check.
 
 ## Troubleshooting

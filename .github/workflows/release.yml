@@ -27,6 +27,8 @@
 # "dry_run" stops after step 3: use it to try the pipeline without publishing anything.
 #
 # Needs: secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (see docker.yml), HOMEBREW_TAP_TOKEN for Homebrew (see homebrew.yml).
+# Optional: UPDATE_SIGNING_KEY (an Ed25519 private key, PEM, whose public half is UPDATE_KEY in
+# crates/client/src/update/release.rs) signs the client checksums; without it releases are unsigned.
 # If master is protected, the github-actions bot must be allowed to push to it, or the commit of step 5 is refused.
 name: Release
 
@@ -105,6 +107,25 @@ jobs:
             echo "::error::These secrets are not set:$missing. Add each as a REPOSITORY secret with exactly this name (Settings -> Secrets and variables -> Actions -> Secrets -> New repository secret). Secrets of an environment, of Dependabot, and variables are not seen by the publishing jobs. Nothing was changed."
             exit 1
           fi
+      # Signing is optional. With the secret, clients refuse a signature by any other key: a key that is not the one they
+      # know would publish a release that no client takes.
+      - name: Check that the signing key, if there is one, is the one the client knows
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "::notice::No UPDATE_SIGNING_KEY: the client files are published with their checksums only, unsigned."
+            exit 0
+          fi
+          key=$(mktemp)
+          printf '%s\n' "$UPDATE_SIGNING_KEY" > "$key"
+          public=$(openssl pkey -in "$key" -pubout -outform DER | tail -c 32 | od -An -tx1 | tr -d ' \n')
+          rm -f "$key"
+          known=$(sed -n 's/^pub const UPDATE_KEY: &str = "\([0-9a-f]*\)";/\1/p' crates/client/src/update/release.rs)
+          [ -n "$public" ] && [ "$public" = "$known" ] || {
+            echo "::error::The secret UPDATE_SIGNING_KEY (public key ${public:-unreadable}) is not the key in crates/client/src/update/release.rs ($known). Nothing was changed."
+            exit 1
+          }
       - name: Check that Docker Hub accepts the login
         uses: docker/login-action@v3
         with:
@@ -296,10 +317,24 @@ jobs:
           pattern: client-*
           path: out
           merge-multiple: true
+      # Only with the secret (optional). A client installs a signed update only if the signature is by UPDATE_KEY
+      # (crates/client/src/update/release.rs).
+      - name: Sign the checksums
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          [ -n "$UPDATE_SIGNING_KEY" ] || { echo "unsigned: no UPDATE_SIGNING_KEY"; exit 0; }
+          key=$(mktemp)
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$UPDATE_SIGNING_KEY" > "$key"
+          for f in out/*.sha256; do
+            openssl pkeyutl -sign -inkey "$key" -rawin -in "$f" -out "$f.sig"
+            openssl pkeyutl -verify -inkey "$key" -rawin -in "$f" -sigfile "$f.sig" >/dev/null
+          done
       - name: Create the tag and the release
         run: |
           # shellcheck disable=SC2016 # the backticks are Markdown, not command substitution
-          printf 'Server: `docker pull %s:%s`; the optional modules: video `docker pull %s:%s`, fetch `docker pull %s:%s`\n\nClient: the installer for your system is attached below, each with a `.sha256`.\n\n' \
+          printf 'Server: `docker pull %s:%s`; the optional modules: video `docker pull %s:%s`, fetch `docker pull %s:%s`\n\nClient: the installer for your system is attached below, each with a `.sha256` (and its signature, `.sha256.sig`, when the release is signed).\n\n' \
             "$IMAGE" "$VERSION" "$VIDEO_IMAGE" "$VERSION" "$FETCH_IMAGE" "$VERSION" > notes.md
           gh release create "v$VERSION" out/* --target "$SHA" --title "v$VERSION" \
             --notes-file notes.md --generate-notes

@@ -76,7 +76,7 @@ ingress:
 
 Turn on **gRPC** for the zone; put **Cloudflare Access** on `files.` only (devices use tokens); enroll with
 `https://devices.example.com`. The cookie is `Secure` when `X-Forwarded-Proto: https` arrives. A tunnel alone makes every
-visitor one address (five wrong guesses lock the login for a minute for all): route `cloudflared` through the Caddy proxy
+visitor one address (five wrong guesses from anyone block the login for a minute for all): route `cloudflared` through the Caddy proxy
 (`http://proxy:80`, `http://proxy:7443`) or set `FAFNIRX_TRUSTED_PROXY` to its address. Responses carry CSP, `X-Frame-Options:
 DENY`, `nosniff`, and HSTS behind https. Browser uploads use 8 MiB pieces; live updates use SSE with a 15 s keep-alive. A VPN is equally safe.
 
@@ -110,9 +110,11 @@ major upgrade needs dump and restore. Clients update themselves from GitHub with
 
 - Strong `FAFNIRX_ADMIN_PASSWORD` and `FAFNIRX_DB_PASSWORD`; `.env` readable only by you; PostgreSQL port unpublished.
 - `8080` and `7443` off the internet unless behind TLS.
+- Give accounts only to people you trust. Every user can add [sources](sources.md), and a source reads with the master's rights:
+  a folder on the master (other users' files, `rclone.conf`), a remote of `rclone.conf`, or any address the fetch module can reach.
 - Device tokens are shown once and stored as SHA-256 hashes; revoke lost devices. A device adds data to its own device; it reads and writes only the folders of its user, those shared with them and the master folders.
 - Source and mirror credentials, and the encryption key of backup mirrors, are plain text in the database and `rclone.conf`: protect backups and the config folder. Keep a copy of each backup key away from the master.
-- The [fetch module](sources.md#web-files-and-feeds) reaches any address your server can reach: give it only `data/tmp` (compose does), keep its port unpublished, only let people you trust add sources, and read its [legal notes](sources.md#legal).
+- The [fetch module](sources.md#web-files-and-feeds) reaches any address your server can reach: give it only `data/tmp` (compose does), keep its port unpublished, and read its [legal notes](sources.md#legal).
 - A [plugin](plugins.md) is a container with write access to `data/tmp`: run only what you trust. Don't publish its port; it has no login, only the shared token.
 - The master's disk is not encrypted by fafnirx: use an encrypted dataset. A **backup** mirror is encrypted with its own key ([Mirrors](mirrors.md)); a replica is not.
 

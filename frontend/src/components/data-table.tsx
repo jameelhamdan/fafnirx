@@ -2,7 +2,7 @@ import { AlignJustify, Columns3, Search, X } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { msg, useT } from '@/lib/i18n'
 import type { Density, Selection, TableView } from '@/lib/table-view'
-import { cn } from '@/lib/utils'
+import { cn, HIT_AREA } from '@/lib/utils'
 import { Button } from './ui/button'
 import { Checkbox } from './ui/checkbox'
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuTrigger } from './ui/dropdown-menu'
@@ -12,13 +12,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 /** The checkbox in a header cell that selects every row. */
 export function SelectAll({ selection }: { selection: Selection }) {
   const t = useT()
-  return <Checkbox checked={selection.all ? true : selection.some ? 'indeterminate' : false} onCheckedChange={selection.toggleAll} aria-label={t('Select all rows')} />
+  return <Checkbox checked={selection.all ? true : selection.some ? 'indeterminate' : false} onCheckedChange={selection.toggleAll} aria-label={t('Select all rows')} className={HIT_AREA} />
 }
 
 /** The checkbox of one row. */
 export function SelectRow({ selection, id }: { selection: Selection; id: string }) {
   const t = useT()
-  return <Checkbox checked={selection.selected.has(id)} onCheckedChange={() => selection.toggle(id)} aria-label={t('Select row')} />
+  return <Checkbox checked={selection.selected.has(id)} onCheckedChange={() => selection.toggle(id)} aria-label={t('Select row')} className={HIT_AREA} />
 }
 
 const DENSITY_LABEL: Record<Density, string> = { compact: msg('Compact rows'), normal: msg('Normal rows'), comfortable: msg('Comfortable rows') }

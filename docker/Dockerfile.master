@@ -28,10 +28,23 @@ RUN service postgresql start \
     && service postgresql stop
 
 FROM debian:bookworm-slim
-# rclone performs the offsite mirror uploads; ca-certificates lets it (and the master) verify remote TLS; curl is for the
-# health check.
+# rclone performs the mirror uploads and reads storage sources: the upstream release, pinned and checked against the checksums
+# below (Debian's package is years older). ca-certificates lets it (and the master) verify remote TLS; curl is for the download
+# and the health check.
+ARG RCLONE_VERSION=1.75.2
+ARG RCLONE_SHA256_AMD64=349ac8fba6ff65d6247043f1750cdcb518ec5d500ef91463a10d37c0ccdf3702
+ARG RCLONE_SHA256_ARM64=7e1e8d69654941b7b7df84ee74c5f7fb09cce7d5496947fb7bf16b55ff427d10
+ARG TARGETARCH
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends rclone ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl unzip \
+    && arch="${TARGETARCH:-$(dpkg --print-architecture)}" \
+    && case "$arch" in amd64) sum=$RCLONE_SHA256_AMD64 ;; arm64) sum=$RCLONE_SHA256_ARM64 ;; *) echo "no rclone for $arch" >&2; exit 1 ;; esac \
+    && curl -fsSLo /tmp/rclone.zip "https://downloads.rclone.org/v$RCLONE_VERSION/rclone-v$RCLONE_VERSION-linux-$arch.zip" \
+    && echo "$sum  /tmp/rclone.zip" | sha256sum -c - \
+    && unzip -qj /tmp/rclone.zip "*/rclone" -d /usr/local/bin \
+    && chmod 755 /usr/local/bin/rclone \
+    && rm /tmp/rclone.zip \
+    && apt-get purge -y unzip && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 1000 --create-home fafnirx \
     && mkdir /data /config && chown fafnirx /data /config

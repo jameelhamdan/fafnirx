@@ -47,12 +47,22 @@ impl Api {
     }
 
     fn with_modules(modules: Arc<crate::modules::Registry>) -> Self {
+        Self::build(modules, Default::default())
+    }
+
+    /// Behind a proxy the master trusts (the connection's own address): each request names its client in `x-forwarded-for`.
+    fn behind_proxy() -> Self {
+        Self::build(Arc::default(), crate::platform::proxy::Trusted::parse("127.0.0.1").unwrap())
+    }
+
+    fn build(modules: Arc<crate::modules::Registry>, trusted: crate::platform::proxy::Trusted) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(Store::open(dir.path()).unwrap());
         let db = testing::db();
         super::auth::bootstrap(&mut *db.get().unwrap(), "secret").unwrap();
         let mut state = AppState::new(db.clone(), store.clone(), dir.path().to_path_buf()).unwrap();
         state.modules = modules;
+        state.trusted = trusted;
         let state = Arc::new(state);
         let app = router(state.clone()).layer(MockConnectInfo("127.0.0.1:1".parse::<SocketAddr>().unwrap()));
         Self { app, db, store, cookie: String::new(), _dir: dir }

@@ -157,7 +157,7 @@ pub fn remove(c: &mut Client, store: &Store, id: i64, folder: &str) -> anyhow::R
 
 /// Removes the directory of a deleted folder when nothing but empty folders is left in it. A file that is there anyway (put
 /// in by hand, not yet noticed by the watcher) is not ours to remove.
-fn remove_if_only_folders(dir: &std::path::Path) {
+pub(crate) fn remove_if_only_folders(dir: &std::path::Path) {
     fn has_files(dir: &std::path::Path) -> bool {
         std::fs::read_dir(dir)
             .map(|entries| entries.flatten().any(|e| e.file_type().map_or(true, |t| !t.is_dir() || has_files(&e.path()))))

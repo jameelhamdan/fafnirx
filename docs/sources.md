@@ -98,8 +98,8 @@ sequenceDiagram
   another run at once. A restart or a failure loses at most the file being made.
 - A download that receives nothing for 10 minutes (`FAFNIRX_FETCH_IDLE_SECS`) is given up on; the file counts as failed and the run as
   *partial*. An empty file is a failure too.
-- The module follows redirects and reaches **any address your server can reach**, including the local network. Only give the right to
-  add sources to people you trust.
+- The module follows redirects and reaches **any address your server can reach**, including the local network. Every user can add
+  sources, so only give accounts to people you trust.
 
 ### Run it
 

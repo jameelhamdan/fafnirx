@@ -47,7 +47,9 @@ function Unavailable({ asset, video, retry }: { asset: Asset; video?: boolean; r
   )
 }
 
-/** A photo that zooms in on a double click (or a tap on a touch screen twice) and follows the pointer while zoomed. */
+const clamp = (n: number) => Math.min(100, Math.max(0, n))
+
+/** A photo that zooms in on a double click (a double tap on a touch screen, Z on a keyboard) and follows the pointer while zoomed. */
 function Photo({ asset, onFail }: { asset: Asset; onFail: () => void }) {
   const t = useT()
   const [zoom, setZoom] = useState<{ x: number; y: number } | null>(null)
@@ -60,6 +62,21 @@ function Photo({ asset, onFail }: { asset: Asset; onFail: () => void }) {
     const rect = e.currentTarget.getBoundingClientRect()
     return { x: ((e.clientX - rect.left) / rect.width) * 100, y: ((e.clientY - rect.top) / rect.height) * 100 }
   }
+  // Z (or +) zooms in on the middle and the arrows move around; Z, - or Escape zooms out.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || busyElsewhere(e)) return
+      const step = { ArrowLeft: [-10, 0], ArrowRight: [10, 0], ArrowUp: [0, -10], ArrowDown: [0, 10] }[e.key]
+      if (!zoom && (e.key === 'z' || e.key === '+' || e.key === '=')) setZoom({ x: 50, y: 50 })
+      else if (zoom && (e.key === 'z' || e.key === '-' || e.key === 'Escape')) setZoom(null)
+      else if (zoom && step) setZoom({ x: clamp(zoom.x + step[0]), y: clamp(zoom.y + step[1]) })
+      else return
+      e.preventDefault()
+    }
+    // Capturing: it runs before the viewer's keys (which skip a taken key) however often it is added again.
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [zoom])
   const waiting = picture.state === 'pending'
   return (
     <>
@@ -69,7 +86,7 @@ function Photo({ asset, onFail }: { asset: Asset; onFail: () => void }) {
       src={mediaUrl(asset.id, 'preview', asset.hash)}
       alt={asset.name}
       draggable={false}
-      title={zoom ? undefined : t('Double-click to zoom')}
+      title={zoom ? undefined : t('Double-click or press Z to zoom')}
       onLoad={picture.onLoad}
       onError={picture.onError}
       onDoubleClick={(e) => setZoom(zoom ? null : at(e as unknown as PointerEvent<HTMLElement>))}
@@ -285,7 +302,7 @@ export function Viewer({
           {/* The picture itself, blurred and dimmed, fills what the picture leaves empty. */}
           <Backdrop key={asset.id} src={mediaUrl(asset.id, 'thumb', asset.hash)} />
           <div key={asset.id} className="animate-in fade-in absolute inset-0 z-[1] flex items-center justify-center duration-200">
-            <Media asset={asset} />
+            <Media key={asset.id} asset={asset} />
           </div>
           {before && (
             <Button variant="ghost" size="icon" className={cn(glass, 'absolute top-1/2 left-2 z-[2] size-11 -translate-y-1/2 max-sm:hidden')} aria-label={t('Previous')} onClick={() => go(-1)}><ChevronLeft className="size-6" /></Button>

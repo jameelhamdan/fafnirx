@@ -173,7 +173,8 @@ pub async fn finish_upload(State(state): State<Shared>, Extension(who): Extensio
             .filter(|u| u.user_id == who.user_id)
             .ok_or_else(|| ApiError::not_found("No such upload (it may have expired)"))?;
         if u.received != u.size {
-            return Err(ApiError::conflict(format!("Only {} of {} bytes arrived", u.received, u.size)));
+            let (received, size) = (u.received, u.size);
+            return Err(ApiError::conflict(format!("Only {received} of {size} bytes arrived")));
         }
         uploads.remove(&id).expect("just found")
     };

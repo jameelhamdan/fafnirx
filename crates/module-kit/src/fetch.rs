@@ -125,7 +125,7 @@ pub fn router<M: Fetcher>(common: &Common, module: M) -> Router {
     let for_master = Router::new()
         .route(MANIFEST_PATH, get(manifest::<M>))
         .route("/status", get(status::<M>))
-        .route(&format!("{UI_PREFIX}/:file"), get(ui_file::<M>))
+        .route(&format!("{UI_PREFIX}/{{file}}"), get(ui_file::<M>))
         .route(FETCH_CHECK_PATH, post(check::<M>))
         .route(FETCH_LIST_PATH, post(list::<M>))
         .route(FETCH_GET_PATH, post(fetch::<M>))

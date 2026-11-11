@@ -10,6 +10,14 @@ fn ranges() {
     assert_eq!(parse_range("bytes=0-1,5-6", 1000), None);
     assert_eq!(parse_range("items=0-1", 1000), None);
     assert_eq!(parse_range("bytes=0-1", 0), None);
+
+    // What starts past the end cannot be answered (416); what is not understood is ignored (the whole file).
+    assert!(past_the_end("bytes=1000-", 1000));
+    assert!(past_the_end("bytes=2000-2100", 1000));
+    assert!(past_the_end("bytes=-0", 1000));
+    assert!(!past_the_end("bytes=999-", 1000));
+    assert!(!past_the_end("bytes=0-1,5-6", 1000));
+    assert!(!past_the_end("items=5000-", 1000));
 }
 
 #[test]

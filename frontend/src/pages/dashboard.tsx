@@ -85,7 +85,6 @@ function DiskBar({ data }: { data: DashboardData }) {
         {shown.map((d, i) => (
           <span key={d.folder} className="flex items-center gap-1.5"><i className="size-2 rounded-[1px]" style={{ background: tone, opacity: 0.9 - i * 0.12 }} />{d.folder} {bytes(d.bytes)}</span>
         ))}
-        <span className="ms-auto">{t('{free} free of {total}', { free: bytes(disk.free), total: bytes(disk.total) })}</span>
       </div>
     </div>
   )
@@ -258,7 +257,7 @@ export default function Dashboard() {
 
       <section className="overflow-hidden rounded-xl border bg-card" aria-label={t('Summary')}>
         <div className="grid grid-cols-2 divide-x divide-border rtl:divide-x-reverse sm:grid-cols-4">
-          <Figure label={t('Devices online')} value={`${data.online}/${clients.length}`} note={offline > 0 ? t('{count} offline', { count: offline }) : clients.length === 0 ? t('none added') : undefined} tone={offline > 0 ? 'warning' : undefined} />
+          <Figure label={t('Computers online')} value={`${data.online}/${clients.length}`} note={offline > 0 ? t('{count} offline', { count: offline }) : clients.length === 0 ? t('no computer added') : undefined} tone={offline > 0 ? 'warning' : undefined} />
           <Figure label={t('Files')} value={count(data.totals.files)} note={data.totals.marked_deleted ? t('{count} deleted, waiting for retention', { count: count(data.totals.marked_deleted) }) : undefined} />
           <Figure label={t('Stored')} value={bytes(data.totals.bytes)} />
           <Figure label={t('Master disk')} value={disk ? `${disk.percent}%` : '—'} note={disk ? t('{free} free of {total}', { free: bytes(disk.free), total: bytes(disk.total) }) : undefined} tone={diskTone} />

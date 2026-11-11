@@ -16,15 +16,16 @@ blake3.workspace = true
 prost.workspace = true
 tokio = { workspace = true, optional = true, features = ["signal", "macros"] }
 tonic.workspace = true
+tonic-prost.workspace = true
 unicode-normalization.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
 
 [build-dependencies]
-tonic-build = "0.12"
+tonic-prost-build = "0.14"
 protoc-bin-vendored = "3"
 
 [package.metadata.cargo-machete]
 # Used by the generated gRPC code.
-ignored = ["prost"]
+ignored = ["prost", "tonic-prost"]
