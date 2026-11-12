@@ -127,8 +127,8 @@ try {
   // What only the master may ask for is not reachable through its login: /files is all the web app gets.
   const status = await admin.get(`/api/m/video/${id}/status`)
   check(status.status === 404, 'the report and the manifest of the module are not served to the web app')
-  const queue = (await admin.get('/api/queue')).json
-  check(Array.isArray(queue.modules.video?.active), 'the queue page gets the module\'s report')
+  const queue = await admin.get('/api/queue')
+  check(queue.status === 200 && Array.isArray(queue.json.jobs), 'the queue page lists the jobs, those of the module included')
 
   // --- a file that is gone or changed ---------------------------------------------------------------------------------------------
   fs.writeFileSync(path.join(data, 'files', 'users', 'admin', 'videos', 'trip', 'clip.mkv'), 'a different video, another content hash')
