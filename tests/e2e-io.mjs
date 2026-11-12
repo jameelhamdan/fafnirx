@@ -95,7 +95,8 @@ try {
   check(paths.size === want.length && want.every((p) => paths.has(p)), `the source holds the files of the folder (${[...paths].sort()})`)
   check(stored('admin/source-photos', 'big.bin').equals(big), 'a multi-chunk file is stored byte for byte under files/<source>/')
   const devices = (await admin.get('/api/devices')).json
-  check(devices.filter((d) => d.kind === 'device').length === 0 && devices.some((d) => d.key === 'admin/source-photos' && d.kind === 'local'), 'the folder of a source is a local folder, never a device')
+  const folders = (await admin.get('/api/folders')).json
+  check(!devices.some((d) => d.key === 'admin/source-photos') && folders.some((f) => f.key === 'admin/source-photos'), 'the folder of a source is a folder, never a device')
 
   // --- changes in the folder: edit, delete, rename, add --------------------------------------------------------------------------------
   put('a.txt', 'second version')
