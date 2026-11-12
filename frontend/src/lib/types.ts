@@ -26,7 +26,6 @@ export type { Trash } from './generated/Trash'
 export type { TrashEntry } from './generated/TrashEntry'
 export type { UserInfo } from './generated/UserInfo'
 
-export type DeviceKind = 'device' | 'local' | 'master'
 
 export type Role = 'admin' | 'normal' | 'readonly'
 

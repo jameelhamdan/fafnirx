@@ -44,7 +44,7 @@ export function SelectionBar({ selected, onClear }: { selected: Asset[]; onClear
               {allArchived ? <ArchiveRestore className="size-4" /> : <Archive className="size-4" />}{allArchived ? t('Unarchive') : t('Archive')}
             </DropdownMenuItem>
           )}
-          <DropdownMenuItem onSelect={() => downloadZip(selected.map((a) => ({ device: a.device, path: a.path })), selected.length === 1 ? selected[0].name : 'photos')}>
+          <DropdownMenuItem onSelect={() => downloadZip(selected.map((a) => ({ folder: a.folder, path: a.path })), selected.length === 1 ? selected[0].name : 'photos')}>
             <Download className="size-4" />{t('Download')}
           </DropdownMenuItem>
           {mine && <DropdownMenuSeparator />}
@@ -59,8 +59,8 @@ export function SelectionBar({ selected, onClear }: { selected: Asset[]; onClear
         description={t('They move to the trash and stay recoverable until the retention period ends. The originals on your devices are not touched.')}
         action={t('Delete')}
         destructive
-        onCancel={() => setDialog(null)}
-        onConfirm={() => remove.mutate(selected.map((a) => ({ device: a.device, path: a.path })), { onSuccess: finish })}
+        onClose={() => setDialog(null)}
+        onConfirm={() => remove.mutate(selected.map((a) => ({ folder: a.folder, path: a.path })), { onSuccess: finish })}
       />
     </div>
   )

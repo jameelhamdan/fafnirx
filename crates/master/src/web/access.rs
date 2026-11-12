@@ -13,8 +13,10 @@
 //! (never for a read-only account). The folders a user can use, and whether they may change each, are decided in one place, the
 //! query `folders_for_user`; this only looks the folder up in what it gave.
 
-use super::ApiError;
+use super::{ApiError, App};
 use crate::repo::Viewer;
+use axum::extract::FromRequestParts;
+use axum::http::request::Parts;
 use axum::http::StatusCode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +42,25 @@ impl Role {
             Self::Normal => "normal",
             Self::Readonly => "readonly",
         }
+    }
+}
+
+/// What nearly every handler of the web API starts from: the app and the person asking, as the guard resolved them.
+pub struct Ctx {
+    pub state: App,
+    pub who: Access,
+}
+
+impl FromRequestParts<App> for Ctx {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &App) -> Result<Self, ApiError> {
+        let who = parts
+            .extensions
+            .get::<Access>()
+            .cloned()
+            .ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "login required".into()))?;
+        Ok(Ctx { state: state.clone(), who })
     }
 }
 

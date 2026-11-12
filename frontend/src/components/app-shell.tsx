@@ -145,7 +145,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           >
             <Search className="size-4 shrink-0" />
             <span className="flex-1 truncate">{t('Go to a page, device or folder…')}</span>
-            <kbd className="hidden rounded-md border bg-background px-1.5 py-0.5 text-[10px] sm:inline">{mac ? '⌘K' : 'Ctrl K'}</kbd>
+            <kbd className="hidden rounded-md border bg-background px-1.5 py-0.5 text-2xs sm:inline">{mac ? '⌘K' : 'Ctrl K'}</kbd>
           </button>
           <div className="hidden flex-1 md:block" />
           {version && (

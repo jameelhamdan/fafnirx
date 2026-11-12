@@ -1,6 +1,6 @@
 --! lock_expired_files
 -- At most `limit` of them at a time, so that a large deletion is removed in short transactions.
-SELECT id, device_id FROM files WHERE deleted_at IS NOT NULL AND deleted_at < :cutoff ORDER BY deleted_at LIMIT :limit FOR UPDATE;
+SELECT id, folder_id FROM files WHERE deleted_at IS NOT NULL AND deleted_at < :cutoff ORDER BY deleted_at LIMIT :limit FOR UPDATE;
 
 --! delete_versions_of_files
 DELETE FROM versions WHERE file_id = ANY(:file_ids) RETURNING id;

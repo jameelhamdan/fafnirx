@@ -1,4 +1,4 @@
-//! Where the config, the state and the files shared with the service are, for a user and for the whole computer.
+//! Where the config, the state and the files shared with the service are, for a user and for the whole device.
 
 use std::path::{Path, PathBuf};
 
@@ -10,7 +10,7 @@ pub fn home() -> PathBuf {
     env_dir("HOME").or_else(|| env_dir("USERPROFILE")).unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// Where a system-wide install keeps its files. Its service runs as an administrative account for every user of the computer, so
+/// Where a system-wide install keeps its files. Its service runs as an administrative account for every user of the device, so
 /// nothing it needs is in a user's profile: `config.toml` and the token (the config folder), the databases (`state`, private to
 /// the service) and the files that the tray and the commands of any user share with it (`control`).
 pub fn system_data_dir() -> PathBuf {
@@ -49,7 +49,7 @@ pub fn control_dir(state_dir: &Path) -> PathBuf {
     }
 }
 
-/// The config of this computer: the system-wide one where it was installed and for root on Linux and macOS, who installs it,
+/// The config of this device: the system-wide one where it was installed and for root on Linux and macOS, who installs it,
 /// else the one of the current user. A Windows client belongs to the user, so that nothing in it needs administrator rights.
 pub fn default_config_path() -> PathBuf {
     if cfg!(unix) && (system_config_path().exists() || crate::service::elevate::is_admin()) {

@@ -4,13 +4,12 @@
 
 use crate::platform::id::Id;
 use crate::repo::files;
-use crate::web::access::Access;
-use crate::web::{ApiError, Shared};
+use crate::web::access::{Access, Ctx};
+use crate::web::{ApiError, App};
 use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
-use axum::Extension;
 
 /// The parts of a module's address: short names, so that the address cannot lead anywhere else.
 fn safe_rest(rest: &str) -> bool {
@@ -27,7 +26,7 @@ fn locate(c: &mut postgres::Client, who: &Access, id: uuid::Uuid) -> anyhow::Res
     Ok((crate::platform::store::tree_path(&folder, &path), hex::encode(root)))
 }
 
-pub async fn proxy(State(state): State<Shared>, Extension(who): Extension<Access>, Path((module, Id(id), rest)): Path<(String, Id, String)>) -> Result<Response, ApiError> {
+pub async fn proxy(Ctx { state, who }: Ctx, Path((module, Id(id), rest)): Path<(String, Id, String)>) -> Result<Response, ApiError> {
     let module = state.modules.up(&module).ok_or_else(|| ApiError::not_found("No such module"))?;
     if !safe_rest(&rest) {
         return Err(ApiError::not_found("No such resource"));
@@ -47,7 +46,7 @@ pub async fn proxy(State(state): State<Shared>, Extension(who): Extension<Access
 
 /// What the web app asks for of a module's own screens: `GET /api/m/<module>/ui/<file>` becomes `GET /ui/<file>`. The same
 /// for every user, so only the login is checked.
-pub async fn ui(State(state): State<Shared>, Path((module, file)): Path<(String, String)>) -> Result<Response, ApiError> {
+pub async fn ui(State(state): State<App>, Path((module, file)): Path<(String, String)>) -> Result<Response, ApiError> {
     let module = state.modules.up(&module).ok_or_else(|| ApiError::not_found("No such module"))?;
     if !safe_rest(&file) || file.contains('/') {
         return Err(ApiError::not_found("No such resource"));

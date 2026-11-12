@@ -32,7 +32,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Folders of this computer and where each one goes: this computer's own namespace on the master, a master folder, or a folder of yours
+    /// Folders of this device and where each one goes: this device's own namespace on the master, a master folder, or a folder of yours
     Folder(FolderCmd),
     /// Run in the foreground: watch, upload, stay connected
     Run {
@@ -69,11 +69,11 @@ enum Cmd {
         #[arg(long)]
         check: bool,
     },
-    /// Set this computer up: put the program where it belongs, connect it to the master, collect folders, and run the client as a
-    /// service of the computer (Linux, macOS) or at login (Windows). The device token is asked for (hidden), or read from standard
+    /// Set this device up: put the program where it belongs, connect it to the master, collect folders, and run the client as a
+    /// service of the device (Linux, macOS) or at login (Windows). The device token is asked for (hidden), or read from standard
     /// input or FAFNIRX_TOKEN; it is not an argument because other users of the machine can see arguments.
     Install {
-        /// The master: nas.lan, nas.lan:7443 or a URL. Without it an enrolled computer is only brought up to date
+        /// The master: nas.lan, nas.lan:7443 or a URL. Without it an enrolled device is only brought up to date
         #[arg(long)]
         server: Option<String>,
         /// A folder to collect (repeat for more)
@@ -92,7 +92,7 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Take this computer's client away: the service, the start at login, and the program. What was backed up stays on the master
+    /// Take this device's client away: the service, the start at login, and the program. What was backed up stays on the master
     Uninstall {
         /// Also remove the config, the token and the state of this client
         #[arg(long)]
@@ -114,7 +114,7 @@ impl Cmd {
         match self {
             Cmd::Install { dry_run, .. } | Cmd::Uninstall { dry_run, .. } => !dry_run,
             Cmd::Sync | Cmd::ReleaseDeletes => true,
-            // Listing what this computer has changes and reads nothing secret; every other thing a folder does does.
+            // Listing what this device has changes and reads nothing secret; every other thing a folder does does.
             Cmd::Folder(FolderCmd { action: FolderAction::List { available: false } }) => false,
             Cmd::Folder(_) => true,
             _ => false,
@@ -134,11 +134,11 @@ enum FolderAction {
     Add {
         #[arg(required = true)]
         paths: Vec<PathBuf>,
-        /// computer (this computer's own namespace, upload only), master:<folder> (a subfolder of the master files that an
+        /// device (this device's own namespace, upload only; `computer` also works), master:<folder> (a subfolder of the master files that an
         /// administrator made), or <owner>/<folder> / the name of a folder of yours
-        #[arg(long, default_value = "computer")]
+        #[arg(long, default_value = "device")]
         target: String,
-        /// Name in this computer's namespace (only with the target computer; default: the folder name)
+        /// Name in this device's namespace (only with the target device; default: the folder name)
         #[arg(long)]
         name: Option<String>,
         /// both (default; the server's version wins a clash), up (send only), keep or ask: see `folder mode`
@@ -148,15 +148,15 @@ enum FolderAction {
         #[arg(long)]
         create: bool,
     },
-    /// List the folders of this computer and where each one goes; with --available, the folders on the master that can be added
+    /// List the folders of this device and where each one goes; with --available, the folders on the master that can be added
     List {
         #[arg(long)]
         available: bool,
     },
-    /// Make a folder of yours on the master that your computers and other users can sync (add it with `folder add`)
+    /// Make a folder of yours on the master that your devices and other users can sync (add it with `folder add`)
     Create { name: String },
     /// Show or set how a synced folder syncs: both (both ways; the master's version wins a file changed on both sides and this
-    /// computer's is put aside), up (send only; nothing comes back), keep (both ways; both versions are kept) or ask (both ways; a
+    /// device's is put aside), up (send only; nothing comes back), keep (both ways; both versions are kept) or ask (both ways; a
     /// question on screen)
     Mode {
         name: String,
@@ -175,7 +175,7 @@ enum FolderAction {
     },
     /// Keep the files whose deletion on the master is held back (instead of `release-deletes`, which deletes them here)
     Keep { name: String },
-    /// Stop syncing a folder on this computer (nothing is deleted): a collected one or a synced one
+    /// Stop syncing a folder on this device (nothing is deleted): a collected one or a synced one
     Remove { name: String },
 }
 
@@ -216,8 +216,8 @@ fn main() -> Result<()> {
 
 fn run(cli: Cli) -> Result<()> {
     let config_path = cli.config.clone().unwrap_or_else(default_config_path);
-    // The system-wide install belongs to the computer: what changes it, or reads its token, is done by an administrator.
-    // An install that only writes the config it was given (the program stays, no service) touches nothing of the computer's.
+    // The system-wide install belongs to the device: what changes it, or reads its token, is done by an administrator.
+    // An install that only writes the config it was given (the program stays, no service) touches nothing of the device's.
     let own_config_only = matches!(cli.cmd, Cmd::Install { in_place: true, no_start: true, .. });
     let system = config::is_system_config(&config_path) || (!cfg!(windows) && !own_config_only && matches!(cli.cmd, Cmd::Install { .. } | Cmd::Uninstall { .. }));
     if cli.cmd.needs_admin() && system && !service::elevate::is_admin() {

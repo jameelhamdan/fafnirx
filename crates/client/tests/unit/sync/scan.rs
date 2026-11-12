@@ -2,7 +2,7 @@ use super::*;
 use std::fs;
 
 fn folder(dir: &Path) -> Folder {
-    Folder::computer(dir.to_path_buf(), "docs".into())
+    Folder::device(dir.to_path_buf(), "docs".into())
 }
 
 #[test]
@@ -45,15 +45,15 @@ fn a_synced_folder_skips_the_names_windows_cannot_keep_and_a_backup_does_not() {
         fs::write(d.path().join(name), "x").unwrap();
     }
     let names = |name: &str| -> Vec<String> {
-        let scan = scan_folder(&Folder::computer(d.path().to_path_buf(), name.into()), None).unwrap();
+        let scan = scan_folder(&Folder::device(d.path().to_path_buf(), name.into()), None).unwrap();
         scan.entries.iter().map(|e| e.remote.clone()).collect()
     };
     assert_eq!(
         names("docs"),
         ["docs/CON.txt", "docs/a:b.txt", "docs/fine.txt"],
-        "a backup keeps everything the computer has"
+        "a backup keeps everything the device has"
     );
-    assert_eq!(names(""), ["fine.txt"], "a synced folder only what every kind of computer can hold");
+    assert_eq!(names(""), ["fine.txt"], "a synced folder only what every kind of device can hold");
 }
 
 #[test]

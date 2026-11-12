@@ -1,9 +1,9 @@
 //! Offsite mirrors, driven by rclone.
 //!
 //! A mirror holds three plain directories that need nothing from fafnirx to read or restore:
-//!   files/<device>/<path>                   the current file tree (the same layout as the master's own)
+//!   files/<key>/<path>                      the current file tree (the same layout as the master's own)
 //!   versions/<UTC timestamp>/...            what a run replaced or removed (the last N runs are kept)
-//!   meta/*.json                             statistics and a file list per namespace
+//!   meta/*.json                             statistics and a file list per folder
 //!   meta/library.json                       albums, tags, favorites and corrected dates and places
 //!
 //! A mirror holds the whole tree or, with a folder, that folder at the same place below `files/`.
@@ -55,15 +55,15 @@ impl MirrorRow {
         self.link.mirror_kind()
     }
 
-    /// The folder it holds; empty for everything.
-    fn folder(&self) -> &str {
-        self.link.folder.as_deref().unwrap_or_default()
+    /// The key of the folder or device it holds; empty for everything.
+    fn scope(&self) -> &str {
+        &self.link.scope
     }
 }
 
 struct LiveFile {
-    device_id: i64,
-    /// The device's folder (`<user>/<device>`, or `master:<name>`): where its files are on the master and on the mirror.
+    folder_id: i64,
+    /// The folder's folder (`<user>/<folder>`, or `master:<name>`): where its files are on the master and on the mirror.
     ns: String,
     path: String,
     root: [u8; HASH_LEN],
@@ -79,7 +79,7 @@ impl LiveFile {
 }
 
 /// Path relative to the `files/` directory, which is the same on the master and on the mirror: the files of a master folder
-/// are at its root, the files of a device below `users/<user>/<device>`.
+/// are at its root, the files of a folder below `users/<user>/<folder>`.
 fn relative(folder: &str, path: &str) -> String {
     crate::platform::store::tree_path(folder, path)
 }
@@ -109,11 +109,11 @@ fn stage_file(store: &Store, dest: &Path, f: &LiveFile) -> Result<()> {
     Ok(())
 }
 
-fn load_live(conn: &mut Client, folder_id: Option<i64>) -> Result<Vec<LiveFile>> {
-    Ok(mirrors::live_files(conn, folder_id)?
+fn load_live(conn: &mut Client, folder_id: Option<i64>, device_id: Option<i64>) -> Result<Vec<LiveFile>> {
+    Ok(mirrors::live_files(conn, folder_id, device_id)?
         .into_iter()
         .map(|f| LiveFile {
-            device_id: f.device_id,
+            folder_id: f.folder_id,
             ns: f.folder,
             path: f.path,
             root: f.root_hash.try_into().unwrap_or([0; HASH_LEN]),
@@ -123,13 +123,13 @@ fn load_live(conn: &mut Client, folder_id: Option<i64>) -> Result<Vec<LiveFile>>
         .collect())
 }
 
-/// device id -> path -> root hash of what is on the mirror.
+/// folder id -> path -> root hash of what is on the mirror.
 type Mirrored = HashMap<i64, HashMap<String, Vec<u8>>>;
 
 fn load_mirrored(conn: &mut Client, mirror_id: i64) -> Result<Mirrored> {
     let mut mirrored = Mirrored::new();
-    for (device_id, path, root) in mirrors::items(conn, mirror_id)? {
-        mirrored.entry(device_id).or_default().insert(path, root);
+    for (folder_id, path, root) in mirrors::items(conn, mirror_id)? {
+        mirrored.entry(folder_id).or_default().insert(path, root);
     }
     Ok(mirrored)
 }
@@ -145,24 +145,24 @@ struct Rename<'a> {
 struct Diff<'a> {
     /// Live files whose content is not on the mirror yet.
     changed: Vec<&'a LiveFile>,
-    /// (device id, path) of files on the mirror that are no longer live.
+    /// (folder id, path) of files on the mirror that are no longer live.
     removed: Vec<(i64, String)>,
     /// Files in `changed` and `removed` that are one file with a new path.
     renamed: Vec<Rename<'a>>,
 }
 
 fn diff<'a>(live: &'a [LiveFile], mirrored: &Mirrored) -> Diff<'a> {
-    let on_mirror = |f: &LiveFile| mirrored.get(&f.device_id).and_then(|files| files.get(&f.path));
-    let live_keys: HashSet<(i64, &str)> = live.iter().map(|f| (f.device_id, f.path.as_str())).collect();
+    let on_mirror = |f: &LiveFile| mirrored.get(&f.folder_id).and_then(|files| files.get(&f.path));
+    let live_keys: HashSet<(i64, &str)> = live.iter().map(|f| (f.folder_id, f.path.as_str())).collect();
     let mut removed: Vec<(i64, String, &Vec<u8>)> = mirrored
         .iter()
-        .flat_map(|(device, files)| files.iter().map(move |(path, root)| (*device, path, root)))
-        .filter(|(device, path, _)| !live_keys.contains(&(*device, path.as_str())))
-        .map(|(device, path, root)| (device, path.clone(), root))
+        .flat_map(|(folder, files)| files.iter().map(move |(path, root)| (*folder, path, root)))
+        .filter(|(folder, path, _)| !live_keys.contains(&(*folder, path.as_str())))
+        .map(|(folder, path, root)| (folder, path.clone(), root))
         .collect();
     removed.sort();
     // A path that is new and has the content of a vanished one is a rename or move; equal content is interchangeable.
-    let mut vanished = fafnirx_common::Vanished::new(removed.into_iter().map(|(device, path, root)| (root.clone(), (device, path))));
+    let mut vanished = fafnirx_common::Vanished::new(removed.into_iter().map(|(folder, path, root)| (root.clone(), (folder, path))));
     let (mut changed, mut renamed) = (Vec::new(), Vec::new());
     for f in live {
         match on_mirror(f) {
@@ -217,7 +217,7 @@ fn metadata(m: &MirrorRow, live: &[LiveFile], stamp: &str, run: &MirrorRun) -> B
         "stats.json".into(),
         serde_json::json!({
             "mirror": m.link.name,
-            "folder": m.folder(),
+            "scope": m.scope(),
             "run": stamp,
             "generated_at_unix": unix_now(),
             "files": live.len(),
@@ -272,8 +272,8 @@ impl Job {
         // Fail early, before touching any data, if the remote is unusable.
         self.rc.run(&["mkdir", &self.remotes.root], &[]).await.context("cannot reach the mirror")?;
 
-        let (mirror_id, folder_id) = (self.m.link.id, self.m.link.folder_id);
-        let (live, mirrored) = db::with(&self.db, move |c| Ok((load_live(c, folder_id)?, load_mirrored(c, mirror_id)?))).await?;
+        let (mirror_id, folder_id, device_id) = (self.m.link.id, self.m.link.folder_id, self.m.link.device_id);
+        let (live, mirrored) = db::with(&self.db, move |c| Ok((load_live(c, folder_id, device_id)?, load_mirrored(c, mirror_id)?))).await?;
         let Diff { mut changed, mut removed, renamed } = diff(&live, &mirrored);
         let mut out = MirrorRun { total_files: live.len(), ..Default::default() };
 
@@ -324,12 +324,12 @@ impl Job {
                     .run(&args, &[])
                     .await
                     .with_context(|| format!("upload batch {} of {}", n + 1, batches.len()))?;
-                let rows: Vec<(i64, String, Vec<u8>)> = good.iter().map(|f| (f.device_id, f.path.clone(), f.root.to_vec())).collect();
+                let rows: Vec<(i64, String, Vec<u8>)> = good.iter().map(|f| (f.folder_id, f.path.clone(), f.root.to_vec())).collect();
                 let mirror_id = self.m.link.id;
                 db::with(&self.db, move |c| {
                     let mut tx = c.transaction()?;
-                    for (device_id, path, root) in rows {
-                        mirrors::remember_item(&mut tx, mirror_id, device_id, &path, &root)?;
+                    for (folder_id, path, root) in rows {
+                        mirrors::remember_item(&mut tx, mirror_id, folder_id, &path, &root)?;
                     }
                     Ok(tx.commit()?)
                 })
@@ -347,7 +347,7 @@ impl Job {
         if renamed.is_empty() {
             return Ok(renamed);
         }
-        let namespaces: HashMap<i64, String> = db::with(&self.db, |c| Ok(mirrors::device_folders(c)?.into_iter().collect())).await?;
+        let namespaces: HashMap<i64, String> = db::with(&self.db, |c| Ok(mirrors::folder_keys(c)?.into_iter().collect())).await?;
         let mut failed = Vec::new();
         for chunk in renamed.chunks(RENAME_PARALLEL) {
             let moves = chunk.iter().map(|r| async {
@@ -360,7 +360,7 @@ impl Job {
             let mut rows = Vec::new();
             for (r, ok) in chunk.iter().zip(&done) {
                 if *ok {
-                    rows.push((r.from.clone(), r.to.device_id, r.to.path.clone(), r.to.root.to_vec()));
+                    rows.push((r.from.clone(), r.to.folder_id, r.to.path.clone(), r.to.root.to_vec()));
                 } else {
                     failed.push(r.clone());
                 }
@@ -368,8 +368,8 @@ impl Job {
             let (mirror_id, moved) = (self.m.link.id, rows.len());
             db::with(&self.db, move |c| {
                 let mut tx = c.transaction()?;
-                for ((device_id, path), to_device, to_path, root) in rows {
-                    mirrors::forget_item(&mut tx, mirror_id, device_id, &path)?;
+                for ((folder_id, path), to_device, to_path, root) in rows {
+                    mirrors::forget_item(&mut tx, mirror_id, folder_id, &path)?;
                     mirrors::remember_item(&mut tx, mirror_id, to_device, &to_path, &root)?;
                 }
                 Ok(tx.commit()?)
@@ -385,7 +385,7 @@ impl Job {
         if removed.is_empty() {
             return Ok(());
         }
-        let namespaces: HashMap<i64, String> = db::with(&self.db, |c| Ok(mirrors::device_folders(c)?.into_iter().collect())).await?;
+        let namespaces: HashMap<i64, String> = db::with(&self.db, |c| Ok(mirrors::folder_keys(c)?.into_iter().collect())).await?;
         let list: Vec<String> = removed.iter().filter_map(|(d, p)| namespaces.get(d).map(|ns| relative(ns, p))).collect();
         let list_file = self.stage_root.join("removed.txt");
         std::fs::write(&list_file, list.join("\n"))?;
@@ -405,8 +405,8 @@ impl Job {
         let (mirror_id, gone) = (self.m.link.id, removed.to_vec());
         db::with(&self.db, move |c| {
             let mut tx = c.transaction()?;
-            for (device_id, path) in gone {
-                mirrors::forget_item(&mut tx, mirror_id, device_id, &path)?;
+            for (folder_id, path) in gone {
+                mirrors::forget_item(&mut tx, mirror_id, folder_id, &path)?;
             }
             Ok(tx.commit()?)
         })
@@ -423,8 +423,8 @@ impl Job {
             std::fs::write(dir.join(name), serde_json::to_vec_pretty(&value)?)?;
         }
         // Albums, tags, favorites and corrected dates live in the database only: keep a readable copy. It names files all
-        // over the tree, so a mirror of one folder leaves it out.
-        if self.m.link.folder_id.is_none() {
+        // over the tree, so a mirror of one folder or device leaves it out.
+        if self.m.link.scope.is_empty() {
             let library = db::with(&self.db, crate::library::photos::snapshot).await?;
             std::fs::write(dir.join("library.json"), serde_json::to_vec_pretty(&library)?)?;
         }

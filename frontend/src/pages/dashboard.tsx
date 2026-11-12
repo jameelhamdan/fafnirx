@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, X } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
@@ -13,7 +13,6 @@ import { useNow } from '@/hooks/use-now'
 import { api } from '@/lib/api'
 import { ago, bytes, count, duration } from '@/lib/format'
 import { locale, msg, useT } from '@/lib/i18n'
-import { filesLink } from '@/lib/links'
 import { useApiMutation } from '@/lib/mutation'
 import { deviceAddress } from '@/lib/session'
 import { STATUS } from '@/lib/status'
@@ -26,12 +25,11 @@ const ALERT: Record<string, string> = {
   disk_usage: msg('Disk usage'),
   source_failed: msg('Source failed'),
   mirror_failed: msg('Mirror failed'),
-  device_conflict: msg('Device used by two computers'),
+  device_conflict: msg('Device used by two clients'),
   deletions_held: msg('Deletions held back'),
   misplaced_files: msg('Files outside a device folder'),
 }
 
-const KIND = { device: msg('Device'), local: msg('Local folder'), master: msg('Master folder') }
 
 /** A titled block of the page: a hairline-framed panel with a header strip, not a card. */
 function Panel({ title, aside, children, className }: { title: string; aside?: ReactNode; children: ReactNode; className?: string }) {
@@ -39,7 +37,7 @@ function Panel({ title, aside, children, className }: { title: string; aside?: R
     <section className={cn('min-w-0 overflow-hidden rounded-xl border bg-card', className)}>
       <header className="flex h-10 items-center justify-between gap-2 border-b px-4">
         <h2 className="text-sm font-semibold">{title}</h2>
-        {aside && <div className="num text-[11px] text-muted-foreground">{aside}</div>}
+        {aside && <div className="num text-2xs text-muted-foreground">{aside}</div>}
       </header>
       {children}
     </section>
@@ -52,38 +50,37 @@ function Figure({ label, value, note, tone }: { label: string; value: string; no
     <div className="min-w-0 px-4 py-3">
       <p className="text-xs font-medium text-muted-foreground">{label}</p>
       <p className={cn('num text-2xl leading-tight font-semibold', tone === 'warning' && 'text-warning', tone === 'critical' && 'text-destructive')}>{value}</p>
-      {note && <p className="num truncate text-[11px] text-muted-foreground">{note}</p>}
+      {note && <p className="num truncate text-2xs text-muted-foreground">{note}</p>}
     </div>
   )
 }
 
-/** The master disk as one bar: each device's stored bytes in turn, then the rest of what is used, then free; a tick marks 80 %. */
+/** The master disk as one bar: each folder's stored bytes in turn, then the rest of what is used, then free; a tick marks 80 %. */
 function DiskBar({ data }: { data: DashboardData }) {
   const t = useT()
   const disk = data.disk
   if (!disk) return null
-  const devices = [...data.devices].filter((d) => d.bytes > 0).sort((a, b) => b.bytes - a.bytes)
-  const shown = devices.slice(0, 6)
+  const shown = data.folders.slice(0, 6)
   const known = shown.reduce((n, d) => n + d.bytes, 0)
   const other = Math.max(0, disk.used - known)
   const pct = (n: number) => `${(100 * n) / disk.total}%`
   const hot = disk.percent >= 90 ? 'critical' : disk.percent >= 80 ? 'warning' : 'ok'
-  // Steps of one grey, so no device looks more important than another; the bar's colour only changes when the disk is filling up.
+  // Steps of one colour, so no folder looks more important than another; the bar's colour only changes when the disk is filling up.
   const tone = hot === 'critical' ? 'var(--destructive)' : hot === 'warning' ? 'var(--warning)' : 'var(--primary)'
   return (
     <div className="px-4 pt-1 pb-4">
       <div className="relative h-3 overflow-hidden rounded-full bg-muted" role="img" aria-label={t('{free} free of {total}', { free: bytes(disk.free), total: bytes(disk.total) })}>
         <div className="flex h-full">
           {shown.map((d, i) => (
-            <div key={d.folder} className="h-full border-e border-card" style={{ width: pct(d.bytes), background: tone, opacity: 0.9 - i * 0.12 }} title={`${d.folder}: ${bytes(d.bytes)}`} />
+            <div key={d.key} className="h-full border-e border-card" style={{ width: pct(d.bytes), background: tone, opacity: 0.9 - i * 0.12 }} title={`${d.key}: ${bytes(d.bytes)}`} />
           ))}
           {other > 0 && <div className="h-full" style={{ width: pct(other), background: tone, opacity: 0.18 }} title={`${t('Other')}: ${bytes(other)}`} />}
         </div>
         <i className="absolute inset-y-0 w-px bg-warning" style={{ insetInlineStart: '80%' }} aria-hidden />
       </div>
-      <div className="num mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-muted-foreground">
+      <div className="num mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-2xs text-muted-foreground">
         {shown.map((d, i) => (
-          <span key={d.folder} className="flex items-center gap-1.5"><i className="size-2 rounded-[1px]" style={{ background: tone, opacity: 0.9 - i * 0.12 }} />{d.folder} {bytes(d.bytes)}</span>
+          <span key={d.key} className="flex items-center gap-1.5"><i className="size-2 rounded-[1px]" style={{ background: tone, opacity: 0.9 - i * 0.12 }} />{d.key} {bytes(d.bytes)}</span>
         ))}
       </div>
     </div>
@@ -101,7 +98,7 @@ function ActivityChart({ days }: { days: DashboardData['activity'] }) {
   return (
     <div className="px-3 py-3">
       <div className="flex gap-2">
-        <div className="num flex h-36 flex-col justify-between text-end text-[10px] text-muted-foreground" aria-hidden>
+        <div className="num flex h-36 flex-col justify-between text-end text-2xs text-muted-foreground" aria-hidden>
           <span>{count(peak)}</span>
           <span>{count(Math.round(peak / 2))}</span>
           <span>0</span>
@@ -112,7 +109,7 @@ function ActivityChart({ days }: { days: DashboardData['activity'] }) {
             const total = totals[i]
             return (
               <div key={d.day} className="relative flex h-full flex-1 flex-col justify-end" title={`${day(d.day)}: ${t('{added} added, {updated} updated, {renamed} renamed, {deleted} deleted', { added: d.added, updated: d.updated, renamed: d.renamed, deleted: d.deleted })}`}>
-                {total > 0 && i === busiest && <span className="num absolute -top-4 start-1/2 -translate-x-1/2 text-[10px] text-muted-foreground rtl:translate-x-1/2">{count(total)}</span>}
+                {total > 0 && i === busiest && <span className="num absolute -top-4 start-1/2 -translate-x-1/2 text-2xs text-muted-foreground rtl:translate-x-1/2">{count(total)}</span>}
                 {total > 0 && (
                   <div className="flex flex-col-reverse overflow-hidden rounded-t-[1px]" style={{ height: `${(100 * total) / peak}%` }}>
                     <div className="bg-primary" style={{ flex: d.added }} />
@@ -126,7 +123,7 @@ function ActivityChart({ days }: { days: DashboardData['activity'] }) {
           })}
         </div>
       </div>
-      <div className="num mt-1.5 flex items-center justify-between ps-7 text-[10px] text-muted-foreground">
+      <div className="num mt-1.5 flex items-center justify-between ps-7 text-2xs text-muted-foreground">
         <span>{day(days[0].day)}</span>
         <span className="flex gap-3">
           {LEGEND.map(([label, colour]) => <span key={label} className="flex items-center gap-1"><i className={cn('size-2 rounded-[1px]', colour)} />{label}</span>)}
@@ -137,7 +134,7 @@ function ActivityChart({ days }: { days: DashboardData['activity'] }) {
   )
 }
 
-/** Computers, local folders and master folders with what each holds and is doing; filter, columns and density as on every table. */
+/** Devices with what each holds and is doing; filter, columns and density as on every table. */
 function DevicesTable({ data }: { data: DashboardData }) {
   const t = useT()
   const now = useNow()
@@ -156,9 +153,9 @@ function DevicesTable({ data }: { data: DashboardData }) {
   )
   const view = useTableView('dashboard-devices', columns)
   const total = data.devices.reduce((n, d) => n + d.bytes, 0)
-  const rows = data.devices.filter((d) => matches(filter, d.folder, d.kind, d.os, d.hostname))
+  const rows = data.devices.filter((d) => matches(filter, d.key, d.os, d.hostname))
   return (
-    <Panel title={t('Devices')} aside={`${data.online} / ${data.devices.filter((d) => d.kind === 'device').length} ${t('online')}`}>
+    <Panel title={t('Devices')} aside={`${data.online} / ${data.devices.length} ${t('online')}`}>
       <DataTable view={view} className="rounded-none border-0" toolbar={<TableToolbar view={view} filter={filter} onFilter={setFilter} placeholder={t('Filter devices')} shown={rows.length} total={data.devices.length} />}>
         <Table>
           <TableHeader>
@@ -177,15 +174,13 @@ function DevicesTable({ data }: { data: DashboardData }) {
               <TableRow className="hover:bg-transparent"><TableCell colSpan={7} className="py-6 text-center text-muted-foreground">{data.devices.length === 0 ? t('No devices yet. Add one on the Devices page.') : t('No device matches.')}</TableCell></TableRow>
             )}
             {rows.map((d) => {
-              const device = d.kind === 'device'
               const share = total > 0 ? (100 * d.bytes) / total : 0
               return (
-                <TableRow key={d.folder}>
+                <TableRow key={d.key}>
                   <TableCell>
-                    <Link to={device ? `/devices/${deviceAddress(d.folder)}` : filesLink(d.folder)} className="num text-[13px] font-medium hover:underline">{d.folder}</Link>
-                    {!device && <span className="ms-2 text-[11px] text-muted-foreground">{t(KIND[d.kind])}</span>}
+                    <Link to={`/devices/${deviceAddress(d.key)}`} className="num text-compact font-medium hover:underline">{d.key}</Link>
                   </TableCell>
-                  <TableCell>{device ? <StatusDot status={d.revoked ? 'revoked' : d.online ? 'online' : 'offline'} label={d.revoked ? t('Revoked') : d.online ? t('Online') : t('Offline')} /> : <span className="text-muted-foreground">—</span>}</TableCell>
+                  <TableCell><StatusDot status={d.revoked ? 'revoked' : d.online ? 'online' : 'offline'} label={d.revoked ? t('Revoked') : d.online ? t('Online') : t('Offline')} /></TableCell>
                   {view.show('activity') && <TableCell className="hidden w-48 lg:table-cell">{d.activity ? <ActivityView activity={d.activity} compact /> : <span className="text-muted-foreground">—</span>}</TableCell>}
                   {view.show('files') && <TableCell className="num text-end">{count(d.files)}</TableCell>}
                   {view.show('size') && <TableCell className="num text-end">{bytes(d.bytes)}</TableCell>}
@@ -193,11 +188,11 @@ function DevicesTable({ data }: { data: DashboardData }) {
                     <TableCell className="hidden md:table-cell">
                       <div className="flex items-center gap-2">
                         <div className="h-1.5 w-12 overflow-hidden rounded-full bg-muted"><div className="h-full bg-muted-foreground" style={{ width: `${share}%` }} /></div>
-                        <span className="num w-9 text-[11px] text-muted-foreground">{share < 1 && share > 0 ? '<1' : Math.round(share)}%</span>
+                        <span className="num w-9 text-2xs text-muted-foreground">{share < 1 && share > 0 ? '<1' : Math.round(share)}%</span>
                       </div>
                     </TableCell>
                   )}
-                  {view.show('seen') && <TableCell className="num hidden text-end text-muted-foreground sm:table-cell">{device ? ago(d.last_seen, now) : '—'}</TableCell>}
+                  {view.show('seen') && <TableCell className="num hidden text-end text-muted-foreground sm:table-cell">{ago(d.last_seen, now)}</TableCell>}
                 </TableRow>
               )
             })}
@@ -210,12 +205,10 @@ function DevicesTable({ data }: { data: DashboardData }) {
 
 export default function Dashboard() {
   const t = useT()
-  const client = useQueryClient()
   const now = useNow()
   const { data, error } = useQuery({ queryKey: ['dashboard'], queryFn: () => api.get<DashboardData>('/api/dashboard') })
   const dismiss = useApiMutation((id: string) => api.post(`/api/alerts/${id}/dismiss`), {
-    onSuccess: () => client.invalidateQueries({ queryKey: ['dashboard'] }),
-    toastError: true,
+    invalidate: [['dashboard']],
   })
 
   if (error) return <ErrorNote error={error} />
@@ -228,12 +221,11 @@ export default function Dashboard() {
       </div>
     )
   }
-  const clients = data.devices.filter((d) => d.kind === 'device')
   const jobs = [...data.sources.map((s) => ({ ...s, type: 'source' as const })), ...data.mirrors.map((m) => ({ ...m, type: 'mirror' as const }))]
   const failing = jobs.filter((j) => j.enabled && (j.status === 'failed' || j.status === 'partial')).length
   const disk = data.disk
   const diskTone = disk ? (disk.percent >= 90 ? 'critical' : disk.percent >= 80 ? 'warning' : undefined) : undefined
-  const offline = clients.filter((d) => !d.online && !d.revoked).length
+  const offline = data.devices.filter((d) => !d.online && !d.revoked).length
 
   return (
     <div className="space-y-3">
@@ -242,11 +234,11 @@ export default function Dashboard() {
       {data.alerts.length > 0 && (
         <ul className="overflow-hidden rounded-xl border border-warning/50 bg-warning/10" aria-label={t('Alerts')}>
           {data.alerts.map((a) => (
-            <li key={a.id} className="flex items-start gap-2 border-b border-warning/25 px-3 py-1.5 text-[13px] last:border-b-0">
+            <li key={a.id} className="flex items-start gap-2 border-b border-warning/25 px-3 py-1.5 text-compact last:border-b-0">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" />
               <div className="min-w-0 flex-1">
                 <span className="font-medium">{a.key ? `${t(ALERT[a.kind] ?? a.kind.replace('_', ' '))}: ${a.key}` : t(ALERT[a.kind] ?? a.kind.replace('_', ' '))}</span>
-                <span className="num ms-2 text-[11px] text-muted-foreground">{ago(a.updated_at ?? a.created_at, now)}</span>
+                <span className="num ms-2 text-2xs text-muted-foreground">{ago(a.updated_at ?? a.created_at, now)}</span>
                 <p className="break-words whitespace-pre-line text-xs text-muted-foreground">{a.message}</p>
               </div>
               <Button variant="ghost" size="icon-xs" onClick={() => dismiss.mutate(a.id)} aria-label={t('Dismiss alert')}><X /></Button>
@@ -257,7 +249,7 @@ export default function Dashboard() {
 
       <section className="overflow-hidden rounded-xl border bg-card" aria-label={t('Summary')}>
         <div className="grid grid-cols-2 divide-x divide-border rtl:divide-x-reverse sm:grid-cols-4">
-          <Figure label={t('Computers online')} value={`${data.online}/${clients.length}`} note={offline > 0 ? t('{count} offline', { count: offline }) : clients.length === 0 ? t('no computer added') : undefined} tone={offline > 0 ? 'warning' : undefined} />
+          <Figure label={t('Devices online')} value={`${data.online}/${data.devices.length}`} note={offline > 0 ? t('{count} offline', { count: offline }) : data.devices.length === 0 ? t('no device added') : undefined} tone={offline > 0 ? 'warning' : undefined} />
           <Figure label={t('Files')} value={count(data.totals.files)} note={data.totals.marked_deleted ? t('{count} deleted, waiting for retention', { count: count(data.totals.marked_deleted) }) : undefined} />
           <Figure label={t('Stored')} value={bytes(data.totals.bytes)} />
           <Figure label={t('Master disk')} value={disk ? `${disk.percent}%` : '—'} note={disk ? t('{free} free of {total}', { free: bytes(disk.free), total: bytes(disk.total) }) : undefined} tone={diskTone} />
@@ -275,15 +267,15 @@ export default function Dashboard() {
         <div className="min-w-0 space-y-3">
           <Panel title={t('Sources and mirrors')} aside={failing > 0 ? t('{count} need attention', { count: failing }) : jobs.length > 0 ? t('all nominal') : undefined}>
             {jobs.length === 0 ? (
-              <p className="px-3 py-4 text-[13px] text-muted-foreground">{t('None configured.')}</p>
+              <p className="px-3 py-4 text-compact text-muted-foreground">{t('None configured.')}</p>
             ) : (
               <ul className="divide-y">
                 {jobs.map((j) => (
-                  <li key={j.type + j.key} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-3 py-1.5 text-[13px]">
+                  <li key={j.type + j.key} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-3 py-1.5 text-compact">
                     <Link to={j.type === 'source' ? '/sources' : '/mirrors'} className="num truncate hover:underline">{j.key}</Link>
                     <StatusDot status={j.enabled ? j.status : 'paused'} label={j.running ? t('Running') : j.enabled ? t(STATUS[j.status] ?? j.status) : t('Paused')} />
-                    <span className="text-[11px] text-muted-foreground">{j.type === 'source' ? t('Source') : t('Mirror')} · {t('every {time}', { time: duration(j.interval_secs) })}</span>
-                    <span className="num text-end text-[11px] text-muted-foreground">{ago(j.last_run_at, now)}</span>
+                    <span className="text-2xs text-muted-foreground">{j.type === 'source' ? t('Source') : t('Mirror')} · {t('every {time}', { time: duration(j.interval_secs) })}</span>
+                    <span className="num text-end text-2xs text-muted-foreground">{ago(j.last_run_at, now)}</span>
                   </li>
                 ))}
               </ul>

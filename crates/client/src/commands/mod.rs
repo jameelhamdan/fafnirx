@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Stops syncing a folder of this computer, collected or attached to a folder of the master. Nothing is deleted.
+/// Stops syncing a folder of this device, collected or attached to a folder of the master. Nothing is deleted.
 pub fn remove_folder(config_path: &Path, name: &str) -> Result<()> {
     let full = config::remove_folder_from_file(config_path, name)?;
     println!("\"{full}\" is no longer synced here; the files stay in the folder and on the master");
@@ -31,7 +31,7 @@ pub fn list_folders(config_path: &Path) -> Result<()> {
         println!("no folders yet: fafnirx folder add <path>");
     }
     for f in &cfg.folders {
-        if f.is_computer() {
+        if f.is_device() {
             println!("{}\t{}", f.name, f.path.display());
         } else {
             println!("{}\t{}\t(synced {})", f.name, f.path.display(), f.mode.name());
@@ -55,7 +55,7 @@ pub fn read_token() -> Result<String> {
     Ok(token.trim().to_string())
 }
 
-/// Connects this computer to the master: writes the config, keeps the token, and says hello. `fafnirx install` calls it.
+/// Connects this device to the master: writes the config, keeps the token, and says hello. `fafnirx install` calls it.
 pub async fn enroll(config_path: PathBuf, server: String, token: String) -> Result<()> {
     let token = token.trim().to_string();
     if token.is_empty() {
@@ -97,10 +97,10 @@ fn wake_client(config_path: &Path) {
     }
 }
 
-/// Collects the folder at `dir` into this computer's own namespace on the master (upload only) and returns it. The one place that
+/// Collects the folder at `dir` into this device's own namespace on the master (upload only) and returns it. The one place that
 /// does it: the command line and the service, which does it for a user's tray, both call this.
 pub fn collect_folder(config_path: &Path, dir: &Path, name: Option<&str>) -> Result<config::Folder> {
-    config::add_folder_to_file(config_path, NewFolder { dir, target: Target::Computer, name, id: None, mode: Mode::Up })
+    config::add_folder_to_file(config_path, NewFolder { dir, target: Target::Device, name, id: None, mode: Mode::Up })
 }
 
 pub fn add_folders(config_path: &Path, paths: &[PathBuf], name: Option<&str>) -> Result<()> {

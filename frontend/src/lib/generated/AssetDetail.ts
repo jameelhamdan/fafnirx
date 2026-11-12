@@ -36,7 +36,7 @@ described: Described | null,
 /**
  * Work still to do on it: waiting, running or failed. Not set when everything is done.
  */
-work: 'waiting' | 'running' | 'failed' | null, id: Id, device: string, path: string, name: string, 
+work: 'waiting' | 'running' | 'failed' | null, id: Id, folder: string, path: string, name: string, 
 /**
  * image or video
  */

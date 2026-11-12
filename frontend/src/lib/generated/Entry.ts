@@ -3,15 +3,15 @@ import type { Id } from "./Id";
 
 export type Entry = { 
 /**
- * device, dir or file
+ * folder, dir or file
  */
-kind: 'device' | 'dir' | 'file', 
+kind: 'folder' | 'dir' | 'file', 
 /**
  * For a file: its id in the library (the address of its viewer, favorites and albums).
  */
-id: Id | null, name: string, device: string, path: string, size: number | null, 
+id: Id | null, name: string, folder: string, path: string, size: number | null, 
 /**
- * Modification time on the source device, unix seconds.
+ * Modification time on the source folder, unix seconds.
  */
 mtime: number | null, 
 /**
@@ -19,18 +19,18 @@ mtime: number | null,
  */
 changed: number | null, 
 /**
- * Number of files, for folders and devices.
+ * Number of files, for folders and directories.
  */
 files: number | null, versions: number | null, deleted_at: number | null, purge_at: number | null, mime: string | null, preview: boolean, width: number | null, height: number | null, taken_at: number | null, 
 /**
- * For a device entry: master, device or local.
+ * For a folder entry: what the folder is.
  */
-device_kind: 'device' | 'local' | 'master' | null, 
+folder_kind: 'backup' | 'user' | 'master' | null, 
 /**
  * For a photo or video: its details have not been read yet, so it is still being processed.
  */
 processing: boolean, 
 /**
- * For a device entry: whether the web app may add, change or delete files there.
+ * For a folder entry: whether the web app may add, change or delete files there.
  */
 writable: boolean, };

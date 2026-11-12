@@ -54,7 +54,7 @@ impl From<tonic::Status> for SyncError {
         use tonic::Code::*;
         let msg = format!("{:?}: {}", s.code(), s.message());
         match s.code() {
-            // PermissionDenied: another computer is using this device. Stop; the heartbeat says why.
+            // PermissionDenied: another device is using this device. Stop; the heartbeat says why.
             Unavailable | DeadlineExceeded | Cancelled | Unknown | Unauthenticated | PermissionDenied | ResourceExhausted | Internal => SyncError::Offline(msg),
             FailedPrecondition => SyncError::Refused(msg),
             _ => SyncError::File(msg),
@@ -81,10 +81,8 @@ pub struct Report {
     pub deleted: usize,
     pub failed: usize,
     pub bytes: u64,
-    /// Files received from a synced folder, and files of this computer kept under another name because both sides changed.
-    #[serde(default)]
+    /// Files received from a synced folder, and files of this device kept under another name because both sides changed.
     pub downloaded: usize,
-    #[serde(default)]
     pub conflicts: usize,
 }
 
@@ -230,7 +228,7 @@ impl Engine {
         self.set_activity("scanning", "", 0, 0);
         let (entries, scanned, unreadable) = self.scan(cfg).await;
         let (changed, mut vanished) = self.detect_changes(&entries, &scanned, &unreadable)?;
-        let roots = cfg.computer_folders().count();
+        let roots = cfg.device_folders().count();
         let every_folder_read = roots > 0 && scanned.len() == roots;
         if vanished.is_empty() {
             // Nothing can be a rename, so a file goes out as soon as it is hashed. The first sync of a big
@@ -257,7 +255,7 @@ impl Engine {
         let mut entries = Vec::new();
         let mut scanned = HashSet::new();
         let mut unreadable = HashSet::new();
-        for folder in cfg.computer_folders() {
+        for folder in cfg.device_folders() {
             let (f, exclude): (Folder, Option<PathBuf>) = (folder.clone(), self.exclude.clone());
             match tokio::task::spawn_blocking(move || scan_folder(&f, exclude.as_deref())).await {
                 Ok(Ok(scan)) => {

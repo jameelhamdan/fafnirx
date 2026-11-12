@@ -28,7 +28,6 @@ function useSaveSettings(data: SettingsData) {
       void client.invalidateQueries({ queryKey: ['session'] })
       toast.success(t('Settings saved'))
     },
-    toastError: true,
   })
 }
 

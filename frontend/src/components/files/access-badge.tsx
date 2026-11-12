@@ -4,13 +4,13 @@ import { useT } from '@/lib/i18n'
 import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
-/** Whether the web app can change the files of a device: changeable, or read-only (with the reason on hover). */
-export function AccessBadge({ writable, kind }: { writable: boolean; kind: Entry['device_kind'] }) {
+/** Whether the web app can change the files of a folder: changeable, or read-only (with the reason on hover). */
+export function AccessBadge({ writable, kind }: { writable: boolean; kind: Entry['folder_kind'] }) {
   const t = useT()
   const why = writable
     ? t('You can upload, delete and restore files here.')
-    : kind === 'device'
-      ? t('This computer sends its own files: nothing can be uploaded or edited here. You can browse and download them, and hide them by deleting.')
+    : kind === 'backup'
+      ? t('A device sends its own files: nothing can be uploaded or edited here. You can browse and download them, and hide them by deleting.')
       : t('Your account can only read here.')
   return (
     <Tooltip>

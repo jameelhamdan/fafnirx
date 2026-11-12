@@ -8,11 +8,18 @@ use std::time::Duration;
 /// the `postgres` crate drives its own runtime and panics when called from async code.
 pub type Db = r2d2::Pool<PostgresConnectionManager<NoTls>>;
 
-/// A device as the data path knows it: the row id and its folder (`<user>/<device>`, or `master:<name>` for a master folder).
+/// A device as the data path knows it: the row id and its key (`<user>/<name>`).
 #[derive(Clone, Debug)]
-pub struct Device {
+pub struct DeviceRef {
     pub id: i64,
-    pub name: String,
+    pub key: String,
+}
+
+/// A folder as the data path knows it: the row id and its key (`<user>/<name>`, `<user>/<folder>/<directory>` or `master:<name>`).
+#[derive(Clone, Debug)]
+pub struct FolderRef {
+    pub id: i64,
+    pub key: String,
 }
 
 /// `N` random bytes from the operating system.
@@ -22,7 +29,7 @@ pub fn random_bytes<const N: usize>() -> [u8; N] {
     out
 }
 
-/// A new device token: 32 random bytes, URL-safe.
+/// A new folder token: 32 random bytes, URL-safe.
 pub fn new_token() -> String {
     base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, random_bytes::<32>())
 }
@@ -45,13 +52,15 @@ pub enum Topic {
     Library,
     /// A picture that someone asked for is made. Key: the id of the file.
     Thumbs,
-    /// Files of a device. Key: the folder of the device.
+    /// Files of a folder. Key: the key of the folder.
     Files,
-    /// A device or folder was added, changed or removed. Key: its folder (empty: the list).
+    /// A folder was added, changed or removed. Key: its key (empty: the list).
+    Folders,
+    /// A device was added, changed or removed. Key: its key (empty: the list).
     Devices,
-    /// What a computer is doing now. Key: its folder.
+    /// What a device is doing now. Key: its key.
     Activity,
-    /// An alert was opened or closed. Key: the folder of the device it is about, or what it names.
+    /// An alert was opened or closed. Key: the key of the folder or device it is about, or what it names.
     Alerts,
     /// A source or mirror ran. Key: `<user>/<source>`, or `mirrors`.
     Jobs,
@@ -62,7 +71,7 @@ pub enum Topic {
 /// Who is told about a change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reach {
-    /// Everybody: not about one device, or only a hint to look again.
+    /// Everybody: not about one folder, or only a hint to look again.
     Everyone,
     /// Whoever can see the folder that is the key (everybody when there is none).
     Folder,
@@ -72,11 +81,12 @@ pub enum Reach {
 }
 
 impl Topic {
-    pub const ALL: [Topic; 9] = [
+    pub const ALL: [Topic; 10] = [
         Topic::Resync,
         Topic::Library,
         Topic::Thumbs,
         Topic::Files,
+        Topic::Folders,
         Topic::Devices,
         Topic::Activity,
         Topic::Alerts,
@@ -90,6 +100,7 @@ impl Topic {
             Topic::Library => "library",
             Topic::Thumbs => "thumbs",
             Topic::Files => "files",
+            Topic::Folders => "folders",
             Topic::Devices => "devices",
             Topic::Activity => "activity",
             Topic::Alerts => "alerts",
@@ -105,7 +116,7 @@ impl Topic {
     pub fn reach(self) -> Reach {
         match self {
             Topic::Resync | Topic::Library | Topic::Thumbs => Reach::Everyone,
-            Topic::Files | Topic::Devices | Topic::Activity | Topic::Alerts => Reach::Folder,
+            Topic::Files | Topic::Folders | Topic::Devices | Topic::Activity | Topic::Alerts => Reach::Folder,
             Topic::Jobs => Reach::Source,
             Topic::Users => Reach::Admins,
         }
@@ -119,10 +130,10 @@ pub fn notify(conn: &mut impl GenericClient, topic: Topic, key: &str) -> Result<
     Ok(())
 }
 
-/// Takes the lock for one path of a device until the end of the transaction, so that commits, deletes and
+/// Takes the lock for one path of a folder until the end of the transaction, so that commits, deletes and
 /// what the file watcher finds never interleave on that path. Works across processes.
-pub fn lock_path(conn: &mut impl GenericClient, device_id: i64, path: &str) -> Result<(), postgres::Error> {
-    conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", &[&format!("{device_id}/{path}")])?;
+pub fn lock_path(conn: &mut impl GenericClient, folder_id: i64, path: &str) -> Result<(), postgres::Error> {
+    conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", &[&format!("{folder_id}/{path}")])?;
     Ok(())
 }
 

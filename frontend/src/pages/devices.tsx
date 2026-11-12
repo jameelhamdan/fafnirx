@@ -34,6 +34,7 @@ function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail) => voi
   // An administrator can add a device for any user who can have one.
   const users = useQuery({ queryKey: ['users'], queryFn: () => api.get<UserInfo[]>('/api/users'), enabled: isAdmin && open })
   const create = useApiMutation(() => api.post<DeviceDetail>('/api/devices', { name, user: owner || undefined }), {
+    inline: true,
     invalidate: [['devices']],
     onSuccess: (made) => {
       setOpen(false)
@@ -79,18 +80,18 @@ function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail) => voi
   )
 }
 
-/** The root folders of a computer, as it last said, with what each one is: shared, filled by a source, read only. */
+/** The root folders of a device, as it last said, with what each one is: shared, filled by a source, read only. */
 function DeviceFolders({ device, folders, onOpen }: { device: DeviceDetail['device']; folders: Folder[]; onOpen: (folder: string) => void }) {
   const t = useT()
   const now = useNow()
-  const { data, error } = useQuery({ queryKey: ['device', device.folder], queryFn: () => api.get<DeviceDetail>(`/api/devices/${deviceAddress(device.folder)}`) })
+  const { data, error } = useQuery({ queryKey: ['device', device.key], queryFn: () => api.get<DeviceDetail>(`/api/devices/${deviceAddress(device.key)}`) })
   if (error) return <ErrorNote error={error} />
   if (!data) return <Skeleton className="h-10" />
-  if (data.folders.length === 0) return <p className="text-sm text-muted-foreground">{t('No folder is attached to this computer yet.')}</p>
+  if (data.folders.length === 0) return <p className="text-sm text-muted-foreground">{t('No folder is attached to this device yet.')}</p>
   return (
     <ul className="divide-y">
       {data.folders.map((r) => {
-        const folder = folders.find((f) => f.folder === r.name)
+        const folder = folders.find((f) => f.key === r.name)
         const trouble = r.last_error !== '' || r.failing > 0
         return (
           <li key={r.name} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm">
@@ -101,7 +102,7 @@ function DeviceFolders({ device, folders, onOpen }: { device: DeviceDetail['devi
             {folder && !folder.can_write && <Badge variant="outline">{t('Read only')}</Badge>}
             <span className="text-muted-foreground">{t('{files} files, {size}', { files: count(r.files), size: bytes(r.bytes) })}</span>
             {r.last_cycle > 0 && <span className="text-muted-foreground">{t('Synced {when}', { when: ago(r.last_cycle, now) })}</span>}
-            {folder && <Button size="sm" variant="ghost" className="ms-auto" onClick={() => onOpen(folder.folder)}>{t('Details')}</Button>}
+            {folder && <Button size="sm" variant="ghost" className="ms-auto" onClick={() => onOpen(folder.key)}>{t('Details')}</Button>}
             {r.last_error && <p className="basis-full text-xs text-destructive">{r.last_error}</p>}
           </li>
         )
@@ -121,14 +122,14 @@ function Row({ d, now, view, showUser, folders, onOpen }: { d: DeviceSummary; no
             <Button size="icon" variant="ghost" className="size-7" aria-expanded={open} aria-label={open ? t('Hide folders') : t('Show folders')} onClick={() => setOpen(!open)}>
               <ChevronRight className={`size-4 transition-transform ${open ? 'rotate-90' : 'rtl:rotate-180'}`} />
             </Button>
-            <Link to={`/devices/${deviceAddress(d.folder)}`} className="num text-[13px] font-medium hover:underline">{showUser ? d.folder : d.name}</Link>
+            <Link to={`/devices/${deviceAddress(d.key)}`} className="num text-compact font-medium hover:underline">{showUser ? d.key : d.name}</Link>
           </div>
           {d.activity && <div className="mt-2 max-w-sm ps-9"><ActivityView activity={d.activity} /></div>}
         </TableCell>
         <TableCell><StatusDot status={d.revoked ? 'revoked' : d.online ? 'online' : 'offline'} label={d.revoked ? t('Revoked') : d.online ? t('Online') : t('Offline')} /></TableCell>
         {view.show('os') && <TableCell className="hidden md:table-cell text-muted-foreground">{d.os ?? '—'}</TableCell>}
-        {view.show('version') && <TableCell className="num hidden text-[12px] text-muted-foreground lg:table-cell">{d.client_version ?? '—'}</TableCell>}
-        {view.show('ip') && <TableCell className="num hidden text-[12px] text-muted-foreground lg:table-cell">{d.ip ?? '—'}</TableCell>}
+        {view.show('version') && <TableCell className="num hidden text-xs text-muted-foreground lg:table-cell">{d.client_version ?? '—'}</TableCell>}
+        {view.show('ip') && <TableCell className="num hidden text-xs text-muted-foreground lg:table-cell">{d.ip ?? '—'}</TableCell>}
         {view.show('files') && <TableCell className="num text-end">{count(d.files)}</TableCell>}
         {view.show('size') && <TableCell className="num text-end">{bytes(d.bytes)}</TableCell>}
         {view.show('seen') && <TableCell className="num hidden text-end text-muted-foreground sm:table-cell">{ago(d.last_seen, now)}</TableCell>}
@@ -148,7 +149,7 @@ function SectionHeader({ title, description, actions }: { title: string; descrip
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
         <h2 className="text-base font-semibold tracking-tight">{title}</h2>
-        <p className="mt-0.5 max-w-3xl text-[13px] text-muted-foreground">{description}</p>
+        <p className="mt-0.5 max-w-3xl text-compact text-muted-foreground">{description}</p>
       </div>
       <div className="flex flex-wrap items-center gap-2">{actions}</div>
     </div>
@@ -163,8 +164,6 @@ export default function Devices() {
   const admin = useRole() === 'admin'
   const devices = useQuery({ queryKey: ['devices'], queryFn: () => api.get<DeviceSummary[]>('/api/devices') })
   const folders = useQuery({ queryKey: ['folders'], queryFn: () => api.get<Folder[]>('/api/folders') })
-  // The folders that live on the master (local and master files) are listed below; this list is the computers.
-  const computers = devices.data?.filter((d) => d.kind === 'device')
   const all = folders.data ?? []
   const [filter, setFilter] = useState('')
   const [only, setOnly] = useState('')
@@ -182,7 +181,7 @@ export default function Devices() {
     [t],
   )
   const view = useTableView('devices', columns)
-  const shown = (computers ?? []).filter((d) => (only === '' || (only === 'revoked' ? d.revoked : only === 'online' ? d.online && !d.revoked : !d.online && !d.revoked)) && matches(filter, d.folder, d.os, d.hostname, d.ip))
+  const shown = (devices.data ?? []).filter((d) => (only === '' || (only === 'revoked' ? d.revoked : only === 'online' ? d.online && !d.revoked : !d.online && !d.revoked)) && matches(filter, d.key, d.os, d.hostname, d.ip))
 
   return (
     <div className="space-y-6">
@@ -190,18 +189,18 @@ export default function Devices() {
       <section className="space-y-3">
         <SectionHeader
           title={t('Devices')}
-          description={t('Computers and phones that send their folders here. Open one to see its folders.')}
+          description={t('Devices that send their folders here. Open one to see its folders.')}
           actions={<AddDeviceDialog onCreated={setMade} />}
         />
-        {devices.error ? <ErrorNote error={devices.error} /> : !computers ? (
+        {devices.error ? <ErrorNote error={devices.error} /> : !devices.data ? (
           <Skeleton className="h-48" />
-        ) : computers.length === 0 ? (
+        ) : devices.data.length === 0 ? (
           <Empty title={t('No devices yet')}>{t('Add a device to get a token and the command that connects it.')}</Empty>
         ) : (
           <DataTable
             view={view}
             toolbar={
-              <TableToolbar view={view} filter={filter} onFilter={setFilter} placeholder={t('Filter by name, system or address')} shown={shown.length} total={computers.length}>
+              <TableToolbar view={view} filter={filter} onFilter={setFilter} placeholder={t('Filter by name, system or address')} shown={shown.length} total={devices.data.length}>
                 <Picker
                   size="sm"
                   label={t('Status')}
@@ -227,7 +226,7 @@ export default function Devices() {
               </TableHeader>
               <TableBody>
                 {shown.length === 0 && <TableRow className="hover:bg-transparent"><TableCell colSpan={9} className="py-6 text-center text-muted-foreground">{t('No device matches.')}</TableCell></TableRow>}
-                {shown.map((d) => <Row key={d.folder} d={d} now={now} view={view} showUser={admin} folders={all} onOpen={setOpened} />)}
+                {shown.map((d) => <Row key={d.key} d={d} now={now} view={view} showUser={admin} folders={all} onOpen={setOpened} />)}
               </TableBody>
             </Table>
           </DataTable>
@@ -236,19 +235,19 @@ export default function Devices() {
       <section className="space-y-3">
         <SectionHeader
           title={t('Folders')}
-          description={t('Folders that belong to you, or to the master files, not to one computer. Attach one to a folder of each computer and it stays the same on all of them. Other users can use one of yours only when you add them here.')}
+          description={t('Folders that belong to you, or to the master files, not to one device. Attach one to a folder of each device and it stays the same on all of them. Other users can use one of yours only when you add them here.')}
           actions={<>{admin && <AddMasterFolder />}<AddFolder onMade={setOpened} /></>}
         />
         {folders.error ? <ErrorNote error={folders.error} /> : !folders.data ? (
           <Skeleton className="h-32" />
         ) : all.length === 0 ? (
-          <Empty title={t('No folders')}>{t('Make one, then attach a folder of each computer to it.')}</Empty>
+          <Empty title={t('No folders')}>{t('Make one, then attach a folder of each device to it.')}</Empty>
         ) : (
           <FoldersSection folders={all} onOpen={setOpened} />
         )}
       </section>
-      <FolderPanel folder={all.find((f) => f.folder === opened)} onClose={() => setOpened(null)} />
-      <EnrollDialog name={made?.device.folder ?? ''} token={made?.token ?? null} onClose={() => setMade(null)} />
+      <FolderPanel folder={all.find((f) => f.key === opened)} onClose={() => setOpened(null)} />
+      <EnrollDialog name={made?.device.key ?? ''} token={made?.token ?? null} onClose={() => setMade(null)} />
     </div>
   )
 }

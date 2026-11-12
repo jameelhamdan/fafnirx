@@ -3,56 +3,56 @@
 -- Every query that lists files takes the same three numbers for who is looking:
 --   :uid         the viewing user (their favorites, ratings and tags are the ones shown)
 --   :all         true when everything is visible (administrators)
---   :scope_user  the user whose devices are visible besides the master files (-1: nobody's)
--- A file is visible when `(:all OR d.kind = 'master' OR d.user_id = :scope_user)`.
+--   :scope_user  the user whose folders are visible besides the master files (-1: nobody's)
+-- A file is visible when `(:all OR fo.kind = 'master' OR fo.user_id = :scope_user)`.
 --
 -- When a file was taken: as the user corrected it, else as the camera said, else when the file last changed
 -- (unix seconds; photos have no time zone, so everything is read as UTC):
 --   COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000)
 
---! timeline_days (device?, kind?, tag?, month?)
+--! timeline_days (folder?, kind?, tag?, month?)
 -- How many files each day holds, newest day first: the skeleton of the timeline. Filters: `scope` is timeline
 -- (not archived), favorites or archive; the others narrow it down when given. `month` is YYYY-MM.
 SELECT to_char(to_timestamp(COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000)) AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
        COUNT(*) AS n
 FROM files f
-JOIN devices d ON d.id = f.device_id
+JOIN folders fo ON fo.id = f.folder_id
 JOIN versions v ON v.id = f.current_version_id
 LEFT JOIN file_meta m ON m.root_hash = v.root_hash
 LEFT JOIN file_state s ON s.file_id = f.id AND s.user_id = :uid
 WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
-  AND visible(d, :scope_user::bigint, :all::boolean)
+  AND visible(fo, :scope_user::bigint, :all::boolean)
   AND CASE :scope::text
         WHEN 'timeline' THEN NOT COALESCE(s.archived, false)
         WHEN 'favorites' THEN COALESCE(s.favorite, false)
         WHEN 'archive' THEN COALESCE(s.archived, false)
       END
-  AND (:device::text IS NULL OR d.folder = :device)
+  AND (:folder::text IS NULL OR fo.key = :folder OR starts_with(fo.key, :folder || '/'))
   AND (:kind::text IS NULL OR f.media = :kind)
   AND (:tag::uuid IS NULL OR EXISTS (SELECT 1 FROM file_tags t WHERE t.file_id = f.id AND t.tag_id = :tag))
   AND (:month::text IS NULL
        OR to_char(to_timestamp(COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000)) AT TIME ZONE 'UTC', 'YYYY-MM') = :month)
 GROUP BY 1 ORDER BY 1 DESC;
 
---! timeline_assets (device?, kind?, tag?, month?) : Asset(width?, height?, duration_ms?, rating?, lat?, lon?)
+--! timeline_assets (folder?, kind?, tag?, month?) : Asset(width?, height?, duration_ms?, rating?, lat?, lon?)
 -- The files of the timeline with the same filters, newest first.
-SELECT f.id, d.folder, f.path, v.size, v.root_hash, m.width, m.height, m.duration_ms,
+SELECT f.id, fo.key AS folder, f.path, v.size, v.root_hash, m.width, m.height, m.duration_ms,
        COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000) AS shown_at,
        COALESCE(s.favorite, false) AS favorite, COALESCE(s.archived, false) AS archived, s.rating,
        COALESCE(s.lat, m.lat) AS lat, COALESCE(s.lon, m.lon) AS lon, (m.root_hash IS NULL) AS processing
 FROM files f
-JOIN devices d ON d.id = f.device_id
+JOIN folders fo ON fo.id = f.folder_id
 JOIN versions v ON v.id = f.current_version_id
 LEFT JOIN file_meta m ON m.root_hash = v.root_hash
 LEFT JOIN file_state s ON s.file_id = f.id AND s.user_id = :uid
 WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
-  AND visible(d, :scope_user::bigint, :all::boolean)
+  AND visible(fo, :scope_user::bigint, :all::boolean)
   AND CASE :scope::text
         WHEN 'timeline' THEN NOT COALESCE(s.archived, false)
         WHEN 'favorites' THEN COALESCE(s.favorite, false)
         WHEN 'archive' THEN COALESCE(s.archived, false)
       END
-  AND (:device::text IS NULL OR d.folder = :device)
+  AND (:folder::text IS NULL OR fo.key = :folder OR starts_with(fo.key, :folder || '/'))
   AND (:kind::text IS NULL OR f.media = :kind)
   AND (:tag::uuid IS NULL OR EXISTS (SELECT 1 FROM file_tags t WHERE t.file_id = f.id AND t.tag_id = :tag))
   AND (:month::text IS NULL
@@ -61,33 +61,33 @@ ORDER BY shown_at DESC, f.id DESC LIMIT :limit;
 
 --! assets_by_ids : Asset(width?, height?, duration_ms?, rating?, lat?, lon?)
 -- Some files by id, whatever they are, as long as they are not deleted and the user can see them.
-SELECT f.id, d.folder, f.path, v.size, v.root_hash, m.width, m.height, m.duration_ms,
+SELECT f.id, fo.key AS folder, f.path, v.size, v.root_hash, m.width, m.height, m.duration_ms,
        COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000) AS shown_at,
        COALESCE(s.favorite, false) AS favorite, COALESCE(s.archived, false) AS archived, s.rating,
        COALESCE(s.lat, m.lat) AS lat, COALESCE(s.lon, m.lon) AS lon, (m.root_hash IS NULL) AS processing
 FROM files f
-JOIN devices d ON d.id = f.device_id
+JOIN folders fo ON fo.id = f.folder_id
 JOIN versions v ON v.id = f.current_version_id
 LEFT JOIN file_meta m ON m.root_hash = v.root_hash
 LEFT JOIN file_state s ON s.file_id = f.id AND s.user_id = :uid
 WHERE f.id = ANY(:ids) AND f.deleted_at IS NULL
-  AND visible(d, :scope_user::bigint, :all::boolean)
+  AND visible(fo, :scope_user::bigint, :all::boolean)
 ORDER BY shown_at DESC, f.id DESC;
 
 --! album_assets : Asset(width?, height?, duration_ms?, rating?, lat?, lon?)
 -- What is in an album, by path (which the caller then sorts the way people read names).
-SELECT f.id, d.folder, f.path, v.size, v.root_hash, m.width, m.height, m.duration_ms,
+SELECT f.id, fo.key AS folder, f.path, v.size, v.root_hash, m.width, m.height, m.duration_ms,
        COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000) AS shown_at,
        COALESCE(s.favorite, false) AS favorite, COALESCE(s.archived, false) AS archived, s.rating,
        COALESCE(s.lat, m.lat) AS lat, COALESCE(s.lon, m.lon) AS lon, (m.root_hash IS NULL) AS processing
 FROM files f
-JOIN devices d ON d.id = f.device_id
+JOIN folders fo ON fo.id = f.folder_id
 JOIN versions v ON v.id = f.current_version_id
 LEFT JOIN file_meta m ON m.root_hash = v.root_hash
 LEFT JOIN file_state s ON s.file_id = f.id AND s.user_id = :uid
 WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
-  AND visible(d, :scope_user::bigint, :all::boolean)
-  AND EXISTS (SELECT 1 FROM albums a WHERE a.id = :album_id AND a.folder_device_id = f.device_id)
+  AND visible(fo, :scope_user::bigint, :all::boolean)
+  AND EXISTS (SELECT 1 FROM albums a WHERE a.id = :album_id AND a.folder_id = f.folder_id)
 ORDER BY f.path, f.id DESC LIMIT :limit;
 
 --! asset_extras : (mime?, camera_when?, camera_lat?, camera_lon?, exif?, codec?, caption?, keywords?)
@@ -104,30 +104,30 @@ WHERE f.id = :id;
 
 --! trash_page
 -- Deleted files the user can see, newest deletion first, with the version that would bring each back.
-SELECT f.id, d.folder, f.path, v.size, f.deleted_at AS deleted_at, v.id AS version_id, v.root_hash,
+SELECT f.id, fo.key AS folder, f.path, v.size, f.deleted_at AS deleted_at, v.id AS version_id, v.root_hash,
        COUNT(*) OVER () AS total
 FROM files f
-JOIN devices d ON d.id = f.device_id
+JOIN folders fo ON fo.id = f.folder_id
 JOIN versions v ON v.id = f.current_version_id
-WHERE f.deleted_at IS NOT NULL AND f.deleted_by IS DISTINCT FROM 'rename' AND visible(d, :scope_user::bigint, :all::boolean)
+WHERE f.deleted_at IS NOT NULL AND f.deleted_by IS DISTINCT FROM 'rename' AND visible(fo, :scope_user::bigint, :all::boolean)
 ORDER BY f.deleted_at DESC, f.id DESC LIMIT :limit OFFSET :offset;
 
 --! purgeable_files
 -- The deleted files among :ids that the trash lists for this user, locked: what may be removed for good.
-SELECT f.id, f.device_id, d.folder, f.deleted_at AS deleted_at
+SELECT f.id, f.folder_id, fo.key AS folder, f.deleted_at AS deleted_at
 FROM files f
-JOIN devices d ON d.id = f.device_id
+JOIN folders fo ON fo.id = f.folder_id
 WHERE f.id = ANY(:ids) AND f.deleted_at IS NOT NULL AND f.deleted_by IS DISTINCT FROM 'rename'
-  AND visible(d, :scope_user::bigint, :all::boolean)
+  AND visible(fo, :scope_user::bigint, :all::boolean)
 FOR UPDATE OF f;
 
 --! versions_size
 SELECT COALESCE(SUM(size), 0)::bigint AS bytes FROM versions WHERE file_id = ANY(:file_ids);
 
 --! visible_file_exists
-SELECT EXISTS (SELECT 1 FROM files f JOIN devices d ON d.id = f.device_id
+SELECT EXISTS (SELECT 1 FROM files f JOIN folders fo ON fo.id = f.folder_id
                WHERE f.id = :id AND f.deleted_at IS NULL
-                 AND visible(d, :scope_user::bigint, :all::boolean)) AS visible;
+                 AND visible(fo, :scope_user::bigint, :all::boolean)) AS visible;
 
 -- What a user says about a file: favorite, archived, rating, description, corrected time and place. One row per
 -- user and file, made the first time they say anything.
@@ -159,20 +159,20 @@ UPDATE file_state SET updated_at = :now WHERE file_id = :file_id AND user_id = :
 --! bulk_set_favorite
 -- The same favorite for many files at once: those the user can see. Returns how many.
 INSERT INTO file_state (file_id, user_id, updated_at, favorite)
-SELECT f.id, :uid, :now, :value FROM files f JOIN devices d ON d.id = f.device_id
-WHERE f.id = ANY(:ids) AND f.deleted_at IS NULL AND visible(d, :scope_user::bigint, :all::boolean)
+SELECT f.id, :uid, :now, :value FROM files f JOIN folders fo ON fo.id = f.folder_id
+WHERE f.id = ANY(:ids) AND f.deleted_at IS NULL AND visible(fo, :scope_user::bigint, :all::boolean)
 ON CONFLICT (user_id, file_id) DO UPDATE SET favorite = excluded.favorite, updated_at = excluded.updated_at;
 
 --! bulk_set_archived
 INSERT INTO file_state (file_id, user_id, updated_at, archived)
-SELECT f.id, :uid, :now, :value FROM files f JOIN devices d ON d.id = f.device_id
-WHERE f.id = ANY(:ids) AND f.deleted_at IS NULL AND visible(d, :scope_user::bigint, :all::boolean)
+SELECT f.id, :uid, :now, :value FROM files f JOIN folders fo ON fo.id = f.folder_id
+WHERE f.id = ANY(:ids) AND f.deleted_at IS NULL AND visible(fo, :scope_user::bigint, :all::boolean)
 ON CONFLICT (user_id, file_id) DO UPDATE SET archived = excluded.archived, updated_at = excluded.updated_at;
 
 --! bulk_add_tags
 INSERT INTO file_tags (file_id, tag_id)
-SELECT f.id, t FROM files f JOIN devices d ON d.id = f.device_id CROSS JOIN unnest(:tag_ids::uuid[]) t
-WHERE f.id = ANY(:ids) AND f.deleted_at IS NULL AND visible(d, :scope_user::bigint, :all::boolean)
+SELECT f.id, t FROM files f JOIN folders fo ON fo.id = f.folder_id CROSS JOIN unnest(:tag_ids::uuid[]) t
+WHERE f.id = ANY(:ids) AND f.deleted_at IS NULL AND visible(fo, :scope_user::bigint, :all::boolean)
 ON CONFLICT DO NOTHING;
 
 -- Tags belong to the user who made them.
@@ -198,10 +198,10 @@ DELETE FROM tags t WHERE NOT EXISTS (SELECT 1 FROM file_tags ft WHERE ft.tag_id 
 
 --! list_tags
 -- The user's tags with how many visible files carry each.
-SELECT t.id, t.name, COUNT(d.id) AS files FROM tags t
+SELECT t.id, t.name, COUNT(fo.id) AS files FROM tags t
 LEFT JOIN file_tags ft ON ft.tag_id = t.id
 LEFT JOIN files f ON f.id = ft.file_id AND f.deleted_at IS NULL
-LEFT JOIN devices d ON d.id = f.device_id AND visible(d, :scope_user::bigint, :all::boolean)
+LEFT JOIN folders fo ON fo.id = f.folder_id AND visible(fo, :scope_user::bigint, :all::boolean)
 WHERE t.user_id = :uid GROUP BY t.id ORDER BY lower(t.name);
 
 --! delete_tag
@@ -210,37 +210,37 @@ DELETE FROM tags WHERE id = :id AND user_id = :uid;
 -- What a mirror keeps of the library, so that albums, tags and favorites survive losing the database.
 
 --! snapshot_albums
-SELECT a.id, a.name, a.description, a.created_at, u.name AS owner, d.folder
-FROM albums a JOIN users u ON u.id = a.user_id JOIN devices d ON d.id = a.folder_device_id ORDER BY a.created_at, a.id;
+SELECT a.id, a.name, a.description, a.created_at, u.name AS owner, fo.key AS folder
+FROM albums a JOIN users u ON u.id = a.user_id JOIN folders fo ON fo.id = a.folder_id ORDER BY a.created_at, a.id;
 
 --! snapshot_tags
 SELECT t.id, t.name, u.name AS owner FROM tags t JOIN users u ON u.id = t.user_id ORDER BY lower(t.name), t.id;
 
 --! snapshot_tag_files
-SELECT ft.tag_id, d.folder, f.path FROM file_tags ft
-JOIN files f ON f.id = ft.file_id JOIN devices d ON d.id = f.device_id ORDER BY ft.tag_id, f.path;
+SELECT ft.tag_id, fo.key AS folder, f.path FROM file_tags ft
+JOIN files f ON f.id = ft.file_id JOIN folders fo ON fo.id = f.folder_id ORDER BY ft.tag_id, f.path;
 
 --! snapshot_states : (rating?, taken_at?, lat?, lon?)
-SELECT d.folder, f.path, s.favorite, s.archived, s.rating, s.description, s.taken_at, s.lat, s.lon, u.name AS owner
-FROM file_state s JOIN files f ON f.id = s.file_id JOIN devices d ON d.id = f.device_id JOIN users u ON u.id = s.user_id
+SELECT fo.key AS folder, f.path, s.favorite, s.archived, s.rating, s.description, s.taken_at, s.lat, s.lon, u.name AS owner
+FROM file_state s JOIN files f ON f.id = s.file_id JOIN folders fo ON fo.id = f.folder_id JOIN users u ON u.id = s.user_id
 WHERE s.favorite OR s.archived OR s.rating IS NOT NULL OR s.description <> '' OR s.taken_at IS NOT NULL OR s.lat IS NOT NULL
-ORDER BY d.folder, f.path, u.name;
+ORDER BY fo.key, f.path, u.name;
 
 --! folder_assets : Asset(width?, height?, duration_ms?, rating?, lat?, lon?)
 -- The photos and videos directly in the folder of a file, by path: what the viewer opened from the file browser steps through.
-WITH me AS (SELECT device_id, regexp_replace(path, '[^/]*$', '') AS dir FROM files WHERE id = :id)
-SELECT f.id, d.folder, f.path, v.size, v.root_hash, m.width, m.height, m.duration_ms,
+WITH me AS (SELECT folder_id, regexp_replace(path, '[^/]*$', '') AS dir FROM files WHERE id = :id)
+SELECT f.id, fo.key AS folder, f.path, v.size, v.root_hash, m.width, m.height, m.duration_ms,
        COALESCE(s.taken_at, m.taken_at, v.mtime / 1000000000) AS shown_at,
        COALESCE(s.favorite, false) AS favorite, COALESCE(s.archived, false) AS archived, s.rating,
        COALESCE(s.lat, m.lat) AS lat, COALESCE(s.lon, m.lon) AS lon, (m.root_hash IS NULL) AS processing
 FROM me
-JOIN files f ON f.device_id = me.device_id
+JOIN files f ON f.folder_id = me.folder_id
             AND f.path LIKE replace(replace(replace(me.dir, '!', '!!'), '%', '!%'), '_', '!_') || '%' ESCAPE '!'
             AND position('/' IN substr(f.path, length(me.dir) + 1)) = 0
-JOIN devices d ON d.id = f.device_id
+JOIN folders fo ON fo.id = f.folder_id
 JOIN versions v ON v.id = f.current_version_id
 LEFT JOIN file_meta m ON m.root_hash = v.root_hash
 LEFT JOIN file_state s ON s.file_id = f.id AND s.user_id = :uid
 WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
-  AND visible(d, :scope_user::bigint, :all::boolean)
+  AND visible(fo, :scope_user::bigint, :all::boolean)
 ORDER BY f.path LIMIT :limit;

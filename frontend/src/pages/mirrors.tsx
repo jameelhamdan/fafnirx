@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { BookOpen, Copy, Download, FolderOpen, KeyRound, Lock, Plus, RefreshCw, RotateCcw } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
@@ -32,7 +32,7 @@ const BLANK = {
   kind: 'backup' as Kind,
   name: '',
   storage: NO_STORAGE,
-  folder: '',
+  scope: '',
   interval_hours: '24',
   keep_runs: '3',
   crypt_password: '',
@@ -79,7 +79,7 @@ function KeyField({ form, set }: { form: typeof BLANK; set: (patch: Partial<type
   const filled = form.crypt_password !== '' && form.crypt_salt !== ''
   const text = `${t('fafnirx backup key for {name}', { name: form.name || '…' })}\n\n${t('Password')}: ${form.crypt_password}\n${t('Salt')}: ${form.crypt_salt}\n`
   return (
-    <div className="space-y-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+    <div className="space-y-3 rounded-md border border-warning/40 bg-warning/5 p-3">
       <p className="text-sm">{t('The backup is encrypted with a key only you hold. Without it nothing can be restored, not even by the master.')}</p>
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant="outline" size="sm" onClick={() => set({ crypt_password: randomSecret(), crypt_salt: randomSecret(), saved: false })}>
@@ -123,14 +123,14 @@ function problem(form: typeof BLANK, t: ReturnType<typeof useT>): string | null 
   return null
 }
 
-/** Picks what a mirror holds: one whole folder, or everything. */
-function FolderChoice({ value, onChange }: { value: string; onChange: (folder: string) => void }) {
+/** Picks what a mirror holds: one device with its folders, one whole folder, or everything. */
+function ScopeChoice({ value, onChange }: { value: string; onChange: (scope: string) => void }) {
   const t = useT()
-  const { data, error } = useQuery({ queryKey: ['mirrors', 'folders'], queryFn: () => api.get<string[]>('/api/mirrors/folders') })
+  const { data, error } = useQuery({ queryKey: ['mirrors', 'scopes'], queryFn: () => api.get<string[]>('/api/mirrors/scopes') })
   return (
     <div className="space-y-1.5">
       <Picker
-        label={t('Folder to mirror')}
+        label={t('What to mirror')}
         className="w-full"
         value={value}
         onChange={onChange}
@@ -138,7 +138,7 @@ function FolderChoice({ value, onChange }: { value: string; onChange: (folder: s
       />
       {error && <p role="alert" className="text-sm text-destructive">{error.message}</p>}
       <p className="text-xs text-muted-foreground">
-        {value === '' ? t('Mirrors everything: the master files and every user.') : t('Mirrors {folder} and everything in it.', { folder: value })}
+        {value === '' ? t('Mirrors everything: the master files and every user.') : t('Mirrors {scope} and everything in it.', { scope: value })}
       </p>
     </div>
   )
@@ -146,7 +146,6 @@ function FolderChoice({ value, onChange }: { value: string; onChange: (folder: s
 
 function AddMirror() {
   const t = useT()
-  const client = useQueryClient()
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState(BLANK)
   const set = (patch: Partial<typeof BLANK>) => setForm((f) => ({ ...f, ...patch }))
@@ -156,18 +155,19 @@ function AddMirror() {
         name: form.name,
         kind: form.kind,
         ...storageBody(form.storage),
-        folder: form.folder,
+        scope: form.scope,
         interval_hours: Number(form.interval_hours),
         keep_runs: Number(form.keep_runs),
         crypt_password: form.kind === 'backup' ? form.crypt_password : '',
         crypt_salt: form.kind === 'backup' ? form.crypt_salt : '',
       }), {
+    inline: true,
     onSuccess: () => {
       toast.success(t('Mirror {name} added. The first run starts within a few seconds.', { name: form.name }))
       setOpen(false)
       setForm(BLANK)
-      void client.invalidateQueries({ queryKey: ['mirrors'] })
     },
+    invalidate: [['mirrors']],
   })
   return (
     <FormDialog
@@ -196,7 +196,7 @@ function AddMirror() {
       </Step>
 
       <Step n={2} title={t('What to copy')}>
-        <FolderChoice value={form.folder} onChange={(folder) => set({ folder })} />
+        <ScopeChoice value={form.scope} onChange={(scope) => set({ scope })} />
       </Step>
 
       <Step n={3} title={t('Where to put it')}>
@@ -261,11 +261,10 @@ export default function Mirrors() {
   const resyncNow = useApiMutation((name: string) => api.post(`/api/mirrors/${name}/resync`), {
     invalidate: [['mirrors']],
     success: (_r, name) => t('{name} will re-send every file on its next run.', { name }),
-    toastError: true,
   })
   const kit = useApiMutation(
     (name: string) => api.get<{ config: string }>(`/api/mirrors/${name}/restore-kit`).then((r) => ({ name, config: r.config })),
-    { onSuccess: ({ name, config }) => saveText(`${name}-restore.conf`, config), toastError: true },
+    { onSuccess: ({ name, config }) => saveText(`${name}-restore.conf`, config) },
   )
   return (
     <div>
@@ -287,7 +286,7 @@ export default function Mirrors() {
               <div className="space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant={backup ? 'default' : 'secondary'}>{backup ? <><Lock className="size-3" />{t('Backup')}</> : <><FolderOpen className="size-3" />{t('Replica')}</>}</Badge>
-                  <span>{j.detail.folder ? String(j.detail.folder) : t('Everything')} → {j.detail.remote ? String(j.detail.remote) : `${String(j.detail.remote_type)}:${String(j.detail.remote_path || '')}`}</span>
+                  <span>{j.detail.scope ? String(j.detail.scope) : t('Everything')} → {j.detail.remote ? String(j.detail.remote) : `${String(j.detail.remote_type)}:${String(j.detail.remote_path || '')}`}</span>
                 </div>
                 <div>
                   {t('keeps {count} runs', { count: String(j.detail.keep_runs) })}
@@ -311,8 +310,8 @@ export default function Mirrors() {
         title={t('Re-send everything to {name}?', { name: resync ?? '' })}
         description={t('Use this after emptying the remote. The next run uploads every file again.')}
         action={t('Re-send')}
-        onCancel={() => setResync(null)}
-        onConfirm={() => { if (resync) resyncNow.mutate(resync); setResync(null) }}
+        onClose={() => setResync(null)}
+        onConfirm={() => resync && resyncNow.mutate(resync)}
       />
     </div>
   )

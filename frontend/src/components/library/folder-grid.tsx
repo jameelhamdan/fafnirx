@@ -18,7 +18,7 @@ const title = (name: string) => (name.includes('.') ? name.slice(0, name.lastInd
  */
 export function FolderGrid({ assets, root, src, selected, onOpen, onToggle }: {
   assets: Asset[]
-  /** The path of the album's folder inside its device. */
+  /** The path of the album's folder inside its folder. */
   root: string
   src: (a: Asset) => string
   selected: Set<string>

@@ -11,7 +11,7 @@ fn spec() -> MirrorSpec {
         remote_path: " bucket/x ".into(),
         options: [("Access-Key".to_string(), Value::from(1))].into(),
         interval_hours: 72.0,
-        folder: " /ana/laptop/ ".into(),
+        scope: " /ana/laptop/ ".into(),
         keep_runs: 3,
     }
 }
@@ -28,7 +28,7 @@ fn a_backend_spelled_out_is_normalized() {
     m.normalize().unwrap();
     assert_eq!((m.remote_type.as_str(), m.remote_path.as_str()), ("s3", "bucket/x"));
     assert_eq!(m.options["access_key"], Value::from("1"));
-    assert_eq!(m.folder, "ana/laptop");
+    assert_eq!(m.scope, "ana/laptop");
     let mut bad = spec();
     bad.keep_runs = 0;
     assert!(bad.normalize().is_err());

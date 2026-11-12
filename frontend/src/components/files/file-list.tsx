@@ -85,7 +85,7 @@ export function FileList({
                     {gone && e.kind === 'file' && <span className="shrink-0 text-xs text-destructive">{t('deleted')}</span>}
                     {/* On a phone the name needs the room: the count and the badge show from `sm` up (and in the details). */}
                     {e.kind !== 'file' && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{plural(e.files ?? 0, 'file')}</span>}
-                    {e.kind === 'device' && <span className="hidden shrink-0 sm:inline-flex"><AccessBadge writable={e.writable} kind={e.device_kind} /></span>}
+                    {e.kind === 'folder' && <span className="hidden shrink-0 sm:inline-flex"><AccessBadge writable={e.writable} kind={e.folder_kind} /></span>}
                   </button>
                   {e.kind === 'file' && e.id && !gone && e.mime?.startsWith('video/') && (
                     <Link to={`/watch/${e.id}`} state={watch} className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={t('Open in viewer')} title={t('Open in viewer')}><Play className="size-4" /></Link>

@@ -61,7 +61,7 @@ fn start(config_path: &Path, subcommand: &[&str]) {
     spawn_quiet(&mut c);
 }
 
-/// Starts the client: the service when this computer has one, else the program itself in the background.
+/// Starts the client: the service when this device has one, else the program itself in the background.
 pub fn start_client(config_path: &Path) {
     if crate::config::is_system_config(config_path) && service::installed() {
         let _ = service::start();

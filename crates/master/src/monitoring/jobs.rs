@@ -18,7 +18,7 @@ const DISK_ALERT_PERCENT: f64 = 80.0;
 const STALE_UPLOAD: Duration = Duration::from_secs(24 * 3600);
 /// An upload error that the client has not reported again for this long is considered gone.
 const UPLOAD_ERROR_TTL_SECS: i64 = 48 * 3600;
-/// A computer says every 20 seconds that it holds deletions back; after this long without it the alert is closed.
+/// A device says every 20 seconds that it holds deletions back; after this long without it the alert is closed.
 const HELD_ALERT_TTL_SECS: i64 = 15 * 60;
 /// The change log and the alerts that were resolved are only for looking at recent activity.
 const EVENT_KEEP_DAYS: i64 = 90;
@@ -61,9 +61,9 @@ fn minute(db: &Db, data_dir: &std::path::Path) {
     {
         tracing::error!("alert job failed: {e}");
     }
-    // Devices that are not syncing (a local folder, a source, a change in the web app) get their totals here.
-    if let Err(e) = crate::devices::totals::refresh_stale(conn) {
-        tracing::error!("device totals failed: {e:#}");
+    // Folders that are not syncing (a local folder, a source, a change in the web app) get their totals here.
+    if let Err(e) = crate::folders::totals::refresh_stale(conn) {
+        tracing::error!("folder totals failed: {e:#}");
     }
 }
 
@@ -77,8 +77,7 @@ fn expire_quiet_alerts(conn: &mut impl GenericClient) -> Result<(), postgres::Er
 
 fn offline_alerts(conn: &mut impl GenericClient) -> Result<(), postgres::Error> {
     let limit = settings::get_i64(conn, "offline_after_secs", 60);
-    // Only clients heartbeat; sources and local folders also get a last_seen when they collect something.
-    let rows = devices::clients_last_seen(conn)?;
+    let rows = devices::last_seen(conn)?;
     for (name, last_seen) in rows {
         let idle = unix_now() - last_seen;
         let message = (idle > limit).then(|| format!("Device {name} has not been seen for {idle} s"));
@@ -128,20 +127,20 @@ const RETENTION_BATCH: i64 = 1000;
 /// Removes deleted files and pruned versions older than the retention period from the database and
 /// returns the ids of the removed versions, whose stored files the caller deletes.
 fn retention(conn: &mut Client) -> Result<Vec<i64>> {
-    let cutoff = unix_now() - settings::get_i64(conn, "retention_days", 30) * 86400;
+    let cutoff = unix_now() - settings::retention_days(conn) * 86400;
     let (mut removed, mut files, mut old_versions) = (Vec::new(), 0, 0);
     loop {
         let mut tx = conn.transaction()?;
         // The rows are locked first: a file that came back in the meantime is no longer expired once its lock is
         // released, so it keeps its history.
-        let (expired, device_ids) = retention::lock_expired_files(&mut tx, cutoff, RETENTION_BATCH)?;
+        let (expired, folder_ids) = retention::lock_expired_files(&mut tx, cutoff, RETENTION_BATCH)?;
         removed.extend(retention::delete_versions_of(&mut tx, &expired)?);
         files += retention::delete_files(&mut tx, &expired)?;
-        // Deletions before this time are no longer all known: a computer that was last in step before it has to be sent the
+        // Deletions before this time are no longer all known: a device that was last in step before it has to be sent the
         // whole list of files instead of the changes (`devices::grpc::list_changes`). It only moves forward.
         let known_from = settings::get_i64(&mut tx, settings::DELETIONS_KNOWN_FROM, 0).max(cutoff);
         settings::set(&mut tx, settings::DELETIONS_KNOWN_FROM, &known_from.to_string())?;
-        sql::devices::mark_totals_stale().bind(&mut tx, &device_ids).map(drop)?;
+        sql::folders::mark_totals_stale().bind(&mut tx, &folder_ids).map(drop)?;
         let pruned = sql::retention::delete_pruned_versions().bind(&mut tx, &cutoff, &RETENTION_BATCH).all()?;
         tx.commit()?;
         let done = (expired.len() as i64) < RETENTION_BATCH && (pruned.len() as i64) < RETENTION_BATCH;

@@ -9,7 +9,8 @@ menu (top right), which also logs you out. Pages update live.
 | Timeline, Favorites, Archive, Albums, Trash | Photos and videos by month and day; grouped; deleted files |
 | Files | Browse, search, preview, download, upload, move, delete |
 | Processing | Background work |
-| Devices, Sources, Mirrors | Computers that send, with their folders and your other folders; storage that is read; offsite copies |
+| Devices, Sources | Devices that send, with their folders and your other folders; storage that is read |
+| Mirrors | Offsite copies (administrators only) |
 | Users, Settings | Administrators only |
 
 ## Users and roles
@@ -22,8 +23,8 @@ menu (top right), which also logs you out. Pages update live.
 
 - Master folders belong to nobody; everyone sees them.
 - Users cannot be renamed (the name is a folder). Disabling one ends their logins. One administrator always remains.
-- **Delete** (on a disabled user, not yourself or `admin`) removes the account with their computers and what those sent (the
-  computers keep their files), memberships, tags, albums and favorites. Refused while one of their folders has files or they
+- **Delete** (on a disabled user, not yourself or `admin`) removes the account with their devices and what those sent (the
+  devices keep their files), memberships, tags, albums and favorites. Refused while one of their folders has files or they
   have a source, or a mirror or someone else's source uses their folder. The name can then be used again.
 - A device belongs to the user who adds it; names are unique per user (`bob/laptop`, `alice/laptop`).
 - Favorites, ratings, tags, albums, corrected dates and places are per user.
@@ -34,19 +35,19 @@ video in the viewer (send it to anyone who can see the file); `/albums/<id>` an 
 
 ## Files
 
-The top level lists devices, local folders and the master folders, each named by its location (`user/name`, `master:name`). A badge shows
-**Changeable** (master folders and local folders, if your role may write) or **Read-only** (computers).
+The top level lists folders: those of users, the master folders and a folder for each directory a device sends, each named by its key (`user/name`, `master:name`, `user/device/directory`). A badge shows
+**Changeable** (master folders and folders of users, if your role may write) or **Read-only** (what devices sent).
 
 - **Search** (current folder and below), type filter, sort, deleted files, list or grid.
 - **Select** to download (zip for several), show as album, move or rename, delete.
 - **Details** show preview, EXIF and the **history**: every version can be downloaded or restored (restoring adds a new
   version and loses nothing). Photos and videos also have the library data (favorite, rating, tags, date, place).
-- **Move or rename** works in local folders and master folders. A folder moves with its contents, and albums and sources that point
-  into it follow. Nothing moves if a name is in the way. Files a computer sent cannot be moved (409).
-- **Rename folder** (a top-level folder you own) changes its name everywhere at once; computers that sync it keep working.
-- **Upload** into a local folder or a master folder by drag and drop (resumable).
+- **Move or rename** works in folders of users and master folders. A folder moves with its contents, and albums and sources that point
+  into it follow. Nothing moves if a name is in the way. Files a device sent cannot be moved (409).
+- **Rename folder** (a top-level folder you own) changes its name everywhere at once; devices that sync it keep working.
+- **Upload** into a folder of yours or a master folder by drag and drop (resumable).
 - **Delete** moves a file to the Trash; data stays until retention ends or you choose **Delete forever**, which frees the disk.
-  Files from a computer or source are not re-fetched. In a synced folder the deletion reaches every computer.
+  Files from a device or source are not re-fetched. In a synced folder the deletion reaches every device.
 
 ## Photos and videos
 
@@ -90,14 +91,14 @@ Metadata work, retention and sign-ins are not logged.
 
 ## Devices and folders
 
-The **Devices** page lists the computers; open a row to see the folders attached to it (state, size, last sync). Below it are all
+The **Devices** page lists the devices; open a row to see the folders attached to it (state, size, last sync). Below it are all
 folders: yours, shared with you, and master folders (make, share, rename, delete). A folder that a source fills carries a
 **Source: name** badge, and there is a filter for them.
 
 **Add device** gives a name and a token (shown once). **Rotate token** replaces it. **Revoke** stops uploads and keeps the data.
-**Release** lets another computer take the device over.
+**Release** lets another device take the device over.
 
-One computer holds a device at a time. A second one with the same token is refused while the first is heard from, and the owner
+One device holds a device at a time. A second one with the same token is refused while the first is heard from, and the owner
 gets an alert. After 90 s of silence it may take over; Release or Rotate does it at once.
 
 ## The client
@@ -130,13 +131,13 @@ auto_update = true              # check GitHub releases every 6 hours
 web_url = "http://nas.lan:8080" # the tray's link to the web app
 ```
 
-`[[folders]]` tables are written by `folder add`: each has a `path`, a `name` and a `target` (`computer`, the default, or `folder`,
-a folder of the master) and, for the second, a `mode` (`both`, the default, `up`, `keep` or `ask`; a `computer` folder is always `up`)
+`[[folders]]` tables are written by `folder add`: each has a `path`, a `name` and a `target` (`device`, the default, or `folder`,
+a folder of the master) and, for the second, a `mode` (`both`, the default, `up`, `keep` or `ask`; a `device` folder is always `up`)
 and an `id`, set when attaching. With `ask`, `ask_timeout_hours` (default 24, 0 = for ever) is how long a file waits for an answer
 before both versions are kept.
 
 **Service.** On Windows the client belongs to your user: it and the tray start when you log in. On Linux and macOS it is a
-service of the computer (systemd, launchd) that runs as root, starts at boot, is restarted on failure, and reads every user's
+service of the device (systemd, launchd) that runs as root, starts at boot, is restarted on failure, and reads every user's
 folders. The tray of each user starts at login and talks to the service through `<data>/control`.
 
 **What is collected:** everything under the added folders except `.fafnirxignore` matches (gitignore syntax). Symlinks, locked
@@ -155,22 +156,22 @@ deletions are sent, or send them now with `fafnirx release-deletes`.
 ### The tray
 
 Green is online, red an error, amber paused, grey not running. The menu shows what is happening and has pause/resume, sync now,
-**Check for updates**, **Folders** (those of this computer, and the folders of the master you can sync), and links to the config, log,
+**Check for updates**, **Folders** (those of this device, and the folders of the master you can sync), and links to the config, log,
 client data folder and web app. Every sync (**Sync now** too, at most every 10 s) asks the master for its folders; when a folder attached here is gone from
-the master (deleted, or no longer shared with you) and its folder on this computer is empty, **Folders** gets the entry
+the master (deleted, or no longer shared with you) and its folder on this device is empty, **Folders** gets the entry
 **Remove N folders deleted on the server**, which stops syncing them after you confirm. A folder that still holds files is never offered. On macOS and Linux the folder entries need no password: the tray leaves a request and the
 service applies it, only for folders owned by the user who asked.
 
 ## Folders: sync both ways
 
-Every folder of a computer goes to a **target**, and its mode says which way. The default target, `computer`, is a backup: up
+Every folder of a device goes to a **target**, and its mode says which way. The default target, `device`, is a backup: up
 only, the same as the mode `up`. A **folder** (made in Files or **Folders**) belongs to a user, or to
-a master folder, not to a computer. Any computer of that user attaches a local folder to it, and changes reach the others.
+a master folder, not to a device. Any device of that user attaches a local folder to it, and changes reach the others.
 Sharing it with other users is a matter of who may use it.
 
 | Target | What it is |
 |---|---|
-| `computer` (default) | This computer's own space on the master. Up only |
+| `device` (default) | This device's own space on the master. Up only |
 | `master:<folder>` | A master folder, made by an administrator under **Folders** (or by a new folder in `files/`). Everyone can sync it; read-only users only read |
 | `<owner>/<name>` | A folder of yours, or one shared with you. Both ways |
 
@@ -190,22 +191,22 @@ name works when it is unambiguous. Files the client creates in an attached folde
 
 - **Cycle.** Receive, then send. The master tells running clients about changes (within seconds); a poll every minute is the
   fallback. Unchanged on both sides: untouched; changed on one: copied.
-- **Names.** Rules of the most limited computer: paths differing only in case, and names Windows cannot store (`: ? * " < > |`,
+- **Names.** Rules of the most limited device: paths differing only in case, and names Windows cannot store (`: ? * " < > |`,
   trailing dot or space, `CON`, `NUL`...), are refused and reported to the sender.
 - **Mode** says which way a folder goes and who wins when a file changed here and on the master (set in the tray's folder menu
-  or `folder mode`; per folder and computer):
+  or `folder mode`; per folder and device):
   - `both` (default): both ways; the master's version wins and yours goes to `.fafnirx-conflicts/` (never synced).
   - `up`: send only; nothing of the master's is received or deleted here.
-  - `keep`: both ways; yours is kept as `name (conflict <computer> <date>).ext` next to the master's.
+  - `keep`: both ways; yours is kept as `name (conflict <device> <date>).ext` next to the master's.
   - `ask`: needs a screen. The tray shows a dialog with both versions; closing it decides later. After `ask_timeout_hours`
     (default 24) both are kept.
-- **Deletes.** Web app deletes apply on every computer; the Trash keeps a version. Deletes by other computers pass the delete
+- **Deletes.** Web app deletes apply on every device; the Trash keeps a version. Deletes by other devices pass the delete
   guard; a held one waits until `release-deletes` or `folder keep`, and raises **Deletions held back**.
 - **Status.** `fafnirx status` shows each folder (in step or not, last sync, held deletions, last problem), also with the client
-  stopped. The **Devices** page shows the same per computer, and the command to attach it.
-- **Access.** The owner adds users (read-only or read and change) and removes them; a member can leave. A computer attached to a folder its user can only read receives it and sends nothing (the tray and `folder list` mark it read-only). Removing a member ends
+  stopped. The **Devices** page shows the same per device, and the command to attach it.
+- **Access.** The owner adds users (read-only or read and change) and removes them; a member can leave. A device attached to a folder its user can only read receives it and sends nothing (the tray and `folder list` mark it read-only). Removing a member ends
   their access at once; their local files stay.
-- **Deleting a folder.** Delete its files first; then the folder, its trash and history go. Attached computers keep their files;
+- **Deleting a folder.** Delete its files first; then the folder, its trash and history go. Attached devices keep their files;
   run `folder remove` there.
 
 **macOS** needs Full Disk Access for folders in Documents, Desktop, Downloads, iCloud Drive and other volumes. Without it
@@ -224,12 +225,12 @@ A large file that changes often takes about *versions kept* times its size.
 
 ## Local folders and the network drive
 
-`data/files/` is a plain tree: `files/users/<user>/<device>/<path>`, master folders in `files/<name>/<path>`. Share it over SMB/NFS
+`data/files/` is a plain tree: `files/users/<user>/<name>/<path>` (`files/users/<user>/<device>/<directory>/<path>` for what a device sends), master folders in `files/<name>/<path>`. Share it over SMB/NFS
 ([Deployment](deployment.md#storage)).
 
-- Write as `FAFNIRX_UID`. A new `files/users/<user>/<name>` becomes a local folder of that user; a new folder directly under
+- Write as `FAFNIRX_UID`. A new `files/users/<user>/<name>` becomes a folder of that user; a new folder directly under
   `files/` is a master folder.
-- Only local folders and master folders are written in place. Share device and source folders read-only: writes there are not recorded.
+- Only folders of users and master folders are written in place. Share device and source folders read-only: writes there are not recorded.
 - Changes are noticed within seconds, or every 5 minutes on mounts without events. Administrators can press **Scan now**
   (Files, Settings → File store).
 - A moved file is recorded as a `rename` if it keeps its size and mtime; otherwise as `delete` and `add`.
@@ -242,9 +243,9 @@ A large file that changes often takes about *versions kept* times its size.
 | Upload error | A client reports one | 48 h after the last report |
 | Disk usage | Data disk over 80% | Usage drops |
 | Source / Mirror failed | A run fails or is partial | A good run |
-| Device used by two computers | A second computer uses the token | It stops |
-| Deletions held back | A computer holds a large deletion | Dealt with, or no report for 15 min |
-| Files outside a device folder | Files in `files/users/` not under `<user>/<device>/` | Moved or removed |
+| Device used by two devices | A second device uses the token | It stops |
+| Deletions held back | A device holds a large deletion | Dealt with, or no report for 15 min |
+| Files outside a folder | Files in `files/users/` not under `<user>/<name>/` | Moved or removed |
 
 Dismiss by hand. Collection never pauses automatically. There is no email or webhook.
 

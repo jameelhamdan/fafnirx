@@ -14,6 +14,7 @@ export function ChangePassword({ open, onClose }: { open: boolean; onClose: () =
   const [next, setNext] = useState('')
   const [again, setAgain] = useState('')
   const change = useApiMutation(() => api.post('/api/me/password', { current, new: next }), {
+    inline: true,
     onSuccess: () => {
       toast.success(t('Password changed. Your other logins have ended.'))
       close()

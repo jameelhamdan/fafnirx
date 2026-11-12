@@ -30,8 +30,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const hits = useMemo(() => {
     const all: Hit[] = [
       ...visibleNav(role, photos).flatMap((g) => g.items.map((i) => ({ key: i.to, group: t('Pages'), label: t(i.label), icon: i.icon, to: i.to }))),
-      ...(devices.data ?? []).filter((d) => d.kind === 'device').map((d) => ({ key: `d:${d.folder}`, group: t('Devices'), label: d.folder, hint: d.online ? t('Online') : t('Offline'), icon: Monitor, to: `/devices/${deviceAddress(d.folder)}` })),
-      ...(folders.data ?? []).map((f) => ({ key: `f:${f.folder}`, group: t('Folders'), label: f.folder, icon: FolderOpen, to: folderLink(f.folder) })),
+      ...(devices.data ?? []).map((d) => ({ key: `d:${d.key}`, group: t('Devices'), label: d.key, hint: d.online ? t('Online') : t('Offline'), icon: Monitor, to: `/devices/${deviceAddress(d.key)}` })),
+      ...(folders.data ?? []).map((f) => ({ key: `f:${f.key}`, group: t('Folders'), label: f.key, icon: FolderOpen, to: folderLink(f.key) })),
     ]
     return all.filter((h) => matches(query, h.label, h.group)).slice(0, 40)
   }, [query, role, photos, devices.data, folders.data, t])
@@ -92,7 +92,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                 className={cn('flex w-full items-center gap-2 rounded-lg px-2 py-2 text-start text-sm', i === active && 'bg-accent')}
               >
                 <h.icon className="size-4 shrink-0 text-muted-foreground" />
-                <span className={cn('min-w-0 flex-1 truncate', h.group !== t('Pages') && 'num text-[13px]')}>{h.label}</span>
+                <span className={cn('min-w-0 flex-1 truncate', h.group !== t('Pages') && 'num text-compact')}>{h.label}</span>
                 {h.hint && <span className="text-xs text-muted-foreground">{h.hint}</span>}
                 {i === active && <CornerDownLeft className="size-3.5 text-muted-foreground" />}
               </button>

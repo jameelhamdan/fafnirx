@@ -7,23 +7,23 @@ use crate::library::photos::{nullable, Asset, MAX_ASSETS};
 use crate::platform::db;
 use crate::platform::id::Id;
 use crate::repo::{albums, library};
-use crate::web::access::Access;
+use crate::web::access::{Access, Ctx};
 use crate::web::input;
-use crate::web::{act, change, run, ApiError, Done, Res, Shared};
-use axum::extract::{Path, State};
-use axum::{Extension, Json};
+use crate::web::{act, change, run, ApiError, Done, Res};
+use axum::extract::Path;
+use axum::Json;
 use fafnirx_common::unix_now;
 use fafnirx_db::client::GenericClient;
 use fafnirx_db::queries as sql;
 use serde::{Deserialize, Serialize};
 
-/// A place in the file tree: a device's folder name and a path below it.
+/// A place in the file tree: a folder's key and a path below it.
 #[derive(Serialize, Deserialize, Clone)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export, rename = "AlbumFolder"))]
 pub struct Folder {
-    /// The device's folder name (`<user>/<device>`).
-    device: String,
-    /// The path below it, without slashes at the ends; empty for the whole device.
+    /// The key of the folder (`<user>/<name>`).
+    folder: String,
+    /// The path below it, without slashes at the ends; empty for the whole folder.
     #[serde(default)]
     path: String,
 }
@@ -56,7 +56,7 @@ impl From<albums::Album> for AlbumInfo {
             count: a.files,
             bytes: a.bytes,
             cover: a.cover.map(Id),
-            folder: Folder { device: a.folder, path: String::new() },
+            folder: Folder { folder: a.folder, path: String::new() },
         }
     }
 }
@@ -89,7 +89,7 @@ fn load_album(c: &mut impl GenericClient, who: &Access, id: uuid::Uuid) -> anyho
     }
 }
 
-pub async fn list(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Vec<AlbumInfo>> {
+pub async fn list(Ctx { state, who }: Ctx) -> Res<Vec<AlbumInfo>> {
     let out = run(&state, move |c| {
         albums::of_user(c, who.user_id)?
             .into_iter()
@@ -119,12 +119,12 @@ pub struct NewAlbum {
     folder: Folder,
 }
 
-pub async fn create(State(state): State<Shared>, Extension(who): Extension<Access>, Json(body): Json<NewAlbum>) -> Res<AlbumInfo> {
+pub async fn create(Ctx { state, who }: Ctx, Json(body): Json<NewAlbum>) -> Res<AlbumInfo> {
     who.require_workspace()?;
     let out = run(&state, move |c| {
         // One album per folder, so asking again gives the one there is.
         let shown = find_folder(c, &who, &body.folder)?;
-        if let Some(id) = albums::of_folder(c, who.user_id, shown.device_id)? {
+        if let Some(id) = albums::of_folder(c, who.user_id, shown.folder_id)? {
             return load_album(c, &who, id);
         }
         let name = match body.name.trim() {
@@ -138,7 +138,7 @@ pub async fn create(State(state): State<Shared>, Extension(who): Extension<Acces
                 user_id: who.user_id,
                 name: &name,
                 description: body.description.trim(),
-                folder_device_id: shown.device_id,
+                folder_id: shown.folder_id,
                 now: unix_now(),
             },
         )?;
@@ -153,18 +153,18 @@ pub async fn create(State(state): State<Shared>, Extension(who): Extension<Acces
 
 /// A folder the user can see, as an album shows it.
 struct FolderShown {
-    device_id: i64,
+    folder_id: i64,
     /// What to call an album of it.
     name: String,
 }
 
-fn find_folder(c: &mut postgres::Client, who: &Access, folder: &Folder) -> anyhow::Result<FolderShown> {
-    let device = crate::files::browse::find_device(c, who, &folder.device)?;
-    if !input::folder_path(&folder.path)?.is_empty() {
+fn find_folder(c: &mut postgres::Client, who: &Access, place: &Folder) -> anyhow::Result<FolderShown> {
+    let found = crate::files::browse::find_folder(c, who, &place.folder)?;
+    if !input::folder_path(&place.path)?.is_empty() {
         return Err(ApiError::bad("An album shows a whole folder: make the folder you want a folder of its own").into());
     }
-    let name = device.name.rsplit('/').next().unwrap_or(&device.name).to_string();
-    Ok(FolderShown { device_id: device.id, name })
+    let name = found.key.rsplit('/').next().unwrap_or(&found.key).to_string();
+    Ok(FolderShown { folder_id: found.id, name })
 }
 
 #[derive(Serialize)]
@@ -176,13 +176,13 @@ pub struct AlbumAssets {
 }
 
 /// An album and what is in it, in the order of the files' names, in which "Episode 2" comes before "Episode 10".
-pub async fn detail(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>) -> Res<AlbumAssets> {
+pub async fn detail(Ctx { state, who }: Ctx, Path(Id(id)): Path<Id>) -> Res<AlbumAssets> {
     let out = run(&state, move |c| {
         let album = load_album(c, &who, id)?;
         let mut assets: Vec<Asset> = library::album_assets(c, who.viewer(), id, MAX_ASSETS + 1)?.into_iter().map(Asset::from).collect();
         let more = assets.len() as i64 > MAX_ASSETS;
         assets.truncate(MAX_ASSETS as usize);
-        assets.sort_by(|a, b| natural_cmp(&a.device, &b.device).then_with(|| natural_cmp(&a.path, &b.path)));
+        assets.sort_by(|a, b| natural_cmp(&a.folder, &b.folder).then_with(|| natural_cmp(&a.path, &b.path)));
         Ok(AlbumAssets { album, assets, more })
     })
     .await?;
@@ -234,7 +234,7 @@ pub struct AlbumEdit {
     cover: Option<Option<Id>>,
 }
 
-pub async fn edit(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>, Json(body): Json<AlbumEdit>) -> Res<AlbumInfo> {
+pub async fn edit(Ctx { state, who }: Ctx, Path(Id(id)): Path<Id>, Json(body): Json<AlbumEdit>) -> Res<AlbumInfo> {
     let name = body.name.as_deref().map(clean_name).transpose()?.map(str::to_string);
     let out = change(&state, crate::platform::db::Topic::Library, move |tx| {
         load_album(tx, &who, id)?;
@@ -261,7 +261,7 @@ pub async fn edit(State(state): State<Shared>, Extension(who): Extension<Access>
 }
 
 /// Deletes the album. The photos stay where they are.
-pub async fn delete(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>) -> Res<Done> {
+pub async fn delete(Ctx { state, who }: Ctx, Path(Id(id)): Path<Id>) -> Res<Done> {
     act(&state, move |c| {
         if !albums::delete(c, who.user_id, id)? {
             return Err(ApiError::not_found("No such album").into());

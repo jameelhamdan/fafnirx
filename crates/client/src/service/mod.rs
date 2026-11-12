@@ -1,9 +1,9 @@
 //! The client as a program that runs by itself, for every user where the OS allows it. Linux (a systemd unit) and macOS (a
-//! LaunchDaemon): a service of the computer that starts at boot, is started again when it fails, and is managed by the operating
+//! LaunchDaemon): a service of the device that starts at boot, is started again when it fails, and is managed by the operating
 //! system like any other program (`unix`). Windows: the client of the user, started when they log in (`windows`). The tray of each
 //! user is started when they log in.
 //!
-//! The config, token and state of a service are in the folders of the computer (`config::system_data_dir`), not in a profile, and
+//! The config, token and state of a service are in the folders of the device (`config::system_data_dir`), not in a profile, and
 //! it runs with the rights to read the folders of every user, so only an administrator may change them (`prepare_dirs`).
 
 pub mod disk_access;
@@ -90,8 +90,8 @@ pub fn prepare_dirs(config_path: &Path) -> Result<()> {
     os::set_dir_modes(&config_dir, &data, &state, &control)
 }
 
-/// Installs the client (a service of the computer on Linux and macOS, the client of the user on Windows) and removes the older
-/// versions of it that are left on the computer, so that only this one remains.
+/// Installs the client (a service of the device on Linux and macOS, the client of the user on Windows) and removes the older
+/// versions of it that are left on the device, so that only this one remains.
 pub fn install(config_path: &Path, dry: bool) -> Result<()> {
     let exe = std::env::current_exe()?;
     os::install_service(config_path, &fafnirx_common::plain_path(&exe), dry)?;

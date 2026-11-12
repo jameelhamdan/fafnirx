@@ -41,7 +41,7 @@ service Collector {
   // The current content of a file of a folder.
   rpc DownloadFolder(DownloadFolderRequest) returns (stream FileData);
 
-  // Says when one of the named folders changed, so that a computer need not poll: once for each folder when the call
+  // Says when one of the named folders changed, so that a device need not poll: once for each folder when the call
   // starts (look now), then whenever a file in it was written or deleted. Folders the caller cannot use are left out.
   rpc WatchFolder(WatchFolderRequest) returns (stream FolderChanged);
 }
@@ -64,7 +64,7 @@ message HeartbeatRequest {
   repeated FolderState folders = 14;  // the synced folders attached here, all of them on every beat
 }
 
-// What one folder attached to a computer is doing.
+// What one folder attached to a device is doing.
 message FolderState {
   string name = 1;             // <owner>/<name>
   uint64 files = 2;            // in step with the master
@@ -73,7 +73,7 @@ message FolderState {
   string last_error = 5;       // empty when the last cycle went well
   uint32 held = 6;             // deletions held back
   uint32 failing = 7;          // files waiting for a retry
-  string mode = 8;             // how this computer settles conflicts: up | both | keep | ask (empty from an older client)
+  string mode = 8;             // how this device settles conflicts: up | both | keep | ask (empty from an older client)
 }
 
 message IdentifyRequest {}

@@ -15,10 +15,10 @@ fn a_folder_pattern_takes_wildcards_literally() {
     assert_eq!(like_prefix("100%_sure\\"), r"100\%\_sure\\%");
     assert_eq!(like_prefix(""), "%");
 
-    let db = testing::db_with_device();
+    let db = testing::db_with_folder();
     let mut c = db.get().unwrap();
     for path in ["a_b/x", "aXb/x", "a%/y", "abc/z", "a_b2/w"] {
-        c.execute("INSERT INTO files (device_id, path) VALUES (1, $1)", &[&path]).unwrap();
+        c.execute("INSERT INTO files (folder_id, path) VALUES (1, $1)", &[&path]).unwrap();
     }
     let mut below = |folder: &str| -> Vec<String> {
         let rows = c.query("SELECT path FROM files WHERE path LIKE $1 ORDER BY path", &[&like_prefix(folder)]);

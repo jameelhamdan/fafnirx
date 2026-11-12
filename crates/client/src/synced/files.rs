@@ -8,7 +8,7 @@ use anyhow::Result;
 use std::path::Path;
 use std::path::PathBuf;
 
-/// The place of a path of the synced folder on this computer. The path is clean: relative, without `..`.
+/// The place of a path of the synced folder on this device. The path is clean: relative, without `..`.
 pub(super) fn local_path(root: &Path, remote: &str) -> PathBuf {
     remote.split('/').fold(root.to_path_buf(), |p, part| p.join(part))
 }
@@ -73,7 +73,7 @@ pub(super) async fn hash_in_background(path: &Path) -> Result<crate::sync::hash:
         .map_err(|e| SyncError::File(format!("{e:#}")))
 }
 
-/// `name (conflict <computer> <date>).ext`, or with a number when that name is taken too.
+/// `name (conflict <device> <date>).ext`, or with a number when that name is taken too.
 pub(super) fn conflict_name(target: &Path, host: &str, now: i64) -> PathBuf {
     let stem = target.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let ext = target.extension().map(|e| e.to_string_lossy().into_owned());

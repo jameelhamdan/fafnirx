@@ -18,6 +18,9 @@ cargo test --workspace
 ```sh
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p fafnirx --no-default-features -- -D warnings   # the client without the tray
+cargo machete && cargo deny check advisories
+bash scripts/check-layout.sh
 cargo test --workspace
 cd frontend && npx tsc -b && npx oxlint && npm run i18n -- --check
 ```

@@ -1,4 +1,4 @@
-//! The photo library: a timeline of every photo and video a user can reach (their devices and the master files),
+//! The photo library: a timeline of every photo and video a user can reach (their folders and the master files),
 //! favorites, archive, tags, descriptions, ratings, corrected dates and places, the map and the trash.
 //!
 //! Everything people say about a file lives in `file_state` and `tags`, next to the file and keyed by it and by
@@ -19,10 +19,10 @@ use crate::platform::id::Id;
 use crate::repo::jobs::JobStatus;
 use crate::repo::library::{self, Media, Scope};
 use crate::repo::{albums, files, tags};
-use crate::web::access::Access;
-use crate::web::{run, ApiError, Res, Shared};
-use axum::extract::{Path, Query, State};
-use axum::{Extension, Json};
+use crate::web::access::Ctx;
+use crate::web::{run, ApiError, Res};
+use axum::extract::{Path, Query};
+use axum::Json;
 use fafnirx_common::base_name;
 use fafnirx_db::client::GenericClient;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -44,7 +44,7 @@ fn short_hash(root: &[u8]) -> String {
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Asset {
     pub id: Id,
-    pub device: String,
+    pub folder: String,
     pub path: String,
     pub name: String,
     /// image or video
@@ -73,7 +73,7 @@ impl From<library::Asset> for Asset {
             name: base_name(&a.path).to_string(),
             kind: meta::kind(&a.path).unwrap_or("image"),
             hash: short_hash(&a.root_hash),
-            device: a.folder,
+            folder: a.folder,
             size: a.size,
             width: a.width,
             height: a.height,
@@ -95,7 +95,7 @@ impl From<library::Asset> for Asset {
 pub struct Filter {
     /// timeline (everything not archived), favorites or archive
     scope: Option<String>,
-    device: Option<String>,
+    folder: Option<String>,
     /// image or video
     kind: Option<String>,
     tag: Option<Id>,
@@ -124,7 +124,7 @@ impl Filter {
         }
         Ok(library::Filter {
             scope,
-            device: self.device.as_deref().filter(|d| !d.is_empty()),
+            folder: self.folder.as_deref().filter(|d| !d.is_empty()),
             kind,
             tag: self.tag.map(|t| t.0),
             month,
@@ -175,7 +175,7 @@ fn months_of(days: Vec<(String, i64)>) -> Vec<Month> {
 }
 
 /// How many photos and videos each month and day holds, newest first: the skeleton of the timeline.
-pub async fn buckets(State(state): State<Shared>, Extension(who): Extension<Access>, Query(filter): Query<Filter>) -> Res<Buckets> {
+pub async fn buckets(Ctx { state, who }: Ctx, Query(filter): Query<Filter>) -> Res<Buckets> {
     filter.checked()?;
     let out = run(&state, move |c| {
         let days = library::days(c, who.viewer(), &filter.checked()?)?;
@@ -193,7 +193,7 @@ pub struct Assets {
 }
 
 /// The photos and videos of one month, newest first.
-pub async fn timeline(State(state): State<Shared>, Extension(who): Extension<Access>, Query(filter): Query<Filter>) -> Res<Assets> {
+pub async fn timeline(Ctx { state, who }: Ctx, Query(filter): Query<Filter>) -> Res<Assets> {
     if filter.month.as_deref().unwrap_or("").is_empty() {
         return Err(ApiError::bad("month is required, like 2024-05"));
     }
@@ -215,7 +215,7 @@ pub struct IdsQuery {
 }
 
 /// Some files by id (the map shows places, and opens the files that are there).
-pub async fn by_ids(State(state): State<Shared>, Extension(who): Extension<Access>, Query(q): Query<IdsQuery>) -> Res<Assets> {
+pub async fn by_ids(Ctx { state, who }: Ctx, Query(q): Query<IdsQuery>) -> Res<Assets> {
     let ids: Vec<uuid::Uuid> = q.ids.split(',').filter_map(|s| s.trim().parse::<Id>().ok()).map(|i| i.0).take(500).collect();
     let assets = run(&state, move |c| Ok(library::by_ids(c, who.viewer(), &ids)?.into_iter().map(Asset::from).collect())).await?;
     Ok(Json(Assets { assets }))
@@ -271,7 +271,7 @@ pub struct Detail {
 
 /// The photos and videos in the folder of a file, in the order of their names: what the viewer opened from the file browser
 /// steps through. The file itself is in it.
-pub async fn folder(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>) -> Res<Assets> {
+pub async fn folder(Ctx { state, who }: Ctx, Path(Id(id)): Path<Id>) -> Res<Assets> {
     let assets = run(&state, move |c| {
         let mut assets: Vec<Asset> = library::folder_of(c, who.viewer(), id, MAX_ASSETS)?.into_iter().map(Asset::from).collect();
         if !assets.iter().any(|a| a.id.0 == id) {
@@ -284,7 +284,7 @@ pub async fn folder(State(state): State<Shared>, Extension(who): Extension<Acces
     Ok(Json(Assets { assets }))
 }
 
-pub async fn detail(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>) -> Res<Detail> {
+pub async fn detail(Ctx { state, who }: Ctx, Path(Id(id)): Path<Id>) -> Res<Detail> {
     let store = state.store.clone();
     let out = run(&state, move |c| {
         let viewer = who.viewer();
@@ -301,7 +301,7 @@ pub async fn detail(State(state): State<Shared>, Extension(who): Extension<Acces
             .collect();
         let asset = Asset::from(asset);
         let described = described(c, &store, &asset);
-        let work = work_state(c, &asset.device, &asset.path, asset.processing)?;
+        let work = work_state(c, &asset.folder, &asset.path, asset.processing)?;
         Ok(Detail {
             mime: extras.mime.unwrap_or_else(|| meta::mime(&asset.path)),
             description: extras.description,
@@ -329,8 +329,8 @@ pub async fn detail(State(state): State<Shared>, Extension(who): Extension<Acces
 
 /// Whether a file still has work to do, from its unfinished jobs: `running`, `waiting` or `failed`. A file whose details were
 /// never read counts as waiting even before its job is queued.
-pub fn work_state(c: &mut impl GenericClient, device: &str, path: &str, unread: bool) -> Result<Option<String>, postgres::Error> {
-    let jobs = crate::repo::jobs::pending_of(c, device, path)?;
+pub fn work_state(c: &mut impl GenericClient, folder: &str, path: &str, unread: bool) -> Result<Option<String>, postgres::Error> {
+    let jobs = crate::repo::jobs::pending_of(c, folder, path)?;
     let has = |s: JobStatus| jobs.iter().any(|(_, status)| *status == s);
     Ok(if has(JobStatus::Running) {
         Some("running")
@@ -349,9 +349,9 @@ fn described(c: &mut postgres::Client, store: &crate::platform::store::Store, as
     if asset.kind != "video" {
         return None;
     }
-    let near = files::neighbours(c, &asset.device, &asset.path).ok()?;
+    let near = files::neighbours(c, &asset.folder, &asset.path).ok()?;
     let (nfo, _) = artwork::description(&asset.path, &near)?;
-    let disk = store.live_path(&asset.device, nfo).ok()?;
+    let disk = store.live_path(&asset.folder, nfo).ok()?;
     if std::fs::metadata(&disk).ok()?.len() > artwork::NFO_MAX_BYTES {
         return None;
     }

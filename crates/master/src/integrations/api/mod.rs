@@ -6,10 +6,9 @@
 use crate::integrations::fetch_source;
 use crate::platform::db;
 use crate::repo::links::{self, Dir, RunStatus, SourceKind};
-use crate::web::access::Access;
-use crate::web::{act, run, ApiError, Done, Res, Shared};
-use axum::extract::State;
-use axum::{Extension, Json};
+use crate::web::access::{Access, Ctx};
+use crate::web::{act, run, ApiError, App, Done, Res};
+use axum::Json;
 use fafnirx_db::queries as sql;
 use postgres::Client;
 use serde::Serialize;
@@ -22,7 +21,7 @@ pub use mirror::*;
 pub use source::*;
 
 const INTERVAL_HOURS: (f64, f64) = (0.25, 24.0 * 365.0);
-/// Source devices are named after their source.
+/// Source folders are named after their source.
 const SOURCE_PREFIX: &str = "source-";
 
 #[derive(Serialize)]
@@ -60,7 +59,7 @@ fn states(c: &mut Client, dir: Dir, who: &Access) -> Result<Vec<JobState>, postg
                     "files": r.files,
                     "kind": r.kind,
                     "remote": storage_label(&kind, &config),
-                    "folder": r.folder,
+                    "folder": r.scope,
                     "config": shown_config(&kind, &config),
                 }),
                 Dir::Out => {
@@ -72,7 +71,7 @@ fn states(c: &mut Client, dir: Dir, who: &Access) -> Result<Vec<JobState>, postg
                         "remote": config["remote"],
                         "remote_type": config["remote_type"],
                         "remote_path": config["remote_path"],
-                        "folder": r.folder,
+                        "scope": r.scope,
                         "keep_runs": config["keep_runs"],
                         "option_keys": keys,
                         "files": r.files,
@@ -149,12 +148,12 @@ fn mirror_id(c: &mut Client, name: &str) -> anyhow::Result<i64> {
     Ok(links::id_by_name(c, Dir::Out, None, name)?.ok_or_else(|| ApiError::not_found("No such mirror"))?)
 }
 
-pub async fn sources(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Vec<JobState>> {
+pub async fn sources(Ctx { state, who }: Ctx) -> Res<Vec<JobState>> {
     who.require_workspace()?;
     Ok(Json(run(&state, move |c| Ok(states(c, Dir::In, &who)?)).await?))
 }
 
-pub async fn mirrors(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Vec<JobState>> {
+pub async fn mirrors(Ctx { state, who }: Ctx) -> Res<Vec<JobState>> {
     who.require_admin()?;
     Ok(Json(run(&state, move |c| Ok(states(c, Dir::Out, &who)?)).await?))
 }
@@ -239,7 +238,7 @@ fn touch(c: &mut Client, id: i64, key: &str, what: Touch) -> anyhow::Result<()> 
 
 /// Does `what` to the source `<user>/<name>` if the user manages it, or to the mirror `name` (administrators) when no user is given,
 /// and announces it (to `<user>/<name>`, or to `mirrors`).
-async fn touch_link(state: &Shared, who: Access, user: Option<String>, name: String, what: Touch) -> Res<Done> {
+async fn touch_link(state: &App, who: Access, user: Option<String>, name: String, what: Touch) -> Res<Done> {
     if user.is_some() {
         who.require_workspace()?;
     } else {

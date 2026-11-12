@@ -193,9 +193,9 @@ export class Master {
       put: (u, b) => call('PUT', u, b),
       delete: (u) => call('DELETE', u),
       /** Uploads a file through the web API (start, bytes, finish); returns the status of finishing it. */
-      upload: async (device, p, text) => {
+      upload: async (folder, p, text) => {
         const body = Buffer.from(text)
-        const started = (await call('POST', '/api/uploads', { device, path: p, size: body.length })).json
+        const started = (await call('POST', '/api/uploads', { folder, path: p, size: body.length })).json
         await fetch(`${this.base}/api/uploads/${started.id}?offset=0`, { method: 'PUT', headers: { cookie, 'x-requested-with': 'e2e' }, body })
         return (await call('POST', `/api/uploads/${started.id}/finish`, {})).status
       },
@@ -250,7 +250,7 @@ export async function harness(prefix = 'fafnirx-e2e-', { binaries = [MASTER, CLI
 }
 
 /**
- * Gives the client of a config file a state directory of its own, as a second computer has. By default it also turns self-update
+ * Gives the client of a config file a state directory of its own, as a second device has. By default it also turns self-update
  * off: a client that updates itself would fetch the newest real release and replace the binary under test.
  */
 export function isolate(cfg, stateDir, { autoUpdate = false } = {}) {
@@ -267,9 +267,12 @@ export async function enrollDevice({ tmp, master }, admin, name = 'laptop', dir 
   const client = clientIn(path.join(tmp, dir))
   client.c.enroll(token, `http://127.0.0.1:${master.grpc}`)
   isolate(client.cfg, path.join(tmp, state))
-  // Enrolling ran with the default state directory, which is one computer; the client of the test keeps its state in
+  // Enrolling ran with the default state directory, which is one device; the client of the test keeps its state in
   // `tmp`, which is another. Release the device so that this one can have it.
-  const folder = encodeURIComponent((await admin.get('/api/devices')).json.find((d) => d.name === name && (!user || d.user === user))?.folder ?? `admin/${name}`)
+  const folder = encodeURIComponent((await admin.get('/api/devices')).json.find((d) => d.name === name && (!user || d.user === user))?.key ?? `admin/${name}`)
   await admin.post(`/api/devices/${folder}/release`)
   return { ...client, token }
 }
+
+/** SQL for the path a file had when a directory of a device was the first part of its paths (`docs/a.txt`): `d` is its folder, `f` the file. */
+export const OLD_PATH = "(CASE WHEN d.kind = 'backup' THEN d.name || '/' || f.path ELSE f.path END)"

@@ -5,24 +5,26 @@ import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto'
 import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
-import { CHUNK, CLIENT, ENV, EXE, MASTER, check, clientIn, harness, isolate, passedChecks, run, sleep, until } from './lib.mjs'
+import { CHUNK, CLIENT, ENV, EXE, MASTER, OLD_PATH, check, clientIn, harness, isolate, passedChecks, run, sleep, until } from './lib.mjs'
 
 const h = await harness('fafnirx-e2e-', { binaries: [MASTER, CLIENT] })
 const { tmp, data, schema, master } = h
 const server = `http://127.0.0.1:${master.grpc}`
 let daemon = null
 
-/** What the master stores for a path of the device: the live file, or its folder of the version once deleted. */
+/** What the master stores for a path of a device or folder: the live file, or its folder of the version once deleted. */
 const stored = async (device, p) => {
   const [row] = await schema.rows(
-    "SELECT f.current_version_id, f.deleted_at FROM files f JOIN devices d ON d.id = f.device_id WHERE d.folder = $1 AND f.path = $2",
+    `SELECT f.current_version_id, f.deleted_at, d.key, f.path FROM files f JOIN folders d ON d.id = f.folder_id
+     WHERE (d.key = $1 OR starts_with(d.key, $1 || '/')) AND ${OLD_PATH} = $2`,
     [device, p],
   )
   if (!row) return null
-  const file = row[1] === null ? path.join(data, 'files', ...(device.startsWith('master:') ? [device.slice(7)] : ['users', device]), p) : path.join(data, 'versions', String(row[0]), device.replace(/^master:/, ''), p)
+  const [, deleted, key, inside] = row
+  const file = deleted === null ? path.join(data, 'files', ...(key.startsWith('master:') ? [key.slice(7)] : ['users', key]), inside) : path.join(data, 'versions', String(row[0]), key.replace(/^master:/, ''), inside)
   return fs.existsSync(file) ? fs.readFileSync(file) : null
 }
-const known = async (p) => (await schema.rows('SELECT 1 FROM files WHERE path = $1', [p])).length > 0
+const known = async (p) => (await schema.rows(`SELECT 1 FROM files f JOIN folders d ON d.id = f.folder_id WHERE ${OLD_PATH} = $1`, [p])).length > 0
 
 try {
   await master.start()
@@ -41,9 +43,9 @@ try {
   const out = c.enroll(token, server).stdout
   check(out.includes('as device "admin/laptop"'), `enroll connects without TLS (${out.trim().split('\n').pop()})`)
   isolate(cfg, path.join(tmp, 'state'), { autoUpdate: true })
-  // The enrolling above ran with the default state directory, which counts as one computer; the client of this test keeps
+  // The enrolling above ran with the default state directory, which counts as one device; the client of this test keeps
   // its state elsewhere, so it is another. Releasing the device lets that one take it (and exercises the release).
-  check((await admin.post('/api/devices/admin%2Flaptop/release')).status === 200, 'a device can be released for another computer')
+  check((await admin.post('/api/devices/admin%2Flaptop/release')).status === 200, 'a device can be released for another device')
   const plain = run(CLIENT,['--config', path.join(tmp, 'x', 'config.toml'), 'install', '--in-place', '--no-start', '--no-path', '--server', 'http://203.0.113.5:7443'], { ok: false, input: 'x\n' })
   check(plain.stdout.includes('plain http on a public address'), 'plain http to a public address is warned about')
 
@@ -69,7 +71,7 @@ try {
   const first = c('sync').stdout
   check(first.includes('5 uploaded'), `first sync uploads 5 files (${first.trim()})`)
 
-  const paths = new Set((await schema.rows('SELECT path FROM files WHERE deleted_at IS NULL')).map((r) => r[0]))
+  const paths = new Set((await schema.rows(`SELECT ${OLD_PATH} FROM files f JOIN folders d ON d.id = f.folder_id WHERE f.deleted_at IS NULL`)).map((r) => r[0]))
   check(
     ['docs/big.bin', 'docs/sub/a.txt', 'docs/sub/deep/b.txt', 'docs/.fafnirxignore', 'docs/empty.txt'].every((p) => paths.has(p)) && paths.size === 5,
     `the device holds the expected paths ${[...paths].sort()}`,
@@ -77,11 +79,11 @@ try {
   check((await stored('admin/laptop', 'docs/big.bin'))?.equals(big), 'a multi-chunk file is stored as one normal file, byte for byte')
   check((await stored('admin/laptop', 'docs/sub/a.txt'))?.toString() === 'hello', 'a small file is stored under its own name')
 
-  const listing = (await admin.get('/api/files?device=admin/laptop&path=docs')).json
+  const listing = (await admin.get('/api/files?folder=admin/laptop/docs')).json
   check(listing.entries.some((e) => e.kind === 'dir' && e.name === 'sub') && listing.entries.some((e) => e.name === 'big.bin'), 'the file browser lists what was collected')
-  const dl = await admin.bytes('/api/files/download?device=admin/laptop&path=docs/big.bin')
+  const dl = await admin.bytes('/api/files/download?folder=admin/laptop/docs&path=big.bin')
   check(dl.status === 200 && dl.body.equals(big), 'the web API downloads a multi-chunk file intact')
-  const part = await admin.bytes('/api/files/download?device=admin/laptop&path=docs/big.bin', { range: `bytes=${CHUNK}-${CHUNK + 99}` })
+  const part = await admin.bytes('/api/files/download?folder=admin/laptop/docs&path=big.bin', { range: `bytes=${CHUNK}-${CHUNK + 99}` })
   check(part.status === 206 && part.body.equals(big.subarray(CHUNK, CHUNK + 100)), 'a byte range of a download is served (streaming, resume)')
 
   // --- unchanged: nothing is sent ---------------------------------------------------------------------------
@@ -107,10 +109,10 @@ try {
   fs.writeFileSync(path.join(src, 'big.bin'), edited)
   const sent = Number(/(\d+) bytes sent/.exec(c('sync').stdout)[1])
   check(sent === edited.length, `an edited file is sent whole (${sent} bytes)`)
-  const info = (await admin.get('/api/files/info?device=admin/laptop&path=docs/big.bin')).json
+  const info = (await admin.get('/api/files/info?folder=admin/laptop/docs&path=big.bin')).json
   check(info.versions.length === 2 && info.versions.every((v) => v.available), 'the old version is kept next to the new one')
   const old = info.versions.find((v) => !v.current)
-  const oldBytes = await admin.bytes(`/api/files/download?device=admin/laptop&path=docs/big.bin&version=${old.id}`)
+  const oldBytes = await admin.bytes(`/api/files/download?folder=admin/laptop/docs&path=big.bin&version=${old.id}`)
   check(oldBytes.body.equals(big), 'an older version can be downloaded')
   check((await stored('admin/laptop', 'docs/big.bin')).equals(edited), 'the current version is the edited file')
 
@@ -122,11 +124,11 @@ try {
   fs.renameSync(path.join(src, 'sub', 'a.txt'), path.join(src, 'sub', 'renamed.txt'))
   const renamed = c('sync').stdout
   check(renamed.includes('1 renamed') && renamed.includes('0 bytes sent'), `a rename is detected without re-uploading (${renamed.trim()})`)
-  const [ev] = await schema.rows("SELECT action, detail FROM events WHERE path = 'docs/sub/renamed.txt'")
-  check(ev?.[0] === 'rename' && ev?.[1] === 'docs/sub/a.txt', 'the rename is recorded in the change log')
-  const oldDeletes = await schema.rows("SELECT action FROM events WHERE path = 'docs/sub/a.txt' AND action = 'delete'")
+  const [ev] = await schema.rows("SELECT e.action, e.detail FROM events e JOIN folders d ON d.id = e.folder_id WHERE d.key = 'admin/laptop/docs' AND e.path = 'sub/renamed.txt'")
+  check(ev?.[0] === 'rename' && ev?.[1] === 'sub/a.txt', 'the rename is recorded in the change log')
+  const oldDeletes = await schema.rows("SELECT e.action FROM events e JOIN folders d ON d.id = e.folder_id WHERE d.key = 'admin/laptop/docs' AND e.path = 'sub/a.txt' AND e.action = 'delete'")
   check(oldDeletes.length === 0, 'the old path of a rename is not logged as a delete')
-  const [vacated] = await schema.rows("SELECT f.deleted_by FROM files f JOIN devices d ON d.id = f.device_id WHERE d.folder = 'admin/laptop' AND f.path = 'docs/sub/a.txt'")
+  const [vacated] = await schema.rows("SELECT f.deleted_by FROM files f JOIN folders d ON d.id = f.folder_id WHERE d.key = 'admin/laptop/docs' AND f.path = 'sub/a.txt'")
   check(vacated?.[0] === 'rename', 'and it is kept as renamed (hidden from the trash), not as deleted')
 
   // --- a file becomes a folder of the same name: the old path is deleted first, so the new files can be stored ----
@@ -147,17 +149,17 @@ try {
   c('sync')
   fs.rmSync(held, { recursive: true })
   c.try('sync')
-  check((await stored('admin/laptop', 'held/keep.txt'))?.toString() === 'keep me' && (await schema.rows("SELECT 1 FROM files WHERE path = 'held/keep.txt' AND deleted_at IS NULL")).length === 1, 'files of a collected folder that disappeared stay on the master')
+  check((await stored('admin/laptop', 'held/keep.txt'))?.toString() === 'keep me' && (await schema.rows(`SELECT 1 FROM files f JOIN folders d ON d.id = f.folder_id WHERE ${OLD_PATH} = 'held/keep.txt' AND f.deleted_at IS NULL`)).length === 1, 'files of a collected folder that disappeared stay on the master')
   c('folder', 'remove', 'held')
 
   // --- deleted in the web app: hidden on the master, not sent again, and the device's file is left alone ----------
   const mine = path.join(src, 'web-deleted.txt')
   fs.writeFileSync(mine, 'v1')
   c('sync')
-  await admin.post('/api/files/delete', { items: [{ device: 'admin/laptop', path: 'docs/web-deleted.txt' }] })
+  await admin.post('/api/files/delete', { items: [{ folder: 'admin/laptop/docs', path: 'web-deleted.txt' }] })
   fs.writeFileSync(mine, 'v2, changed on the device after the delete')
   c('sync')
-  const [webDeleted] = await schema.rows("SELECT deleted_at, deleted_by FROM files WHERE path = 'docs/web-deleted.txt'")
+  const [webDeleted] = await schema.rows(`SELECT f.deleted_at, f.deleted_by FROM files f JOIN folders d ON d.id = f.folder_id WHERE ${OLD_PATH} = 'docs/web-deleted.txt'`)
   check(webDeleted?.[0] != null && webDeleted[1] === 'web' && (await stored('admin/laptop', 'docs/web-deleted.txt'))?.toString() === 'v1', 'a file deleted in the web app stays deleted and is not sent again')
   check(fs.readFileSync(mine, 'utf8').startsWith('v2'), 'and the file on the device is untouched')
   fs.rmSync(mine)
@@ -166,11 +168,11 @@ try {
   // --- delete: the data stays --------------------------------------------------------------------------------------
   fs.unlinkSync(path.join(src, 'sub', 'deep', 'b.txt'))
   check(c('sync').stdout.includes('1 deleted'), 'a delete is reported')
-  const [[deletedAt]] = await schema.rows("SELECT deleted_at FROM files WHERE path = 'docs/sub/deep/b.txt'")
+  const [[deletedAt]] = await schema.rows(`SELECT f.deleted_at FROM files f JOIN folders d ON d.id = f.folder_id WHERE ${OLD_PATH} = 'docs/sub/deep/b.txt'`)
   check(deletedAt !== null, 'the path is marked deleted')
   check((await stored('admin/laptop', 'docs/sub/deep/b.txt'))?.toString() === 'world', 'a deleted file is still fully recoverable')
-  check(!(await admin.get('/api/files?device=admin/laptop&path=docs/sub/deep')).json.entries.some((e) => e.name === 'b.txt'), 'a deleted file leaves the listing')
-  const gone = (await admin.get('/api/files?device=admin/laptop&path=docs/sub/deep&deleted=1')).json.entries.find((e) => e.name === 'b.txt')
+  check(!(await admin.get('/api/files?folder=admin/laptop/docs&path=sub/deep')).json.entries.some((e) => e.name === 'b.txt'), 'a deleted file leaves the listing')
+  const gone = (await admin.get('/api/files?folder=admin/laptop/docs&path=sub/deep&deleted=1')).json.entries.find((e) => e.name === 'b.txt')
   check(gone?.deleted_at && gone.purge_at > gone.deleted_at, 'with "deleted" on, it shows when it will be removed for good')
 
   // --- resume after the client is killed mid-upload -------------------------------------------------------------------
@@ -205,22 +207,22 @@ try {
   check(online, 'the daemon connects and reports online')
   const admin2 = await master.admin()
   check((await admin2.get('/api/devices')).json.find((d) => d.name === 'laptop').online === true, 'the web API shows the device online')
-  // --- a second computer with the same token is refused, and tells why ---------------------------------------------------
+  // --- a second device with the same token is refused, and tells why ---------------------------------------------------
   const twinDir = path.join(tmp, 'twin')
   const twin = clientIn(twinDir)
   const twinOut = twin.c.enroll(token, server).stdout
-  check(twinOut.includes('device in use'), `a second computer enrolling with the same token is told the device is in use (${twinOut.trim().split('\n').pop()})`)
+  check(twinOut.includes('device in use'), `a second device enrolling with the same token is told the device is in use (${twinOut.trim().split('\n').pop()})`)
   isolate(twin.cfg, path.join(tmp, 'twin-state'), { autoUpdate: true })
   const twinSrc = path.join(tmp, 'twin-docs')
   fs.mkdirSync(twinSrc, { recursive: true })
   fs.writeFileSync(path.join(twinSrc, 'twin-only.txt'), 'must never arrive')
   twin.c('folder', 'add', twinSrc, '--name', 'twin')
   const twinDaemon = spawn(CLIENT, ['--config', twin.cfg, 'run'], { env: ENV, stdio: 'ignore' })
-  check(await until(() => twin.c('status').stdout.includes('not sending'), 40), 'the second computer waits and says it is not sending')
+  check(await until(() => twin.c('status').stdout.includes('not sending'), 40), 'the second device waits and says it is not sending')
   await new Promise((r) => setTimeout(r, 3000))
   check(!(await known('twin/twin-only.txt')), 'and nothing it has is sent')
-  check(c('status').stdout.split('\n').slice(0, 2).join(' ').includes('online'), 'the first computer carries on undisturbed')
-  check((await admin2.get('/api/dashboard')).json.alerts.some((a) => a.kind === 'device_conflict' && a.key === 'admin/laptop'), 'the owner gets an alert about the second computer')
+  check(c('status').stdout.split('\n').slice(0, 2).join(' ').includes('online'), 'the first device carries on undisturbed')
+  check((await admin2.get('/api/dashboard')).json.alerts.some((a) => a.kind === 'device_conflict' && a.key === 'admin/laptop'), 'the owner gets an alert about the second device')
   twinDaemon.kill()
   const second = spawn(CLIENT, ['--config', cfg, 'run'], { env: ENV, stdio: ['ignore', 'pipe', 'ignore'] })
   let said = ''
@@ -263,7 +265,7 @@ try {
   // --- a local folder: upload in the browser's chunks, then files dropped straight into it ------------------------------------------------
   check((await admin2.post('/api/folders', { name: 'photos' })).status === 200, 'a local folder is created')
   const photo = randomBytes(300_000)
-  const upload = (await admin2.post('/api/uploads', { device: 'admin/photos', path: '2024/p.jpg', size: photo.length })).json
+  const upload = (await admin2.post('/api/uploads', { folder: 'admin/photos', path: '2024/p.jpg', size: photo.length })).json
   for (let at = 0; at < photo.length; at += 100_000) {
     const r = await fetch(`${master.base}/api/uploads/${upload.id}?offset=${at}`, { method: 'PUT', headers: { cookie: admin2.cookie, 'x-requested-with': 'e2e' }, body: photo.subarray(at, at + 100_000) })
     if (!r.ok) check(false, `an upload chunk is accepted (${r.status})`)
@@ -275,28 +277,28 @@ try {
   check(await until(() => known('dropped/x.txt'), 60), 'a file dropped into files/<name>/ is picked up (file watcher)')
   fs.mkdirSync(path.join(data, 'files', 'users', 'admin', 'newdrive'))
   fs.writeFileSync(path.join(data, 'files', 'users', 'admin', 'newdrive', 'y.txt'), 'in a folder nobody created')
-  check(await until(() => known('y.txt'), 60), 'a new folder in the folder of a user becomes a device of that user')
-  const kind = (await schema.rows("SELECT kind FROM devices WHERE name = 'newdrive'"))[0]?.[0]
-  check(kind === 'local', 'and it is a local device')
+  check(await until(() => known('y.txt'), 60), 'a new directory in the directory of a user becomes a folder of that user')
+  const kind = (await schema.rows("SELECT kind FROM folders WHERE name = 'newdrive'"))[0]?.[0]
+  check(kind === 'user', 'and it is a folder of that user')
   // Master folders: a folder in files/ (not files/users/) belongs to nobody.
   fs.mkdirSync(path.join(data, 'files', 'scans'), { recursive: true })
   fs.writeFileSync(path.join(data, 'files', 'scans', 'loose.txt'), 'dropped on the share, for everybody')
   check(await until(() => known('loose.txt'), 60), 'a file dropped into a new folder of files/ outside users/ is picked up')
-  const [master0] = await schema.rows("SELECT d.kind, d.user_id IS NULL, d.folder FROM files f JOIN devices d ON d.id = f.device_id WHERE f.path = 'loose.txt'")
+  const [master0] = await schema.rows("SELECT d.kind, d.user_id IS NULL, d.key FROM files f JOIN folders d ON d.id = f.folder_id WHERE f.path = 'loose.txt'")
   check(master0?.[0] === 'master' && master0[1] === true && master0[2] === 'master:scans', 'the folder is a master folder: no user, no device of anyone')
-  check((await schema.rows("SELECT 1 FROM devices WHERE kind = 'master' AND lower(name) LIKE 'users%'")).length === 0, 'the folders of the users are never a master folder')
+  check((await schema.rows("SELECT 1 FROM folders WHERE kind = 'master' AND lower(name) LIKE 'users%'")).length === 0, 'the folders of the users are never a master folder')
   const bob = (await admin2.post('/api/users', { name: 'bob', role: 'readonly', password: 'password-1' }))
   check(bob.status === 200, 'a user is added')
   const asBob = await master.admin('bob', 'password-1')
-  check((await asBob.get('/api/files?device=master:scans')).json.entries.some((e) => e.name === 'loose.txt'), 'a read-only user sees the master folders')
-  check((await asBob.bytes('/api/files/download?device=master:scans&path=loose.txt')).body.toString() === 'dropped on the share, for everybody', 'and can download them')
-  check((await asBob.get('/api/files?device=admin/photos')).status === 404, 'but not the files of the administrator')
+  check((await asBob.get('/api/files?folder=master:scans')).json.entries.some((e) => e.name === 'loose.txt'), 'a read-only user sees the master folders')
+  check((await asBob.bytes('/api/files/download?folder=master:scans&path=loose.txt')).body.toString() === 'dropped on the share, for everybody', 'and can download them')
+  check((await asBob.get('/api/files?folder=admin/photos')).status === 404, 'but not the files of the administrator')
   check((await asBob.post('/api/devices', { name: 'mine' })).status === 403, 'and has no devices of their own')
   // The top level says what each folder is and whether the web app may change it.
-  const tops = async (who) => Object.fromEntries((await who.get('/api/files')).json.entries.map((e) => [e.device, [e.device_kind, e.writable]]))
+  const tops = async (who) => Object.fromEntries((await who.get('/api/files')).json.entries.map((e) => [e.folder, [e.folder_kind, e.writable]]))
   const adminTop = await tops(admin2)
-  check(adminTop['master:scans']?.join() === 'master,true' && adminTop['admin/photos']?.join() === 'local,true', 'a master folder and a local folder are changeable')
-  check(adminTop['admin/laptop']?.join() === 'device,false', 'what a computer sends is read-only in the web app')
+  check(adminTop['master:scans']?.join() === 'master,true' && adminTop['admin/photos']?.join() === 'user,true', 'a master folder and a folder of a user are changeable')
+  check(adminTop['admin/laptop/docs']?.join() === 'backup,false', 'what a device sends is read-only in the web app')
   check((await tops(asBob))['master:scans']?.join() === 'master,false', 'a read-only user cannot change a master folder')
   // A scan can be asked for, by an administrator only.
   const oldFile = path.join(data, 'files', 'scans', 'asked-for.txt')
@@ -307,7 +309,7 @@ try {
   check(asked.status === 200 && typeof asked.json.started === 'boolean', 'an administrator can ask for a scan')
   check(await until(() => known('asked-for.txt'), 60), 'and the file put there by hand is recorded')
   fs.unlinkSync(path.join(data, 'files', 'users', 'admin', 'photos', 'dropped', 'x.txt'))
-  const removed = await until(async () => (await schema.rows("SELECT deleted_at FROM files WHERE path = 'dropped/x.txt'"))[0]?.[0] != null, 60)
+  const removed = await until(async () => (await schema.rows(`SELECT f.deleted_at FROM files f JOIN folders d ON d.id = f.folder_id WHERE ${OLD_PATH} = 'dropped/x.txt'`))[0]?.[0] != null, 60)
   check(removed, 'a file removed from files/<name>/ is marked deleted')
 
   const copy = path.join(tmp, `fafnirx-copy${EXE}`)

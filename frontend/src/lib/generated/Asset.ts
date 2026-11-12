@@ -4,7 +4,7 @@ import type { Id } from "./Id";
 /**
  * A photo or video as the grid and the viewer need it.
  */
-export type Asset = { id: Id, device: string, path: string, name: string, 
+export type Asset = { id: Id, folder: string, path: string, name: string, 
 /**
  * image or video
  */

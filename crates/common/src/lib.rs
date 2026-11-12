@@ -23,7 +23,7 @@ pub fn unix_now() -> i64 {
 /// Whether `name` can name a device (and so its folder): 1-63 characters, lowercase letters, digits,
 /// `.`, `_` or `-`, starting with a letter or digit, and not a name Windows reserves. The database
 /// enforces the same rule.
-pub fn valid_device_name(name: &str) -> bool {
+pub fn valid_name(name: &str) -> bool {
     let mut chars = name.chars();
     let shape = name.len() <= 63 && chars.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit()) && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'));
     let stem = name.split('.').next().unwrap_or(name);
@@ -206,15 +206,15 @@ pub fn nfc(name: &str) -> String {
 }
 
 /// What decides whether two paths are the same name: composed and lowercase. Some file systems (Windows, macOS) cannot hold
-/// two paths that differ only in case, so a shared folder, which every kind of computer must be able to hold, treats them as one
+/// two paths that differ only in case, so a shared folder, which every kind of device must be able to hold, treats them as one
 /// name on all of them.
 pub fn fold_path(path: &str) -> String {
     nfc(path).to_lowercase()
 }
 
-/// Why a path cannot be kept by every kind of computer, if it cannot: a character Windows does not allow in a name, a name
+/// Why a path cannot be kept by every kind of device, if it cannot: a character Windows does not allow in a name, a name
 /// that ends in a space or a dot, or a name Windows reserves. Shared folders refuse such paths everywhere, so that a file does
-/// not exist on one computer and fail to arrive on another.
+/// not exist on one device and fail to arrive on another.
 pub fn not_portable(path: &str) -> Option<String> {
     for part in path.split('/') {
         if let Some(c) = part.chars().find(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*' | '\\')) {

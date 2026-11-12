@@ -75,7 +75,7 @@ fn the_worker_reads_a_photo_and_makes_a_picture_only_when_asked() {
     use crate::platform::db::testing;
     use fafnirx_common::{chunk_hash, root_hash};
 
-    let db = testing::db_with_device();
+    let db = testing::db_with_folder();
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let mut data = Vec::new();
@@ -85,9 +85,9 @@ fn the_worker_reads_a_photo_and_makes_a_picture_only_when_asked() {
     let root = root_hash(&[chunk_hash(&data)], data.len() as u64);
     let staged = store.temp_path();
     std::fs::write(&staged, &data).unwrap();
-    let device = testing::device();
+    let folder = testing::folder();
     let v = NewVersion {
-        device: &device,
+        folder: &folder,
         path: "trip/a.png",
         root,
         size: data.len() as u64,
@@ -113,7 +113,7 @@ fn the_worker_reads_a_photo_and_makes_a_picture_only_when_asked() {
     let ask = |size: u32| {
         let job = ThumbJob {
             id: "someid".into(),
-            device: device.name.clone(),
+            folder: folder.key.clone(),
             path: "trip/a.png".into(),
             root: root_hex.clone(),
             key: root_hex.clone(),
@@ -135,7 +135,7 @@ fn the_worker_reads_a_photo_and_makes_a_picture_only_when_asked() {
     // With thumbnails off nothing is made, even for a job that was queued before.
     let other = ThumbJob {
         id: "someid".into(),
-        device: device.name.clone(),
+        folder: folder.key.clone(),
         path: "trip/a.png".into(),
         root: root_hex.clone(),
         key: root_hex.clone(),
@@ -157,12 +157,12 @@ fn the_worker_reads_a_photo_and_makes_a_picture_only_when_asked() {
 #[test]
 fn the_library_column_of_files_agrees_with_the_extension_lists() {
     use crate::platform::db::testing;
-    let db = testing::db_with_device();
+    let db = testing::db_with_folder();
     let mut c = db.get().unwrap();
     let mut paths: Vec<String> = IMAGE_EXTENSIONS.iter().chain(&VIDEO_EXTENSIONS).map(|e| format!("a/x.{e}")).collect();
     paths.extend(["a/X.JPG", "a/video.MP4", "a/x.jpg.txt", "a/jpg", "a/x.docx", "a/.mp4x"].map(String::from));
     for path in &paths {
-        c.execute("INSERT INTO files (device_id, path) VALUES (1, $1)", &[path]).unwrap();
+        c.execute("INSERT INTO files (folder_id, path) VALUES (1, $1)", &[path]).unwrap();
         let media: Option<String> = c.query_one("SELECT media FROM files WHERE path = $1", &[path]).unwrap().get(0);
         assert_eq!(media.as_deref(), kind(path), "{path}");
     }

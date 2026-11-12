@@ -46,7 +46,7 @@ export function UploadPanel() {
           {items.map((i) => (
             <li key={i.id} className="space-y-1 px-3 py-2 text-xs">
               <div className="flex justify-between gap-2">
-                <span className="truncate" title={`${i.device}/${i.path}`}>{i.path}</span>
+                <span className="truncate" title={`${i.folder}/${i.path}`}>{i.path}</span>
                 <span className="shrink-0 text-muted-foreground">
                   {i.status === 'done' ? t('Done') : i.status === 'error' ? t('Failed') : i.status === 'queued' ? t('Waiting') : `${percent(i.sent, i.size) ?? 0}%`}
                 </span>

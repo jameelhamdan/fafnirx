@@ -33,7 +33,7 @@ export function FileGrid({
             <button type="button" onClick={() => onOpen(e)} className="block w-full text-left" title={e.name}>
               <div className="grid aspect-square place-items-center bg-muted/40">
                 {e.kind === 'file' && e.preview ? (
-                  <Thumb src={e.id ? mediaUrl(e.id, 'thumb') : thumbUrl(e.device, e.path)} className={cn('size-full', e.deleted_at && 'opacity-40')} fallback={<FileIcon entry={e} className="size-10" />} />
+                  <Thumb src={e.id ? mediaUrl(e.id, 'thumb') : thumbUrl(e.folder, e.path)} className={cn('size-full', e.deleted_at && 'opacity-40')} fallback={<FileIcon entry={e} className="size-10" />} />
                 ) : (
                   <FileIcon entry={e} className="size-10" />
                 )}
@@ -42,7 +42,7 @@ export function FileGrid({
                 <p className={cn('truncate text-sm', e.kind !== 'file' && 'font-medium')}>{e.name}</p>
                 {e.processing && <p className="flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="size-3 animate-spin" />{t('Still being processed')}</p>}
                 <p className="text-xs text-muted-foreground">{e.kind === 'file' ? bytes(e.size) : `${plural(e.files ?? 0, 'file')} · ${bytes(e.size)}`}</p>
-                {e.kind === 'device' && <div className="mt-1"><AccessBadge writable={e.writable} kind={e.device_kind} /></div>}
+                {e.kind === 'folder' && <div className="mt-1"><AccessBadge writable={e.writable} kind={e.folder_kind} /></div>}
               </div>
             </button>
             <Checkbox

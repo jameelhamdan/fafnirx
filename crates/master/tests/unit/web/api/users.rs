@@ -147,28 +147,34 @@ fn every_user_has_a_workspace_and_the_master_files_belong_to_everyone() {
             assert_eq!(try_upload(&api, &format!("{who}/phone"), "me.txt", who.as_bytes()).await, StatusCode::OK);
         }
 
-        // Each sees their own devices and the master files, and nothing of the other's.
+        // Each sees their own folders and the master files, and nothing of the other's.
         api.cookie = bob.clone();
-        let (_, devices) = api.get("/api/devices").await;
-        assert_eq!(devices.as_array().unwrap().len(), 1);
-        assert_eq!(devices[0]["folder"], "bob/phone");
+        let (_, mine) = api.get("/api/folders").await;
+        let own: Vec<_> = mine
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|f| f["mine"] == true)
+            .map(|f| f["key"].as_str().unwrap())
+            .collect();
+        assert_eq!(own, ["bob/phone"]);
         let (_, top) = api.get("/api/files").await;
-        let names: Vec<_> = top["entries"].as_array().unwrap().iter().map(|e| e["device"].as_str().unwrap()).collect();
+        let names: Vec<_> = top["entries"].as_array().unwrap().iter().map(|e| e["folder"].as_str().unwrap()).collect();
         assert_eq!(names, ["bob/phone", "master:docs"]);
         // What the web app may change is told with each entry: the master folder and his local folder, both his to write.
         let kinds: Vec<_> = top["entries"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|e| (e["device_kind"].as_str().unwrap(), e["writable"].as_bool().unwrap()))
+            .map(|e| (e["folder_kind"].as_str().unwrap(), e["writable"].as_bool().unwrap()))
             .collect();
-        assert_eq!(kinds, [("local", true), ("master", true)]);
-        let (_, inside) = api.get("/api/files?device=bob/phone").await;
-        assert_eq!((inside["device_kind"].clone(), inside["writable"].clone()), (json!("local"), json!(true)));
-        assert_eq!(api.get("/api/files?device=alice/phone").await.0, StatusCode::NOT_FOUND);
-        assert_eq!(api.get("/api/files/info?device=alice/phone&path=me.txt").await.0, StatusCode::NOT_FOUND);
+        assert_eq!(kinds, [("user", true), ("master", true)]);
+        let (_, inside) = api.get("/api/files?folder=bob/phone").await;
+        assert_eq!((inside["folder_kind"].clone(), inside["writable"].clone()), (json!("user"), json!(true)));
+        assert_eq!(api.get("/api/files?folder=alice/phone").await.0, StatusCode::NOT_FOUND);
+        assert_eq!(api.get("/api/files/info?folder=alice/phone&path=me.txt").await.0, StatusCode::NOT_FOUND);
         let (status, _, _) = api
-            .send(Method::GET, "/api/files/download?device=alice/phone&path=me.txt", Body::empty(), &[])
+            .send(Method::GET, "/api/files/download?folder=alice/phone&path=me.txt", Body::empty(), &[])
             .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(api.get("/api/devices/alice%2Fphone").await.0, StatusCode::NOT_FOUND);
@@ -179,38 +185,38 @@ fn every_user_has_a_workspace_and_the_master_files_belong_to_everyone() {
             StatusCode::NOT_FOUND,
             "no writing in another workspace"
         );
-        let delete = json!({"items": [{"device": "alice/phone", "path": "me.txt"}]});
+        let delete = json!({"items": [{"folder": "alice/phone", "path": "me.txt"}]});
         assert_eq!(api.json(Method::POST, "/api/files/delete", delete).await.0, StatusCode::NOT_FOUND);
-        let (_, body) = api.get("/api/files?device=master:docs").await;
+        let (_, body) = api.get("/api/files?folder=master:docs").await;
         assert_eq!(body["entries"][0]["name"], "readme.txt");
         // A normal user writes to the master folders too.
         assert_eq!(try_upload(&api, "master:docs", "from-bob.txt", b"hi").await, StatusCode::OK);
         let (_, dash) = api.get("/api/dashboard").await;
-        assert_eq!(dash["devices"].as_array().unwrap().len(), 1);
+        assert_eq!(dash["devices"], json!([]), "his folders are no devices");
         assert_eq!(dash["mirrors"], json!([]));
 
         // Read-only: sees the master files, has nothing of its own and changes nothing.
         api.cookie = carol.clone();
         let (_, top) = api.get("/api/files").await;
-        let names: Vec<_> = top["entries"].as_array().unwrap().iter().map(|e| e["device"].as_str().unwrap()).collect();
+        let names: Vec<_> = top["entries"].as_array().unwrap().iter().map(|e| e["folder"].as_str().unwrap()).collect();
         assert_eq!(names, ["master:docs"]);
         assert_eq!(api.get("/api/devices").await.1, json!([]));
         assert_eq!(api.get("/api/sources").await.0, StatusCode::FORBIDDEN, "no workspace, no sources");
         let (status, _, body) = api
-            .send(Method::GET, "/api/files/download?device=master:docs&path=readme.txt", Body::empty(), &[])
+            .send(Method::GET, "/api/files/download?folder=master:docs&path=readme.txt", Body::empty(), &[])
             .await;
         assert_eq!((status, body.as_slice()), (StatusCode::OK, &b"for everyone"[..]));
-        assert_eq!(api.get("/api/files?device=bob/phone").await.0, StatusCode::NOT_FOUND);
+        assert_eq!(api.get("/api/files?folder=bob/phone").await.0, StatusCode::NOT_FOUND);
         assert_eq!(try_upload(&api, "master:docs", "x.txt", b"x").await, StatusCode::FORBIDDEN);
         let own = json!({"name": "mine"});
         assert_eq!(api.json(Method::POST, "/api/folders", own).await.0, StatusCode::FORBIDDEN);
-        let delete = json!({"items": [{"device": "master:docs", "path": "readme.txt"}]});
+        let delete = json!({"items": [{"folder": "master:docs", "path": "readme.txt"}]});
         assert_eq!(api.json(Method::POST, "/api/files/delete", delete).await.0, StatusCode::FORBIDDEN);
         assert_eq!(
             api.json(
                 Method::POST,
                 "/api/albums",
-                json!({"name": "mine", "folder": {"device": "master:docs", "path": ""}})
+                json!({"name": "mine", "folder": {"folder": "master:docs", "path": ""}})
             )
             .await
             .0,
@@ -219,14 +225,14 @@ fn every_user_has_a_workspace_and_the_master_files_belong_to_everyone() {
 
         // The administrator reaches everything.
         api.cookie = admin;
-        let (_, devices) = api.get("/api/devices").await;
-        let folders: Vec<_> = devices.as_array().unwrap().iter().map(|d| d["folder"].as_str().unwrap()).collect();
-        assert_eq!(folders, ["alice/phone", "bob/phone"]);
-        let (status, _, body) = api.send(Method::GET, "/api/files/download?device=bob/phone&path=me.txt", Body::empty(), &[]).await;
+        let (_, top) = api.get("/api/files").await;
+        let folders: Vec<_> = top["entries"].as_array().unwrap().iter().map(|e| e["folder"].as_str().unwrap()).collect();
+        assert_eq!(folders, ["alice/phone", "bob/phone", "master:docs"]);
+        let (status, _, body) = api.send(Method::GET, "/api/files/download?folder=bob/phone&path=me.txt", Body::empty(), &[]).await;
         assert_eq!((status, body.as_slice()), (StatusCode::OK, &b"bob"[..]));
         assert_eq!(try_upload(&api, "alice/phone", "from-admin.txt", b"x").await, StatusCode::OK);
         let (status, made) = api.json(Method::POST, "/api/devices", json!({"name": "tablet", "user": "bob"})).await;
-        assert_eq!((status, made["device"]["folder"].clone()), (StatusCode::OK, json!("bob/tablet")));
+        assert_eq!((status, made["device"]["key"].clone()), (StatusCode::OK, json!("bob/tablet")));
 
         // The folders of the users are in users/, so a user can have the name of a master folder.
         let docs = json!({"name": "docs", "role": "normal", "password": "password-1"});
@@ -253,7 +259,7 @@ fn what_people_say_about_a_master_file_is_their_own() {
             .json(
                 Method::POST,
                 "/api/albums",
-                json!({"name": "Bob's", "folder": {"device": "master:shared", "path": ""}}),
+                json!({"name": "Bob's", "folder": {"folder": "master:shared", "path": ""}}),
             )
             .await;
         assert_eq!((status, album["count"].clone()), (StatusCode::OK, json!(1)));
@@ -330,9 +336,9 @@ fn a_disabled_user_is_deleted_with_what_is_theirs_once_nothing_of_value_is_left(
             "nothing was deleted"
         );
 
-        // Once the folder is empty (the file in its trash), the user goes with the folder and the computer.
+        // Once the folder is empty (the file in its trash), the user goes with the folder and the device.
         let (status, body) = api
-            .json(Method::POST, "/api/files/delete", json!({"items": [{"device": "dave/docs", "path": "letter.txt"}]}))
+            .json(Method::POST, "/api/files/delete", json!({"items": [{"folder": "dave/docs", "path": "letter.txt"}]}))
             .await;
         assert_eq!(status, StatusCode::OK, "{body}");
         let (status, body) = delete(&api, "dave").await;

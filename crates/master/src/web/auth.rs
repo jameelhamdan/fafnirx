@@ -4,8 +4,8 @@
 //! the moment the row goes: when the user logs out, is disabled, or gets a new password.
 
 use super::access::{Access, Role};
-use crate::repo::{devices, sessions, settings, users};
-use crate::web::{done, run, ApiError, Done, Res, Shared};
+use crate::repo::{folders, sessions, settings, users};
+use crate::web::{done, run, ApiError, App, Done, Res};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
 use axum::extract::{ConnectInfo, State};
@@ -103,7 +103,7 @@ pub fn user_of_session(conn: &mut impl GenericClient, headers: &HeaderMap) -> an
         return Ok(None);
     };
     let Some(role) = Role::parse(&role) else { return Ok(None) };
-    let folders = devices::folders(conn, user_id)?.into_iter().map(|f| (f.folder, f.can_write)).collect();
+    let folders = folders::usable(conn, user_id)?.into_iter().map(|f| (f.key, f.can_write)).collect();
     Ok(Some(Access { user_id, name, role, folders }))
 }
 
@@ -128,7 +128,7 @@ pub fn is_secure(headers: &HeaderMap) -> bool {
 }
 
 /// The lock that lets one password check of a user name run at a time. Gates nobody waits on are dropped.
-fn gate(state: &Shared, username: &str) -> Arc<tokio::sync::Mutex<()>> {
+fn gate(state: &App, username: &str) -> Arc<tokio::sync::Mutex<()>> {
     let mut gates = state.login_gates.locked();
     gates.retain(|_, g| Arc::strong_count(g) > 1);
     gates.entry(username.to_string()).or_default().clone()
@@ -138,7 +138,7 @@ fn wrong() -> ApiError {
     ApiError(StatusCode::UNAUTHORIZED, "Wrong username or password".into())
 }
 
-pub async fn login(State(state): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Json(body): Json<Login>) -> Result<impl IntoResponse, ApiError> {
+pub async fn login(State(state): State<App>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Json(body): Json<Login>) -> Result<impl IntoResponse, ApiError> {
     // The connection itself, unless it comes from a proxy the master was told to trust (`FAFNIRX_TRUSTED_PROXY`): then the
     // address the proxy saw. Otherwise forwarding headers are not believed, anyone who can reach the port could forge them.
     // Guesses are limited per address and per user name at that address: a blocked address cannot try more, and nobody can
@@ -206,7 +206,7 @@ pub async fn login(State(state): State<Shared>, ConnectInfo(peer): ConnectInfo<S
     Ok((AppendHeaders([cookie_header(&token, SESSION_SECS, is_secure(&headers))]), Json(Done { ok: true })))
 }
 
-pub async fn logout(State(state): State<Shared>, headers: HeaderMap) -> Result<impl IntoResponse, ApiError> {
+pub async fn logout(State(state): State<App>, headers: HeaderMap) -> Result<impl IntoResponse, ApiError> {
     if let Some(token) = cookie_token(&headers) {
         let stored = token_hash(&token);
         run(&state, move |c| Ok(sql::sessions::delete_session().bind(c, &stored).map(drop)?)).await?;
@@ -240,7 +240,7 @@ pub struct Session {
     photos: Option<bool>,
 }
 
-pub async fn session(State(state): State<Shared>, access: Option<Extension<Access>>) -> Res<Session> {
+pub async fn session(State(state): State<App>, access: Option<Extension<Access>>) -> Res<Session> {
     let access = access.map(|Extension(a)| a);
     let logged_in = access.is_some();
     let photos = if logged_in { Some(run(&state, |c| Ok(settings::photos_on(c))).await?) } else { None };
@@ -259,7 +259,7 @@ pub struct ChangePassword {
 }
 
 /// Users change their own password; the session they do it in stays.
-pub async fn change_password(State(state): State<Shared>, Extension(access): Extension<Access>, headers: HeaderMap, Json(body): Json<ChangePassword>) -> Res<Done> {
+pub async fn change_password(State(state): State<App>, Extension(access): Extension<Access>, headers: HeaderMap, Json(body): Json<ChangePassword>) -> Res<Done> {
     if body.new.chars().count() < MIN_PASSWORD {
         return Err(ApiError::bad(format!("The password needs at least {MIN_PASSWORD} characters")));
     }

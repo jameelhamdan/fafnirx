@@ -1,12 +1,12 @@
 //! The numbers on the dashboard.
 
-use crate::devices::api::{computers_and_folders, DeviceSummary};
+use crate::devices::api::{device_summaries, DeviceSummary};
 use crate::integrations::api::{job_states, JobState};
-use crate::repo::{alerts, devices, events};
-use crate::web::access::Access;
-use crate::web::{act, run, Done, Res, Shared};
-use axum::extract::{Path, State};
-use axum::{Extension, Json};
+use crate::repo::{alerts, events, folders};
+use crate::web::access::{Access, Ctx};
+use crate::web::{act, run, Done, Res};
+use axum::extract::Path;
+use axum::Json;
 use fafnirx_common::unix_now;
 use fafnirx_db::queries as sql;
 use postgres::Client;
@@ -41,12 +41,12 @@ pub struct Recent {
     action: String,
     path: String,
     detail: Option<String>,
-    device: String,
+    folder: String,
 }
 
 impl From<events::Recent> for Recent {
     fn from(e: events::Recent) -> Self {
-        Self { id: e.id, ts: e.ts, action: e.action, path: e.path, detail: e.detail, device: e.device }
+        Self { id: e.id, ts: e.ts, action: e.action, path: e.path, detail: e.detail, folder: e.folder }
     }
 }
 
@@ -62,6 +62,14 @@ pub struct Alert {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+pub struct FolderTotal {
+    key: String,
+    bytes: i64,
+    files: i64,
+}
+
+#[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export, rename = "DashboardDisk"))]
 pub struct Disk {
     total: u64,
@@ -74,6 +82,8 @@ pub struct Disk {
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Dashboard {
     devices: Vec<DeviceSummary>,
+    /// What each folder holds, the biggest first.
+    folders: Vec<FolderTotal>,
     online: usize,
     totals: Totals,
     activity: Vec<Day>,
@@ -84,11 +94,11 @@ pub struct Dashboard {
     disk: Option<Disk>,
 }
 
-/// What the devices `who` can see hold (the master files included).
+/// What the folders `who` can see hold (the master folders included).
 pub fn totals(c: &mut Client, who: &Access) -> Result<Totals, postgres::Error> {
-    // Kept on the device rows, as of each device's last sync.
+    // Kept on the folder rows, as of each folder's last sum.
     let (all, user) = who.scope_args();
-    let (files, bytes, marked_deleted) = devices::visible_totals(c, all, user)?;
+    let (files, bytes, marked_deleted) = folders::visible_totals(c, all, user)?;
     Ok(Totals { files, bytes, marked_deleted })
 }
 
@@ -113,16 +123,21 @@ fn activity(c: &mut Client, who: &Access) -> Result<Vec<Day>, postgres::Error> {
     Ok(days)
 }
 
-/// The latest changes in the devices `who` can see, or only in the device with this folder.
+/// The latest changes in the folders `who` can see, or only in the folder with this key (a device key: those of its folders).
 pub fn recent(c: &mut Client, who: &Access, limit: i64, folder: Option<&str>) -> Result<Vec<Recent>, postgres::Error> {
     let (all, user) = who.scope_args();
     Ok(events::recent(c, folder, all, user, limit)?.into_iter().map(Recent::from).collect())
 }
 
-pub async fn dashboard(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Dashboard> {
+pub async fn dashboard(Ctx { state, who }: Ctx) -> Res<Dashboard> {
     let data_dir = state.data_dir.clone();
     let out = run(&state, move |c| {
-        let devices = computers_and_folders(c, &who)?;
+        let devices = device_summaries(c, &who, None)?;
+        let (all, user) = who.scope_args();
+        let folders = folders::totals(c, all, user)?
+            .into_iter()
+            .map(|(key, bytes, files)| FolderTotal { key, bytes, files })
+            .collect();
         let online = devices.iter().filter(|d| d.online).count();
         // Sources are per user (an administrator sees all); mirrors belong to the administrators.
         let (sources, mirrors) = if who.has_workspace() { job_states(c, &who)? } else { Default::default() };
@@ -144,6 +159,7 @@ pub async fn dashboard(State(state): State<Shared>, Extension(who): Extension<Ac
             .map(|(total, free)| Disk { total, used: total.saturating_sub(free), free, percent: 100 * total.saturating_sub(free) / total });
         Ok(Dashboard {
             devices,
+            folders,
             online,
             totals: totals(c, &who)?,
             activity: activity(c, &who)?,
@@ -158,7 +174,7 @@ pub async fn dashboard(State(state): State<Shared>, Extension(who): Extension<Ac
     Ok(Json(out))
 }
 
-pub async fn dismiss(State(state): State<Shared>, Extension(who): Extension<Access>, Path(crate::platform::id::Id(id)): Path<crate::platform::id::Id>) -> Res<Done> {
+pub async fn dismiss(Ctx { state, who }: Ctx, Path(crate::platform::id::Id(id)): Path<crate::platform::id::Id>) -> Res<Done> {
     act(&state, move |c| {
         // Only the alerts of a device the user can see.
         let key = sql::alerts::alert_key().bind(c, &id).opt()?;

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Installs the fafnirx client on Linux or macOS in one command: downloads the program for this machine, checks its sha256, and
-# runs `fafnirx install` with your options. It asks for the administrator password: the client is a service of the computer.
+# runs `fafnirx install` with your options. It asks for the administrator password: the client is a service of the device.
 #
 #   curl -fsSL https://raw.githubusercontent.com/jameelhamdan/fafnirx/master/installer/get.sh | sh -s -- \
 #       --server nas.lan --folder ~/Documents

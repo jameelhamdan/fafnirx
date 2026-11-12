@@ -1,18 +1,17 @@
 //! Chunked, resumable uploads that fit behind proxies with request size limits.
 
-use crate::files::browse::find_device_to_change;
+use crate::files::browse::find_folder_to_change;
 use crate::files::ingest::{self, NewVersion};
 use crate::platform::db;
-use crate::repo::devices::DeviceKind;
-use crate::web::access::Access;
-use crate::web::{run, ApiError, Res, Shared};
+use crate::repo::folders;
+use crate::web::access::Ctx;
+use crate::web::{run, ApiError, App, Res};
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::{Extension, Json};
+use axum::Json;
 use fafnirx_common::{clean_remote_path, unix_now, LockExt};
-use fafnirx_db::queries as sql;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -24,7 +23,7 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 pub struct Upload {
     /// The user who started it: nobody else can add to it or finish it.
     user_id: i64,
-    device: String,
+    folder: String,
     path: String,
     size: u64,
     mtime_ns: i64,
@@ -39,10 +38,10 @@ const STALE_UPLOAD: Duration = Duration::from_secs(24 * 3600);
 
 #[derive(Deserialize)]
 pub struct NewUpload {
-    device: String,
+    folder: String,
     path: String,
     size: u64,
-    /// Modification time on the uploading computer, unix milliseconds.
+    /// Modification time on the uploading device, unix milliseconds.
     mtime_ms: Option<i64>,
 }
 
@@ -52,25 +51,22 @@ pub struct UploadId {
     received: u64,
 }
 
-pub async fn start_upload(State(state): State<Shared>, Extension(who): Extension<Access>, Json(b): Json<NewUpload>) -> Res<UploadId> {
+pub async fn start_upload(Ctx { state, who }: Ctx, Json(b): Json<NewUpload>) -> Res<UploadId> {
     let path = clean_remote_path(&b.path).map_err(|e| ApiError::bad(e.to_string()))?;
-    let device = b.device.clone();
+    let folder = b.folder.clone();
     let user = who.clone();
     let kind = run(&state, move |c| {
-        user.check_write(&device)?;
-        Ok(DeviceKind::from_db(
-            &sql::devices::device_kind_by_folder()
-                .bind(c, &device)
-                .opt()?
-                .ok_or_else(|| ApiError::not_found("No such device"))?,
-        ))
+        user.check_write(&folder)?;
+        Ok(folders::id_and_kind(c, &folder)?.ok_or_else(|| ApiError::not_found("No such folder"))?.1)
     })
     .await?;
-    // Only folders that live on the master take uploads: a device's files are what the device sends.
+    // Only folders that live on the master take uploads: a folder's files are what the folder sends.
     if !kind.editable() {
-        return Err(ApiError::bad("Files can only be uploaded to a local folder. Create one on the Files page first."));
+        return Err(ApiError::bad(
+            "Files can only be uploaded to a folder of yours or a master folder. Create one on the Files page first.",
+        ));
     }
-    state.store.live_path(&b.device, &path).map_err(|e| ApiError::bad(e.to_string()))?;
+    state.store.live_path(&b.folder, &path).map_err(|e| ApiError::bad(e.to_string()))?;
     let id = hex::encode(db::random_bytes::<16>());
     let file = state.store.temp_path();
     tokio::fs::File::create(&file).await.map_err(anyhow::Error::from)?;
@@ -93,7 +89,7 @@ pub async fn start_upload(State(state): State<Shared>, Extension(who): Extension
         id.clone(),
         Upload {
             user_id: who.user_id,
-            device: b.device,
+            folder: b.folder,
             path,
             size: b.size,
             mtime_ns,
@@ -105,7 +101,7 @@ pub async fn start_upload(State(state): State<Shared>, Extension(who): Extension
     Ok(Json(UploadId { id, received: 0 }))
 }
 
-fn session<T>(state: &Shared, user_id: i64, id: &str, f: impl FnOnce(&mut Upload) -> T) -> Result<T, ApiError> {
+fn session<T>(state: &App, user_id: i64, id: &str, f: impl FnOnce(&mut Upload) -> T) -> Result<T, ApiError> {
     let mut uploads = state.uploads.locked();
     let upload = uploads
         .get_mut(id)
@@ -121,7 +117,7 @@ pub struct Received {
     size: u64,
 }
 
-pub async fn upload_status(State(state): State<Shared>, Extension(who): Extension<Access>, Path(id): Path<String>) -> Res<Received> {
+pub async fn upload_status(Ctx { state, who }: Ctx, Path(id): Path<String>) -> Res<Received> {
     Ok(Json(session(&state, who.user_id, &id, |u| Received { received: u.received, size: u.size })?))
 }
 
@@ -130,7 +126,7 @@ pub struct Offset {
     offset: u64,
 }
 
-pub async fn upload_chunk(State(state): State<Shared>, Extension(who): Extension<Access>, Path(id): Path<String>, Query(q): Query<Offset>, body: Body) -> Result<Json<Received>, Response> {
+pub async fn upload_chunk(Ctx { state, who }: Ctx, Path(id): Path<String>, Query(q): Query<Offset>, body: Body) -> Result<Json<Received>, Response> {
     let (file, received, size) = session(&state, who.user_id, &id, |u| (u.file.clone(), u.received, u.size)).map_err(IntoResponse::into_response)?;
     if q.offset != received {
         let wrong = Json(serde_json::json!({ "error": format!("expected offset {received}"), "received": received }));
@@ -160,12 +156,12 @@ pub async fn upload_chunk(State(state): State<Shared>, Extension(who): Extension
 
 #[derive(Serialize)]
 pub struct Finished {
-    device: String,
+    folder: String,
     path: String,
     size: u64,
 }
 
-pub async fn finish_upload(State(state): State<Shared>, Extension(who): Extension<Access>, Path(id): Path<String>) -> Res<Finished> {
+pub async fn finish_upload(Ctx { state, who }: Ctx, Path(id): Path<String>) -> Res<Finished> {
     let upload = {
         let mut uploads = state.uploads.locked();
         let u = uploads
@@ -192,15 +188,15 @@ pub async fn finish_upload(State(state): State<Shared>, Extension(who): Extensio
     let result = run(&state, move |c| {
         let (root, size) = crate::platform::store::hash_file(&upload.file)?;
         // Checked again: the user may have lost the right while the file was on its way.
-        let dev = find_device_to_change(c, &who, &upload.device)?;
-        ingest::check_names(c, &dev, &upload.path, None, true)?;
+        let folder = find_folder_to_change(c, &who, &upload.folder)?;
+        ingest::check_names(c, &folder, &upload.path, None, true)?;
         ingest::commit_version(
             c,
             &store,
             &upload.file,
-            &NewVersion { device: &dev, path: &upload.path, root, size, mtime: upload.mtime_ns, mode: 0, renamed_from: None },
+            &NewVersion { folder: &folder, path: &upload.path, root, size, mtime: upload.mtime_ns, mode: 0, renamed_from: None },
         )?;
-        Ok(Finished { device: upload.device, path: upload.path, size })
+        Ok(Finished { folder: upload.folder, path: upload.path, size })
     })
     .await;
     match kept {
@@ -216,7 +212,7 @@ pub async fn finish_upload(State(state): State<Shared>, Extension(who): Extensio
     Ok(Json(result?))
 }
 
-pub async fn abort_upload(State(state): State<Shared>, Extension(who): Extension<Access>, Path(id): Path<String>) -> Res<crate::web::Done> {
+pub async fn abort_upload(Ctx { state, who }: Ctx, Path(id): Path<String>) -> Res<crate::web::Done> {
     {
         let mut uploads = state.uploads.locked();
         if uploads.get(&id).is_some_and(|u| u.user_id == who.user_id) {

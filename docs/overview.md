@@ -20,9 +20,9 @@ flowchart LR
 1. The client notices a change (file watcher + periodic scan) and waits for the file to settle.
 2. It hashes the file in 4 MiB chunks (BLAKE3): a file is its chunk hashes plus a root hash.
 3. It sends the list; the master answers with the chunks it still needs. Interrupted uploads resume. Content the device
-   already has under another path (a copy or a rename) needs no data.
+   already has under another path (a copy or a rename, within one directory of the device) needs no data. Moved to another top-level directory, a file is sent again.
 4. The master verifies every chunk, assembles the file, checks the root hash, and moves it to
-   `files/users/<user>/<device>/<path>`. The file it replaces moves to `versions/<version id>/<user>/<device>/<path>`.
+   `files/users/<user>/<device>/<directory>/<path>` (the directory is a folder of its own). The file it replaces moves to `versions/<version id>/<user>/<device>/<directory>/<path>`.
 5. Deleting on the device only marks the path deleted; the data stays until the retention period passes.
 6. Mirrors copy the current tree, and what changed since the last run, to storage you choose.
 
@@ -36,7 +36,7 @@ flowchart LR
 - **The master changes only its own files**, never a file on a device. Files a device or source sent cannot be edited or
   renamed on the master; only folders and master folders can.
 - **Deleting in the web app hides first.** The file goes to the Trash; the device is not asked for it again. In a
-  synced folder, computers delete it too. It is erased when retention ends, or when you choose **Delete forever** in the Trash.
+  synced folder, devices delete it too. It is erased when retention ends, or when you choose **Delete forever** in the Trash.
 - **Roles.** Administrator: everything. Normal: master folders and own folders, read and write. Read only: reads master folders.
 
 ## Not in scope

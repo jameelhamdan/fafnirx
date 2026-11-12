@@ -15,7 +15,7 @@
 //!   FAFNIRX_RCLONE          rclone binary used by mirrors (default: rclone from PATH)
 //!   FAFNIRX_RCLONE_CONFIG   rclone config file for mirrors that name a remote (default <FAFNIRX_DATA>/rclone.conf)
 //!   FAFNIRX_TICK_SECS       how often sources and mirrors are checked for being due (default 15)
-//!   FAFNIRX_INSTANCE_LEASE_SECS  seconds a device must be silent before another computer may use its token (default 90)
+//!   FAFNIRX_INSTANCE_LEASE_SECS  seconds a device must be silent before another device may use its token (default 90)
 //!   FAFNIRX_PLUGIN_SECRET   the secret that the optional modules (containers) join with and are called with (at least 16
 //!                           characters, e.g. `openssl rand -hex 24`); without it no module may join
 //!   FAFNIRX_PLUGINS         comma separated ids of the modules that must be running (`video,fetch`); one that is not connected
@@ -35,6 +35,7 @@
 mod platform;
 mod devices;
 mod files;
+mod folders;
 mod integrations;
 mod library;
 mod modules;

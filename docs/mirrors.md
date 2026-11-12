@@ -15,18 +15,18 @@ The kind is chosen when the mirror is added and cannot be changed: add another m
 ## What a mirror holds
 
 ```text
-files/users/<user>/<device>/...  current tree per device or folder (shared or not)
+files/users/<user>/<key>/...      current tree per folder (a device's: <user>/<device>/<directory>)
 files/<name>/<path>              master folders
 versions/<UTC time>/...          what that run replaced or removed
 meta/stats.json                  run stats
-meta/<user>_<device>.json        file lists (path, size, mtime, root hash)
+meta/<folder key, / as _>.json    file lists (path, size, mtime, root hash)
 meta/library.json                albums, tags, favorites, ratings, descriptions, corrected dates and places
 ```
 
 A backup has the same tree below the encryption: every name above, `files/` and `meta/` included, is encrypted on the
 storage. `meta/library.json` is left out when the mirror holds one folder (it names files of the whole tree).
 
-**What to copy:** everything, or one whole folder (`master:<folder>`, `<user>/<folder>` or a computer, `<user>/<computer>`).
+**What to copy:** everything, one whole folder (`master:<folder>`, `<user>/<folder>`), or one device with all its folders (`<user>/<device>`).
 Files keep their place below `files/`. The choice cannot be changed later. A mirror points at the folder itself, so renaming
 the folder keeps it attached; the next run copies it under the new name, and the copy under the old name stays on the storage
 until you delete it there.
@@ -55,7 +55,7 @@ protect its backups.
 
 ### Restore
 
-On the mirror's card, **Download restore kit** (administrators) gives an `rclone.conf` with the storage and the key. On any computer with rclone:
+On the mirror's card, **Download restore kit** (administrators) gives an `rclone.conf` with the storage and the key. On any device with rclone:
 
 ```text
 rclone --config fafnirx-restore.conf copy fafnirx-backup:files ./restored

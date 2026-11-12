@@ -3,7 +3,7 @@
 use super::*;
 
 fn members(folders: &Value, folder: &str) -> Vec<(String, bool)> {
-    let found = folders.as_array().unwrap().iter().find(|f| f["folder"] == folder).expect("the folder is listed");
+    let found = folders.as_array().unwrap().iter().find(|f| f["key"] == folder).expect("the folder is listed");
     found["members"]
         .as_array()
         .unwrap()
@@ -26,7 +26,7 @@ fn the_owner_makes_a_shared_folder_and_lets_other_users_in_one_by_one() {
         let (status, body) = api.json(Method::POST, "/api/folders", json!({"name": " Family "})).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         let made = api.get("/api/folders").await.1;
-        assert_eq!(made[0]["folder"], "bob/family");
+        assert_eq!(made[0]["key"], "bob/family");
         assert_eq!((made[0]["mine"].clone(), made[0]["can_write"].clone()), (json!(true), json!(true)));
         assert!(members(&made, "bob/family").is_empty(), "nobody else can use it yet");
         assert!(api._dir.path().join("files/users/bob/family").is_dir(), "the folder exists for a network share");
@@ -34,13 +34,13 @@ fn the_owner_makes_a_shared_folder_and_lets_other_users_in_one_by_one() {
 
         // It is a folder of Bob's that the web app can change, like a local one.
         assert_eq!(try_upload(&api, "bob/family", "a.txt", b"hello").await, StatusCode::OK);
-        let (_, inside) = api.get("/api/files?device=bob/family").await;
-        assert_eq!((inside["device_kind"].clone(), inside["writable"].clone()), (json!("local"), json!(true)));
+        let (_, inside) = api.get("/api/files?folder=bob/family").await;
+        assert_eq!((inside["folder_kind"].clone(), inside["writable"].clone()), (json!("user"), json!(true)));
 
         // Nobody else sees it, and nobody but its owner manages it.
         api.cookie = alice.clone();
         assert_eq!(api.get("/api/folders").await.1, json!([]));
-        assert_eq!(api.get("/api/files?device=bob/family").await.0, StatusCode::NOT_FOUND);
+        assert_eq!(api.get("/api/files?folder=bob/family").await.0, StatusCode::NOT_FOUND);
         let add = json!({"user": "alice"});
         assert_eq!(api.json(Method::POST, "/api/folders/family/members", add.clone()).await.0, StatusCode::NOT_FOUND);
 
@@ -52,7 +52,7 @@ fn the_owner_makes_a_shared_folder_and_lets_other_users_in_one_by_one() {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(members(&api.get("/api/folders").await.1, "bob/family"), [("alice".to_string(), false)]);
         for (body, why) in [
-            (json!({"user": "bob"}), "he already has it on all his computers"),
+            (json!({"user": "bob"}), "he already has it on all his devices"),
             (json!({"user": "ghost"}), "there is no such user"),
             (json!({"user": "carol", "can_write": true}), "a read-only account cannot be given write access"),
         ] {
@@ -71,7 +71,7 @@ fn the_owner_makes_a_shared_folder_and_lets_other_users_in_one_by_one() {
         api.cookie = alice.clone();
         let (_, theirs) = api.get("/api/folders").await;
         assert_eq!(theirs.as_array().unwrap().len(), 1);
-        assert_eq!(theirs[0]["folder"], "bob/family");
+        assert_eq!(theirs[0]["key"], "bob/family");
         assert_eq!((theirs[0]["mine"].clone(), theirs[0]["can_write"].clone()), (json!(false), json!(false)));
         assert_eq!(theirs[0]["members"], json!([]));
         assert_eq!(
@@ -80,26 +80,26 @@ fn the_owner_makes_a_shared_folder_and_lets_other_users_in_one_by_one() {
             "not hers to delete"
         );
 
-        // She sees it in the web app too: in the folder list, its files, and as a device. She may not change it yet.
-        let (status, inside) = api.get("/api/files?device=bob/family").await;
+        // She sees it in the web app too: in the folder list and its files. She may not change it yet.
+        let (status, inside) = api.get("/api/files?folder=bob/family").await;
         assert_eq!(status, StatusCode::OK, "{inside}");
-        assert_eq!((inside["device_kind"].clone(), inside["writable"].clone()), (json!("local"), json!(false)));
+        assert_eq!((inside["folder_kind"].clone(), inside["writable"].clone()), (json!("user"), json!(false)));
         assert_eq!(inside["entries"][0]["name"], "a.txt");
         let (_, top) = api.get("/api/files").await;
         assert!(
-            top["entries"].as_array().unwrap().iter().any(|e| e["device"] == "bob/family"),
+            top["entries"].as_array().unwrap().iter().any(|e| e["folder"] == "bob/family"),
             "listed in the folders"
         );
-        let (_, devices) = api.get("/api/devices").await;
-        assert!(devices.as_array().unwrap().iter().any(|d| d["folder"] == "bob/family" && d["kind"] == "local"));
+        let (_, folders) = api.get("/api/folders").await;
+        assert!(folders.as_array().unwrap().iter().any(|f| f["key"] == "bob/family" && f["mine"] == false));
         assert_eq!(try_upload(&api, "bob/family", "b.txt", b"hers").await, StatusCode::FORBIDDEN, "read-only");
-        let (status, _, _) = api.send(Method::GET, "/api/files/download?device=bob/family&path=a.txt", Body::empty(), &[]).await;
+        let (status, _, _) = api.send(Method::GET, "/api/files/download?folder=bob/family&path=a.txt", Body::empty(), &[]).await;
         assert_eq!(status, StatusCode::OK, "and she can download");
 
         // Carol can read it too, but a read-only account has no shared folders of its own.
         api.cookie = carol.clone();
         assert_eq!(api.get("/api/folders").await.1.as_array().unwrap().len(), 1);
-        assert_eq!(api.get("/api/files?device=bob/family").await.0, StatusCode::OK, "a read-only account reads it");
+        assert_eq!(api.get("/api/files?folder=bob/family").await.0, StatusCode::OK, "a read-only account reads it");
         assert_eq!(api.json(Method::POST, "/api/folders", json!({"name": "mine"})).await.0, StatusCode::FORBIDDEN);
 
         // Bob lets Alice change it, and she can upload.
@@ -124,14 +124,14 @@ fn the_owner_makes_a_shared_folder_and_lets_other_users_in_one_by_one() {
         );
         api.cookie = alice.clone();
         assert_eq!(api.get("/api/folders").await.1, json!([]), "and it is gone for her");
-        assert_eq!(api.get("/api/files?device=bob/family").await.0, StatusCode::NOT_FOUND);
+        assert_eq!(api.get("/api/files?folder=bob/family").await.0, StatusCode::NOT_FOUND);
 
         // A folder with files cannot be deleted. Once they are deleted it can, and it takes the trash and the history along.
         api.cookie = bob.clone();
         assert_eq!(api.json(Method::DELETE, "/api/folders/family", json!({})).await.0, StatusCode::CONFLICT);
         let both = json!({"items": [
-            {"device": "bob/family", "path": "a.txt"},
-            {"device": "bob/family", "path": "b.txt"},
+            {"folder": "bob/family", "path": "a.txt"},
+            {"folder": "bob/family", "path": "b.txt"},
         ]});
         assert_eq!(api.json(Method::POST, "/api/files/delete", both).await.0, StatusCode::OK);
         assert_eq!(api.json(Method::DELETE, "/api/folders/family", json!({})).await.0, StatusCode::OK);
@@ -140,7 +140,7 @@ fn the_owner_makes_a_shared_folder_and_lets_other_users_in_one_by_one() {
         assert!(!api._dir.path().join("files/users/bob/family").exists(), "and its folder");
         let versions = std::fs::read_dir(api._dir.path().join("versions")).map(|d| d.count()).unwrap_or(0);
         assert_eq!(versions, 0, "and the stored copies of the deleted files");
-        assert_eq!(api.get("/api/files?device=bob/family").await.0, StatusCode::NOT_FOUND);
+        assert_eq!(api.get("/api/files?folder=bob/family").await.0, StatusCode::NOT_FOUND);
         // The name is free again.
         assert_eq!(api.json(Method::POST, "/api/folders", json!({"name": "family"})).await.0, StatusCode::OK);
     });
@@ -200,44 +200,44 @@ fn a_renamed_folder_keeps_its_files_members_and_albums() {
         );
         assert_eq!(try_upload(&api, "bob/family", "pics/a.txt", b"hello").await, StatusCode::OK);
         let (status, album) = api
-            .json(Method::POST, "/api/albums", json!({"name": "", "folder": {"device": "bob/family", "path": ""}}))
+            .json(Method::POST, "/api/albums", json!({"name": "", "folder": {"folder": "bob/family", "path": ""}}))
             .await;
         assert_eq!(status, StatusCode::OK, "{album}");
 
         // Only the owner renames, and not to a bad or taken name.
         api.cookie = alice.clone();
         assert_eq!(
-            api.json(Method::POST, "/api/devices/bob%2Ffamily/rename", json!({"name": "kin"})).await.0,
+            api.json(Method::POST, "/api/folders/family/rename", json!({"name": "kin"})).await.0,
             StatusCode::NOT_FOUND
         );
         api.cookie = bob.clone();
         assert_eq!(
-            api.json(Method::POST, "/api/devices/bob%2Ffamily/rename", json!({"name": "Bad Name"})).await.0,
+            api.json(Method::POST, "/api/folders/family/rename", json!({"name": "Bad Name"})).await.0,
             StatusCode::BAD_REQUEST
         );
         assert_eq!(api.json(Method::POST, "/api/folders", json!({"name": "pc"})).await.0, StatusCode::OK);
         assert_eq!(
-            api.json(Method::POST, "/api/devices/bob%2Ffamily/rename", json!({"name": "pc"})).await.0,
+            api.json(Method::POST, "/api/folders/family/rename", json!({"name": "pc"})).await.0,
             StatusCode::CONFLICT
         );
 
-        let (status, renamed) = api.json(Method::POST, "/api/devices/bob%2Ffamily/rename", json!({"name": " Kin "})).await;
+        let (status, renamed) = api.json(Method::POST, "/api/folders/family/rename", json!({"name": " Kin "})).await;
         assert_eq!(status, StatusCode::OK, "{renamed}");
         assert_eq!(renamed["folder"], "bob/kin");
 
         let root = api._dir.path().join("files/users/bob");
         assert!(root.join("kin/pics/a.txt").is_file() && !root.join("family").exists(), "the folder moved on disk");
-        assert_eq!(api.get("/api/files?device=bob/family").await.0, StatusCode::NOT_FOUND);
-        let (_, inside) = api.get("/api/files?device=bob/kin&path=pics").await;
+        assert_eq!(api.get("/api/files?folder=bob/family").await.0, StatusCode::NOT_FOUND);
+        let (_, inside) = api.get("/api/files?folder=bob/kin&path=pics").await;
         assert_eq!(inside["entries"].as_array().map(Vec::len), Some(1), "{inside}");
         let (_, shared) = api.get("/api/folders").await;
-        assert_eq!(shared[0]["folder"], "bob/kin");
+        assert_eq!(shared[0]["key"], "bob/kin");
         assert_eq!(members(&shared, "bob/kin"), [("alice".to_string(), false)], "members stay");
         api.cookie = alice.clone();
-        assert_eq!(api.get("/api/files?device=bob/kin").await.0, StatusCode::OK, "the member follows the new name");
+        assert_eq!(api.get("/api/files?folder=bob/kin").await.0, StatusCode::OK, "the member follows the new name");
         api.cookie = bob.clone();
         let (_, albums) = api.get("/api/albums").await;
-        assert_eq!(albums[0]["folder"]["device"], "bob/kin", "the album follows the folder");
+        assert_eq!(albums[0]["folder"]["folder"], "bob/kin", "the album follows the folder");
     });
 }
 
@@ -263,7 +263,7 @@ fn only_an_administrator_makes_master_folders_and_everyone_sees_them() {
         let listed = master_folders_of(&all);
         let names: Vec<_> = listed.iter().map(|f| f["name"].as_str().unwrap().to_string()).collect();
         assert_eq!(names, ["Music", "Photos"], "every user sees them");
-        assert_eq!((listed[0]["folder"].as_str(), listed[0]["can_write"].as_bool()), (Some("master:Music"), Some(true)));
+        assert_eq!((listed[0]["key"].as_str(), listed[0]["can_write"].as_bool()), (Some("master:Music"), Some(true)));
         assert_eq!(api.json(Method::POST, "/api/master-folders", made("Docs")).await.0, StatusCode::FORBIDDEN);
         let id = listed[0]["public_id"].as_str().unwrap().to_string();
         assert_eq!(

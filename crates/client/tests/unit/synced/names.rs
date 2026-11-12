@@ -19,7 +19,7 @@ async fn a_rename_on_the_master_moves_the_file_instead_of_receiving_it_again() {
 }
 
 #[tokio::test]
-async fn a_rename_that_only_changes_the_case_is_a_move_on_every_kind_of_computer() {
+async fn a_rename_that_only_changes_the_case_is_a_move_on_every_kind_of_device() {
     let mut rig = Rig::new().await;
     rig.remote_has("Readme.md", b"same content");
     rig.cycle().await;

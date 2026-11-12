@@ -2,7 +2,7 @@
 //!
 //! A cycle receives what changed on the master, then sends what changed here with the engine that uploads the collected
 //! folders, so a file changed on both sides is noticed before the upload replaces the other side's version. Nothing is
-//! overwritten silently: what becomes of this computer's version depends on the folder's mode (the master's is
+//! overwritten silently: what becomes of this device's version depends on the folder's mode (the master's is
 //! kept and this one put aside; this one is sent; both are kept; or a person is asked).
 //!
 //! `State::synced` records each path as it was when last in step. A local file that still matches it is unchanged here, so
@@ -32,13 +32,13 @@ use std::sync::{Arc, Mutex};
 /// A file being received is written under this prefix next to its place and renamed when it is complete and checked.
 pub const PART_PREFIX: &str = ".fafnirx-part-";
 
-/// Where this computer's version of a file goes when the master's is kept (`Mode::Both`): beside the files, never synced.
+/// Where this device's version of a file goes when the master's is kept (`Mode::Both`): beside the files, never synced.
 pub const CONFLICT_DIR: &str = ".fafnirx-conflicts";
 
 /// Where in the state the point up to which the master's changes were seen is kept.
 const CURSOR: &str = "synced_cursor";
 
-/// A synced folder attached to a folder of this computer.
+/// A synced folder attached to a folder of this device.
 pub struct Attached {
     engine: Engine,
     synced: Folder,
@@ -48,7 +48,7 @@ pub struct Attached {
 }
 
 /// What the master listed: the point to continue from next time, and the paths.
-/// A path the master changed, and where it goes on this computer.
+/// A path the master changed, and where it goes on this device.
 #[derive(Clone, Copy)]
 struct Incoming<'a> {
     path: &'a str,
@@ -59,7 +59,7 @@ struct Incoming<'a> {
 struct Listing {
     cursor: i64,
     /// The paths are every live one, not the changes: the master does not remember every deletion since the last time (it was
-    /// asked from the start, or this computer was away longer than deleted files are kept).
+    /// asked from the start, or this device was away longer than deleted files are kept).
     complete: bool,
     changes: Vec<pb::Change>,
 }
@@ -85,9 +85,9 @@ enum Master<'a> {
     Live(&'a pb::Change),
 }
 
-/// What a conflict came to on this computer.
+/// What a conflict came to on this device.
 enum Settled {
-    /// This computer's version is out of the way: the master's may take its place.
+    /// This device's version is out of the way: the master's may take its place.
     Receive,
     /// The file here stays as it is, and nothing is received for it now.
     Leave,
@@ -223,7 +223,7 @@ impl Attached {
         self.engine.skip = self.engine.state.pending_paths()?;
         // The engine collects one folder with no name of its own: the files of a synced folder are at the top.
         let mut one = cfg.clone();
-        one.folders = vec![Folder::computer(self.synced.path.clone(), String::new())];
+        one.folders = vec![Folder::device(self.synced.path.clone(), String::new())];
         let pushed = self.engine.cycle(&one).await?;
         report.add(&pushed);
         Ok(report)
@@ -254,7 +254,7 @@ impl Attached {
             Applied::Held => keep_cursor_back = true,
             // The master lists a little before the time it names, so that a write racing with it is not missed, and from the
             // second it names on. The deletions that were kept are not to be listed (and held) again: the point goes past that
-            // second, which a write by another computer in that very second would miss until it changes again.
+            // second, which a write by another device in that very second would miss until it changes again.
             Applied::Kept => next = cursor + LISTING_LAG + 1,
             Applied::Done => {}
         }
@@ -300,7 +300,7 @@ impl Attached {
             }
             let folded = fold_path(&path);
             if path.split('/').next() == Some(CONFLICT_DIR) {
-                self.skipped(&path, "that folder is where this computer puts its own versions aside");
+                self.skipped(&path, "that folder is where this device puts its own versions aside");
             } else if let Some(why) = not_portable(&path) {
                 self.skipped(&path, &why);
             } else if let Some(first) = names.get(&folded).filter(|first| **first != path) {
@@ -312,7 +312,7 @@ impl Attached {
             }
         }
         if listing.complete {
-            // Whatever was in step and is not listed was deleted while this computer was away. It goes the way a deletion
+            // Whatever was in step and is not listed was deleted while this device was away. It goes the way a deletion
             // that was listed goes: unchanged here, it is deleted (unless that is a large part of the folder); changed here,
             // it is kept under another name.
             for base in self.engine.state.all_synced()? {
@@ -341,8 +341,8 @@ impl Attached {
         Ok(())
     }
 
-    /// A file that is not received because this computer cannot hold it the way every other computer does. It is said once
-    /// per listing and not retried: the same rule applies on every kind of computer.
+    /// A file that is not received because this device cannot hold it the way every other device does. It is said once
+    /// per listing and not retried: the same rule applies on every kind of device.
     fn skipped(&self, path: &str, why: &str) {
         self.engine.report_error(format!("{}/{path}: not received: {why}", self.synced.name));
     }
@@ -388,7 +388,7 @@ impl Attached {
         if base.as_ref().is_some_and(|b| b.root_hash == change.root_hash) {
             return Ok(());
         }
-        // Another spelling of this name is here (a different case, or of a folder above it). Every kind of computer treats that as
+        // Another spelling of this name is here (a different case, or of a folder above it). Every kind of device treats that as
         // one name, so the file is not received, unless the other spelling is what the master just renamed.
         if let Some(clash) = self.spellings.clash_with(path) {
             let Some(i) = deletions.iter().position(|(_, old_target)| *old_target == clash) else {
@@ -467,11 +467,11 @@ impl Attached {
         Ok(false)
     }
 
-    /// Deletes here what was deleted on the master. Deletions by other computers that are a large part of the folder wait
+    /// Deletes here what was deleted on the master. Deletions by other devices that are a large part of the folder wait
     /// until released or kept (see `Applied`).
     fn apply_deletions(&mut self, deletions: Vec<(Synced, PathBuf)>, from_web: &HashSet<String>, folded: &HashSet<String>, report: &mut Report) -> Result<Applied, SyncError> {
         let synced = self.engine.state.totals()?.0;
-        // What was deleted in the web app is applied whatever its number; the guard is for what other computers delete.
+        // What was deleted in the web app is applied whatever its number; the guard is for what other devices delete.
         let (web, deletions): (Vec<_>, Vec<_>) = deletions.into_iter().partition(|(base, _)| from_web.contains(&base.path));
         self.delete_here(web, folded, report)?;
         let state = &self.engine.state;

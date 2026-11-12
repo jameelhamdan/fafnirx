@@ -51,8 +51,8 @@ impl Media {
 /// Which files a view shows: the scope, narrowed down by whatever else is given.
 pub struct Filter<'a> {
     pub scope: Scope,
-    /// Only the files of the device with this folder name.
-    pub device: Option<&'a str>,
+    /// Only the files of the folder with this folder name.
+    pub folder: Option<&'a str>,
     pub kind: Option<Media>,
     /// Only the files that carry this tag.
     pub tag: Option<Uuid>,
@@ -67,7 +67,7 @@ pub fn days(c: &mut impl GenericClient, who: Viewer, f: &Filter) -> Result<Vec<(
         all: who.all,
         scope_user: who.scope_user,
         scope: f.scope.as_str(),
-        device: f.device,
+        folder: f.folder,
         kind: f.kind.map(Media::as_str),
         tag: f.tag,
         month: f.month,
@@ -82,7 +82,7 @@ pub fn assets(c: &mut impl GenericClient, who: Viewer, f: &Filter, limit: i64) -
         all: who.all,
         scope_user: who.scope_user,
         scope: f.scope.as_str(),
-        device: f.device,
+        folder: f.folder,
         kind: f.kind.map(Media::as_str),
         tag: f.tag,
         month: f.month,

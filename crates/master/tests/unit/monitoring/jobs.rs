@@ -3,14 +3,14 @@ use crate::platform::db::testing;
 
 #[test]
 fn retention_removes_only_expired() {
-    let db = testing::db_with_device();
+    let db = testing::db_with_folder();
     let mut c = db.get().unwrap();
     let old = unix_now() - 40 * 86400;
     let fresh = unix_now() - 86400;
-    c.execute("INSERT INTO files (device_id, path, deleted_at) VALUES (1, 'old', $1)", &[&old]).unwrap();
-    c.execute("INSERT INTO files (device_id, path, deleted_at) VALUES (1, 'fresh', $1)", &[&fresh])
+    c.execute("INSERT INTO files (folder_id, path, deleted_at) VALUES (1, 'old', $1)", &[&old]).unwrap();
+    c.execute("INSERT INTO files (folder_id, path, deleted_at) VALUES (1, 'fresh', $1)", &[&fresh])
         .unwrap();
-    c.execute("INSERT INTO files (device_id, path) VALUES (1, 'live')", &[]).unwrap();
+    c.execute("INSERT INTO files (folder_id, path) VALUES (1, 'live')", &[]).unwrap();
     c.execute(
         "INSERT INTO versions (file_id, root_hash, size, mtime, created_at)
              SELECT id, decode('00', 'hex'), 0, 0, 0 FROM files ORDER BY deleted_at NULLS LAST",
@@ -44,7 +44,7 @@ fn retention_removes_only_expired() {
 
 #[test]
 fn upload_errors_expire_after_48_hours_without_a_new_report() {
-    let db = testing::db_with_device();
+    let db = testing::db_with_folder();
     let mut c = db.get().unwrap();
     let c = &mut *c;
     alerts::upsert(c, "upload_error", "d", "disk full").unwrap();
@@ -81,18 +81,17 @@ fn upload_errors_expire_after_48_hours_without_a_new_report() {
     c.execute("UPDATE alerts SET updated_at = $1 WHERE kind = 'deletions_held'", &[&(unix_now() - 20 * 60)])
         .unwrap();
     expire_quiet_alerts(c).unwrap();
-    assert_eq!(testing::open_alerts(c), 2, "20 minutes without a report: the computer no longer holds them");
+    assert_eq!(testing::open_alerts(c), 2, "20 minutes without a report: the device no longer holds them");
 }
 
 #[test]
-fn local_folders_are_never_offline() {
-    let db = testing::db_with_device();
+fn folders_are_never_offline() {
+    let db = testing::db_with_folder();
     let mut c = db.get().unwrap();
     let c = &mut *c;
-    c.execute("UPDATE devices SET kind = 'local', last_seen = $1 WHERE id = 1", &[&(unix_now() - 600)])
-        .unwrap();
+    c.execute("UPDATE folders SET last_collected = $1 WHERE id = 1", &[&(unix_now() - 600)]).unwrap();
     offline_alerts(c).unwrap();
-    assert_eq!(testing::open_alerts(c), 0, "only clients send heartbeats");
+    assert_eq!(testing::open_alerts(c), 0, "only devices send heartbeats");
 }
 
 #[test]

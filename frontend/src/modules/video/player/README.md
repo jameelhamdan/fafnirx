@@ -45,7 +45,7 @@ Keys: space/`k` play, `j`/`l` skip 10 s, `m` mute, `c` subtitles. Arrows are lef
 - **`hls`**: an HLS master playlist. The player picks quality by connection (or by hand) and falls back to `src` on failure.
 - **`subtitles.list`**: a JSON array `[{ "index": 0, "name": "English", "language": "en", "forced": false }]`.
   **`track`**: the WebVTT of one track, with `{index}` replaced. A `forced` track in the page's language starts by itself;
-  otherwise the last choice is kept. Without `subtitles`, the viewer can still load a `.srt`/`.vtt` from their computer.
+  otherwise the last choice is kept. Without `subtitles`, the viewer can still load a `.srt`/`.vtt` from their device.
 
 fafnirx's backend for both is the video module's service (`modules/video/service`), reached through the master.
 

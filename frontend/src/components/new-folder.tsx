@@ -8,7 +8,7 @@ import { useSession } from '@/lib/session'
 import { useApiMutation } from '@/lib/mutation'
 
 /**
- * Makes a folder of the user's: it lives on the master, anything can be uploaded into it, and computers can keep it in step. The
+ * Makes a folder of the user's: it lives on the master, anything can be uploaded into it, and devices can keep it in step. The
  * dialog opens and closes where it is used (`onCreated` gets the folder as clients name it).
  */
 export function NewFolder({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (folder: string) => void }) {
@@ -16,6 +16,7 @@ export function NewFolder({ open, onClose, onCreated }: { open: boolean; onClose
   const me = useSession()?.user?.name
   const [name, setName] = useState('')
   const create = useApiMutation((): Promise<{ folder: string }> => api.post('/api/folders', { name }), {
+    inline: true,
     invalidate: [['folders'], ['devices'], ['files']],
     onSuccess: (made) => {
       setName('')
@@ -27,7 +28,7 @@ export function NewFolder({ open, onClose, onCreated }: { open: boolean; onClose
       open={open}
       onOpenChange={(o) => { if (!o) { onClose(); create.reset() } }}
       title={t('New folder')}
-      description={t('A folder of yours that lives on the master. Upload into it, or copy files straight into files/<you>/<name>/ on the server; your computers can keep it in step.')}
+      description={t('A folder of yours that lives on the master. Upload into it, or copy files straight into files/<you>/<name>/ on the server; your devices can keep it in step.')}
       onSubmit={() => create.mutate()}
       submit={t('Create')}
       disabled={!name.trim()}

@@ -10,7 +10,6 @@ export function RescanButton({ variant = 'outline' }: { variant?: 'outline' | 'd
   const t = useT()
   const rescan = useApiMutation(() => api.post<{ started: boolean }>('/api/files/rescan'), {
     onSuccess: (r) => toast.success(r.started ? t('Scanning the file store. New files show up as they are found.') : t('A scan is already running.')),
-    toastError: true,
   })
   return (
     <Button variant={variant} disabled={rescan.isPending} onClick={() => rescan.mutate()}>

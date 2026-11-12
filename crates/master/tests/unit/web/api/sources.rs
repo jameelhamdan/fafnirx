@@ -25,7 +25,7 @@ fn a_source_writes_into_a_chosen_folder_and_can_be_edited() {
         // With no folder named it gets one of its own; with one it writes there.
         assert_eq!(api.json(Method::POST, "/api/sources", source("alone", None)).await.0, StatusCode::OK);
         assert_eq!(listed(&api, "alone").await["detail"]["folder"], "admin/source-alone");
-        let place = json!({"device": "admin/media"});
+        let place = json!({"folder": "admin/media"});
         let (status, body) = api.json(Method::POST, "/api/sources", source("pics", Some(place))).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(listed(&api, "pics").await["detail"]["folder"], "admin/media");
@@ -33,9 +33,9 @@ fn a_source_writes_into_a_chosen_folder_and_can_be_edited() {
 
         // Not just anywhere: the master folders are open to it, but not a folder that does not exist.
         master_folder(&api, "Media").await;
-        let master = json!({"device": "master:Media"});
+        let master = json!({"folder": "master:Media"});
         assert_eq!(api.json(Method::POST, "/api/sources", source("feeds", Some(master))).await.0, StatusCode::OK);
-        let nowhere = json!({"device": "admin/nothing"});
+        let nowhere = json!({"folder": "admin/nothing"});
         assert_eq!(api.json(Method::POST, "/api/sources", source("bad", Some(nowhere))).await.0, StatusCode::NOT_FOUND);
 
         // Editing: the name, the schedule and the folder. A name that is taken is refused.
@@ -47,7 +47,7 @@ fn a_source_writes_into_a_chosen_folder_and_can_be_edited() {
             (renamed["key"].clone(), renamed["interval_secs"].clone()),
             (json!("admin/photos"), json!(12 * 3600))
         );
-        let moved = json!({"folder": {"device": "admin/source-alone"}});
+        let moved = json!({"folder": {"folder": "admin/source-alone"}});
         assert_eq!(api.json(Method::PATCH, "/api/sources/admin/photos", moved).await.0, StatusCode::OK);
         assert_eq!(listed(&api, "photos").await["detail"]["folder"], "admin/source-alone");
         assert_eq!(api.json(Method::PATCH, "/api/sources/admin/ghost", json!({})).await.0, StatusCode::NOT_FOUND);
@@ -63,7 +63,7 @@ fn a_folder_with_a_source_in_it_can_be_renamed_and_deleting_the_source_leaves_th
     block(async {
         api.cookie = login(&api).await;
         api.json(Method::POST, "/api/folders", json!({"name": "media"})).await;
-        let place = json!({"device": "admin/media"});
+        let place = json!({"folder": "admin/media"});
         assert_eq!(api.json(Method::POST, "/api/sources", source("feed", Some(place))).await.0, StatusCode::OK);
         // One file the source collected (as its record says), and one somebody put there.
         assert_eq!(try_upload(&api, "admin/media", "from-source.txt", b"a").await, StatusCode::OK);
@@ -71,7 +71,7 @@ fn a_folder_with_a_source_in_it_can_be_renamed_and_deleting_the_source_leaves_th
         let db = api.db.clone();
         crate::platform::db::with(&db, |c| {
             c.execute(
-                "INSERT INTO link_items (link_id, device_id, path, remote_id, version) SELECT id, folder_id, 'from-source.txt', 'r', 'm' FROM links",
+                "INSERT INTO link_items (link_id, folder_id, path, remote_id, version) SELECT id, folder_id, 'from-source.txt', 'r', 'm' FROM links",
                 &[],
             )?;
             Ok(())
@@ -80,7 +80,7 @@ fn a_folder_with_a_source_in_it_can_be_renamed_and_deleting_the_source_leaves_th
         .unwrap();
 
         // The folder is renamed: the source still writes into it, under its new name.
-        let (status, renamed) = api.json(Method::POST, "/api/devices/admin%2Fmedia/rename", json!({"name": "films"})).await;
+        let (status, renamed) = api.json(Method::POST, "/api/folders/media/rename", json!({"name": "films"})).await;
         assert_eq!(status, StatusCode::OK, "{renamed}");
         assert_eq!(listed(&api, "feed").await["detail"]["folder"], "admin/films");
         assert_eq!(listed(&api, "feed").await["detail"]["files"], 1);
@@ -88,7 +88,7 @@ fn a_folder_with_a_source_in_it_can_be_renamed_and_deleting_the_source_leaves_th
         // Deleting the source deletes what it collected, and nothing else in the folder.
         let del = api.send(Method::DELETE, "/api/sources/admin/feed", Body::empty(), &[]).await;
         assert_eq!(del.0, StatusCode::OK);
-        let (_, inside) = api.get("/api/files?device=admin/films").await;
+        let (_, inside) = api.get("/api/files?folder=admin/films").await;
         let names: Vec<_> = inside["entries"]
             .as_array()
             .unwrap()
@@ -107,14 +107,14 @@ fn changing_the_folder_of_a_source_trashes_what_it_collected_and_it_collects_aga
         for name in ["media", "other"] {
             api.json(Method::POST, "/api/folders", json!({"name": name})).await;
         }
-        let place = json!({"device": "admin/media"});
+        let place = json!({"folder": "admin/media"});
         assert_eq!(api.json(Method::POST, "/api/sources", source("feed", Some(place))).await.0, StatusCode::OK);
         assert_eq!(try_upload(&api, "admin/media", "got.txt", b"collected").await, StatusCode::OK);
         assert_eq!(try_upload(&api, "admin/media", "mine.txt", b"somebody's").await, StatusCode::OK);
         let db = api.db.clone();
         crate::platform::db::with(&db, |c| {
             c.execute(
-                "INSERT INTO link_items (link_id, device_id, path, remote_id, version) SELECT id, folder_id, 'got.txt', 'r', 'm' FROM links",
+                "INSERT INTO link_items (link_id, folder_id, path, remote_id, version) SELECT id, folder_id, 'got.txt', 'r', 'm' FROM links",
                 &[],
             )?;
             Ok(())
@@ -124,11 +124,11 @@ fn changing_the_folder_of_a_source_trashes_what_it_collected_and_it_collects_aga
         assert_eq!(listed(&api, "feed").await["detail"]["files"], 1);
 
         // Another folder: what it collected goes to the Trash, the file somebody else put there stays, and it remembers nothing.
-        let away = json!({"folder": {"device": "admin/other"}});
+        let away = json!({"folder": {"folder": "admin/other"}});
         assert_eq!(api.json(Method::PATCH, "/api/sources/admin/feed", away).await.0, StatusCode::OK);
-        let (_, trash) = api.get("/api/files?device=admin/media&deleted=1").await;
+        let (_, trash) = api.get("/api/files?folder=admin/media&deleted=1").await;
         assert_eq!(trash["entries"][0]["name"], "got.txt", "{trash}");
-        let (_, left) = api.get("/api/files?device=admin/media").await;
+        let (_, left) = api.get("/api/files?folder=admin/media").await;
         assert_eq!(left["entries"][0]["name"], "mine.txt", "{left}");
         assert_eq!(listed(&api, "feed").await["detail"]["files"], 0, "it remembers nothing about the old folder");
         assert_eq!(listed(&api, "feed").await["detail"]["folder"], "admin/other");
@@ -172,7 +172,7 @@ fn the_runs_of_sources_are_in_the_same_list_as_the_other_work() {
             .as_array()
             .unwrap()
             .iter()
-            .find(|f| f["folder"] == "admin/source-feed")
+            .find(|f| f["key"] == "admin/source-feed")
             .expect("the source's own folder");
         assert_eq!(own["rules"]["sources"][0]["key"], "admin/feed");
     });

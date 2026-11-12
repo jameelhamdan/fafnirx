@@ -11,7 +11,7 @@ async fn synced_rig() -> (Rig, Vec<String>) {
     (rig, names)
 }
 
-/// The same, with all of them deleted by another computer, so that the deletions are held back.
+/// The same, with all of them deleted by another device, so that the deletions are held back.
 async fn held_rig() -> (Rig, Vec<String>) {
     let (mut rig, names) = synced_rig().await;
     rig.held.lock().unwrap().changes = names.iter().map(|n| master::gone(n)).collect();
@@ -62,13 +62,13 @@ async fn deletions_made_in_the_web_app_are_applied_at_once_however_many() {
 }
 
 #[tokio::test]
-async fn only_what_other_computers_deleted_is_held() {
+async fn only_what_other_devices_deleted_is_held() {
     let (mut rig, names) = synced_rig().await;
     let mut changes: Vec<_> = names[..2].iter().map(|n| master::gone_in_the_web_app(n)).collect();
     changes.extend(names[2..].iter().map(|n| master::gone(n)));
     rig.held.lock().unwrap().changes = changes;
     let report = rig.cycle().await;
-    assert_eq!(report.deleted, 2, "the web app's two go, the other computer's ten wait");
+    assert_eq!(report.deleted, 2, "the web app's two go, the other device's ten wait");
     assert_eq!(rig.attached.engine.state.pull_hold().unwrap().map(|(n, _)| n), Some(10));
 }
 

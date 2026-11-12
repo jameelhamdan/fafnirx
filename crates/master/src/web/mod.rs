@@ -11,6 +11,7 @@ pub mod auth;
 mod events;
 pub mod input;
 mod plugins;
+pub mod settings;
 pub mod users;
 
 #[cfg(test)]
@@ -21,7 +22,7 @@ pub use events::listen;
 
 use crate::platform::db::Db;
 use crate::platform::store::Store;
-use crate::{devices, files, integrations, library, monitoring};
+use crate::{devices, files, folders, integrations, library, monitoring};
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{Method, StatusCode};
 use axum::middleware::{self, Next};
@@ -55,7 +56,7 @@ pub struct AppState {
     pub modules: Arc<crate::modules::Registry>,
 }
 
-pub type Shared = Arc<AppState>;
+pub type App = Arc<AppState>;
 
 impl AppState {
     pub fn new(db: Db, store: Arc<Store>, data_dir: PathBuf) -> Result<Self, anyhow::Error> {
@@ -126,7 +127,7 @@ impl IntoResponse for ApiError {
 pub type Res<T> = Result<Json<T>, ApiError>;
 
 /// Runs `f` on a blocking thread with a database connection.
-pub async fn run<T, F>(state: &Shared, f: F) -> Result<T, ApiError>
+pub async fn run<T, F>(state: &App, f: F) -> Result<T, ApiError>
 where
     T: Send + 'static,
     F: FnOnce(&mut Client) -> anyhow::Result<T> + Send + 'static,
@@ -135,7 +136,7 @@ where
 }
 
 /// Like [`run`], in one transaction that tells the live pages of `topic` before it commits (a change that fails tells nobody).
-pub async fn change<T, F>(state: &Shared, topic: crate::platform::db::Topic, f: F) -> Result<T, ApiError>
+pub async fn change<T, F>(state: &App, topic: crate::platform::db::Topic, f: F) -> Result<T, ApiError>
 where
     T: Send + 'static,
     F: FnOnce(&mut postgres::Transaction) -> anyhow::Result<T> + Send + 'static,
@@ -160,7 +161,7 @@ pub fn done() -> Res<Done> {
 }
 
 /// Runs `f` like [`run`] and answers `{ "ok": true }`: the handlers that change something and return nothing.
-pub async fn act<F>(state: &Shared, f: F) -> Res<Done>
+pub async fn act<F>(state: &App, f: F) -> Res<Done>
 where
     F: FnOnce(&mut Client) -> anyhow::Result<()> + Send + 'static,
 {
@@ -169,7 +170,7 @@ where
 }
 
 /// Quick JSON calls.
-fn light() -> Router<Shared> {
+fn light() -> Router<App> {
     Router::new()
         .route("/api/login", post(auth::login))
         .route("/api/logout", post(auth::logout))
@@ -181,28 +182,28 @@ fn light() -> Router<Shared> {
         .route("/api/users/{name}", axum::routing::patch(users::update).delete(users::delete))
         .route("/api/dashboard", get(monitoring::api::dashboard))
         .route("/api/alerts/{id}/dismiss", post(monitoring::api::dismiss))
-        .route("/api/settings", get(devices::api::settings).put(devices::api::save_settings))
+        .route("/api/settings", get(settings::get).put(settings::save))
         .route("/api/devices", get(devices::api::list).post(devices::api::create))
         .route("/api/devices/{name}", get(devices::api::detail))
         .route("/api/devices/{name}/token", post(devices::api::rotate_token))
         .route("/api/devices/{name}/release", post(devices::api::release))
-        .route("/api/devices/{name}/rename", post(devices::api::rename))
         .route("/api/devices/{name}/revoke", post(devices::api::revoke))
-        .route("/api/master-folders", post(devices::master_folders::create))
-        .route("/api/master-folders/{id}", delete(devices::master_folders::delete))
-        .route("/api/master-folders/{id}/rename", post(devices::master_folders::rename))
-        .route("/api/folders", get(devices::folders::list).post(devices::folders::create))
-        .route("/api/folders/leave", post(devices::folders::leave))
-        .route("/api/folders/people", get(devices::folders::people))
-        .route("/api/folders/{name}", delete(devices::folders::delete))
-        .route("/api/folders/{name}/members", post(devices::folders::add_member))
-        .route("/api/folders/{name}/members/{user}", delete(devices::folders::remove_member))
+        .route("/api/master-folders", post(folders::master::create))
+        .route("/api/master-folders/{id}", delete(folders::master::delete))
+        .route("/api/master-folders/{id}/rename", post(folders::master::rename))
+        .route("/api/folders", get(folders::api::list).post(folders::api::create))
+        .route("/api/folders/leave", post(folders::api::leave))
+        .route("/api/folders/people", get(folders::api::people))
+        .route("/api/folders/{name}", delete(folders::api::delete))
+        .route("/api/folders/{name}/rename", post(folders::api::rename))
+        .route("/api/folders/{name}/members", post(folders::api::add_member))
+        .route("/api/folders/{name}/members/{user}", delete(folders::api::remove_member))
         .route("/api/files", get(files::browse::list))
         .route("/api/files/info", get(files::browse::info))
-        .route("/api/files/delete", post(files::browse::remove))
-        .route("/api/files/move", post(files::browse::move_files))
-        .route("/api/files/rescan", post(files::browse::rescan))
-        .route("/api/files/restore", post(files::browse::restore))
+        .route("/api/files/delete", post(files::changes::remove))
+        .route("/api/files/move", post(files::changes::move_files))
+        .route("/api/files/rescan", post(files::changes::rescan))
+        .route("/api/files/restore", post(files::changes::restore))
         .route("/api/timeline/buckets", get(library::photos::buckets))
         .route("/api/timeline", get(library::photos::timeline))
         .route("/api/library", get(library::photos::by_ids))
@@ -226,7 +227,7 @@ fn light() -> Router<Shared> {
         .route("/api/sources/{user}/{name}/run", post(integrations::api::run_source))
         .route("/api/sources/{user}/{name}/toggle", post(integrations::api::toggle_source))
         .route("/api/mirrors", get(integrations::api::mirrors).post(integrations::api::create_mirror))
-        .route("/api/mirrors/folders", get(integrations::api::mirror_folders))
+        .route("/api/mirrors/scopes", get(integrations::api::mirror_scopes))
         .route("/api/mirrors/{name}", delete(integrations::api::delete_mirror))
         .route("/api/mirrors/{name}/run", post(integrations::api::run_mirror))
         .route("/api/mirrors/{name}/toggle", post(integrations::api::toggle_mirror))
@@ -236,7 +237,7 @@ fn light() -> Router<Shared> {
 }
 
 /// Moving file contents.
-fn heavy() -> Router<Shared> {
+fn heavy() -> Router<App> {
     Router::new()
         .route("/api/files/download", get(files::transfer::download))
         .route("/api/files/thumb", get(files::transfer::thumbnail))
@@ -261,7 +262,7 @@ fn heavy() -> Router<Shared> {
 }
 
 /// Every route, behind the login, plus the web app.
-pub fn router(state: Shared) -> Router {
+pub fn router(state: App) -> Router {
     light()
         .merge(heavy())
         .route("/healthz", get(healthz))
@@ -310,7 +311,7 @@ async fn security_headers(req: axum::extract::Request, next: Next) -> Response {
 
 /// Everything under `/api` except logging in and a plugin announcing itself (it has its own secret) needs a valid session (and tells
 /// the handlers who it is, as an [`access::Access`]); changes also need the marker header (a cross-site form cannot set it).
-async fn guard(State(state): State<Shared>, mut req: axum::extract::Request, next: Next) -> Response {
+async fn guard(State(state): State<App>, mut req: axum::extract::Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
     if path.starts_with("/api/") && path != "/api/login" && path != "/api/plugins/register" {
         let headers = req.headers().clone();

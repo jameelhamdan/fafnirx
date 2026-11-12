@@ -4,7 +4,7 @@ use fafnirx_common::{chunk_hash, root_hash};
 use std::fs;
 
 fn put(store: &Store, path: &str, data: &[u8]) -> PathBuf {
-    let p = store.live_path("admin/d", path).unwrap();
+    let p = store.live_path("admin/f", path).unwrap();
     fs::create_dir_all(p.parent().unwrap()).unwrap();
     fs::write(&p, data).unwrap();
     p
@@ -24,11 +24,11 @@ fn live(c: &mut Client) -> Vec<(String, Vec<u8>)> {
 
 #[test]
 fn files_added_changed_and_removed_directly_are_tracked() {
-    let db = testing::db_with_device();
+    let db = testing::db_with_folder();
     let mut c = db.get().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
-    let (dev, none) = (testing::device(), Duration::ZERO);
+    let (dev, none) = (testing::folder(), Duration::ZERO);
     let root = |d: &[u8]| root_hash(&[chunk_hash(d)], d.len() as u64).to_vec();
 
     let p = put(&store, "docs/a.txt", b"one");
@@ -56,16 +56,16 @@ fn files_added_changed_and_removed_directly_are_tracked() {
 
 #[test]
 fn a_file_moved_in_a_local_folder_is_a_rename() {
-    let db = testing::db_with_device();
+    let db = testing::db_with_folder();
     let mut c = db.get().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
-    let (dev, none) = (testing::device(), Duration::ZERO);
+    let (dev, none) = (testing::folder(), Duration::ZERO);
     put(&store, "Show/a.txt", b"episode one");
     assert_eq!(sync_subtree(&mut c, &store, &dev, "", none).unwrap(), (1, 0));
 
-    let from = store.live_path("admin/d", "Show/a.txt").unwrap();
-    let to = store.live_path("admin/d", "Show 2/a.txt").unwrap();
+    let from = store.live_path("admin/f", "Show/a.txt").unwrap();
+    let to = store.live_path("admin/f", "Show 2/a.txt").unwrap();
     fs::create_dir_all(to.parent().unwrap()).unwrap();
     fs::rename(from, to).unwrap();
     assert_eq!(sync_subtree(&mut c, &store, &dev, "", none).unwrap(), (1, 0), "moved, not deleted");
@@ -81,40 +81,43 @@ fn a_file_moved_in_a_local_folder_is_a_rename() {
 }
 
 #[test]
-fn only_local_folders_are_written_to_in_place() {
+fn only_folders_of_users_are_written_to_in_place() {
     let db = testing::db_with_device();
     let mut c = db.get().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
-    put(&store, "a.txt", b"x");
+    fs::create_dir_all(store.live_dir("admin/d")).unwrap();
     assert!(
-        device_for_folder(&mut c, &store, "admin/d").unwrap().is_none(),
-        "the folder of a device is not changed from here"
+        user_folder(&mut c, &store, "admin/d").unwrap().is_none(),
+        "the directory of a device is not a folder, and is not changed from here"
     );
-    c.execute("UPDATE devices SET kind = 'local' WHERE name = 'd'", &[]).unwrap();
-    assert!(device_for_folder(&mut c, &store, "admin/d").unwrap().is_some());
+    fs::create_dir_all(store.live_dir("admin/focs")).unwrap();
+    assert!(
+        user_folder(&mut c, &store, "admin/focs").unwrap().is_some(),
+        "a directory nobody owns becomes a folder of the user"
+    );
 }
 
 #[test]
 fn decomposed_names_are_renamed_to_their_composed_form() {
-    let db = testing::db_with_device();
+    let db = testing::db_with_folder();
     let mut c = db.get().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     put(&store, "café/menu.txt", b"x");
-    assert_eq!(sync_subtree(&mut c, &store, &testing::device(), "", Duration::ZERO).unwrap(), (1, 0));
+    assert_eq!(sync_subtree(&mut c, &store, &testing::folder(), "", Duration::ZERO).unwrap(), (1, 0));
     let paths: Vec<String> = live(&mut c).into_iter().map(|(p, _)| p).collect();
     assert_eq!(paths, ["café/menu.txt"]);
-    assert!(store.live_path("admin/d", "café/menu.txt").unwrap().is_file());
+    assert!(store.live_path("admin/f", "café/menu.txt").unwrap().is_file());
 }
 
 #[test]
 fn an_event_for_one_path_only_looks_at_that_path() {
-    let db = testing::db_with_device();
+    let db = testing::db_with_folder();
     let mut c = db.get().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
-    let (dev, none) = (testing::device(), Duration::ZERO);
+    let (dev, none) = (testing::folder(), Duration::ZERO);
     put(&store, "a/x", b"1");
     put(&store, "a/y", b"2");
     put(&store, "b/z", b"3");
@@ -122,7 +125,7 @@ fn an_event_for_one_path_only_looks_at_that_path() {
     assert_eq!(sync_subtree(&mut c, &store, &dev, "a", none).unwrap(), (1, 0), "x is known, y is new");
     assert_eq!(live(&mut c).len(), 2, "b/z was not looked at");
 
-    fs::remove_dir_all(store.live_path("admin/d", "a").unwrap()).unwrap();
+    fs::remove_dir_all(store.live_path("admin/f", "a").unwrap()).unwrap();
     assert_eq!(sync_subtree(&mut c, &store, &dev, "a", none).unwrap(), (0, 2), "a removed folder removes its files");
     assert_eq!(sync_subtree(&mut c, &store, &dev, "", none).unwrap(), (1, 0));
     assert_eq!(live(&mut c).len(), 1);
@@ -138,7 +141,7 @@ fn events_are_mapped_to_a_path_of_the_live_tree() {
 }
 
 #[test]
-fn a_new_folder_in_a_users_folder_becomes_their_local_device_and_bad_names_are_ignored() {
+fn a_new_folder_in_a_users_folder_becomes_their_folder_and_bad_names_are_ignored() {
     let db = testing::db();
     let mut c = db.get().unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -146,22 +149,22 @@ fn a_new_folder_in_a_users_folder_becomes_their_local_device_and_bad_names_are_i
     fs::create_dir_all(store.live_dir("admin/camera")).unwrap();
     fs::create_dir_all(store.live_dir("admin/Bad Name")).unwrap_or_default();
     fs::create_dir_all(store.live_dir("nobody/camera")).unwrap();
-    let dev = device_for_folder(&mut c, &store, "admin/camera").unwrap().unwrap();
-    let row = c.query_one("SELECT kind, user_id FROM devices WHERE id = $1", &[&dev.id]).unwrap();
-    assert_eq!((row.get::<_, String>(0), row.get::<_, i64>(1)), ("local".into(), 1));
+    let dev = user_folder(&mut c, &store, "admin/camera").unwrap().unwrap();
+    let row = c.query_one("SELECT kind, user_id FROM folders WHERE id = $1", &[&dev.id]).unwrap();
+    assert_eq!((row.get::<_, String>(0), row.get::<_, i64>(1)), ("user".into(), 1));
     assert_eq!(
-        device_for_folder(&mut c, &store, "admin/camera").unwrap().unwrap().id,
+        user_folder(&mut c, &store, "admin/camera").unwrap().unwrap().id,
         dev.id,
         "found again, not duplicated"
     );
-    assert!(device_for_folder(&mut c, &store, "admin/Bad Name").unwrap().is_none());
-    assert!(device_for_folder(&mut c, &store, "admin/missing").unwrap().is_none());
-    assert!(device_for_folder(&mut c, &store, "nobody/camera").unwrap().is_none(), "there is no such user");
+    assert!(user_folder(&mut c, &store, "admin/Bad Name").unwrap().is_none());
+    assert!(user_folder(&mut c, &store, "admin/missing").unwrap().is_none());
+    assert!(user_folder(&mut c, &store, "nobody/camera").unwrap().is_none(), "there is no such user");
     c.execute("UPDATE users SET role = 'readonly'", &[]).unwrap();
     fs::create_dir_all(store.live_dir("admin/second")).unwrap();
     assert!(
-        device_for_folder(&mut c, &store, "admin/second").unwrap().is_none(),
-        "a user who can only read has no devices"
+        user_folder(&mut c, &store, "admin/second").unwrap().is_none(),
+        "a user who can only read has no folders"
     );
 }
 
@@ -176,15 +179,15 @@ fn a_folder_of_the_master_files_is_a_master_folder() {
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(p, data).unwrap();
     }
-    // The folder of the user is not a master folder: its subfolder is a device of the user. A file in no folder is not recorded.
+    // The folder of the user is not a master folder: its subfolder is a folder of the user. A file in no folder is not recorded.
     scan(&db, &store, Duration::ZERO).unwrap();
     let paths: Vec<String> = live(&mut c).into_iter().map(|(p, _)| p).collect();
     assert_eq!(paths, ["2024/a.txt", "b.txt"]);
-    let folders: Vec<String> = devices::master_devices(&mut *c).unwrap().into_iter().map(|(_, f)| f).collect();
+    let folders: Vec<String> = crate::repo::folders::master_folders(&mut *c).unwrap().into_iter().map(|(_, f)| f).collect();
     assert_eq!(folders, ["master:scans"], "a top-level folder became one, `users` did not");
 
     let (found, rel) = resolve(&mut c, &store, "scans/2024/a.txt").unwrap().unwrap();
-    assert_eq!((found.name.as_str(), rel.as_str()), ("master:scans", "2024/a.txt"));
+    assert_eq!((found.key.as_str(), rel.as_str()), ("master:scans", "2024/a.txt"));
     assert!(
         resolve(&mut c, &store, "users/admin").unwrap().is_none(),
         "the folder of a user is not a master folder"
@@ -235,29 +238,29 @@ fn what_the_layout_leaves_out_is_reported_until_it_is_put_right() {
 
 #[test]
 fn a_missing_device_folder_deletes_nothing() {
-    let db = testing::db_with_device();
+    let db = testing::db_with_folder();
     let mut c = db.get().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
-    let dev = testing::device();
+    let dev = testing::folder();
     put(&store, "a", b"x");
     sync_subtree(&mut c, &store, &dev, "", Duration::ZERO).unwrap();
-    fs::remove_dir_all(store.live_dir("admin/d")).unwrap();
+    fs::remove_dir_all(store.live_dir("admin/f")).unwrap();
     assert_eq!(sync_subtree(&mut c, &store, &dev, "", Duration::ZERO).unwrap(), (0, 0));
     assert_eq!(live(&mut c).len(), 1);
 }
 
 #[test]
 fn files_committed_by_a_client_are_left_alone() {
-    let db = testing::db_with_device();
+    let db = testing::db_with_folder();
     let mut c = db.get().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
-    let dev = testing::device();
+    let dev = testing::folder();
     let staged = store.temp_path();
     fs::write(&staged, b"from a client").unwrap();
     let v = ingest::NewVersion {
-        device: &dev,
+        folder: &dev,
         path: "c.txt",
         root: root_hash(&[chunk_hash(b"from a client")], 13),
         size: 13,

@@ -32,7 +32,7 @@ pub fn claim(state_dir: &Path, name: &str, attempts: u32) -> Result<bool> {
     Ok(false)
 }
 
-/// The name of the user this process runs for, to tell one tray from another where several users share a computer.
+/// The name of the user this process runs for, to tell one tray from another where several users share a device.
 #[cfg(feature = "tray")]
 pub fn user_name() -> String {
     let name = std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_default();
@@ -45,7 +45,7 @@ pub fn user_name() -> String {
 }
 
 /// Which installation of the client this is: made the first time it is asked for and kept in the state directory. It tells the
-/// master apart two computers that use one device token (a config copied to a second machine has no state directory yet, so
+/// master apart two devices that use one device token (a config copied to a second machine has no state directory yet, so
 /// it gets an id of its own). It is not a secret and proves nothing; it only keeps two clients from working as one device.
 pub fn client_id(state_dir: &Path) -> String {
     let path = state_dir.join("instance-id");

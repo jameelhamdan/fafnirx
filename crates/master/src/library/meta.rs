@@ -386,7 +386,7 @@ fn finish(db: &Db, job: &jobs::Claimed, result: Result<Option<String>>) {
 
 #[derive(serde::Deserialize)]
 struct JobFile {
-    device: String,
+    folder: String,
     path: String,
     root: String,
 }
@@ -394,7 +394,7 @@ struct JobFile {
 /// The job's file, if it still holds the content the job was made for.
 fn current_file(c: &mut postgres::Client, p: &JobFile) -> Result<Option<Vec<u8>>> {
     let root = hex::decode(&p.root)?;
-    let current = file_meta::path_holds(c, &p.device, &p.path, &root)?;
+    let current = file_meta::path_holds(c, &p.folder, &p.path, &root)?;
     Ok(current.then_some(root))
 }
 
@@ -405,7 +405,7 @@ fn read_job(db: &Db, store: &Store, payload: &str) -> Result<()> {
     let Some(root) = current_file(&mut c, &p)? else {
         return Ok(()); // replaced or deleted since; the newer content has its own job
     };
-    let disk = store.live_path(&p.device, &p.path)?;
+    let disk = store.live_path(&p.folder, &p.path)?;
     let meta = read_any(&p.path, &disk, &p.root)?;
     let exif = serde_json::Value::Object(meta.exif).to_string();
     let keywords = serde_json::to_string(&meta.keywords)?;
@@ -427,7 +427,7 @@ fn read_job(db: &Db, store: &Store, payload: &str) -> Result<()> {
         },
         unix_now(),
     )?;
-    db::notify(&mut *c, db::Topic::Files, &p.device)?;
+    db::notify(&mut *c, db::Topic::Files, &p.folder)?;
     // Pictures are not made here: they are made when somebody looks at the file (see `thumb_job`). The picture and the description
     // that sit next to a video are looked up whenever they are asked for (see `artwork`), so one that arrives later is used.
     Ok(())
@@ -437,7 +437,7 @@ fn read_job(db: &Db, store: &Store, payload: &str) -> Result<()> {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct ThumbJob {
     pub id: String,
-    pub device: String,
+    pub folder: String,
     pub path: String,
     pub root: String,
     /// Where the picture is kept (see `cached_picture`): by the content of the file, or of the picture beside a video.
@@ -461,14 +461,14 @@ fn thumb_job(db: &Db, store: &Store, cache_root: &Path, payload: &str) -> Result
     let root = hex::decode(&p.root)?;
     let live = !p.deleted && Some(p.version) == p.current;
     // A live file may have been replaced since the picture was asked for: then it is not the content that was asked for.
-    if live && !file_meta::path_holds(&mut *c, &p.device, &p.path, &root)? {
+    if live && !file_meta::path_holds(&mut *c, &p.folder, &p.path, &root)? {
         return Ok(Some("replaced or deleted since".into()));
     }
     let own = crate::files::browse::version_file(
         store,
-        &crate::files::browse::VersionAt { device: &p.device, path: &p.path, version: p.version, current: p.current, deleted: p.deleted },
+        &crate::files::browse::VersionAt { folder: &p.folder, path: &p.path, version: p.version, current: p.current, deleted: p.deleted },
     )?;
-    let art = if live { artwork::lookup(&mut c, store, &p.device, &p.path) } else { None };
+    let art = if live { artwork::lookup(&mut c, store, &p.folder, &p.path) } else { None };
     let (source, root_hex, poster_ms) = match art {
         Some((art, art_root)) => (art, hex::encode(art_root), None),
         None if !can_preview(&p.path) => {

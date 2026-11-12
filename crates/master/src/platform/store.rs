@@ -1,7 +1,7 @@
 //! Plain-file store. The current version of every file lives under its own name:
-//!   files/users/<user>/<device>/<path>             the live tree: the files of a device (its "folder" is <user>/<device>)
+//!   files/users/<user>/<name>/<path>               the live tree: the files of a folder of a user; a device's directory is <user>/<device>/<directory>
 //!   files/<name>/<path>                            a master folder, which belongs to no user (its "folder" is master:<name>)
-//!   versions/<version id>/<folder>/<path>          what a newer version or a deletion replaced
+//!   versions/<version id>/<key>/<path>             what a newer version or a deletion replaced
 //!   tmp/                                         uploads and downloads that are not complete yet
 
 use anyhow::{bail, Context, Result};
@@ -16,7 +16,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// words the clients and the API use.
 pub const MASTER_PREFIX: &str = "master:";
 
-/// Whether a folder (`<user>/<device>`, or `master:<path>`) is a master folder.
+/// Whether a folder (`<user>/<folder>`, or `master:<path>`) is a master folder.
 pub fn is_master(folder: &str) -> bool {
     folder.starts_with(MASTER_PREFIX)
 }
@@ -25,8 +25,8 @@ pub fn is_master(folder: &str) -> bool {
 /// make it read-only in one place. Master files cannot start with this name.
 pub const USERS_DIR: &str = "users";
 
-/// A file as modules and the streaming proxy name it: its place below `files/` (`users/<user>/<device>/<path>` for the files
-/// of a device, `<name>/<path>` for a file of the master folder `<name>`).
+/// A file as modules and the streaming proxy name it: its place below `files/` (`users/<key>/<path>` for the files
+/// of a folder of a user or a device, `<name>/<path>` for a file of the master folder `<name>`).
 pub fn tree_path(folder: &str, path: &str) -> String {
     match folder.strip_prefix(MASTER_PREFIX) {
         Some(name) => format!("{name}/{path}"),
@@ -70,7 +70,7 @@ impl Store {
         Ok(store)
     }
 
-    /// `<base>/<folder>`: `<user>/<device>` (below `users/` when `nested`), or `<name>` for the master folder `master:<name>`.
+    /// `<base>/<key>`: `<user>/<name>` or `<user>/<device>/<directory>` (below `users/` when `nested`), or `<name>` for the master folder `master:<name>`.
     fn folder_in(base: &Path, folder: &str, nested: bool) -> Result<PathBuf> {
         if let Some(name) = folder.strip_prefix(MASTER_PREFIX) {
             let mut out = base.to_path_buf();
@@ -87,21 +87,27 @@ impl Store {
         if nested {
             out.push(USERS_DIR);
         }
-        let mut parts = 0;
-        for part in folder.split('/') {
-            parts += 1;
-            if part.is_empty() || part.contains(['\\', ':']) || part.starts_with('.') {
-                bail!("device folder {folder:?} cannot be stored");
+        // `<user>/<name>`, or `<user>/<device>/<directory>`: the directory is whatever a device calls it, so it only has to be a
+        // name that stays inside.
+        let parts: Vec<&str> = folder.split('/').collect();
+        if !(2..=3).contains(&parts.len()) {
+            bail!("folder {folder:?} cannot be stored");
+        }
+        for (n, part) in parts.iter().enumerate() {
+            let bad = if n == 2 {
+                part.is_empty() || *part == "." || *part == ".." || part.contains('\\') || (cfg!(windows) && part.contains(':'))
+            } else {
+                part.is_empty() || part.contains(['\\', ':']) || part.starts_with('.')
+            };
+            if bad {
+                bail!("folder {folder:?} cannot be stored");
             }
             out.push(part);
-        }
-        if parts != 2 {
-            bail!("device folder {folder:?} cannot be stored");
         }
         Ok(out)
     }
 
-    /// `<base>/<folder>/<path>`. Remote paths are already validated; this refuses what could still
+    /// `<base>/<key>/<path>`. Remote paths are already validated; this refuses what could still
     /// leave the directory on the server's platform.
     fn resolve(base: &Path, nested: bool, folder: &str, path: &str) -> Result<PathBuf> {
         let mut out = Self::folder_in(base, folder, nested)?;
@@ -114,12 +120,12 @@ impl Store {
         Ok(out)
     }
 
-    /// The live tree: one folder per user with one folder per device in it, and the master folders beside them.
+    /// The live tree: one folder per user with the folders of the user and of their devices in it, and the master folders beside them.
     pub fn live_root(&self) -> &Path {
         &self.files
     }
 
-    /// The folder of a device in the live tree.
+    /// The directory of a folder in the live tree.
     pub fn live_dir(&self, folder: &str) -> PathBuf {
         Self::folder_in(&self.files, folder, true).unwrap_or_else(|_| self.files.join("\0invalid"))
     }
@@ -129,8 +135,8 @@ impl Store {
         self.files.join(USERS_DIR).join(user)
     }
 
-    /// Moves a device folder to its new name: its live folder and what its versions kept of it. Folders that are not there
-    /// (nothing was ever stored, or a version kept no file of this device) are skipped. Undone by calling it the other way.
+    /// Moves a folder to its new name: its live folder and what its versions kept of it. Folders that are not there
+    /// (nothing was ever stored, or a version kept no file of this folder) are skipped. Undone by calling it the other way.
     pub fn rename_folder(&self, old: &str, new: &str, versions: &[i64]) -> Result<()> {
         let (from, to) = (Self::folder_in(&self.files, old, true)?, Self::folder_in(&self.files, new, true)?);
         if from.is_dir() {
@@ -152,12 +158,12 @@ impl Store {
         Ok(())
     }
 
-    pub fn live_path(&self, device: &str, path: &str) -> Result<PathBuf> {
-        Self::resolve(&self.files, true, device, path)
+    pub fn live_path(&self, folder: &str, path: &str) -> Result<PathBuf> {
+        Self::resolve(&self.files, true, folder, path)
     }
 
-    pub fn version_path(&self, version_id: i64, device: &str, path: &str) -> Result<PathBuf> {
-        Self::resolve(&self.versions.join(version_id.to_string()), false, device, path)
+    pub fn version_path(&self, version_id: i64, folder: &str, path: &str) -> Result<PathBuf> {
+        Self::resolve(&self.versions.join(version_id.to_string()), false, folder, path)
     }
 
     /// A new path in `tmp`, unique by its random name.
@@ -167,12 +173,12 @@ impl Store {
 
     /// Where the chunks of an upload accumulate until the commit. Keyed by device and content so that
     /// parallel streams of one file land in the same place.
-    fn upload_path(&self, device_id: i64, root: &[u8; HASH_LEN]) -> PathBuf {
-        self.tmp.join(format!("up-{device_id}-{}", hex::encode(root)))
+    fn upload_path(&self, folder_id: i64, root: &[u8; HASH_LEN]) -> PathBuf {
+        self.tmp.join(format!("up-{folder_id}-{}", hex::encode(root)))
     }
 
     /// Writes one chunk of an upload at its place in the file.
-    pub fn write_chunk(&self, device_id: i64, root: &[u8; HASH_LEN], index: u32, data: &[u8]) -> Result<()> {
+    pub fn write_chunk(&self, folder_id: i64, root: &[u8; HASH_LEN], index: u32, data: &[u8]) -> Result<()> {
         if index >= MAX_CHUNK_INDEX {
             bail!("chunk index {index} out of range");
         }
@@ -180,7 +186,7 @@ impl Store {
             .write(true)
             .create(true)
             .truncate(false)
-            .open(self.upload_path(device_id, root))
+            .open(self.upload_path(folder_id, root))
             .context("open upload file")?;
         f.seek(SeekFrom::Start(index as u64 * CHUNK_SIZE as u64))?;
         f.write_all(data)?;
@@ -189,8 +195,8 @@ impl Store {
 
     /// Indexes of the chunks that an interrupted upload of this content has not delivered yet:
     /// those missing from the partial file or not matching their hash.
-    pub fn missing_chunks(&self, device_id: i64, root: &[u8; HASH_LEN], hashes: &[[u8; HASH_LEN]]) -> Vec<u32> {
-        let Ok(mut f) = fs::File::open(self.upload_path(device_id, root)) else {
+    pub fn missing_chunks(&self, folder_id: i64, root: &[u8; HASH_LEN], hashes: &[[u8; HASH_LEN]]) -> Vec<u32> {
+        let Ok(mut f) = fs::File::open(self.upload_path(folder_id, root)) else {
             return (0..hashes.len() as u32).collect();
         };
         let mut buf = vec![0u8; CHUNK_SIZE];
@@ -207,8 +213,8 @@ impl Store {
 
     /// Checks that the uploaded file has exactly the announced content and returns where it is.
     /// An empty file has no chunks, so it is created here.
-    pub fn finish_upload(&self, device_id: i64, root: &[u8; HASH_LEN], size: u64) -> Result<PathBuf> {
-        let path = self.upload_path(device_id, root);
+    pub fn finish_upload(&self, folder_id: i64, root: &[u8; HASH_LEN], size: u64) -> Result<PathBuf> {
+        let path = self.upload_path(folder_id, root);
         if size == 0 && !path.exists() {
             fs::File::create(&path)?;
         }
@@ -226,8 +232,8 @@ impl Store {
     /// identical content needs no upload. It is a real copy, not a link: the live tree can be written
     /// to directly, and a change to one name must not change another. The copy is checked against `root`:
     /// a file edited in the live tree since it was recorded is not the content that was asked for.
-    pub fn copy_live_to_temp(&self, device: &str, path: &str, root: &[u8; HASH_LEN]) -> Result<PathBuf> {
-        let from = self.live_path(device, path)?;
+    pub fn copy_live_to_temp(&self, folder: &str, path: &str, root: &[u8; HASH_LEN]) -> Result<PathBuf> {
+        let from = self.live_path(folder, path)?;
         let to = self.temp_path();
         fs::copy(&from, &to).with_context(|| format!("copy {}", from.display()))?;
         if !file_has_root(&to, root) {
@@ -239,31 +245,31 @@ impl Store {
 
     /// Moves the live file of a path out of the live tree into the folder of `version_id`.
     /// Returns false when there was no live file.
-    pub fn archive(&self, device: &str, path: &str, version_id: i64) -> Result<bool> {
-        let from = self.live_path(device, path)?;
+    pub fn archive(&self, folder: &str, path: &str, version_id: i64) -> Result<bool> {
+        let from = self.live_path(folder, path)?;
         if !from.is_file() {
             return Ok(false);
         }
-        let to = self.version_path(version_id, device, path)?;
+        let to = self.version_path(version_id, folder, path)?;
         move_file(&from, &to)?;
         Ok(true)
     }
 
     /// Undoes [`archive`].
-    pub fn unarchive(&self, device: &str, path: &str, version_id: i64) -> Result<()> {
-        move_file(&self.version_path(version_id, device, path)?, &self.live_path(device, path)?)
+    pub fn unarchive(&self, folder: &str, path: &str, version_id: i64) -> Result<()> {
+        move_file(&self.version_path(version_id, folder, path)?, &self.live_path(folder, path)?)
     }
 
     /// Puts a complete file in place as the live file of a path, with its modification time and mode.
-    pub fn install(&self, device: &str, path: &str, from: &Path, attrs: Attrs) -> Result<()> {
-        let to = self.live_path(device, path)?;
+    pub fn install(&self, folder: &str, path: &str, from: &Path, attrs: Attrs) -> Result<()> {
+        let to = self.live_path(folder, path)?;
         set_attributes(from, attrs.mtime_ns, attrs.mode)?;
         move_file(from, &to)
     }
 
     /// Removes the live file of a path (to undo an [`install`]).
-    pub fn discard_live(&self, device: &str, path: &str) {
-        if let Ok(p) = self.live_path(device, path) {
+    pub fn discard_live(&self, folder: &str, path: &str) {
+        if let Ok(p) = self.live_path(folder, path) {
             let _ = fs::remove_file(p);
         }
     }

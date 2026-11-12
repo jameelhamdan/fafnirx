@@ -55,7 +55,7 @@ Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targ
 - A behaviour change comes with a test; no dead code; update the docs it touches.
 - Log each change once and accurately: a rename is `rename`, never `delete`.
 - **Layout rules** (`scripts/check-layout.sh`, CI): no test block inside a source file; no logic file over 600 lines (it becomes a folder: `mod.rs` plus files by job, children reach the private items of their parent); no function with more than five parameters (a small struct says what they are, `clippy.toml`).
-- **Kinds are enums, not strings.** The database column stays text, the enum owns the spelling (`as_str`/`parse`): `RunStatus`, `MirrorKind`, `SourceKind` in `repo/links.rs`, `JobKind` and `JobStatus` in `repo/jobs.rs`, `DeviceKind` in `repo/devices.rs`. A new kind is a new variant and the compiler lists every `match` to change.
+- **Kinds are enums, not strings.** The database column stays text, the enum owns the spelling (`as_str`/`parse`): `RunStatus`, `MirrorKind`, `SourceKind` in `repo/links.rs`, `JobKind` and `JobStatus` in `repo/jobs.rs`, `FolderKind` in `repo/folders.rs`. A new kind is a new variant and the compiler lists every `match` to change.
 - **Errors cross a boundary as a type.** The device API's handlers return `CallError` (`devices/call.rs`): a `Status`, a refusal the web app gives too, or something internal that is logged and not told. The web side has `ApiError`.
 
 ## Code layout
@@ -66,7 +66,8 @@ Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targ
 |---|---|
 | `platform` | What apps build on: database pool, locks and `NOTIFY`, migrations, the file store, ids |
 | `repo` | Storage: one module per aggregate, and the one query built at run time (the file listing) |
-| `devices` | Clients, tokens, folders and master folders, renames, the device gRPC API |
+| `devices` | Devices: tokens, leases, the device gRPC API |
+| `folders` | Folders of users and master folders, sharing, renames, totals |
 | `web` | HTTP shell, logins, roles, routes and their tests |
 | `files` | Content in and out: ingest (commit, delete, rename, move), the watcher, browsing, downloads, zips |
 | `library` | Photos and videos: metadata jobs, pictures, artwork, albums |
@@ -79,7 +80,7 @@ functions; `platform` knows no app. SQL lives only in `queries/*.sql` (typed, ge
 
 **Links.** A source (`in`) and a mirror (`out`) are rows of one `links` table (`repo/links.rs`). The scheduler (`integrations/mod.rs`) queues a link that is due as a job (`links::schedule`; the `jobs` table is the one queue, with `meta` and `thumb`), claims queued runs (`links::claim_job`), runs each (`mirror::run`, `rclone_source::run`, `fetch_source::run`) and records how it ended: the run returns an `Outcome`, `Source(SourceRun)` or `Mirror(MirrorRun)`, each saying its own counts, and `finish` stores a `RunStatus`.
 
-**Core vs add-ons.** Core: client, `common`, and in the master `devices`, `files`, `monitoring`, `platform`, `repo` (minus
+**Core vs add-ons.** Core: client, `common`, and in the master `devices`, `folders`, `files`, `monitoring`, `platform`, `repo` (minus
 library), `web`, mirrors. Add-ons: the library, and the [modules](modules.md) (separate services; the master asks them for capabilities and works without them). Add-ons use the core, not the reverse; known
 exceptions: `ingest.rs` queues metadata jobs; `browse.rs`/`transfer.rs` use
 `library::meta`; `repo/files.rs` and `repo/jobs.rs` hold library queries; `monitoring/jobs.rs` cleans the library cache.
@@ -103,13 +104,13 @@ Synchronous `postgres` behind an `r2d2` pool.
 - Changing a path: `db::lock_path` first, move files before the transaction ends, `db::notify` in the same transaction
   (`ingest::commit_version` is the model).
 - A rename is `commit_version` with `renamed_from` (clients), `adopt_live` with `renamed_from` (watcher) or
-  `move_path` (web app; only `local` and `master` devices). Each logs one `rename`, calls `files::vacate_renamed` (never
+  `move_path` (web app; only `user` and `master` folders). Each logs one `rename`, calls `files::vacate_renamed` (never
   `delete_path`). Albums show a whole folder, so a rename needs nothing more.
 - A job returns `Ok(Some(note))` to show a note in Processing.
 
 ## Changing things
 
-**Schema.** `crates/master/migrations/` holds the schema as numbered files (`0001` and `0002` shipped in 5.0.0). Add `NNNN_name.sql` next to them and an entry at
+**Schema.** `crates/master/migrations/` holds the schema as numbered files. Add `NNNN_name.sql` next to them and an entry at
 the end of `ALL` in `platform/migrations.rs`. Applied on start, in order, in one transaction behind an advisory lock, with a
 checksum. Never edit a released migration; a newer database than the master is refused. Avoid long locks, and test on populated
 data.
@@ -119,7 +120,7 @@ Update the [diagram](architecture.md#database).
 `#[cfg_attr(test, derive(ts_rs::TS), ts(export))]`, and `cargo test -p fafnirx-master` regenerates its TypeScript type in
 `frontend/src/lib/generated/` (commit it; CI checks it; `types.ts` re-exports it); a
 test in `tests/unit/web/api/`; a line in `ROUTES` (`routes.rs`). Errors are `ApiError` (`bad`, `not_found`, `conflict`) →
-`{ "error": "..." }`. Every handler takes `Extension<Access>` and limits itself to the role: `check_see`/`check_write(folder)`
+`{ "error": "..." }`. Every handler starts from `Ctx { state, who }` (the app and the `Access` of the caller) and limits itself to the role: `check_see`/`check_write(folder)`
 (others' devices answer 404), `viewer()`/`scope_args()` for file queries, `require_admin()`, `require_workspace()`. Parse ids
 with `Id` and check visibility like any input. Test each role.
 
@@ -129,7 +130,7 @@ and the folders the user syncs (shared, master and own); any other call that rea
 
 **A source.** Model: `integrations/rclone_source.rs` (a file is known by its path). A source is a `links` row (direction `in`,
 shared with mirrors: `repo/links.rs`) whose `folder_id` is the folder it writes into (from the `folder` of the request, checked by
-`integrations/api/source.rs`; a source without one gets a `local` folder `source-<name>`). The scheduler queues it when due and
+`integrations/api/source.rs`; a source without one gets a folder `source-<name>`). The scheduler queues it when due and
 dispatches by `kind`. A source lists its files as
 `syncsource::Item`s (path, optional key, marker) and fetches one; `syncsource::apply` compares the listing with its `link_items` (by
 key, else path) and the live `files` of the folder, moves a file whose key has a new name (`ingest::move_path`), downloads the

@@ -33,7 +33,6 @@ function EditAlbum({ album, onClose }: { album: AlbumInfo; onClose: () => void }
       void refresh()
       onClose()
     },
-    toastError: true,
   })
 
   return (
@@ -75,11 +74,9 @@ export default function Album() {
 
   const cover = useApiMutation((file: string) => api.patch(`/api/albums/${id}`, { cover: file }), {
     onSuccess: () => { toast.success(t('Cover changed')); clear(); void refresh() },
-    toastError: true,
   })
   const remove = useApiMutation(() => api.delete(`/api/albums/${id}`), {
     onSuccess: () => { toast.success(t('Album deleted. Its photos are untouched.')); void refresh(); navigate('/albums') },
-    toastError: true,
   })
 
   if (error) {
@@ -103,13 +100,13 @@ export default function Album() {
         description={
           <>
             {plural(album.count, 'item')} · {bytes(album.bytes)}
-            <span className="mt-1 block">{t('Shows the folder {folder}', { folder: [folder.device, folder.path].filter(Boolean).join('/') })}</span>
+            <span className="mt-1 block">{t('Shows the folder {folder}', { folder: [folder.folder, folder.path].filter(Boolean).join('/') })}</span>
             {album.description && <span className="mt-1 block whitespace-pre-line">{album.description}</span>}
           </>
         }
         actions={
           <>
-            <Button variant="outline" asChild><Link to={`/files${query({ device: folder.device, path: folder.path })}`}><FolderOpen className="size-4" />{t('Open folder')}</Link></Button>
+            <Button variant="outline" asChild><Link to={`/files${query({ folder: folder.folder, path: folder.path })}`}><FolderOpen className="size-4" />{t('Open folder')}</Link></Button>
             <Button variant="outline" onClick={() => setDialog('edit')}><Pencil className="size-4" />{t('Edit')}</Button>
             <Button variant="outline" onClick={() => setDialog('delete')}><Trash2 className="size-4" />{t('Delete album')}</Button>
           </>
@@ -146,8 +143,8 @@ export default function Album() {
         description={t('The photos and videos stay where they are.')}
         action={t('Delete album')}
         destructive
-        onCancel={() => setDialog(null)}
-        onConfirm={() => { setDialog(null); remove.mutate() }}
+        onClose={() => setDialog(null)}
+        onConfirm={() => remove.mutate()}
       />
     </div>
   )

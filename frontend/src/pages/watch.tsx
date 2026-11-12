@@ -52,7 +52,7 @@ export default function Watch() {
   const close = () => {
     if (over) navigate(-1)
     else if (window.history.state?.idx > 0) navigate(-1)
-    else navigate(`/files${query({ device: here.device, path: parent(here.path), file: here.path })}`, { replace: true })
+    else navigate(`/files${query({ folder: here.folder, path: parent(here.path), file: here.path })}`, { replace: true })
   }
   return (
     <>

@@ -1,4 +1,4 @@
-//! Files and their versions: one row per path of a device, and one version per distinct content it has had.
+//! Files and their versions: one row per path of a folder, and one version per distinct content it has had.
 
 use fafnirx_common::HASH_LEN;
 use fafnirx_db::client::GenericClient;
@@ -22,9 +22,9 @@ impl Row {
 }
 
 /// The row of a path, locked until the transaction ends.
-pub fn lock_row(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<Option<Row>, Error> {
+pub fn lock_row(c: &mut impl GenericClient, folder_id: i64, path: &str) -> Result<Option<Row>, Error> {
     Ok(q::lock_file_row()
-        .bind(c, &device_id, &path)
+        .bind(c, &folder_id, &path)
         .opt()?
         .map(|r| Row { id: r.id, current: r.current_version_id, deleted_at: r.deleted_at }))
 }
@@ -35,8 +35,8 @@ pub fn has_content(c: &mut impl GenericClient, version_id: i64, root: &[u8]) -> 
 }
 
 /// The id of the row of a path, made if the path is new.
-pub fn ensure(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<Uuid, Error> {
-    q::ensure_file().bind(c, &device_id, &path).one()
+pub fn ensure(c: &mut impl GenericClient, folder_id: i64, path: &str) -> Result<Uuid, Error> {
+    q::ensure_file().bind(c, &folder_id, &path).one()
 }
 
 /// A version to record.
@@ -76,29 +76,29 @@ pub fn content_known(c: &mut impl GenericClient, root: &[u8]) -> Result<bool, Er
     q::content_known().bind(c, &root).one()
 }
 
-/// Path of a live file of the device with this content, preferring `prefer`.
-pub fn live_path_with_root(c: &mut impl GenericClient, device_id: i64, root: &[u8], prefer: Option<&str>) -> Result<Option<String>, Error> {
-    q::live_path_with_root().bind(c, &device_id, &root, &prefer.unwrap_or("")).opt()
+/// Path of a live file of the folder with this content, preferring `prefer`.
+pub fn live_path_with_root(c: &mut impl GenericClient, folder_id: i64, root: &[u8], prefer: Option<&str>) -> Result<Option<String>, Error> {
+    q::live_path_with_root().bind(c, &folder_id, &root, &prefer.unwrap_or("")).opt()
 }
 
-/// A live path of the device that is the same name as `path` but spelled differently (another case), unless `path` is itself
+/// A live path of the folder that is the same name as `path` but spelled differently (another case), unless `path` is itself
 /// there. The path `path` is renamed from does not count: it is on its way out.
-pub fn case_clash(c: &mut impl GenericClient, device_id: i64, path: &str, renamed_from: Option<&str>) -> Result<Option<String>, Error> {
-    q::case_clash().bind(c, &device_id, &path, &renamed_from.unwrap_or("")).opt()
+pub fn case_clash(c: &mut impl GenericClient, folder_id: i64, path: &str, renamed_from: Option<&str>) -> Result<Option<String>, Error> {
+    q::case_clash().bind(c, &folder_id, &path, &renamed_from.unwrap_or("")).opt()
 }
 
 /// Whether the path was deleted in the web app.
-pub fn deleted_in_web_app(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<bool, Error> {
-    Ok(q::deleted_in_web_app().bind(c, &device_id, &path).opt()?.is_some())
+pub fn deleted_in_web_app(c: &mut impl GenericClient, folder_id: i64, path: &str) -> Result<bool, Error> {
+    Ok(q::deleted_in_web_app().bind(c, &folder_id, &path).opt()?.is_some())
 }
 
 /// (root hash, size) of the live (not deleted) version of a path, if any.
-pub fn live_content(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<Option<([u8; HASH_LEN], u64)>, Error> {
-    let found = q::live_content().bind(c, &device_id, &path).opt()?;
+pub fn live_content(c: &mut impl GenericClient, folder_id: i64, path: &str) -> Result<Option<([u8; HASH_LEN], u64)>, Error> {
+    let found = q::live_content().bind(c, &folder_id, &path).opt()?;
     Ok(found.and_then(|v| Some((v.root_hash.try_into().ok()?, v.size as u64))))
 }
 
-/// A path of a device that was written or deleted since some time, as it is now.
+/// A path of a folder that was written or deleted since some time, as it is now.
 pub struct Change {
     pub path: String,
     /// The content hash of a live path; `None` for a deleted one (and then the rest is zero).
@@ -110,10 +110,10 @@ pub struct Change {
     /// A deletion made in the web app.
     pub from_web: bool,
 }
-/// The paths of a device written or deleted at or after `since` (unix seconds; 0 for everything). Needs no history:
+/// The paths of a folder written or deleted at or after `since` (unix seconds; 0 for everything). Needs no history:
 /// it reads the state of the files, so it works however long the client was away, as long as the trash keeps the deletion.
-pub fn changes_since(c: &mut impl GenericClient, device_id: i64, since: i64) -> Result<Vec<Change>, Error> {
-    let rows = q::changes_since().bind(c, &device_id, &since).all()?;
+pub fn changes_since(c: &mut impl GenericClient, folder_id: i64, since: i64) -> Result<Vec<Change>, Error> {
+    let rows = q::changes_since().bind(c, &folder_id, &since).all()?;
     Ok(rows
         .into_iter()
         .map(|r| {
@@ -133,16 +133,16 @@ pub fn changes_since(c: &mut impl GenericClient, device_id: i64, since: i64) -> 
 
 /// Marks a live path deleted. Returns the version that was current (0 when there was none), or `None` when the
 /// path was not live.
-pub fn delete_path(c: &mut impl GenericClient, device_id: i64, path: &str, ts: i64, in_web_app: bool) -> Result<Option<i64>, Error> {
+pub fn delete_path(c: &mut impl GenericClient, folder_id: i64, path: &str, ts: i64, in_web_app: bool) -> Result<Option<i64>, Error> {
     let by = in_web_app.then_some("web");
-    let params = q::DeletePathParams { ts, deleted_by: by, device_id, path };
+    let params = q::DeletePathParams { ts, deleted_by: by, folder_id, path };
     Ok(q::delete_path().params(c, &params).opt()?.map(|v| v.unwrap_or(0)))
 }
 
 /// Takes the old path of a rename out of the live tree. Unlike [`delete_path`] it is neither logged nor shown in the trash.
 /// Returns the version that was current (0 when there was none), or `None` when the path was not live.
-pub fn vacate_renamed(c: &mut impl GenericClient, device_id: i64, path: &str, ts: i64) -> Result<Option<i64>, Error> {
-    Ok(q::vacate_renamed().bind(c, &ts, &device_id, &path).opt()?.map(|v| v.unwrap_or(0)))
+pub fn vacate_renamed(c: &mut impl GenericClient, folder_id: i64, path: &str, ts: i64) -> Result<Option<i64>, Error> {
+    Ok(q::vacate_renamed().bind(c, &ts, &folder_id, &path).opt()?.map(|v| v.unwrap_or(0)))
 }
 
 /// One version of a file.
@@ -157,31 +157,31 @@ pub fn versions(c: &mut impl GenericClient, file_id: Uuid) -> Result<Vec<Version
 }
 
 /// The paths a selection stands for: a file, or every file under a folder.
-pub fn expand(c: &mut impl GenericClient, device_id: i64, path: &str, include_deleted: bool) -> Result<Vec<String>, Error> {
+pub fn expand(c: &mut impl GenericClient, folder_id: i64, path: &str, include_deleted: bool) -> Result<Vec<String>, Error> {
     let below = crate::platform::db::like_prefix(&format!("{path}/"));
-    q::expand_paths().params(c, &q::ExpandPathsParams { device_id, path, below, include_deleted }).all()
+    q::expand_paths().params(c, &q::ExpandPathsParams { folder_id, path, below, include_deleted }).all()
 }
 
 /// The live files [`expand`] gives, each with its modification time (unix nanoseconds).
-pub fn expand_with_mtime(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<Vec<(String, i64)>, Error> {
+pub fn expand_with_mtime(c: &mut impl GenericClient, folder_id: i64, path: &str) -> Result<Vec<(String, i64)>, Error> {
     let below = crate::platform::db::like_prefix(&format!("{path}/"));
     Ok(q::expand_with_mtime()
-        .bind(c, &device_id, &path, &below)
+        .bind(c, &folder_id, &path, &below)
         .all()?
         .into_iter()
         .map(|r| (r.path, r.mtime))
         .collect())
 }
 
-/// One of `paths` that is a live file of the device, if any.
-pub fn first_live_of(c: &mut impl GenericClient, device_id: i64, paths: &[String]) -> Result<Option<String>, Error> {
-    q::first_live_of().bind(c, &device_id, &paths).opt()
+/// One of `paths` that is a live file of the folder, if any.
+pub fn first_live_of(c: &mut impl GenericClient, folder_id: i64, paths: &[String]) -> Result<Option<String>, Error> {
+    q::first_live_of().bind(c, &folder_id, &paths).opt()
 }
 
 /// The folders directly below a path (`below` is the `LIKE` pattern of the path, `from` the 1-based character
 /// position where the folder names start).
-pub fn folders_below(c: &mut impl GenericClient, device_id: i64, below: &str, include_deleted: bool, from: i32) -> Result<Vec<Folder>, Error> {
-    q::folders_below().bind(c, &from, &device_id, &below, &include_deleted).all()
+pub fn folders_below(c: &mut impl GenericClient, folder_id: i64, below: &str, include_deleted: bool, from: i32) -> Result<Vec<Folder>, Error> {
+    q::folders_below().bind(c, &from, &folder_id, &below, &include_deleted).all()
 }
 
 /// A path as the transfer code needs it: its row, which may be deleted.
@@ -191,9 +191,9 @@ pub struct Located {
     pub deleted_at: Option<i64>,
 }
 
-pub fn locate(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<Option<Located>, Error> {
+pub fn locate(c: &mut impl GenericClient, folder_id: i64, path: &str) -> Result<Option<Located>, Error> {
     Ok(q::file_row()
-        .bind(c, &device_id, &path)
+        .bind(c, &folder_id, &path)
         .opt()?
         .map(|r| Located { id: r.id, current: r.current_version_id, deleted_at: r.deleted_at }))
 }
@@ -204,26 +204,26 @@ pub fn version_content(c: &mut impl GenericClient, file_id: Uuid, version_id: i6
 }
 
 /// The live files at or below a path as (path, size, mtime), for comparing with what is on disk.
-pub fn live_below(c: &mut impl GenericClient, device_id: i64, path: &str) -> Result<Vec<(String, i64, i64)>, Error> {
+pub fn live_below(c: &mut impl GenericClient, folder_id: i64, path: &str) -> Result<Vec<(String, i64, i64)>, Error> {
     let below = crate::platform::db::like_prefix(&format!("{path}/"));
     Ok(q::live_files_below()
-        .bind(c, &device_id, &path, &below)
+        .bind(c, &folder_id, &path, &below)
         .all()?
         .into_iter()
         .map(|f| (f.path, f.size, f.mtime))
         .collect())
 }
 
-/// Where a live file is and which content it holds: (device folder, path, root hash).
+/// Where a live file is and which content it holds: (folder, path, root hash).
 pub fn location(c: &mut impl GenericClient, id: Uuid) -> Result<Option<(String, String, Vec<u8>)>, Error> {
     Ok(q::file_location().bind(c, &id).opt()?.map(|f| (f.folder, f.path, f.root_hash)))
 }
 
 /// The live files directly in the folder that holds `path`, as (path, root hash): the neighbours of a file.
-pub fn neighbours(c: &mut impl GenericClient, device: &str, path: &str) -> Result<Vec<(String, Vec<u8>)>, Error> {
+pub fn neighbours(c: &mut impl GenericClient, folder: &str, path: &str) -> Result<Vec<(String, Vec<u8>)>, Error> {
     let prefix = path.rfind('/').map_or(String::new(), |i| path[..=i].to_string());
     Ok(q::files_in_folder()
-        .bind(c, &device, &prefix)
+        .bind(c, &folder, &prefix)
         .all()?
         .into_iter()
         .map(|f| (f.path, f.root_hash))

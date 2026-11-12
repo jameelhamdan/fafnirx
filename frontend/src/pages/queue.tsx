@@ -57,8 +57,8 @@ function Counts({ queued, running, failed, done }: { queued: number; running: nu
     [done, t('done today'), 'text-muted-foreground'],
   ]
   return (
-    <p className="num flex flex-wrap gap-x-3 gap-y-0.5 text-[13px]">
-      {parts.map(([n, label, style]) => <span key={label} className={style}><b className="font-medium">{n}</b> <span className="text-[11px]">{label}</span></span>)}
+    <p className="num flex flex-wrap gap-x-3 gap-y-0.5 text-compact">
+      {parts.map(([n, label, style]) => <span key={label} className={style}><b className="font-medium">{n}</b> <span className="text-2xs">{label}</span></span>)}
     </p>
   )
 }
@@ -79,13 +79,13 @@ function JobRow({ job, canControl, view, selection, onCancel, onRetry }: { job: 
         </TableCell>
       )}
       <TableCell className="max-w-0 w-full">
-        <p className="num truncate text-[12px]" title={`${job.device}/${job.path}`}>{job.path || '—'}</p>
-        {job.device && !canSteer && <p className="num truncate text-[11px] text-muted-foreground">{job.device}</p>}
+        <p className="num truncate text-xs" title={`${job.folder}/${job.path}`}>{job.path || '—'}</p>
+        {job.folder && !canSteer && <p className="num truncate text-2xs text-muted-foreground">{job.folder}</p>}
         {job.error && <p className="truncate text-xs text-destructive" title={job.error}>{job.error}</p>}
         {job.note && <p className="truncate text-xs text-muted-foreground" title={job.note}>{job.note}</p>}
         {job.retry_at && <p className="text-xs text-muted-foreground">{t('Failed {n} time(s); tries again {when}', { n: job.attempts, when: dateTime(job.retry_at) })}</p>}
       </TableCell>
-      {view.show('since') && <TableCell className="num whitespace-nowrap text-end text-[12px] text-muted-foreground">{ago(when, now)}</TableCell>}
+      {view.show('since') && <TableCell className="num whitespace-nowrap text-end text-xs text-muted-foreground">{ago(when, now)}</TableCell>}
       <TableCell className="whitespace-nowrap text-end">
         {canControl && canSteer && job.status === 'failed' && <Button size="xs" variant="ghost" onClick={() => onRetry(job.id)}><RotateCcw />{t('Retry')}</Button>}
         {canControl && canSteer && (job.status === 'failed' || job.status === 'queued') && (
@@ -104,9 +104,8 @@ export default function Queue() {
   const act = useApiMutation(({ url, body }: { url: string; body?: unknown; message?: (changed: number) => string }) => api.post<{ changed: number } | null>(url, body), {
     onSuccess: (r, v) => {
       if (v.message && r) toast.success(v.message(r.changed))
-      void refresh()
     },
-    toastError: true,
+    invalidate: [['queue']],
   })
   const retry = (id?: string) => act.mutate({ url: '/api/queue/retry', body: { id }, message: (n) => t('{n} job(s) will run again', { n }) })
   const cancel = (status: 'failed' | 'queued', id?: string) => act.mutate({ url: '/api/queue/cancel', body: { status, id } })
@@ -118,7 +117,7 @@ export default function Queue() {
   const [state, setState] = useState('')
   const columns = useMemo(() => [{ id: 'state', label: t('State'), locked: true }, { id: 'work', label: t('Work') }, { id: 'for', label: t('For'), locked: true }, { id: 'since', label: t('Since') }], [t])
   const view = useTableView('queue', columns)
-  const jobs = (data?.jobs ?? []).filter((j) => (state === '' || j.status === state) && matches(filter, j.path, j.device, j.kind, t(KIND[j.kind] ?? j.kind), j.plugin, j.error))
+  const jobs = (data?.jobs ?? []).filter((j) => (state === '' || j.status === state) && matches(filter, j.path, j.folder, j.kind, t(KIND[j.kind] ?? j.kind), j.plugin, j.error))
   const selection = useSelection(useMemo(() => jobs.filter((j) => steered(j.kind)).map((j) => j.id), [jobs]))
   const picked = (data?.jobs ?? []).filter((j) => selection.selected.has(j.id))
   /** Retry or remove every ticked job that can be: one request each, the server has no batch call. */
@@ -167,7 +166,7 @@ export default function Queue() {
       {!data && !error && <Skeleton className="h-48" />}
       {data && (
         <>
-          {data.paused && <p role="status" className="rounded-md border border-warning/50 bg-warning/10 px-3 py-1.5 text-[13px]">{t('Paused: nothing new is started. What is running now finishes.')}</p>}
+          {data.paused && <p role="status" className="rounded-md border border-warning/50 bg-warning/10 px-3 py-1.5 text-compact">{t('Paused: nothing new is started. What is running now finishes.')}</p>}
           <section className="flex flex-wrap overflow-hidden rounded-xl border bg-card" aria-label={t('Work by kind')}>
             {cards.map((kind) => {
               const s = data.summary.find((x) => x.kind === kind) ?? { kind, queued: 0, running: 0, failed: 0, done: 0 }
@@ -189,7 +188,7 @@ export default function Queue() {
                   view={view}
                   filter={filter}
                   onFilter={setFilter}
-                  placeholder={t('Filter by file, device or kind')}
+                  placeholder={t('Filter by file, folder or kind')}
                   shown={jobs.length}
                   total={data.jobs.length}
                   selection={data.can_control ? selection : undefined}

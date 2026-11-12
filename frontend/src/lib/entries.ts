@@ -1,7 +1,7 @@
 import type { Entry } from './types'
 
 /** Identifies an entry of a listing, for selection. */
-export const entryKey = (e: Entry) => `${e.kind}|${e.device}|${e.path}`
+export const entryKey = (e: Entry) => `${e.kind}|${e.folder}|${e.path}`
 
 /** Whether the library lists a file of this name (a photo or a video): the same extensions as the master's `files.media`. */
 export const isLibraryFile = (name: string) =>

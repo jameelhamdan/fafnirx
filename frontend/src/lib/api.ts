@@ -56,11 +56,11 @@ export function query(params: Record<string, string | number | boolean | undefin
   return text ? `?${text}` : ''
 }
 
-export const downloadUrl = (device: string, path: string, opts: { version?: number; inline?: boolean } = {}) =>
-  `/api/files/download${query({ device, path, version: opts.version, inline: opts.inline })}`
+export const downloadUrl = (folder: string, path: string, opts: { version?: number; inline?: boolean } = {}) =>
+  `/api/files/download${query({ folder, path, version: opts.version, inline: opts.inline })}`
 
-export const thumbUrl = (device: string, path: string, size = 256) =>
-  `/api/files/thumb${query({ device, path, size })}`
+export const thumbUrl = (folder: string, path: string, size = 256) =>
+  `/api/files/thumb${query({ folder, path, size })}`
 
 export type MediaView = 'thumb' | 'preview' | 'original' | 'download'
 
@@ -69,7 +69,7 @@ export const mediaUrl = (id: string, view: MediaView, hash?: string) =>
   `/api/media/${id}/${view}${query({ v: hash })}`
 
 /** Starts a browser download of a zip of the selection (a plain form post, so the browser streams it). */
-export function downloadZip(items: { device: string; path: string }[], name: string) {
+export function downloadZip(items: { folder: string; path: string }[], name: string) {
   const form = document.createElement('form')
   form.method = 'POST'
   form.action = '/api/files/zip'

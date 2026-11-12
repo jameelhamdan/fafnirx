@@ -40,7 +40,7 @@ fn conflicts_get_a_name_of_their_own_next_to_the_file() {
 fn a_read_only_share_stops_that_folder_not_the_client() {
     let read_only = SyncError::from(tonic::Status::failed_precondition("\"bob/family\" is shared with you to read only"));
     assert!(matches!(read_only, SyncError::Refused(_)), "a problem with the folder, recorded against no file");
-    let in_use = SyncError::from(tonic::Status::permission_denied("device in use: another computer is connected"));
+    let in_use = SyncError::from(tonic::Status::permission_denied("device in use: another device is connected"));
     assert!(matches!(in_use, SyncError::Offline(_)), "a problem with the device: nothing can sync");
 }
 
@@ -190,7 +190,7 @@ impl Rig {
         self
     }
 
-    /// The versions of this computer that were put aside, by name.
+    /// The versions of this device that were put aside, by name.
     fn aside(&self) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(self.folder.path().join(CONFLICT_DIR))
             .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
@@ -272,7 +272,7 @@ async fn a_file_deleted_on_the_master_goes_unless_it_was_changed_here() {
 mod names;
 
 #[tokio::test]
-async fn what_was_deleted_while_this_computer_was_away_goes_when_the_master_lists_everything() {
+async fn what_was_deleted_while_this_device_was_away_goes_when_the_master_lists_everything() {
     let mut rig = Rig::new().await;
     for (path, text) in [("keep.txt", "1"), ("gone.txt", "2"), ("edited.txt", "3")] {
         rig.remote_has(path, text.as_bytes());

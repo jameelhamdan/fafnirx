@@ -31,8 +31,8 @@ pub struct MirrorSpec {
     /// rclone backend options (`access_key_id`, `region`, ...), as rclone's lowercase names.
     pub options: BTreeMap<String, Value>,
     pub interval_hours: f64,
-    /// The folder it holds, like `ana/laptop` or `master:Photos`; empty for everything.
-    pub folder: String,
+    /// What it holds: a device like `ana/laptop`, a folder like `ana/photos` or `master:Photos`; empty for everything.
+    pub scope: String,
     /// Runs of history (replaced and removed files) kept on the mirror.
     pub keep_runs: i64,
 }
@@ -108,7 +108,7 @@ impl MirrorSpec {
             }
         }
         normalize_storage(&mut self.remote, &mut self.remote_type, &mut self.remote_path, &mut self.options)?;
-        self.folder = self.folder.trim().trim_matches('/').to_string();
+        self.scope = self.scope.trim().trim_matches('/').to_string();
         self.interval_hours = hours_to_secs(self.interval_hours).map_err(|e| anyhow!(e.1))? as f64 / 3600.0;
         if !(1..=100).contains(&self.keep_runs) {
             bail!("keep_runs must be between 1 and 100");

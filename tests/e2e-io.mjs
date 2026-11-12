@@ -61,7 +61,7 @@ async function runAndWait(table, name) {
   return row
 }
 const livePaths = async (device) =>
-  new Set((await schema.rows("SELECT f.path FROM files f JOIN devices d ON d.id = f.device_id WHERE d.folder = $1 AND f.deleted_at IS NULL", [device])).map((r) => r[0]))
+  new Set((await schema.rows("SELECT f.path FROM files f JOIN folders d ON d.id = f.folder_id WHERE d.key = $1 AND f.deleted_at IS NULL", [device])).map((r) => r[0]))
 const stored = (device, p) => fs.readFileSync(path.join(data, 'files', ...(device === '_master' ? [] : ['users']), device, p))
 const openAlerts = async () => {
   const r = await admin.get('/api/dashboard')
@@ -95,7 +95,7 @@ try {
   check(paths.size === want.length && want.every((p) => paths.has(p)), `the source holds the files of the folder (${[...paths].sort()})`)
   check(stored('admin/source-photos', 'big.bin').equals(big), 'a multi-chunk file is stored byte for byte under files/<source>/')
   const devices = (await admin.get('/api/devices')).json
-  check(devices.filter((d) => d.kind === 'device').length === 0 && devices.some((d) => d.folder === 'admin/source-photos' && d.kind === 'local'), 'the folder of a source is a local folder, never a computer')
+  check(devices.filter((d) => d.kind === 'device').length === 0 && devices.some((d) => d.key === 'admin/source-photos' && d.kind === 'local'), 'the folder of a source is a local folder, never a device')
 
   // --- changes in the folder: edit, delete, rename, add --------------------------------------------------------------------------------
   put('a.txt', 'second version')
@@ -107,9 +107,9 @@ try {
   paths = await livePaths('admin/source-photos')
   check(paths.has('big-renamed.bin') && !paths.has('big.bin') && paths.has('new.txt') && !paths.has('sub/b.txt'), 'edit, rename, add and delete are all picked up')
   check(stored('admin/source-photos', 'a.txt').toString() === 'second version', 'an edited file has the new content')
-  const info = (await admin.get('/api/files/info?device=admin/source-photos&path=a.txt')).json
+  const info = (await admin.get('/api/files/info?folder=admin/source-photos&path=a.txt')).json
   check(info.versions.length === 2, 'the previous version is kept')
-  const gone = await admin.bytes('/api/files/download?device=admin/source-photos&path=sub/b.txt')
+  const gone = await admin.bytes('/api/files/download?folder=admin/source-photos&path=sub/b.txt')
   check(gone.status === 200 && gone.body.toString() === 'in a sub folder', 'a file deleted at the source stays recoverable (retention)')
 
   // --- a storage that cannot be listed must not look like mass deletion ------------------------------------------------------------------

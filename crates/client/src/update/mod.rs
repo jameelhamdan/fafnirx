@@ -72,7 +72,7 @@ fn set_mode(path: &Path, mode: u32) -> Result<()> {
 /// Updates a package install: downloads the `.deb` of the newest release, checks it, and has it installed. The background check
 /// does not do this (`interactive` is false): it cannot ask for permission, so it only says that there is a newer version.
 async fn from_package(work_dir: &Path, interactive: bool) -> Result<bool> {
-    let arch = crate::update::release::deb_arch().context("there is no package for this kind of computer")?;
+    let arch = crate::update::release::deb_arch().context("there is no package for this kind of device")?;
     if !interactive {
         let found = tokio::task::spawn_blocking(move || crate::update::release::latest_deb(&crate::update::release::agent(), arch, VERSION))
             .await

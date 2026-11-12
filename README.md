@@ -1,6 +1,6 @@
 # fafnirx
 
-Collect the files of your computers on a server you own, keep every version, browse them from anywhere, and copy them
+Collect the files of your devices on a server you own, keep every version, browse them from anywhere, and copy them
 offsite. Backups flow one way: devices → master → mirrors. The master never changes a file on a device, and a device
 cannot read or list what the master holds, except the shared folders and master folders it is let into, and its own user's folders, which sync both ways.
 
@@ -15,13 +15,13 @@ flowchart LR
 
 ## Features
 
-- **Client** (Windows, macOS, Linux): watches folders, uploads changes (resumable, verified, deduplicated), tray icon,
+- **Client** (Windows, macOS, Linux): watches folders, uploads changes (resumable, verified, content already on the master is not sent again), tray icon,
   self-update from GitHub releases. **Android:** [fafnirx-android](https://github.com/jameelhamdan/fafnirx-android).
-- **Folders**: a folder that belongs to a user (or is a folder of the master files), not to a computer, kept in sync both ways by
-  any of their computers. One list for yours, those shared with you and the master folders; other users get access to yours only when
+- **Folders**: a folder that belongs to a user (or is a folder of the master files), not to a device, kept in sync both ways by
+  any of their devices. One list for yours, those shared with you and the master folders; other users get access to yours only when
   the owner adds them. A folder can also be shown as an album.
 - **Master**: one Rust binary with the web app built in. Files are stored as plain files in
-  `files/users/<user>/<device>/<path>`; the newest 5 versions are kept, deleted files are removed after 30 days (both configurable).
+  `files/users/<user>/<name>/<path>` (a directory a device sends: `files/users/<user>/<device>/<directory>/<path>`); the newest 5 versions are kept, deleted files are removed after 30 days (both configurable).
 - **File browser**: search, filter, sort, preview, version history, zip download, drag-and-drop upload, delete and restore.
   Photos and videos can be opened in the viewer and rated or favorited from here.
 - **Photo and video library** over the same files: timeline, favorites, archive, trash, albums (a shortcut to a folder),

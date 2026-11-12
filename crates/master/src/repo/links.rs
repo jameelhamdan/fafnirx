@@ -110,6 +110,8 @@ pub struct New<'a> {
     pub config: &'a str,
     /// The folder a source writes into, or the one a mirror holds.
     pub folder_id: Option<i64>,
+    /// The device whose folders a mirror holds (a mirror holds a folder, a device, or everything).
+    pub device_id: Option<i64>,
     pub interval_secs: i64,
 }
 
@@ -122,6 +124,7 @@ pub fn add(c: &mut impl GenericClient, n: &New, now: i64) -> Result<Option<i64>,
         kind: n.kind,
         config: n.config,
         folder_id: n.folder_id,
+        device_id: n.device_id,
         interval_secs: n.interval_secs,
         now,
     };
@@ -139,6 +142,7 @@ pub struct Stored {
     pub kind: String,
     pub config: String,
     pub folder_id: Option<i64>,
+    pub device_id: Option<i64>,
     pub interval_secs: i64,
     pub user_id: Option<i64>,
     pub running: bool,
@@ -157,13 +161,21 @@ pub fn for_edit(c: &mut impl GenericClient, id: i64) -> Result<Option<Stored>, E
         kind: l.kind,
         config: l.config,
         folder_id: l.folder_id,
+        device_id: l.device_id,
         interval_secs: l.interval_secs,
         user_id: l.user_id,
     }))
 }
 
 pub fn update(c: &mut impl GenericClient, id: i64, s: &Stored) -> Result<(), Error> {
-    let params = q::UpdateLinkParams { name: &s.name, config: &s.config, folder_id: s.folder_id, interval_secs: s.interval_secs, id };
+    let params = q::UpdateLinkParams {
+        name: &s.name,
+        config: &s.config,
+        folder_id: s.folder_id,
+        device_id: s.device_id,
+        interval_secs: s.interval_secs,
+        id,
+    };
     q::update_link().params(c, &params).map(drop)
 }
 
@@ -225,7 +237,9 @@ pub struct Due {
     pub name: String,
     pub config: String,
     pub folder_id: Option<i64>,
-    pub folder: Option<String>,
+    pub device_id: Option<i64>,
+    /// The key of the folder or device it is about; empty for everything.
+    pub scope: String,
     pub owner: Option<String>,
 }
 
@@ -257,7 +271,8 @@ pub fn due(c: &mut impl GenericClient, id: i64) -> Result<Option<Due>, Error> {
         name: l.name,
         config: l.config,
         folder_id: l.folder_id,
-        folder: l.folder,
+        device_id: l.device_id,
+        scope: l.scope,
         owner: l.owner,
     }))
 }
@@ -282,7 +297,7 @@ pub fn fail_interrupted(c: &mut impl GenericClient, now: i64) -> Result<(), Erro
 /// (the marker of a source's, the hash of a mirror's).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {
-    pub device_id: i64,
+    pub folder_id: i64,
     pub path: String,
     pub remote_id: String,
     pub version: String,
@@ -293,14 +308,14 @@ pub fn items(c: &mut impl GenericClient, id: i64) -> Result<Vec<Item>, Error> {
         .bind(c, &id)
         .all()?
         .into_iter()
-        .map(|i| Item { device_id: i.device_id, path: i.path, remote_id: i.remote_id, version: i.version })
+        .map(|i| Item { folder_id: i.folder_id, path: i.path, remote_id: i.remote_id, version: i.version })
         .collect())
 }
 
 /// Remembers a file by its place.
-pub fn remember(c: &mut impl GenericClient, id: i64, device_id: i64, path: &str, version: &str) -> Result<(), Error> {
+pub fn remember(c: &mut impl GenericClient, id: i64, folder_id: i64, path: &str, version: &str) -> Result<(), Error> {
     q::remember_item()
-        .params(c, &q::RememberItemParams { link_id: id, device_id, path, version })
+        .params(c, &q::RememberItemParams { link_id: id, folder_id, path, version })
         .map(drop)
 }
 
@@ -309,7 +324,7 @@ pub fn remember(c: &mut impl GenericClient, id: i64, device_id: i64, path: &str,
 pub fn remember_remote(c: &mut impl GenericClient, item: &RemoteItem) -> Result<(), Error> {
     let params = q::RememberRemoteItemParams {
         link_id: item.link_id,
-        device_id: item.device_id,
+        folder_id: item.folder_id,
         path: item.path,
         remote_id: item.remote_id,
         version: item.version,
@@ -320,14 +335,14 @@ pub fn remember_remote(c: &mut impl GenericClient, item: &RemoteItem) -> Result<
 /// A file of a source by the remote's id for it: the link, the device and path it was stored at, and the remote's version of it.
 pub struct RemoteItem<'a> {
     pub link_id: i64,
-    pub device_id: i64,
+    pub folder_id: i64,
     pub path: &'a str,
     pub remote_id: &'a str,
     pub version: &'a str,
 }
 
-pub fn forget(c: &mut impl GenericClient, id: i64, device_id: i64, path: &str) -> Result<(), Error> {
-    q::forget_item().params(c, &q::ForgetItemParams { link_id: id, device_id, path }).map(drop)
+pub fn forget(c: &mut impl GenericClient, id: i64, folder_id: i64, path: &str) -> Result<(), Error> {
+    q::forget_item().params(c, &q::ForgetItemParams { link_id: id, folder_id, path }).map(drop)
 }
 
 pub fn forget_remote(c: &mut impl GenericClient, id: i64, remote_id: &str) -> Result<(), Error> {

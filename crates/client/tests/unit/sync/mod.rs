@@ -17,7 +17,7 @@ pub(crate) struct Calls {
     pub already: Vec<String>,
     /// What a synced folder lists as changed.
     pub changes: Vec<pb::Change>,
-    /// The listing is every live path, as when the computer was away longer than deletions are remembered.
+    /// The listing is every live path, as when the device was away longer than deletions are remembered.
     pub complete: bool,
     /// The content a synced folder serves.
     pub files: HashMap<String, Vec<u8>>,
@@ -113,7 +113,7 @@ impl Rig {
         let url = serve(calls.clone()).await;
         let (folder, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let mut cfg = Config::new(url);
-        cfg.folders.push(Folder::computer(folder.path().to_path_buf(), "docs".into()));
+        cfg.folders.push(Folder::device(folder.path().to_path_buf(), "docs".into()));
         let engine = Engine::new(
             net::client(&cfg, "token", "instance").unwrap(),
             State::open(&state.path().join("state.db")).unwrap(),

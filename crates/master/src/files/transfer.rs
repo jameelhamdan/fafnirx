@@ -1,21 +1,22 @@
 //! Moving file contents out: download (with ranges, so video and photos stream), previews and bulk zip. The way in is `upload`.
 
 use crate::files::browse::VersionAt;
-use crate::files::browse::{find_device, version_file, FileRef};
+use crate::files::browse::{find_folder, version_file, FileRef};
 use crate::library::{artwork, meta};
 use crate::platform::id::Id;
 use crate::repo::files;
 use crate::repo::jobs::{self, JobKind, JobStatus};
-use crate::web::access::Access;
-use crate::web::{run, ApiError, Shared};
+use crate::web::access::{Access, Ctx};
+use crate::web::{run, ApiError, App};
 use axum::body::Body;
-use axum::extract::{Form, Path, Query, State};
+use axum::extract::{Form, Path, Query};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::{Extension, Json};
+use axum::Json;
 use fafnirx_common::{base_name, clean_remote_path, secs_of_ns, unix_now};
 use fafnirx_db::queries as sql;
 use futures_util::StreamExt;
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,7 +26,7 @@ use tokio_util::io::ReaderStream;
 
 #[derive(Deserialize)]
 pub struct FileQuery {
-    device: String,
+    folder: String,
     path: String,
     version: Option<i64>,
     inline: Option<u8>,
@@ -42,25 +43,28 @@ struct Stored {
     art: Option<(PathBuf, Vec<u8>)>,
     /// Which file and content this is, for a picture of it that is asked for.
     id: uuid::Uuid,
-    device: String,
+    folder: String,
     path: String,
     version: i64,
     current: Option<i64>,
     deleted: bool,
 }
 
-fn stored_version(state: &Shared, who: Access, q: &FileQuery) -> impl FnOnce(&mut postgres::Client) -> anyhow::Result<Stored> {
-    let (store, device, path, version) = (state.store.clone(), q.device.clone(), q.path.clone(), q.version);
+fn stored_version(state: &App, who: Access, q: &FileQuery) -> impl FnOnce(&mut postgres::Client) -> anyhow::Result<Stored> {
+    let (store, folder, path, version) = (state.store.clone(), q.folder.clone(), q.path.clone(), q.version);
     move |c| {
-        let dev = find_device(c, &who, &device)?;
+        let folder = find_folder(c, &who, &folder)?;
         let path = clean_remote_path(&path).map_err(|e| ApiError::bad(e.to_string()))?;
-        let file = files::locate(c, dev.id, &path)?.ok_or_else(|| ApiError::not_found("No such file"))?;
+        let file = files::locate(c, folder.id, &path)?.ok_or_else(|| ApiError::not_found("No such file"))?;
         let (file_id, current, deleted) = (file.id, file.current, file.deleted_at);
         let version = version.or(current).ok_or_else(|| ApiError::not_found("No such version"))?;
         let (root, size) = files::version_content(c, file_id, version)?.ok_or_else(|| ApiError::not_found("No such version"))?;
-        let disk = version_file(&store, &VersionAt { device: &dev.name, path: &path, version, current, deleted: deleted.is_some() })?;
+        let disk = version_file(
+            &store,
+            &VersionAt { folder: &folder.key, path: &path, version, current, deleted: deleted.is_some() },
+        )?;
         let art = if deleted.is_none() && Some(version) == current {
-            artwork::lookup(c, &store, &dev.name, &path)
+            artwork::lookup(c, &store, &folder.key, &path)
         } else {
             None
         };
@@ -71,7 +75,7 @@ fn stored_version(state: &Shared, who: Access, q: &FileQuery) -> impl FnOnce(&mu
             name: base_name(&path).to_string(),
             art,
             id: file_id,
-            device: dev.name.clone(),
+            folder: folder.key.clone(),
             version,
             current,
             deleted: deleted.is_some(),
@@ -80,14 +84,12 @@ fn stored_version(state: &Shared, who: Access, q: &FileQuery) -> impl FnOnce(&mu
     }
 }
 
+/// What stays unescaped in a `filename*=UTF-8''...` value: letters, digits and `-_.~`.
+const FILENAME_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'~');
+
 /// `filename*=UTF-8''...` value: everything but unreserved characters is percent-encoded.
 fn percent_encode(name: &str) -> String {
-    name.bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
+    utf8_percent_encode(name, FILENAME_SET).to_string()
 }
 
 /// Kinds a browser may show in place. HTML and SVG can run script, so they are always downloaded.
@@ -122,7 +124,7 @@ fn past_the_end(header: &str, size: u64) -> bool {
     }
 }
 
-pub async fn download(State(state): State<Shared>, Extension(who): Extension<Access>, Query(q): Query<FileQuery>, headers: HeaderMap) -> Result<Response, ApiError> {
+pub async fn download(Ctx { state, who }: Ctx, Query(q): Query<FileQuery>, headers: HeaderMap) -> Result<Response, ApiError> {
     let stored = run(&state, stored_version(&state, who, &q)).await?;
     let etag = format!("\"{}\"", hex::encode(&stored.root));
     let file = SendFile { disk: &stored.disk, etag, size: stored.size, name: &stored.name, inline: q.inline == Some(1) };
@@ -142,7 +144,7 @@ struct SendFile<'a> {
 }
 
 /// Streams a file with `Range` support, so that photos and videos can be seen while they download.
-async fn send_file(state: &Shared, headers: &HeaderMap, f: SendFile<'_>) -> Result<Response, ApiError> {
+async fn send_file(state: &App, headers: &HeaderMap, f: SendFile<'_>) -> Result<Response, ApiError> {
     if headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) == Some(f.etag.as_str()) {
         return Ok((StatusCode::NOT_MODIFIED, [(header::ETAG, f.etag)]).into_response());
     }
@@ -206,7 +208,7 @@ enum Picture {
 /// A JPEG picture of an image or a video frame. When it is made already it is sent. When it is not, a job makes it, and the
 /// answer is "accepted": the browser waits for the master to say it is ready (`thumbs`, see `web::events`) and asks again.
 /// Nothing is made when thumbnails are off.
-async fn preview_response(state: &Shared, stored: &Stored, max: u32, immutable: bool) -> Result<Response, ApiError> {
+async fn preview_response(state: &App, stored: &Stored, max: u32, immutable: bool) -> Result<Response, ApiError> {
     if !meta::thumbnails_enabled() || (!meta::can_preview(&stored.name) && stored.art.is_none()) {
         return Err(ApiError::not_found("No preview for this kind of file"));
     }
@@ -222,7 +224,7 @@ async fn preview_response(state: &Shared, stored: &Stored, max: u32, immutable: 
     }
     let job = serde_json::to_value(meta::ThumbJob {
         id: Id(stored.id).to_string(),
-        device: stored.device.clone(),
+        folder: stored.folder.clone(),
         path: stored.path.clone(),
         root: hex::encode(&stored.root),
         key: picture_of,
@@ -257,7 +259,7 @@ async fn preview_response(state: &Shared, stored: &Stored, max: u32, immutable: 
     }
 }
 
-pub async fn thumbnail(State(state): State<Shared>, Extension(who): Extension<Access>, Query(q): Query<FileQuery>) -> Result<Response, ApiError> {
+pub async fn thumbnail(Ctx { state, who }: Ctx, Query(q): Query<FileQuery>) -> Result<Response, ApiError> {
     let stored = run(&state, stored_version(&state, who, &q)).await?;
     // Two sizes only: every size asked for would be a file kept for good.
     let max = if q.size.unwrap_or(meta::THUMB) <= meta::THUMB { meta::THUMB } else { meta::PREVIEW };
@@ -265,27 +267,27 @@ pub async fn thumbnail(State(state): State<Shared>, Extension(who): Extension<Ac
 }
 
 /// The file with this id as the library knows it: its current content, deleted or not.
-fn stored_by_id(state: &Shared, who: Access, id: uuid::Uuid) -> impl FnOnce(&mut postgres::Client) -> anyhow::Result<Stored> {
+fn stored_by_id(state: &App, who: Access, id: uuid::Uuid) -> impl FnOnce(&mut postgres::Client) -> anyhow::Result<Stored> {
     let store = state.store.clone();
     move |c| {
         let row = sql::files::file_by_id().bind(c, &id).opt()?.ok_or_else(|| ApiError::not_found("No such file"))?;
-        let (device, path, version, deleted_at) = (row.folder, row.path, row.current_version_id, row.deleted_at);
-        // A file of someone else's device does not exist for this user.
-        who.check_see(&device).map_err(|_| ApiError::not_found("No such file"))?;
+        let (folder, path, version, deleted_at) = (row.folder, row.path, row.current_version_id, row.deleted_at);
+        // A file of someone else's folder does not exist for this user.
+        who.check_see(&folder).map_err(|_| ApiError::not_found("No such file"))?;
         Ok(Stored {
             disk: version_file(
                 &store,
-                &VersionAt { device: &device, path: &path, version, current: Some(version), deleted: deleted_at.is_some() },
+                &VersionAt { folder: &folder, path: &path, version, current: Some(version), deleted: deleted_at.is_some() },
             )?,
             root: row.root_hash,
             size: row.size as u64,
             name: base_name(&path).to_string(),
-            art: if deleted_at.is_none() { artwork::lookup(c, &store, &device, &path) } else { None },
+            art: if deleted_at.is_none() { artwork::lookup(c, &store, &folder, &path) } else { None },
             id,
             version,
             current: Some(version),
             deleted: deleted_at.is_some(),
-            device,
+            folder,
             path,
         })
     }
@@ -319,7 +321,7 @@ pub struct MediaQuery {
 }
 
 /// Answers a request for one of the views of a file.
-pub async fn media(State(state): State<Shared>, Extension(who): Extension<Access>, Path((Id(id), variant)): Path<(Id, String)>, Query(q): Query<MediaQuery>, headers: HeaderMap) -> Result<Response, ApiError> {
+pub async fn media(Ctx { state, who }: Ctx, Path((Id(id), variant)): Path<(Id, String)>, Query(q): Query<MediaQuery>, headers: HeaderMap) -> Result<Response, ApiError> {
     let variant = Variant::parse(&variant).ok_or_else(|| ApiError::not_found("No such view"))?;
     let stored = run(&state, stored_by_id(&state, who, id)).await?;
     let root_hex = hex::encode(&stored.root);
@@ -331,37 +333,37 @@ pub async fn media(State(state): State<Shared>, Extension(who): Extension<Access
     }
 }
 
-async fn send_original(state: &Shared, headers: &HeaderMap, stored: &Stored, inline: bool) -> Result<Response, ApiError> {
+async fn send_original(state: &App, headers: &HeaderMap, stored: &Stored, inline: bool) -> Result<Response, ApiError> {
     let etag = format!("\"{}\"", hex::encode(&stored.root));
     send_file(state, headers, SendFile { disk: &stored.disk, etag, size: stored.size, name: &stored.name, inline }).await
 }
 
 #[derive(Deserialize)]
 pub struct ZipForm {
-    /// JSON: `[{"device": "...", "path": "..."}]`; an empty path is the whole device.
+    /// JSON: `[{"folder": "...", "path": "..."}]`; an empty path is the whole folder.
     items: String,
     name: Option<String>,
 }
 
-pub async fn zip(State(state): State<Shared>, Extension(who): Extension<Access>, Form(form): Form<ZipForm>) -> Result<Response, ApiError> {
+pub async fn zip(Ctx { state, who }: Ctx, Form(form): Form<ZipForm>) -> Result<Response, ApiError> {
     let items: Vec<FileRef> = serde_json::from_str(&form.items).map_err(|_| ApiError::bad("items must be a JSON list"))?;
     if items.is_empty() {
         return Err(ApiError::bad("Nothing selected"));
     }
     let store = state.store.clone();
     let entries = run(&state, move |c| {
-        let several = items.iter().map(|i| &i.device).collect::<std::collections::HashSet<_>>().len() > 1;
+        let several = items.iter().map(|i| &i.folder).collect::<std::collections::HashSet<_>>().len() > 1;
         let mut entries = Vec::new();
         for item in &items {
-            let dev = find_device(c, &who, &item.device)?;
+            let folder = find_folder(c, &who, &item.folder)?;
             let selected = item.path.trim_matches('/');
-            // Names inside the zip start at the selected folder (or file), not at the device root.
+            // Names inside the zip start at the selected folder (or file), not at the folder root.
             let parent = selected.rfind('/').map_or(0, |i| i + 1);
-            for (path, mtime) in files::expand_with_mtime(c, dev.id, selected)? {
+            for (path, mtime) in files::expand_with_mtime(c, folder.id, selected)? {
                 let mtime = secs_of_ns(mtime);
                 let inner = &path[parent.min(path.len())..];
-                let name = if several || selected.is_empty() { format!("{}/{inner}", dev.name) } else { inner.to_string() };
-                entries.push(super::zip::Entry { name, path: store.live_path(&dev.name, &path)?, mtime });
+                let name = if several || selected.is_empty() { format!("{}/{inner}", folder.key) } else { inner.to_string() };
+                entries.push(super::zip::Entry { name, path: store.live_path(&folder.key, &path)?, mtime });
             }
         }
         Ok(entries)

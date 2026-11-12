@@ -1,4 +1,4 @@
-//! The client on Windows is no service of the computer: it is the client of the user who installed it, started when they log in
+//! The client on Windows is no service of the device: it is the client of the user who installed it, started when they log in
 //! (`HKCU\...\Run`), needing no administrator, with its config, token and state in their profile.
 
 use super::{restart_background, run, WINDOWS_USER_RUN_KEY};
@@ -51,7 +51,7 @@ pub fn install_service(config: &Path, exe: &Path, dry: bool) -> Result<()> {
 }
 
 /// Makes sure the client (and the tray) start at login, adding the entries that are missing. An update replaces only the program
-/// file, so a computer that got here from a version that started the client another way (a Windows service, an older entry)
+/// file, so a device that got here from a version that started the client another way (a Windows service, an older entry)
 /// would otherwise never start it again after a restart. Best effort: the client runs without it.
 pub fn ensure_login_start(config: &Path) {
     let (client, tray) = user_commands(&fafnirx_common::plain_path(&super::program()), config);
@@ -92,18 +92,18 @@ pub fn set_dir_modes(_config_dir: &Path, _data: &Path, _state: &Path, _control: 
     Ok(())
 }
 
-/// The client of a Windows user is no service of the computer.
+/// The client of a Windows user is no service of the device.
 pub fn installed() -> bool {
     false
 }
 
 #[cfg(feature = "tray")]
 pub fn start() -> Result<()> {
-    bail!("there is no service of the computer on Windows: the client starts when you log in")
+    bail!("there is no service of the device on Windows: the client starts when you log in")
 }
 
 pub fn restart() -> Result<()> {
-    bail!("there is no service of the computer on Windows: use `fafnirx restart`")
+    bail!("there is no service of the device on Windows: use `fafnirx restart`")
 }
 
 /// No service manager starts a client that ends with an error here, so it starts itself.

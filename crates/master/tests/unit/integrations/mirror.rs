@@ -8,7 +8,8 @@ fn row(options: &str) -> MirrorRow {
         name: "m".into(),
         config: String::new(),
         folder_id: None,
-        folder: None,
+        device_id: None,
+        scope: String::new(),
         owner: None,
     };
     let config = mirrors::Config {
@@ -21,8 +22,8 @@ fn row(options: &str) -> MirrorRow {
     MirrorRow { link, config }
 }
 
-fn file(device_id: i64, path: &str, root: u8, size: u64) -> LiveFile {
-    LiveFile { device_id, ns: "d".into(), path: path.into(), root: [root; HASH_LEN], size, mtime: 0 }
+fn file(folder_id: i64, path: &str, root: u8, size: u64) -> LiveFile {
+    LiveFile { folder_id, ns: "d".into(), path: path.into(), root: [root; HASH_LEN], size, mtime: 0 }
 }
 
 #[test]
@@ -145,7 +146,7 @@ fn diff_finds_new_changed_and_removed_files() {
     mirrored.entry(1).or_default().insert("edited".into(), vec![9; HASH_LEN]);
     mirrored.entry(1).or_default().insert("deleted".into(), vec![5; HASH_LEN]);
     let d = diff(&live, &mirrored);
-    let mut changed: Vec<_> = d.changed.iter().map(|f| (f.device_id, f.path.as_str())).collect();
+    let mut changed: Vec<_> = d.changed.iter().map(|f| (f.folder_id, f.path.as_str())).collect();
     changed.sort();
     assert_eq!(changed, [(1, "edited"), (1, "new"), (2, "same")], "same path on another device is a different file");
     assert_eq!(d.removed, [(1, "deleted".to_string())]);

@@ -9,10 +9,10 @@ export type Folder = {
  */
 members: Array<Member>, 
 /**
- * The computers that have it attached, as they last said: all of them for its owner (and an administrator, for a master
+ * The devices that have it attached, as they last said: all of them for its owner (and an administrator, for a master
  * folder), the user's own otherwise.
  */
-computers: Array<FolderState>, 
+devices: Array<FolderState>, 
 /**
  * What else works with it: the sources that write into it, the mirrors that hold it, and the user's album of it.
  */
@@ -24,7 +24,7 @@ public_id: string, name: string,
 /**
  * How the clients name it: `<owner>/<name>`, or `master:<path>`.
  */
-folder: string, 
+key: string, 
 /**
  * The user it belongs to; empty for a master folder.
  */
@@ -42,7 +42,7 @@ can_write: boolean,
  */
 shared: boolean, master: boolean, created_at: number, 
 /**
- * What is in it now (not live: see `devices::totals`).
+ * What is in it now (not live: see `folders::totals`).
  */
 files: number, bytes: number, 
 /**

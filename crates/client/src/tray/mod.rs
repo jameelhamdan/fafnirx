@@ -45,7 +45,7 @@ enum Action {
     OpenFolder(PathBuf),
     OpenUrl(String),
     AddFolders,
-    /// Stop syncing a folder of this computer, collected or attached to a folder of the master.
+    /// Stop syncing a folder of this device, collected or attached to a folder of the master.
     RemoveFolder(String),
     /// Stop syncing the attached folders that were deleted on the master and are empty here.
     RemoveDeleted(Vec<String>),
@@ -239,7 +239,7 @@ impl Menus {
     fn sync_folders(&mut self, folders: &[Folder], on_master: &[(String, bool)], deleted: &[String]) {
         let available: Vec<(String, bool)> = on_master
             .iter()
-            .filter(|(n, _)| !folders.iter().any(|f| !f.is_computer() && &f.name == n))
+            .filter(|(n, _)| !folders.iter().any(|f| !f.is_device() && &f.name == n))
             .cloned()
             .collect();
         let shown = &self.shown_folders;
@@ -265,7 +265,7 @@ impl Menus {
     }
 }
 
-/// Fills the "Folders" submenu: one entry per folder of this computer (⇄ for one synced with a folder of the master), the folders of
+/// Fills the "Folders" submenu: one entry per folder of this device (⇄ for one synced with a folder of the master), the folders of
 /// the master that are not synced here yet, and the ways to add one.
 fn fill_folders_menu(menu: &Submenu, add_item: &MenuItem, folders: &[Folder], available: &[(String, bool)], deleted: &[String]) -> (Actions, Vec<(String, Line)>) {
     for _ in 0..menu.items().len() {
@@ -280,10 +280,10 @@ fn fill_folders_menu(menu: &Submenu, add_item: &MenuItem, folders: &[Folder], av
     for f in folders {
         let path = MenuItem::new(f.path.display().to_string(), false, None);
         let open = MenuItem::new("Open folder", true, None);
-        let stop = MenuItem::new(if f.is_computer() { "Stop collecting" } else { "Stop syncing here" }, true, None);
+        let stop = MenuItem::new(if f.is_device() { "Stop collecting" } else { "Stop syncing here" }, true, None);
         actions.push((open.id().clone(), Action::OpenFolder(f.path.clone())));
         actions.push((stop.id().clone(), Action::RemoveFolder(f.name.clone())));
-        let sub = if f.is_computer() {
+        let sub = if f.is_device() {
             Submenu::with_items(&f.name, true, &[&path, &PredefinedMenuItem::separator(), &open, &stop])
         } else {
             let state = Line::new("waiting for the client", false);

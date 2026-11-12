@@ -7,7 +7,7 @@
 import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { check, enrollDevice, harness, passedChecks, sleep } from './lib.mjs'
+import { OLD_PATH, check, enrollDevice, harness, passedChecks, sleep } from './lib.mjs'
 
 const DAY = 86400
 const h = await harness('fafnirx-e2e-ret-')
@@ -15,11 +15,11 @@ const { tmp, data, schema, master } = h
 
 /** Where the stored copy of every version of a path is. A deleted file keeps all of them under versions/. */
 const versionFiles = async (p) =>
-  (await schema.rows('SELECT v.id, d.folder FROM versions v JOIN files f ON f.id = v.file_id JOIN devices d ON d.id = f.device_id WHERE f.path = $1', [p])).map(
-    ([id, device]) => path.join(data, 'versions', String(id), device, p),
+  (await schema.rows(`SELECT v.id, d.key, f.path FROM versions v JOIN files f ON f.id = v.file_id JOIN folders d ON d.id = f.folder_id WHERE ${OLD_PATH} = $1`, [p])).map(
+    ([id, key, inside]) => path.join(data, 'versions', String(id), key, inside),
   )
 const deletedAt = async (p) => {
-  const rows = await schema.rows('SELECT deleted_at FROM files WHERE path = $1', [`docs/${p}`])
+  const rows = await schema.rows(`SELECT f.deleted_at FROM files f JOIN folders d ON d.id = f.folder_id WHERE ${OLD_PATH} = $1`, [`docs/${p}`])
   return rows.length === 0 ? undefined : rows[0][0]
 }
 
@@ -76,7 +76,7 @@ try {
   await backdate(31)
   await restartAndWaitForCleanup()
   check((await deletedAt('gone.txt')) === undefined && (await deletedAt('shared-copy.txt')) === undefined, '31 days after the delete the file records are gone')
-  const left = (await schema.rows("SELECT COUNT(*) FROM versions v JOIN files f ON f.id = v.file_id WHERE f.path IN ('docs/gone.txt', 'docs/shared-copy.txt')"))[0][0]
+  const left = (await schema.rows(`SELECT COUNT(*) FROM versions v JOIN files f ON f.id = v.file_id JOIN folders d ON d.id = f.folder_id WHERE ${OLD_PATH} IN ('docs/gone.txt', 'docs/shared-copy.txt')`))[0][0]
   check(Number(left) === 0, 'and so are all their versions')
   check(!expired.some(fs.existsSync), 'the stored copies of expired files are deleted from disk')
   check(fs.readFileSync(path.join(data, 'files', 'users', 'admin', 'laptop', 'docs', 'shared.txt')).toString() === 'identical content in two files', 'an identical file that was never deleted is untouched')

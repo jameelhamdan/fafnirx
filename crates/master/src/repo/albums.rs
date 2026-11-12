@@ -1,4 +1,4 @@
-//! Albums: a user's shortcut to a folder of a device.
+//! Albums: a user's shortcut to a folder.
 
 use fafnirx_db::client::GenericClient;
 use fafnirx_db::client::Params;
@@ -18,7 +18,7 @@ pub struct Album {
     pub bytes: i64,
     /// The file chosen as the cover, if one was (`library::albums` falls back on a poster, the first video, the first picture).
     pub cover: Option<Uuid>,
-    /// The folder the album shows: its device folder name.
+    /// The folder the album shows: its key.
     pub folder: String,
 }
 
@@ -33,7 +33,7 @@ impl From<q::FindAlbums> for Album {
             files: a.files,
             bytes: a.bytes,
             cover: a.chosen,
-            folder: a.folder_device,
+            folder: a.folder_key,
         }
     }
 }
@@ -56,19 +56,13 @@ pub fn media(c: &mut impl GenericClient, album_id: Uuid) -> Result<Vec<(Uuid, St
 }
 
 /// The id of the user's album of this folder.
-pub fn of_folder(c: &mut impl GenericClient, user_id: i64, device_id: i64) -> Result<Option<Uuid>, Error> {
-    q::album_of_folder().bind(c, &user_id, &device_id).opt()
+pub fn of_folder(c: &mut impl GenericClient, user_id: i64, folder_id: i64) -> Result<Option<Uuid>, Error> {
+    q::album_of_folder().bind(c, &user_id, &folder_id).opt()
 }
 
-/// A new album showing the folder with this device id. Returns its id.
+/// A new album showing the folder with this folder id. Returns its id.
 pub fn insert(c: &mut impl GenericClient, a: &NewAlbum) -> Result<Uuid, Error> {
-    let params = q::InsertAlbumParams {
-        name: a.name,
-        description: a.description,
-        now: a.now,
-        user_id: a.user_id,
-        folder_device_id: a.folder_device_id,
-    };
+    let params = q::InsertAlbumParams { name: a.name, description: a.description, now: a.now, user_id: a.user_id, folder_id: a.folder_id };
     q::insert_album().params(c, &params).one()
 }
 
@@ -77,7 +71,7 @@ pub struct NewAlbum<'a> {
     pub user_id: i64,
     pub name: &'a str,
     pub description: &'a str,
-    pub folder_device_id: i64,
+    pub folder_id: i64,
     pub now: i64,
 }
 

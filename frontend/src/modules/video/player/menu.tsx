@@ -35,7 +35,7 @@ export function Door({ label, value, onOpen }: { label: string; value?: string; 
 }
 
 export function Heading({ children }: { children: ReactNode }) {
-  return <p className="px-2 pt-2 pb-0.5 text-[11px] font-medium tracking-wide text-white/60 uppercase first:pt-1">{children}</p>
+  return <p className="px-2 pt-2 pb-0.5 text-2xs font-medium tracking-wide text-white/60 uppercase first:pt-1">{children}</p>
 }
 
 /** The top of a page of the menu that was opened from another: a way back. */

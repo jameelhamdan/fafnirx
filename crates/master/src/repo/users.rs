@@ -58,11 +58,16 @@ pub fn who_can_have_devices(c: &mut impl GenericClient, name: &str) -> Result<Op
     q::user_who_can_have_devices().bind(c, &name).opt()
 }
 
-/// A computer or folder of a user.
+/// A device or folder of a user: its id and key.
 pub type Owned = q::DevicesOfUser;
 
 pub fn devices_of(c: &mut impl GenericClient, id: i64) -> Result<Vec<Owned>, Error> {
     q::devices_of_user().bind(c, &id).all()
+}
+
+/// The folders a user made.
+pub fn folders_of(c: &mut impl GenericClient, id: i64) -> Result<Vec<q::FoldersOfUser>, Error> {
+    q::folders_of_user().bind(c, &id).all()
 }
 
 pub fn sources_of(c: &mut impl GenericClient, id: i64) -> Result<Vec<String>, Error> {
@@ -71,7 +76,7 @@ pub fn sources_of(c: &mut impl GenericClient, id: i64) -> Result<Vec<String>, Er
 
 /// A mirror or another user's source that uses a folder of the user: (its name, the folder).
 pub fn link_on_folders_of(c: &mut impl GenericClient, id: i64) -> Result<Option<(String, String)>, Error> {
-    Ok(q::links_on_folders_of_user().bind(c, &id).opt()?.map(|l| (l.name, l.folder)))
+    Ok(q::links_on_folders_of_user().bind(c, &id).opt()?.map(|l| (l.name, l.key)))
 }
 
 /// Deletes the user and what is only theirs that has no device of its own: memberships of others' folders, favorites and

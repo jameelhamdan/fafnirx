@@ -33,12 +33,10 @@ export function JobList({
   const act = useApiMutation(({ job, what }: { job: JobState; what: 'run' | 'toggle' }) => api.post(`/api/${kind}/${job.key}/${what}`), {
     invalidate: [[kind]],
     success: (_d, v) => (v.what === 'run' ? t('Run requested for {name}. It starts within a few seconds.', { name: v.job.key }) : ''),
-    toastError: true,
   })
   const remove = useApiMutation((job: JobState) => api.delete(`/api/${kind}/${job.key}`), {
     invalidate: [[kind]],
     success: (_d, job) => t('{name} removed', { name: job.key }),
-    toastError: true,
   })
 
   if (jobs.length === 0) return <Empty title={emptyTitle}>{emptyText}</Empty>
@@ -77,8 +75,8 @@ export function JobList({
         description={kind === 'sources' ? t('Its files are kept for the retention period, then removed.') : t('Data already on the remote is not touched.')}
         action={t('Remove')}
         destructive
-        onCancel={() => setRemoving(null)}
-        onConfirm={() => { if (removing) remove.mutate(removing); setRemoving(null) }}
+        onClose={() => setRemoving(null)}
+        onConfirm={() => removing && remove.mutate(removing)}
       />
     </div>
   )

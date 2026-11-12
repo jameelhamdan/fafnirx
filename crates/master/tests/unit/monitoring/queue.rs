@@ -7,10 +7,10 @@ fn count(kind: &str, status: &str, n: i64) -> jobs::Count {
 #[test]
 fn process_missing_includes_videos_read_without_details() {
     use crate::platform::db::testing;
-    let db = testing::db_with_device();
+    let db = testing::db_with_folder();
     let mut c = db.get().unwrap();
     for (path, root) in [("a/new.jpg", 1u8), ("a/seen.jpg", 2), ("a/blind.mp4", 3), ("a/known.mp4", 4)] {
-        c.execute("INSERT INTO files (device_id, path) VALUES (1, $1)", &[&path]).unwrap();
+        c.execute("INSERT INTO files (folder_id, path) VALUES (1, $1)", &[&path]).unwrap();
         let version: i64 = c
             .query_one(
                 "INSERT INTO versions (file_id, root_hash, size, mtime, created_at) SELECT id, $2, 1, 0, 0 FROM files WHERE path = $1 RETURNING id",
@@ -51,7 +51,7 @@ fn counts_are_gathered_per_kind() {
 
 #[test]
 fn the_same_work_is_queued_once_and_a_finished_job_stays_listed() {
-    let db = crate::platform::db::testing::db_with_device();
+    let db = crate::platform::db::testing::db_with_folder();
     let mut c = db.get().unwrap();
     let c = &mut *c;
     let work = serde_json::json!({ "device": "master", "path": "a.mp4", "root": "00" });

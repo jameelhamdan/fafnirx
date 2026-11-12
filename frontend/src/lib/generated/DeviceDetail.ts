@@ -5,7 +5,7 @@ import type { Recent } from "./Recent";
 
 export type DeviceDetail = { device: DeviceSummary, events: Array<Recent>, 
 /**
- * The folders attached to the computer, as it last said (empty for anything but a client).
+ * The folders attached to the device, as it last said.
  */
 folders: Array<FolderState>, 
 /**

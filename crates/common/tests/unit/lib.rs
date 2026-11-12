@@ -148,10 +148,10 @@ fn a_name_longer_than_a_filesystem_allows_is_refused() {
 #[test]
 fn device_names_are_slugs() {
     for ok in ["laptop", "pc-2", "a", "my.phone_1", "9lives", "console"] {
-        assert!(valid_device_name(ok), "{ok}");
+        assert!(valid_name(ok), "{ok}");
     }
     for bad in ["", "-a", ".a", "A", "a b", "a/b", "a:b", "con", "nul.txt", "com1", "lpt9", &"a".repeat(64), "é"] {
-        assert!(!valid_device_name(bad), "{bad}");
+        assert!(!valid_name(bad), "{bad}");
     }
 }
 

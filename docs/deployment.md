@@ -11,9 +11,9 @@ Outbound: the storage of your sources and mirrors, only.
 | Files, versions | `./data` (`FAFNIRX_DATA_DIR`) | A checksumming filesystem (ZFS) |
 
 ```text
-files/users/<user>/<device>/<path>  current tree; shareable as a network drive
+files/users/<user>/<name>/<path>    current tree (a device's: <user>/<device>/<directory>/<path>); shareable as a network drive
 files/<name>/<path>                 master folders
-versions/<id>/<user>/<device>/<path> replaced or deleted versions
+versions/<id>/<key>/<path>          replaced or deleted versions
 tmp/                                uploads being assembled (removed after a day untouched)
 cache/thumbs/                       thumbnails and previews, made on demand and kept
 ```
@@ -99,12 +99,8 @@ docker compose exec -T db psql -U fafnirx fafnirx < fafnirx.sql      # into an e
 ## Upgrades
 
 `docker compose pull && docker compose up -d`. The master brings the database up to date when it starts, in one
-transaction, and refuses a database newer than itself. **Back up first.** 5.0.0 upgrades a 4.x database in place with its data kept, but the model is simpler, so some things change: the
-master files become master folders, an album of a place inside a folder is removed (albums show whole folders), a source writes into
-a whole folder (what was below its subfolder stays where it is and is still its own), a mirror that held part of a folder holds the
-whole folder, and a mirror of all master folders or of a whole user is removed (add it again per folder, or as everything). Backup mirrors made by 4.x were compressed before they were encrypted and the restore kit of 5.0.0 does not read them: add a new
-backup, and delete the old one once it has run. 3.x databases must go through 4.x first. A PostgreSQL
-major upgrade needs dump and restore. Clients update themselves from GitHub within about six hours.
+transaction, and refuses a database newer than itself. **Back up first** ([backups](#backups)). A PostgreSQL major upgrade
+needs dump and restore. Clients update themselves from GitHub within about six hours.
 
 ## Security checklist
 

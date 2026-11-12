@@ -74,7 +74,7 @@ pub(super) fn ask_which(folder: &str, file: &daemon::ConflictInfo) -> Option<&'s
         format!("{}, {}", text::human_bytes(file.master_size), ago(file.master_mtime))
     };
     let body = format!(
-        "\"{}\" in \"{folder}\" was changed on this computer and on the server.\n\nThis computer: {}, {}\nServer: {server}\n\nClosing this window decides later.",
+        "\"{}\" in \"{folder}\" was changed on this device and on the server.\n\nThis device: {}, {}\nServer: {server}\n\nClosing this window decides later.",
         file.path,
         text::human_bytes(file.local_size),
         ago(file.local_mtime),
@@ -97,7 +97,7 @@ pub(super) fn synced_name_of(dir: &Path) -> Option<String> {
     let raw = dir.file_name()?.to_string_lossy().to_lowercase();
     let name: String = raw.chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '-' }).collect();
     let name = name.trim_matches(['-', '.', '_']).chars().take(63).collect::<String>();
-    fafnirx_common::valid_device_name(&name).then_some(name)
+    fafnirx_common::valid_name(&name).then_some(name)
 }
 
 /// Asks for a folder and syncs it with the synced folder `name`, made first when `create` is set.
@@ -179,7 +179,7 @@ pub(super) fn with_owner(owner: &str, name: &str) -> String {
     }
 }
 
-/// The user this computer belongs to, from the name of the device (`<user>/<device>`) the client last got from the master.
+/// The user this device belongs to, from the name of the device (`<user>/<device>`) the client last got from the master.
 pub(super) fn owner_of(status: Option<&daemon::Status>) -> &str {
     status.and_then(|s| s.device.split_once('/')).map_or("", |(owner, _)| owner)
 }
@@ -250,7 +250,7 @@ pub(super) fn remove_deleted_dialog(config_path: &Path, names: &[String]) {
 
 {}
 
-Stop syncing them on this computer?",
+Stop syncing them on this device?",
         names.join(
             "
 "
@@ -277,6 +277,6 @@ Stop syncing them on this computer?",
 }
 
 pub(super) fn remove_folder_dialog(config_path: &Path, name: &str) {
-    let text = format!("Stop syncing \"{name}\" on this computer?\n\nNothing is deleted: the files stay in the folder and on the server.");
+    let text = format!("Stop syncing \"{name}\" on this device?\n\nNothing is deleted: the files stay in the folder and on the server.");
     confirm_then(text, || cli_change(config_path, &Request::RemoveFolder { name: name.into() }));
 }

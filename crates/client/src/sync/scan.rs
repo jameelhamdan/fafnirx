@@ -33,7 +33,7 @@ pub struct Scan {
 /// Fails when the folder itself cannot be read; callers must then not treat
 /// its files as deleted.
 /// `exclude` is the client's own state folder: if a collected folder contains it, it is not collected.
-/// A folder with no name is a synced folder, which every kind of computer must be able to hold: names Windows cannot keep
+/// A folder with no name is a synced folder, which every kind of device must be able to hold: names Windows cannot keep
 /// are skipped.
 pub fn scan_folder(folder: &Folder, exclude: Option<&Path>) -> Result<Scan> {
     let root = &folder.path;
@@ -55,7 +55,7 @@ pub fn scan_folder(folder: &Folder, exclude: Option<&Path>) -> Result<Scan> {
         .follow_links(false)
         .add_custom_ignore_filename(IGNORE_FILE)
         .filter_entry(move |e| {
-            // What a synced folder put aside (see `synced::CONFLICT_DIR`) is this computer's own.
+            // What a synced folder put aside (see `synced::CONFLICT_DIR`) is this device's own.
             let aside = synced && e.depth() == 1 && e.file_name() == crate::synced::CONFLICT_DIR;
             !aside && skip.as_deref().is_none_or(|s| !e.path().starts_with(s))
         })

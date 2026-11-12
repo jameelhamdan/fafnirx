@@ -1,7 +1,7 @@
 use super::*;
 
 fn add(cfg: &Path, dir: &Path, name: Option<&str>) -> Result<Folder> {
-    add_folder_to_file(cfg, NewFolder { dir, target: Target::Computer, name, id: None, mode: Mode::Both })
+    add_folder_to_file(cfg, NewFolder { dir, target: Target::Device, name, id: None, mode: Mode::Both })
 }
 
 fn attach(cfg: &Path, name: &str, id: Option<&str>, dir: &Path, mode: Mode) -> Result<Folder> {
@@ -135,7 +135,7 @@ fn rejects_other_schemes_and_bad_names() {
     let mut cfg = Config::new("ftp://x");
     assert!(cfg.validate().is_err());
     cfg.server = "https://x".into();
-    cfg.folders.push(Folder::computer("a".into(), "a/b".into()));
+    cfg.folders.push(Folder::device("a".into(), "a/b".into()));
     assert!(cfg.validate().is_err());
 }
 
@@ -255,7 +255,7 @@ fn synced_folders_are_attached_and_detached_in_place() {
     attach(&cfg, "work", None, &dir.path().join("b"), Mode::Both).unwrap();
     let loaded = Config::load(&cfg).unwrap();
     assert_eq!(attached(&loaded).iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["family", "work"]);
-    assert_eq!(loaded.computer_folders().count(), 1, "the backup folders are not touched");
+    assert_eq!(loaded.device_folders().count(), 1, "the backup folders are not touched");
     assert!(std::fs::read_to_string(&cfg).unwrap().contains("# notes"), "comments survive");
 
     let err = |r: Result<Folder>| format!("{:#}", r.unwrap_err());
@@ -292,4 +292,24 @@ fn the_address_of_the_master_is_completed() {
     ] {
         assert_eq!(normalize_server(typed), url, "{typed}");
     }
+}
+
+#[test]
+fn the_old_target_name_computer_is_still_read_as_device() {
+    let old: Folder = toml_edit::de::from_str(
+        "path = \"/a\"
+name = \"a\"
+target = \"computer\"
+",
+    )
+    .unwrap();
+    assert_eq!(old.target, Target::Device);
+    let new: Folder = toml_edit::de::from_str(
+        "path = \"/a\"
+name = \"a\"
+target = \"device\"
+",
+    )
+    .unwrap();
+    assert_eq!(new.target, Target::Device);
 }

@@ -4,14 +4,11 @@ use crate::platform::db::testing;
 fn db() -> Db {
     let db = testing::db();
     let mut c = db.get().unwrap();
-    c.execute(
-        "INSERT INTO devices (name, kind, token_hash, created_at, user_id) VALUES ('source-d', 'local', '!', 0, 1)",
-        &[],
-    )
-    .unwrap();
+    c.execute("INSERT INTO folders (name, kind, created_at, user_id) VALUES ('source-d', 'user', 0, 1)", &[])
+        .unwrap();
     c.execute(
         "INSERT INTO links (direction, name, kind, config, folder_id, user_id, created_at, interval_secs)
-             VALUES ('in', 'd', 'rclone', '{}', (SELECT id FROM devices WHERE name = 'source-d'), 1, 0, 3600)",
+             VALUES ('in', 'd', 'rclone', '{}', (SELECT id FROM folders WHERE name = 'source-d'), 1, 0, 3600)",
         &[],
     )
     .unwrap();
@@ -41,7 +38,7 @@ fn a_link_that_never_ran_is_queued_as_a_job_then_waits_for_the_interval_or_a_req
     assert_eq!(jobs("queued"), 1);
     let (job, first) = claim(&db).expect("the queued run starts");
     assert_eq!(
-        (first.folder.as_deref().unwrap(), first.key().as_str()),
+        (first.scope.as_str(), first.key().as_str()),
         ("admin/source-d", "admin/d"),
         "writes in its folder, named by its owner"
     );

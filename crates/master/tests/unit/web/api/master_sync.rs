@@ -1,4 +1,4 @@
-//! A computer syncing a folder of the master files through the device API: paths in its messages are below the folder.
+//! A device syncing a folder of the master files through the device API: paths in its messages are below the folder.
 
 use super::*;
 use crate::devices::grpc::Service;
@@ -24,7 +24,7 @@ fn manifest(path: &str, data: &[u8]) -> Manifest {
 }
 
 #[test]
-fn a_computer_syncs_a_master_folder_by_its_paths_below_it() {
+fn a_device_syncs_a_master_folder_by_its_paths_below_it() {
     let mut api = Api::new();
     block(async {
         api.cookie = login(&api).await;
@@ -85,12 +85,12 @@ fn a_computer_syncs_a_master_folder_by_its_paths_below_it() {
         let committed = CommitRequest { manifest: Some(new), mtime: 1, mode: 0o644, renamed_from: String::new() };
         let version = service.commit(asking(committed, &token, folder)).await.unwrap().into_inner().version_id;
         assert!(version > 0);
-        let (_, inside) = api.get("/api/files?device=master:Music&path=new").await;
+        let (_, inside) = api.get("/api/files?folder=master:Music&path=new").await;
         assert_eq!(inside["entries"][0]["name"], "c.txt", "{inside}");
         assert!(api._dir.path().join("files/Music/new/c.txt").is_file(), "below the folder, not at the root");
         assert!(!api._dir.path().join("files/new").exists());
 
-        // A name that not every kind of computer can keep is refused, like in a shared folder.
+        // A name that not every kind of device can keep is refused, like in a shared folder.
         let bad = CommitRequest { manifest: Some(manifest("a:b.txt", b"one")), mtime: 1, mode: 0, renamed_from: String::new() };
         assert_eq!(service.commit(asking(bad, &token, folder)).await.unwrap_err().code(), tonic::Code::InvalidArgument);
         let clash = CommitRequest { manifest: Some(manifest("A.TXT", b"one")), mtime: 1, mode: 0, renamed_from: String::new() };
@@ -98,7 +98,7 @@ fn a_computer_syncs_a_master_folder_by_its_paths_below_it() {
 
         // It deletes below the folder, and only there.
         service.mark_deleted(asking(DeleteRequest { path: "a.txt".into() }, &token, folder)).await.unwrap();
-        let (_, left) = api.get("/api/files?device=master:Music").await;
+        let (_, left) = api.get("/api/files?folder=master:Music").await;
         let names: Vec<_> = left["entries"]
             .as_array()
             .unwrap()
@@ -106,10 +106,10 @@ fn a_computer_syncs_a_master_folder_by_its_paths_below_it() {
             .map(|e| e["name"].as_str().unwrap().to_string())
             .collect();
         assert!(!names.contains(&"a.txt".to_string()), "{names:?}");
-        let (_, rest) = api.get("/api/files?device=master:Other").await;
+        let (_, rest) = api.get("/api/files?folder=master:Other").await;
         assert_eq!(rest["entries"][0]["name"], "x.txt", "the rest of the master files is untouched");
 
-        // A folder can be named by its stable id, for calls and for the watch (a computer keeps the id).
+        // A folder can be named by its stable id, for calls and for the watch (a device keeps the id).
         let (_, all) = api.get("/api/folders").await;
         let folders = master_folders_of(&all);
         let id = folders[0]["public_id"].as_str().unwrap().to_string();
@@ -119,7 +119,7 @@ fn a_computer_syncs_a_master_folder_by_its_paths_below_it() {
         let mut told = service.watch_folder(asking(watch, &token, "")).await.unwrap().into_inner();
         assert_eq!(told.next().await.unwrap().unwrap().folder, id, "told about it under the name it was asked for");
 
-        // Renaming it moves its files; a computer that holds its id keeps working, one that holds the old name is told it is gone.
+        // Renaming it moves its files; a device that holds its id keeps working, one that holds the old name is told it is gone.
         let renamed = api
             .json(Method::POST, &format!("/api/master-folders/{id}/rename"), json!({"path": "Tunes/Rock"}))
             .await;
@@ -149,5 +149,61 @@ fn a_computer_syncs_a_master_folder_by_its_paths_below_it() {
             .list_changes(asking(ListChangesRequest { folder: "master:Nope".into(), since: 0 }, &token, "master:Nope"))
             .await;
         assert_eq!(none.err().map(|s| s.code()), Some(tonic::Code::NotFound));
+    });
+}
+
+fn as_device<T>(msg: T, token: &str) -> tonic::Request<T> {
+    let mut request = tonic::Request::new(msg);
+    request.metadata_mut().insert("authorization", format!("Bearer {token}").parse().unwrap());
+    request
+}
+
+#[test]
+fn a_device_sends_each_directory_into_a_folder_of_its_own() {
+    let mut api = Api::new();
+    block(async {
+        api.cookie = login(&api).await;
+        let (_, made) = api.json(Method::POST, "/api/devices", json!({"name": "laptop"})).await;
+        let token = made["token"].as_str().unwrap().to_string();
+        let (events, _) = tokio::sync::broadcast::channel(8);
+        let service = Service { db: api.db.clone(), store: api.store.clone(), trusted: Default::default(), events };
+
+        // Nothing of the directory is there yet, so the whole file is wanted.
+        let m = manifest("docs/sub/a.txt", b"hello");
+        let wanted = service.negotiate(as_device(m.clone(), &token)).await.unwrap().into_inner();
+        assert!(!wanted.already_current && wanted.missing == [0]);
+
+        // The chunk arrives (staged for the device), and the commit makes the folder `admin/laptop/docs` with the path inside it.
+        let device_id: i64 = crate::platform::db::with(&api.db, |c| Ok(c.query_one("SELECT id FROM devices WHERE name = 'laptop'", &[])?.get(0)))
+            .await
+            .unwrap();
+        let root: [u8; 32] = m.root_hash.clone().try_into().unwrap();
+        api.store.write_chunk(device_id, &root, 0, b"hello").unwrap();
+        let commit = CommitRequest { manifest: Some(m.clone()), mtime: 1, mode: 0o644, renamed_from: String::new() };
+        service.commit(as_device(commit, &token)).await.unwrap();
+        let stored = api._dir.path().join("files/users/admin/laptop/docs/sub/a.txt");
+        assert_eq!(std::fs::read(&stored).unwrap(), b"hello", "stored where the directory always was");
+        let row = crate::platform::db::with(&api.db, |c| {
+            Ok(c.query_one("SELECT d.key, d.kind, f.path FROM files f JOIN folders d ON d.id = f.folder_id", &[])?).map(|r| (r.get::<_, String>(0), r.get::<_, String>(1), r.get::<_, String>(2)))
+        })
+        .await
+        .unwrap();
+        assert_eq!(row, ("admin/laptop/docs".into(), "backup".into(), "sub/a.txt".into()));
+        let current = service.negotiate(as_device(m, &token)).await.unwrap().into_inner();
+        assert!(current.already_current, "the same content is current now");
+
+        // A path with no directory in front of it belongs to no folder.
+        let loose = manifest("loose.txt", b"x");
+        assert_eq!(service.negotiate(as_device(loose, &token)).await.unwrap_err().code(), tonic::Code::InvalidArgument);
+
+        // Deleting it marks it deleted in its folder.
+        service
+            .mark_deleted(as_device(DeleteRequest { path: "docs/sub/a.txt".into() }, &token))
+            .await
+            .unwrap();
+        let deleted: i64 = crate::platform::db::with(&api.db, |c| Ok(c.query_one("SELECT COUNT(*) FROM files WHERE deleted_at IS NOT NULL", &[])?.get(0)))
+            .await
+            .unwrap();
+        assert_eq!(deleted, 1);
     });
 }

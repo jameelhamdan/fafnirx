@@ -68,7 +68,7 @@ jobs:
 
             def caveats
               <<~EOS
-                Set this computer up (it asks for the token, installs the service and starts it):
+                Set this device up (it asks for the token, installs the service and starts it):
                   sudo fafnirx install --server <master> --folder ~/Documents
               EOS
             end

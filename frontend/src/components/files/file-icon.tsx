@@ -2,16 +2,16 @@ import { File, FileArchive, FileAudio, FileImage, FileText, FileVideo, Folder, H
 import type { Entry } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-/** The icon of a device entry says what it is: the master files, a computer that sends, or a folder of a user. */
-function DeviceIcon({ kind, className }: { kind: Entry['device_kind']; className: string }) {
+/** The icon of a folder entry says what it is: a master folder, a directory a device sends, or a folder of a user. */
+function FolderIcon({ kind, className }: { kind: Entry['folder_kind']; className: string }) {
   if (kind === 'master') return <Server className={cn(className, 'text-primary')} />
-  if (kind === 'local') return <HardDrive className={cn(className, 'text-warning')} />
+  if (kind === 'user') return <HardDrive className={cn(className, 'text-warning')} />
   return <Monitor className={cn(className, 'text-success')} />
 }
 
-export function FileIcon({ entry, className }: { entry: Pick<Entry, 'kind' | 'mime'> & { device_kind?: Entry['device_kind'] }; className?: string }) {
+export function FileIcon({ entry, className }: { entry: Pick<Entry, 'kind' | 'mime'> & { folder_kind?: Entry['folder_kind'] }; className?: string }) {
   const cls = cn('size-5 shrink-0', className)
-  if (entry.kind === 'device') return <DeviceIcon kind={entry.device_kind ?? null} className={cls} />
+  if (entry.kind === 'folder') return <FolderIcon kind={entry.folder_kind ?? null} className={cls} />
   if (entry.kind === 'dir') return <Folder className={cn(cls, 'fill-primary/15 text-primary')} />
   const mime = entry.mime ?? ''
   if (mime.startsWith('image/')) return <FileImage className={cn(cls, 'text-success')} />

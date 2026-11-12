@@ -84,7 +84,7 @@ impl Api {
 
     /// What the minute job does: the totals shown for devices catch up with their files.
     async fn catch_up_totals(&self) {
-        crate::platform::db::with(&self.db, crate::devices::totals::refresh_stale).await.unwrap();
+        crate::platform::db::with(&self.db, crate::folders::totals::refresh_stale).await.unwrap();
     }
 
     // The scaffolding is here: `login`, `json`, `get`, `upload`, `add_user`. A test asserts its own status after `json`, so that
@@ -122,9 +122,9 @@ impl Api {
         (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
     }
 
-    async fn upload(&self, device: &str, path: &str, data: &[u8]) {
+    async fn upload(&self, folder: &str, path: &str, data: &[u8]) {
         let (status, started) = self
-            .json(Method::POST, "/api/uploads", json!({"device": device, "path": path, "size": data.len()}))
+            .json(Method::POST, "/api/uploads", json!({"folder": folder, "path": path, "size": data.len()}))
             .await;
         assert_eq!(status, StatusCode::OK, "{started}");
         let id = started["id"].as_str().unwrap();
@@ -142,6 +142,21 @@ impl Api {
 }
 
 /// Makes the master folder `path`; whoever is logged in on `api` has to be an administrator.
+/// A device of the administrator with a folder for one of its directories, as its first upload makes it: the key of the folder.
+async fn backup_folder(api: &Api, device: &str, directory: &str) -> String {
+    api.json(Method::POST, "/api/devices", json!({"name": device})).await;
+    let (device, directory) = (device.to_string(), directory.to_string());
+    crate::platform::db::with(&api.db, move |c| {
+        Ok(c.query_one(
+            "INSERT INTO folders (user_id, device_id, name, kind, created_at) SELECT user_id, id, $2, 'backup', 0 FROM devices WHERE name = $1 RETURNING key",
+            &[&device, &directory],
+        )?
+        .get(0))
+    })
+    .await
+    .unwrap()
+}
+
 async fn master_folder(api: &Api, path: &str) {
     let (status, body) = api.json(Method::POST, "/api/master-folders", json!({ "path": path })).await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -214,9 +229,9 @@ async fn add_user(api: &mut Api, name: &str, role: &str) -> String {
 }
 
 /// Uploads a file to a device as whoever is logged in; the status of the start and the finish.
-async fn try_upload(api: &Api, device: &str, path: &str, data: &[u8]) -> StatusCode {
+async fn try_upload(api: &Api, folder: &str, path: &str, data: &[u8]) -> StatusCode {
     let (status, started) = api
-        .json(Method::POST, "/api/uploads", json!({"device": device, "path": path, "size": data.len()}))
+        .json(Method::POST, "/api/uploads", json!({"folder": folder, "path": path, "size": data.len()}))
         .await;
     if status != StatusCode::OK {
         return status;

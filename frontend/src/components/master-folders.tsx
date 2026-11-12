@@ -14,6 +14,7 @@ export function AddMasterFolder() {
   const [open, setOpen] = useState(false)
   const [path, setPath] = useState('')
   const create = useApiMutation(() => api.post('/api/master-folders', { path }), {
+    inline: true,
     invalidate: [['folders']],
     onSuccess: () => {
       setOpen(false)
@@ -26,7 +27,7 @@ export function AddMasterFolder() {
       onOpenChange={(o) => { setOpen(o); create.reset() }}
       trigger={<Button size="sm" variant="outline"><Plus className="size-4" />{t('Add a master folder')}</Button>}
       title={t('Add a master folder')}
-      description={t('A folder inside the master files that computers can keep in step both ways. It is made if it does not exist. It cannot be inside another master folder or hold one.')}
+      description={t('A folder inside the master files that devices can keep in step both ways. It is made if it does not exist. It cannot be inside another master folder or hold one.')}
       onSubmit={() => create.mutate()}
       submit={t('Add')}
       disabled={!path.trim()}

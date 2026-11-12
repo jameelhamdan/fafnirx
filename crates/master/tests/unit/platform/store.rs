@@ -128,3 +128,16 @@ fn a_file_has_one_name_whether_it_is_found_by_folder_and_path_or_by_where_it_is_
     assert_eq!(tree_path_of(files, Path::new("/data/files/clip.mp4")).unwrap(), "clip.mp4");
     assert!(tree_path_of(files, Path::new("/elsewhere/clip.mp4")).is_err());
 }
+
+#[test]
+fn a_directory_of_a_device_is_a_folder_with_a_third_part() {
+    let (_dir, store) = store();
+    assert!(store.live_path("u/laptop/docs", "a.txt").unwrap().ends_with("users/u/laptop/docs/a.txt"));
+    assert!(
+        store.live_path("u/laptop/.config", "a.txt").is_ok(),
+        "a directory may be named as a device calls it"
+    );
+    for bad in ["u/laptop/..", "u/laptop/", r"u/laptop/a\b", "u/.hidden/docs", "u/laptop/docs/deeper", "u"] {
+        assert!(store.live_path(bad, "a.txt").is_err(), "{bad}");
+    }
+}

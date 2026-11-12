@@ -4,18 +4,18 @@ use crate::repo::files::{deleted_in_web_app, live_path_with_root};
 use fafnirx_common::{chunk_hash, root_hash};
 
 /// Writes `data` to a temporary file and commits it as `path`.
-/// What a computer syncing into a folder does: the names are checked first.
+/// What a device syncing into a folder does: the names are checked first.
 fn synced(c: &mut Client, store: &Store, path: &str, data: &[u8], renamed_from: Option<&str>) -> Result<u64> {
-    check_names(c, &testing::device(), path, renamed_from, true)?;
+    check_names(c, &testing::folder(), path, renamed_from, true)?;
     commit(c, store, path, data, renamed_from)
 }
 
 fn commit(c: &mut Client, store: &Store, path: &str, data: &[u8], renamed_from: Option<&str>) -> Result<u64> {
     let staged = store.temp_path();
     std::fs::write(&staged, data).unwrap();
-    let device = testing::device();
+    let folder = testing::folder();
     let v = NewVersion {
-        device: &device,
+        folder: &folder,
         path,
         root: root_hash(&[chunk_hash(data)], data.len() as u64),
         size: data.len() as u64,
@@ -27,22 +27,25 @@ fn commit(c: &mut Client, store: &Store, path: &str, data: &[u8], renamed_from: 
 }
 
 fn live(store: &Store, path: &str) -> Option<Vec<u8>> {
-    std::fs::read(store.live_path("admin/d", path).unwrap()).ok()
+    std::fs::read(store.live_path("admin/f", path).unwrap()).ok()
 }
 
 #[test]
-fn a_synced_folder_refuses_paths_that_not_every_kind_of_computer_can_hold() {
-    let db = testing::db_with_device();
+fn a_synced_folder_refuses_paths_that_not_every_kind_of_device_can_hold() {
+    let db = testing::db_with_folder();
     let mut c = db.get().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let refusal = |r: anyhow::Result<u64>| r.unwrap_err().downcast::<crate::web::ApiError>().unwrap();
 
-    // The device of the test is an ordinary one: it keeps whatever it is sent, two spellings included.
+    c.execute("INSERT INTO devices (name, token_hash, created_at, user_id) VALUES ('d', 'x', 0, 1)", &[])
+        .unwrap();
+    c.execute("UPDATE folders SET kind = 'backup', device_id = 1 WHERE id = 1", &[]).unwrap();
+    // The folder of a device keeps whatever it is sent, two spellings included.
     commit(&mut c, &store, "Notes.txt", b"one", None).unwrap();
     commit(&mut c, &store, "notes.txt", b"two", None).unwrap();
 
-    c.execute("UPDATE devices SET kind = 'local' WHERE id = 1", &[]).unwrap();
+    c.execute("UPDATE folders SET kind = 'user', device_id = NULL WHERE id = 1", &[]).unwrap();
     let clash = refusal(synced(&mut c, &store, "NOTES.TXT", b"x", None));
     assert_eq!(clash.0, axum::http::StatusCode::CONFLICT, "{}", clash.1);
     let windows = refusal(synced(&mut c, &store, "what?.txt", b"x", None));
@@ -73,43 +76,44 @@ fn a_synced_folder_refuses_paths_that_not_every_kind_of_computer_can_hold() {
 }
 
 #[test]
-fn a_local_folder_and_the_master_files_check_names_only_for_what_people_add() {
-    let db = testing::db_with_device();
+fn a_folder_of_a_user_and_the_master_files_check_names_only_for_what_people_add() {
+    let db = testing::db_with_folder();
     let mut c = db.get().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
-    let device = testing::device();
+    let folder = testing::folder();
     let refused = |r: anyhow::Result<()>| r.unwrap_err().downcast::<crate::web::ApiError>().unwrap().0;
-    c.execute("UPDATE devices SET kind = 'local' WHERE id = 1", &[]).unwrap();
 
     // What is on disk is taken as it is: the watcher cannot refuse a file, and a clash that was there stays.
     commit(&mut c, &store, "Notes.txt", b"one", None).unwrap();
     commit(&mut c, &store, "notes.txt", b"two", None).expect("not a web upload: the watcher's file is recorded");
-    // What a person adds in the web app follows the rules of the computers the folder is shown to over SMB.
-    assert_eq!(refused(check_names(&mut *c, &device, "NOTES.txt", None, true)), axum::http::StatusCode::CONFLICT);
+    // What a person adds in the web app follows the rules of the devices the folder is shown to over SMB.
+    assert_eq!(refused(check_names(&mut *c, &folder, "NOTES.txt", None, true)), axum::http::StatusCode::CONFLICT);
     assert_eq!(
-        refused(check_names(&mut *c, &device, "docs/a:b.txt", None, true)),
+        refused(check_names(&mut *c, &folder, "docs/a:b.txt", None, true)),
         axum::http::StatusCode::BAD_REQUEST
     );
-    check_names(&mut *c, &device, "fresh.txt", None, true).unwrap();
-    check_names(&mut *c, &device, "Notes.txt", None, true).expect("a file that is there can be replaced");
+    check_names(&mut *c, &folder, "fresh.txt", None, true).unwrap();
+    check_names(&mut *c, &folder, "Notes.txt", None, true).expect("a file that is there can be replaced");
     assert_eq!(
-        refused(move_path(&mut c, &store, &device, "Notes.txt", "NOTES.txt")),
+        refused(move_path(&mut c, &store, &folder, "Notes.txt", "NOTES.txt")),
         axum::http::StatusCode::CONFLICT
     );
 
-    // A computer's backup keeps what the computer has.
-    c.execute("UPDATE devices SET kind = 'device' WHERE id = 1", &[]).unwrap();
-    check_names(&mut *c, &device, "NOTES.TXT", None, true).unwrap();
+    // The backup of a device keeps what the device has.
+    c.execute("INSERT INTO devices (name, token_hash, created_at, user_id) VALUES ('d', 'x', 0, 1)", &[])
+        .unwrap();
+    c.execute("UPDATE folders SET kind = 'backup', device_id = 1 WHERE id = 1", &[]).unwrap();
+    check_names(&mut *c, &folder, "NOTES.TXT", None, true).unwrap();
 }
 
 #[test]
 fn add_update_noop_delete_and_rename() {
-    let db = testing::db_with_device();
+    let db = testing::db_with_folder();
     let mut c = db.get().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
-    let device = testing::device();
+    let folder = testing::folder();
 
     let v1 = commit(&mut c, &store, "a", b"one", None).unwrap();
     assert_eq!(live(&store, "a").unwrap(), b"one", "stored as a normal file under its own name");
@@ -118,7 +122,7 @@ fn add_update_noop_delete_and_rename() {
     assert!(v2 > v1);
     assert_eq!(live(&store, "a").unwrap(), b"two");
     assert_eq!(
-        std::fs::read(dir.path().join(format!("versions/{v1}/admin/d/a"))).unwrap(),
+        std::fs::read(dir.path().join(format!("versions/{v1}/admin/f/a"))).unwrap(),
         b"one",
         "the replaced file moves to its version"
     );
@@ -130,10 +134,10 @@ fn add_update_noop_delete_and_rename() {
     assert_eq!(live(&store, "b").unwrap(), b"two");
     assert_eq!(live_path_with_root(&mut *c, 1, &root, Some("a")).unwrap().as_deref(), Some("b"));
 
-    assert!(mark_deleted(&mut c, &store, &device, "b", false).unwrap());
+    assert!(mark_deleted(&mut c, &store, &folder, "b", false).unwrap());
     assert!(live(&store, "b").is_none());
-    assert!(!mark_deleted(&mut c, &store, &device, "b", false).unwrap(), "deleting twice changes nothing");
-    assert!(!deleted_in_web_app(&mut *c, device.id, "b").unwrap(), "a delete on the device is the device's own");
+    assert!(!mark_deleted(&mut c, &store, &folder, "b", false).unwrap(), "deleting twice changes nothing");
+    assert!(!deleted_in_web_app(&mut *c, folder.id, "b").unwrap(), "a delete on the device is the device's own");
     let actions: Vec<String> = c.query("SELECT action FROM events ORDER BY id", &[]).unwrap().iter().map(|r| r.get(0)).collect();
     assert_eq!(
         actions,
@@ -158,10 +162,10 @@ fn add_update_noop_delete_and_rename() {
     commit(&mut c, &store, "b", b"back", None).unwrap();
     assert_eq!(live(&store, "b").unwrap(), b"back", "a deleted path can be added again");
 
-    assert!(mark_deleted(&mut c, &store, &device, "b", true).unwrap());
-    assert!(deleted_in_web_app(&mut *c, device.id, "b").unwrap(), "a delete in the web app is remembered");
+    assert!(mark_deleted(&mut c, &store, &folder, "b", true).unwrap());
+    assert!(deleted_in_web_app(&mut *c, folder.id, "b").unwrap(), "a delete in the web app is remembered");
     commit(&mut c, &store, "b", b"restored", None).unwrap();
-    assert!(!deleted_in_web_app(&mut *c, device.id, "b").unwrap(), "and ends when the file is brought back");
+    assert!(!deleted_in_web_app(&mut *c, folder.id, "b").unwrap(), "and ends when the file is brought back");
 
     // A file that a source collected is remembered as removed in the web app in the source's own record.
     c.execute(
@@ -170,30 +174,30 @@ fn add_update_noop_delete_and_rename() {
     )
     .unwrap();
     c.execute(
-        "INSERT INTO link_items (link_id, device_id, path, remote_id, version) SELECT id, 1, 'b', 'r', 'm' FROM links",
+        "INSERT INTO link_items (link_id, folder_id, path, remote_id, version) SELECT id, 1, 'b', 'r', 'm' FROM links",
         &[],
     )
     .unwrap();
     let flag = |c: &mut postgres::Client| -> bool { c.query_one("SELECT removed_in_web_app FROM link_items", &[]).unwrap().get(0) };
-    assert!(mark_deleted(&mut c, &store, &device, "b", false).unwrap());
+    assert!(mark_deleted(&mut c, &store, &folder, "b", false).unwrap());
     assert!(!flag(&mut c), "a delete by the source itself is not one made in the web app");
     commit(&mut c, &store, "b", b"again", None).unwrap();
-    assert!(mark_deleted(&mut c, &store, &device, "b", true).unwrap());
+    assert!(mark_deleted(&mut c, &store, &folder, "b", true).unwrap());
     assert!(flag(&mut c));
 }
 
 #[test]
 fn a_failed_install_leaves_the_current_file_alone() {
-    let db = testing::db_with_device();
+    let db = testing::db_with_folder();
     let mut c = db.get().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     commit(&mut c, &store, "a", b"one", None).unwrap();
 
     let missing = store.temp_path();
-    let device = testing::device();
+    let folder = testing::folder();
     let v = NewVersion {
-        device: &device,
+        folder: &folder,
         path: "a",
         root: root_hash(&[chunk_hash(b"two")], 3),
         size: 3,
@@ -209,7 +213,7 @@ fn a_failed_install_leaves_the_current_file_alone() {
 
 #[test]
 fn only_the_newest_versions_stay_unpruned() {
-    let db = testing::db_with_device();
+    let db = testing::db_with_folder();
     let mut c = db.get().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
@@ -222,7 +226,7 @@ fn only_the_newest_versions_stay_unpruned() {
 
 #[test]
 fn images_queue_a_metadata_job_once_per_content() {
-    let db = testing::db_with_device();
+    let db = testing::db_with_folder();
     let mut c = db.get().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

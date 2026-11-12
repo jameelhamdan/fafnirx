@@ -4,7 +4,6 @@ import { bytes, duration, percent } from '@/lib/format'
 import { msg, useT } from '@/lib/i18n'
 import type { Activity } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { Badge } from './ui/badge'
 import { Progress } from './ui/progress'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { STATUS } from '@/lib/status'
@@ -58,7 +57,7 @@ export function PageHeader({ title, description, actions }: { title: string; des
     <div className="mb-4 flex flex-wrap items-end justify-between gap-3 border-b pb-3">
       <div>
         <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
-        {description && <p className="mt-0.5 max-w-3xl text-[13px] text-muted-foreground">{description}</p>}
+        {description && <p className="mt-0.5 max-w-3xl text-compact text-muted-foreground">{description}</p>}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
@@ -99,18 +98,11 @@ const DOT: Record<string, string> = {
 export function StatusDot({ status, label }: { status: string; label?: string }) {
   const t = useT()
   return (
-    <span className="inline-flex items-center gap-1.5 text-[13px]">
+    <span className="inline-flex items-center gap-1.5 text-compact">
       <span className={cn('size-1.5 rounded-full', DOT[status] ?? 'bg-muted-foreground/50')} />
       {label ?? t(STATUS[status] ?? status)}
     </span>
   )
-}
-
-const KIND: Record<string, string> = { device: msg('Device'), local: msg('Local folder'), master: msg('Master folder') }
-
-export function KindBadge({ kind }: { kind: string }) {
-  const t = useT()
-  return <Badge variant="secondary">{t(KIND[kind] ?? kind)}</Badge>
 }
 
 /** What a device is doing right now: phase, file, a progress bar, speed and time left. */

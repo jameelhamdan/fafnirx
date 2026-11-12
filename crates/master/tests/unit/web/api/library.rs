@@ -28,7 +28,7 @@ fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
         assert!(names.contains(&"a.png") && names.contains(&"b.png"));
         assert_eq!(listed["assets"][0]["kind"], "image");
         assert_eq!(api.get("/api/timeline/buckets?kind=video").await.1["total"], 0);
-        assert_eq!(api.get("/api/timeline/buckets?device=nowhere").await.1["total"], 0);
+        assert_eq!(api.get("/api/timeline/buckets?folder=nowhere").await.1["total"], 0);
 
         let a = photo_id(&api, "a.png").await;
         let b = photo_id(&api, "b.png").await;
@@ -126,7 +126,7 @@ fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
         api.json(
             Method::POST,
             "/api/files/delete",
-            json!({"items": [{"device": "admin/photos", "path": "trip/a.png"}]}),
+            json!({"items": [{"folder": "admin/photos", "path": "trip/a.png"}]}),
         )
         .await;
         assert_eq!(api.get("/api/timeline/buckets").await.1["total"], 1);
@@ -143,7 +143,7 @@ fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
             .json(
                 Method::POST,
                 "/api/files/restore",
-                json!({"device": "admin/photos", "path": "trip/a.png", "version": version}),
+                json!({"folder": "admin/photos", "path": "trip/a.png", "version": version}),
             )
             .await;
         assert_eq!(status, StatusCode::OK);
@@ -156,7 +156,7 @@ fn the_library_groups_photos_by_month_and_keeps_what_people_say_about_them() {
         );
 
         // Removing from the trash for good takes the file, its versions and its state; what is not in the trash is refused.
-        let delete = json!({"items": [{"device": "admin/photos", "path": "trip/a.png"}]});
+        let delete = json!({"items": [{"folder": "admin/photos", "path": "trip/a.png"}]});
         api.json(Method::POST, "/api/files/delete", delete).await;
         let (_, trash) = api.get("/api/trash").await;
         let purge = json!({"ids": [trash["entries"][0]["id"].clone()]});

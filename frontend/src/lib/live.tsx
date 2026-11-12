@@ -3,7 +3,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { LiveContext } from './live-state'
 import { pictureReady } from './pictures'
 
-/** What the master announces: a topic and a key (a device name, a table, or empty). */
+/** What the master announces: a topic and a key (a device or folder key, a table, or empty). */
 interface Change {
   topic: string
   key: string
@@ -13,13 +13,15 @@ interface Change {
 function staleKeys(change: Change): string[][] {
   switch (change.topic) {
     case 'files':
-      return [['files'], ['info'], ['dashboard'], ['devices'], ['timeline'], ['asset'], ['trash'], ['albums'], ['album']]
+      return [['files'], ['info'], ['dashboard'], ['devices'], ['device'], ['folders'], ['timeline'], ['asset'], ['trash'], ['albums'], ['album']]
     case 'library':
       return [['timeline'], ['asset'], ['albums'], ['album'], ['tags']]
     case 'activity':
       return [['dashboard'], ['device']]
     case 'devices':
-      return [['devices'], ['device'], ['dashboard'], ['files'], ['folders']]
+      return [['devices'], ['device'], ['dashboard']]
+    case 'folders':
+      return [['folders'], ['dashboard'], ['files']]
     case 'alerts':
       return [['dashboard']]
     case 'jobs':

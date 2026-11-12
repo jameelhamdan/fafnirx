@@ -9,15 +9,16 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// Where a folder of this computer goes.
+/// Where a folder of this device goes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Target {
-    /// This computer's own namespace on the master: the folder is only uploaded (a backup), the client never writes to it.
+    /// This device's own namespace on the master: the folder is only uploaded (a backup), the client never writes to it.
     #[default]
-    Computer,
+    #[serde(alias = "computer")]
+    Device,
     /// A folder on the master: one of the user's, another user's shared with them, or `master:<path>`. Changes go the way its
-    /// mode says. It is not also uploaded to this computer's namespace.
+    /// mode says. It is not also uploaded to this device's namespace.
     Folder,
 }
 
@@ -26,7 +27,7 @@ pub enum Target {
 #[serde(deny_unknown_fields)]
 pub struct Folder {
     pub path: PathBuf,
-    /// With the target `computer`: the top-level directory of this folder inside the computer's namespace. With `folder`: the
+    /// With the target `device`: the top-level directory of this folder inside the device's namespace. With `folder`: the
     /// folder on the master, a synced folder of the user, `<owner>/<name>`, or `master:<path>`.
     pub name: String,
     #[serde(default, skip_serializing_if = "is_default")]
@@ -35,7 +36,7 @@ pub struct Folder {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     /// Which way it goes, and what happens to a file changed here and on the master (or changed here and deleted there). A
-    /// folder that goes to the computer's namespace only ever goes up.
+    /// folder that goes to the device's namespace only ever goes up.
     #[serde(default, skip_serializing_if = "is_default")]
     pub mode: Mode,
     /// With `ask`: how long a file waits for an answer; after that both versions are kept. 0: for ever.
@@ -44,20 +45,20 @@ pub struct Folder {
 }
 
 impl Folder {
-    /// A folder uploaded to this computer's namespace.
-    pub fn computer(path: PathBuf, name: String) -> Self {
+    /// A folder uploaded to this device's namespace.
+    pub fn device(path: PathBuf, name: String) -> Self {
         Self {
             path,
             name,
-            target: Target::Computer,
+            target: Target::Device,
             id: None,
             mode: Mode::Up,
             ask_timeout_hours: default_ask_timeout(),
         }
     }
 
-    pub fn is_computer(&self) -> bool {
-        self.target == Target::Computer
+    pub fn is_device(&self) -> bool {
+        self.target == Target::Device
     }
 
     /// What the master is asked for: the stable id when there is one, else the name.
@@ -71,12 +72,12 @@ impl Folder {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
-    /// Both ways. A file changed on both sides becomes the master's; this computer's goes aside in `.fafnirx-conflicts`, unsent.
+    /// Both ways. A file changed on both sides becomes the master's; this device's goes aside in `.fafnirx-conflicts`, unsent.
     #[default]
     Both,
     /// What changes here goes to the master; nothing comes back, and nothing is deleted here.
     Up,
-    /// Both ways. A file changed on both sides is kept in both versions, this computer's under `name (conflict <computer> <date>).ext`.
+    /// Both ways. A file changed on both sides is kept in both versions, this device's under `name (conflict <device> <date>).ext`.
     Keep,
     /// Both ways. A person is asked about a file changed on both sides (a question on screen); until then nothing changes.
     Ask,
@@ -104,7 +105,7 @@ impl Mode {
         cfg!(any(target_os = "windows", target_os = "macos", feature = "tray"))
     }
 
-    /// `ask` needs a dialog: a computer with no screen cannot offer it. On Linux that is a session with a display.
+    /// `ask` needs a dialog: a device with no screen cannot offer it. On Linux that is a session with a display.
     pub fn ask_available() -> bool {
         Self::ask_possible() && (cfg!(any(target_os = "windows", target_os = "macos")) || std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some())
     }
@@ -112,7 +113,7 @@ impl Mode {
     /// Refuses `ask` where it cannot be answered.
     pub fn check_available(self) -> Result<()> {
         if self == Mode::Ask && !Self::ask_available() {
-            bail!("\"ask\" needs a screen to show the question on: it is not available on a computer without one");
+            bail!("\"ask\" needs a screen to show the question on: it is not available on a device without one");
         }
         Ok(())
     }
@@ -198,7 +199,7 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
         let mut cfg: Config = toml_edit::de::from_str(&text).with_context(|| format!("parse config {}", path.display()))?;
-        for f in cfg.folders.iter_mut().filter(|f| f.is_computer()) {
+        for f in cfg.folders.iter_mut().filter(|f| f.is_device()) {
             f.mode = Mode::Up;
         }
         cfg.validate()?;
@@ -216,14 +217,14 @@ impl Config {
         if self.host().is_none() {
             bail!("server must be an http:// or https:// URL");
         }
-        let mut computer = std::collections::HashSet::new();
+        let mut device = std::collections::HashSet::new();
         let mut attached = std::collections::HashSet::new();
         for f in &self.folders {
-            if f.is_computer() {
+            if f.is_device() {
                 if f.name.is_empty() || f.name.contains(['/', '\\']) || f.name == "." || f.name == ".." {
                     bail!("folder name {:?} must be a single path component", f.name);
                 }
-                if !computer.insert(fafnirx_common::fold_path(&f.name)) {
+                if !device.insert(fafnirx_common::fold_path(&f.name)) {
                     bail!(
                         "two folders are called {:?}: the master keeps them side by side under this name, and names that differ \
                          only in case or accents are the same there. Give one a different name, for example {:?}",
@@ -240,13 +241,13 @@ impl Config {
             } else {
                 // The name of one's own folder, or `<owner>/<name>` for one another user synced.
                 let (owner, name) = f.name.split_once('/').unwrap_or(("a", &f.name));
-                if !fafnirx_common::valid_device_name(owner) || !fafnirx_common::valid_device_name(name) {
+                if !fafnirx_common::valid_name(owner) || !fafnirx_common::valid_name(name) {
                     bail!("synced folder name {:?} must be lowercase letters, digits, '.', '_' and '-'", f.name);
                 }
             }
             if !attached.insert(f.name.as_str()) {
                 bail!(
-                    "the folder {:?} is attached twice; a folder of the master is attached to one folder of a computer",
+                    "the folder {:?} is attached twice; a folder of the master is attached to one folder of a device",
                     f.name
                 );
             }
@@ -254,14 +255,14 @@ impl Config {
         Ok(())
     }
 
-    /// The folders uploaded to this computer's own namespace.
-    pub fn computer_folders(&self) -> impl Iterator<Item = &Folder> {
-        self.folders.iter().filter(|f| f.is_computer())
+    /// The folders uploaded to this device's own namespace.
+    pub fn device_folders(&self) -> impl Iterator<Item = &Folder> {
+        self.folders.iter().filter(|f| f.is_device())
     }
 
     /// The folders attached to a folder of the master.
     pub fn attached_folders(&self) -> impl Iterator<Item = &Folder> {
-        self.folders.iter().filter(|f| !f.is_computer())
+        self.folders.iter().filter(|f| !f.is_device())
     }
 
     /// Every local directory the client collects or syncs.
@@ -371,7 +372,7 @@ pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
 pub struct NewFolder<'a> {
     pub dir: &'a Path,
     pub target: Target,
-    /// With the target `computer`: the name in the computer's namespace (default: the directory's own, made unique). With
+    /// With the target `device`: the name in the device's namespace (default: the directory's own, made unique). With
     /// `folder`: the folder of the master.
     pub name: Option<&'a str>,
     pub id: Option<&'a str>,
@@ -379,24 +380,24 @@ pub struct NewFolder<'a> {
 }
 
 /// Adds a folder to the config file, keeping everything else in the file (comments included) as it is. A folder of the master is
-/// made on this computer if it is not there yet: the usual way to set up another computer is to attach a new, empty folder and let
+/// made on this device if it is not there yet: the usual way to set up another device is to attach a new, empty folder and let
 /// it fill. Returns the folder as stored.
 pub fn add_folder_to_file(config_path: &Path, new: NewFolder) -> Result<Folder> {
     let cfg = Config::load(config_path).context("run `fafnirx install --server <address>` first")?;
-    let computer = new.target == Target::Computer;
-    if !computer {
+    let device = new.target == Target::Device;
+    if !device {
         std::fs::create_dir_all(new.dir).with_context(|| format!("cannot make {}", new.dir.display()))?;
     }
     let path = free_directory(&cfg, new.dir)?;
     let name = match new.name {
         Some(n) => n.to_string(),
-        None if computer => {
+        None if device => {
             let base = path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .filter(|n| !n.is_empty())
                 .context("this folder has no name of its own; choose one with --name")?;
-            let taken: std::collections::HashSet<String> = cfg.computer_folders().map(|f| fafnirx_common::fold_path(&f.name)).collect();
+            let taken: std::collections::HashSet<String> = cfg.device_folders().map(|f| fafnirx_common::fold_path(&f.name)).collect();
             let mut candidate = base.clone();
             let mut n = 2;
             while taken.contains(&fafnirx_common::fold_path(&candidate)) {
@@ -412,7 +413,7 @@ pub fn add_folder_to_file(config_path: &Path, new: NewFolder) -> Result<Folder> 
         name,
         target: new.target,
         id: new.id.map(str::to_string),
-        mode: if computer { Mode::Up } else { new.mode },
+        mode: if device { Mode::Up } else { new.mode },
         ask_timeout_hours: default_ask_timeout(),
     };
     let mut check = cfg;
@@ -423,13 +424,13 @@ pub fn add_folder_to_file(config_path: &Path, new: NewFolder) -> Result<Folder> 
         let mut table = toml_edit::Table::new();
         table["path"] = toml_edit::value(folder.path.to_string_lossy().into_owned());
         table["name"] = toml_edit::value(folder.name.clone());
-        if !computer {
+        if !device {
             table["target"] = toml_edit::value("folder");
         }
         if let Some(id) = &folder.id {
             table["id"] = toml_edit::value(id.clone());
         }
-        if !computer && folder.mode != Mode::default() {
+        if !device && folder.mode != Mode::default() {
             table["mode"] = toml_edit::value(folder.mode.name());
         }
         tables(doc, "folders")?.push(table);
@@ -519,7 +520,7 @@ impl Config {
     pub fn folder_named(&self, name: &str) -> Option<&Folder> {
         self.attached_folders()
             .find(|f| names_synced(&f.name, name))
-            .or_else(|| self.computer_folders().find(|f| f.name == name))
+            .or_else(|| self.device_folders().find(|f| f.name == name))
     }
 
     /// The folder of the master a person means by `name`: in full, or by its name alone when only one has it.
@@ -541,7 +542,7 @@ fn is_attached(table: &toml_edit::Table, name: &str) -> bool {
     is_named(table, name) && table.get("target").and_then(|t| t.as_str()) == Some("folder")
 }
 
-/// Stops syncing a folder on this computer: a folder of the master (named in full, or by its name alone when that is not
+/// Stops syncing a folder on this device: a folder of the master (named in full, or by its name alone when that is not
 /// ambiguous) or one collected here. The files stay in the local folder and on the master. Returns the name in full.
 pub fn remove_folder_from_file(config_path: &Path, name: &str) -> Result<String> {
     let cfg = Config::load(config_path)?;

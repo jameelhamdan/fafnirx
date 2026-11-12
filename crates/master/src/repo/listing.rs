@@ -43,7 +43,7 @@ impl Sort {
 
 /// Which files of a device, in what order, and which page of them.
 pub struct Page<'a> {
-    pub device_id: i64,
+    pub folder_id: i64,
     /// The `LIKE` pattern of the folder (`path LIKE $2`).
     pub below: &'a str,
     pub include_deleted: bool,
@@ -77,7 +77,7 @@ pub struct Found {
 const COLUMNS: &str = "f.path, v.size, v.mtime, v.created_at, f.deleted_at, m.mime, m.width, m.height, m.taken_at,
     (SELECT COUNT(*) FROM versions x WHERE x.file_id = f.id), COUNT(*) OVER (), f.id";
 
-const SCOPE: &str = "f.device_id = $1 AND f.path LIKE $2 AND (f.deleted_at IS NULL OR ($3 AND f.deleted_by IS DISTINCT FROM 'rename'))";
+const SCOPE: &str = "f.folder_id = $1 AND f.path LIKE $2 AND (f.deleted_at IS NULL OR ($3 AND f.deleted_by IS DISTINCT FROM 'rename'))";
 
 fn found(rows: &[postgres::Row]) -> Found {
     let total = rows.first().map_or(0, |r| r.get(10));
@@ -120,7 +120,7 @@ pub fn search(c: &mut impl GenericClient, page: &Page, search: Option<&str>, typ
     );
     let rows = c.query(
         &sql,
-        &[&page.device_id, &page.below, &page.include_deleted, &search, &type_regex, &page.limit, &page.offset],
+        &[&page.folder_id, &page.below, &page.include_deleted, &search, &type_regex, &page.limit, &page.offset],
     )?;
     Ok(found(&rows))
 }
@@ -135,6 +135,6 @@ pub fn files_in(c: &mut impl GenericClient, page: &Page, from: i32) -> Result<Fo
         order = page.sort.sql(),
         direction = direction(page),
     );
-    let rows = c.query(&sql, &[&page.device_id, &page.below, &page.include_deleted, &from, &page.limit, &page.offset])?;
+    let rows = c.query(&sql, &[&page.folder_id, &page.below, &page.include_deleted, &from, &page.limit, &page.offset])?;
     Ok(found(&rows))
 }

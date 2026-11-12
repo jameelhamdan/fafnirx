@@ -188,7 +188,7 @@ export function useSubtitles({ video, source, lang, storage, t, onNotice }: Opti
     changeDelay(0)
   }, [storage, changeDelay])
 
-  /** Adds a subtitle file from the person's computer and shows it. */
+  /** Adds a subtitle file from the person's device and shows it. */
   const addFile = useCallback(async (file: File) => {
     try {
       const vtt = file.size <= MAX_SUBTITLE_BYTES ? toVtt(await file.text(), file.name) : null

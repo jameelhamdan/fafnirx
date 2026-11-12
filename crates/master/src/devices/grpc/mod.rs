@@ -5,7 +5,7 @@ use crate::devices::call::{internal, CallError};
 use crate::files::ingest;
 use crate::platform::db::{self, Db};
 use crate::platform::store::Store;
-use crate::repo::{alerts, devices, files, settings};
+use crate::repo::{alerts, devices, files, folders, settings};
 use fafnirx_common::pb::collector_server::Collector;
 use fafnirx_common::pb::*;
 use fafnirx_common::{chunk_count, chunk_hash, clean_remote_path, root_hash, to_hash, unix_now, CHUNK_SIZE, HASH_LEN};
@@ -24,7 +24,7 @@ pub struct Service {
     pub events: tokio::sync::broadcast::Sender<String>,
 }
 
-/// How long a burst of changes to a shared folder is allowed to gather before computers are told: an upload of a thousand
+/// How long a burst of changes to a shared folder is allowed to gather before devices are told: an upload of a thousand
 /// files is one message.
 const WATCH_SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
 
@@ -87,9 +87,9 @@ fn stream_file<T: Send + 'static>(mut file: tokio::fs::File, wrap: fn(Vec<u8>) -
     ReceiverStream::new(rx)
 }
 
-/// A computer that holds back deletions waits for a person: an alert on its device says so until it is dealt with, and it
-/// closes by itself when the computer stops reporting any (or stops reporting at all, see the minute job).
-fn alert_held_deletions(c: &mut Client, device: &str, states: &[devices::FolderState]) -> anyhow::Result<()> {
+/// A device that holds back deletions waits for a person: an alert on its device says so until it is dealt with, and it
+/// closes by itself when the device stops reporting any (or stops reporting at all, see the minute job).
+fn alert_held_deletions(c: &mut Client, device: &str, states: &[&devices::FolderState]) -> anyhow::Result<()> {
     let held: Vec<String> = states.iter().filter(|s| s.held > 0).map(|s| format!("{} ({} files)", s.name, s.held)).collect();
     if held.is_empty() {
         alerts::resolve(c, "deletions_held", device)?;
@@ -169,33 +169,38 @@ impl Collector for Service {
                     disk_free: hb.disk_free as i64,
                 };
                 devices::record_heartbeat(c, dev.id, &info, unix_now())?;
-                // Only folders this computer's user can use: a name is the caller's word, and the owner of a folder is shown it.
-                let usable: Vec<String> = devices::folders(c, owner)?.into_iter().map(|f| f.folder).collect();
-                let states: Vec<devices::FolderState> = hb
+                // Only folders this device's user can use: a name is the caller's word, and the owner of a folder is shown it.
+                let usable = folders::usable(c, owner)?;
+                let states: Vec<(i64, devices::FolderState)> = hb
                     .folders
                     .iter()
-                    .filter(|s| usable.contains(&s.name))
+                    .filter_map(|s| Some((usable.iter().find(|f| f.key == s.name)?.id, s)))
                     .take(50)
-                    .map(|s| devices::FolderState {
-                        name: sanitize(&s.name, 130),
-                        files: s.files as i64,
-                        bytes: s.bytes as i64,
-                        last_cycle: s.last_cycle,
-                        last_error: sanitize(&s.last_error, 300),
-                        held: i64::from(s.held),
-                        failing: i64::from(s.failing),
-                        mode: sanitize(&s.mode, 10),
-                        updated_at: 0,
+                    .map(|(id, s)| {
+                        let state = devices::FolderState {
+                            name: sanitize(&s.name, 130),
+                            files: s.files as i64,
+                            bytes: s.bytes as i64,
+                            last_cycle: s.last_cycle,
+                            last_error: sanitize(&s.last_error, 300),
+                            held: i64::from(s.held),
+                            failing: i64::from(s.failing),
+                            mode: sanitize(&s.mode, 10),
+                            updated_at: 0,
+                        };
+                        (id, state)
                     })
                     .collect();
                 devices::save_folder_state(c, dev.id, &states, unix_now())?;
-                alert_held_deletions(c, &dev.name, &states)?;
+                alert_held_deletions(c, &dev.key, &states.iter().map(|(_, s)| s).collect::<Vec<_>>())?;
                 // A conflict that has not come back for ten minutes is over.
-                alerts::resolve_if_quiet(c, "device_conflict", &dev.name, unix_now() - 600)?;
+                alerts::resolve_if_quiet(c, "device_conflict", &dev.key, unix_now() - 600)?;
                 if hb.phase.is_empty() || hb.phase == "idle" {
-                    // Going from busy to idle means the sync is done: the totals shown for the device are brought up to date.
+                    // Going from busy to idle means the sync is done: the totals shown for its folders are brought up to date.
                     if devices::clear_progress(c, dev.id)? {
-                        crate::devices::totals::refresh(c, dev.id)?;
+                        for (folder_id, _, _) in folders::backups_of(c, dev.id)? {
+                            crate::folders::totals::refresh(c, folder_id)?;
+                        }
                     }
                 } else {
                     let progress = devices::Progress {
@@ -209,13 +214,13 @@ impl Collector for Service {
                     };
                     devices::save_progress(c, dev.id, &progress, unix_now())?;
                 }
-                db::notify(c, db::Topic::Devices, &dev.name)?;
+                db::notify(c, db::Topic::Devices, &dev.key)?;
                 if !hb.errors.is_empty() {
                     let msg = hb.errors.iter().take(5).map(|e| sanitize(e, 300)).collect::<Vec<_>>().join("\n");
-                    alerts::upsert(c, "upload_error", &dev.name, &msg)?;
+                    alerts::upsert(c, "upload_error", &dev.key, &msg)?;
                 }
-                alerts::resolve(c, "device_offline", &dev.name)?;
-                Ok(dev.name)
+                alerts::resolve(c, "device_offline", &dev.key)?;
+                Ok(dev.key)
             })
             .await?;
         Ok(Response::new(HeartbeatResponse { device_name: name, server_time: unix_now() }))
@@ -225,21 +230,23 @@ impl Collector for Service {
         let who = self.caller(&req)?;
         let m = check_manifest(req.get_ref())?;
         let store = self.store.clone();
-        self.blocking_at(who, true, move |c, at, who| {
-            let (dev, path) = (&at.device, m.path.clone());
-            let current = files::live_content(c, dev.id, &path)?.map(|(root, _)| root);
-            // A backup device is told it is up to date for a path deleted in the web app, whatever it holds now. A shared
-            // folder is not: its computers delete such a file themselves, so a file there is a new one.
-            let hidden = who.folder.is_none() && files::deleted_in_web_app(c, dev.id, &path)?;
-            if current == Some(m.root) || hidden {
-                return Ok(Response::new(NegotiateResponse { missing: vec![], already_current: true }));
+        self.blocking_at(who, true, move |c, at, _| {
+            // A directory the device has not sent anything of has no folder yet: nothing is there.
+            if let Some((folder, path)) = at.locate(c, &m.path, false)? {
+                let current = files::live_content(c, folder.id, &path)?.map(|(root, _)| root);
+                // A backup is told it is up to date for a path deleted in the web app, whatever it holds now. A shared
+                // folder is not: its devices delete such a file themselves, so a file there is a new one.
+                let hidden = at.named.is_none() && files::deleted_in_web_app(c, folder.id, &path)?;
+                if current == Some(m.root) || hidden {
+                    return Ok(Response::new(NegotiateResponse { missing: vec![], already_current: true }));
+                }
+                // The folder already has this content under another path (a rename or a copy): the commit
+                // takes it from there, nothing needs to be sent.
+                if files::live_path_with_root(c, folder.id, &m.root, None)?.is_some() {
+                    return Ok(Response::new(NegotiateResponse { missing: vec![], already_current: false }));
+                }
             }
-            // The device already has this content under another path (a rename or a copy): the commit
-            // takes it from there, nothing needs to be sent.
-            if files::live_path_with_root(c, dev.id, &m.root, None)?.is_some() {
-                return Ok(Response::new(NegotiateResponse { missing: vec![], already_current: false }));
-            }
-            let missing = store.missing_chunks(dev.id, &m.root, &m.chunks);
+            let missing = store.missing_chunks(at.device.id, &m.root, &m.chunks);
             Ok(Response::new(NegotiateResponse { missing, already_current: false }))
         })
         .await
@@ -280,23 +287,29 @@ impl Collector for Service {
         };
         let store = self.store.clone();
         let version_id = self
-            .blocking_at(who, true, move |c, at, who| {
-                let (dev, path) = (&at.device, m.path.clone());
-                if who.folder.is_none() && files::deleted_in_web_app(c, dev.id, &path)? {
+            .blocking_at(who, true, move |c, at, _| {
+                devices::touch(c, at.device.id, unix_now())?;
+                let (folder, path) = at.locate(c, &m.path, true)?.ok_or_else(|| Status::internal("no folder for the path"))?;
+                if at.named.is_none() && files::deleted_in_web_app(c, folder.id, &path)? {
                     return Ok(0);
                 }
-                if at.folder {
-                    // A folder takes the rules of the most limited computer for what is synced into it.
-                    ingest::check_names(c, dev, &path, renamed_from.as_deref(), true)?;
+                // A rename is within one folder: from another directory of a device, the old path is deleted on its own.
+                let renamed_from = renamed_from.as_deref().and_then(|from| match at.named {
+                    Some(_) => Some(from.to_string()),
+                    None => from.strip_prefix(&format!("{}/", m.path.split('/').next().unwrap_or_default())).map(str::to_string),
+                });
+                if at.named.is_some() {
+                    // A folder takes the rules of the most limited device for what is synced into it.
+                    ingest::check_names(c, &folder, &path, renamed_from.as_deref(), true)?;
                 }
-                // Content the device already has under another path is taken from there; otherwise the
+                // Content the folder already has under another path is taken from there; otherwise the
                 // upload must be complete and intact.
-                let staged = match files::live_path_with_root(c, dev.id, &m.root, renamed_from.as_deref())? {
+                let staged = match files::live_path_with_root(c, folder.id, &m.root, renamed_from.as_deref())? {
                     Some(from) => store
-                        .copy_live_to_temp(&dev.name, &from, &m.root)
+                        .copy_live_to_temp(&folder.key, &from, &m.root)
                         .map_err(|e| Status::failed_precondition(format!("the file this one is copied from changed: {e:#}")))?,
                     None => store
-                        .finish_upload(dev.id, &m.root, m.size)
+                        .finish_upload(at.device.id, &m.root, m.size)
                         .map_err(|e| Status::failed_precondition(format!("the upload of this file is incomplete: {e:#}")))?,
                 };
                 ingest::commit_version(
@@ -304,7 +317,7 @@ impl Collector for Service {
                     &store,
                     &staged,
                     &ingest::NewVersion {
-                        device: dev,
+                        folder: &folder,
                         path: &path,
                         root: m.root,
                         size: m.size,
@@ -324,7 +337,11 @@ impl Collector for Service {
         let path = clean_remote_path(&req.get_ref().path).map_err(invalid)?;
         let store = self.store.clone();
         self.blocking_at(who, true, move |c, at, _| {
-            ingest::mark_deleted(c, &store, &at.device, &path, false)?;
+            devices::touch(c, at.device.id, unix_now())?;
+            // A directory with no folder has nothing to delete.
+            if let Some((folder, inside)) = at.locate(c, &path, false)? {
+                ingest::mark_deleted(c, &store, &folder, &inside, false)?;
+            }
             Ok(())
         })
         .await?;
@@ -336,11 +353,11 @@ impl Collector for Service {
         let (names, mine, ids, readonly) = self
             .blocking(move |c| {
                 let (_, owner) = authenticate_user(c, &who)?;
-                let all = devices::folders(c, owner)?;
-                let mine = all.iter().filter(|f| f.mine).map(|f| f.folder.clone()).collect::<Vec<_>>();
+                let all = folders::usable(c, owner)?;
+                let mine = all.iter().filter(|f| f.mine).map(|f| f.key.clone()).collect::<Vec<_>>();
                 let ids = all.iter().map(|f| f.public_id.to_string()).collect();
-                let readonly = all.iter().filter(|f| !f.can_write).map(|f| f.folder.clone()).collect::<Vec<_>>();
-                Ok((all.into_iter().map(|f| f.folder).collect::<Vec<_>>(), mine, ids, readonly))
+                let readonly = all.iter().filter(|f| !f.can_write).map(|f| f.key.clone()).collect::<Vec<_>>();
+                Ok((all.into_iter().map(|f| f.key).collect::<Vec<_>>(), mine, ids, readonly))
             })
             .await?;
         Ok(Response::new(ListFoldersResponse { names, mine, ids, readonly }))
@@ -353,10 +370,10 @@ impl Collector for Service {
             .blocking(move |c| {
                 let (_, owner) = authenticate_user(c, &who)?;
                 // Making one that is there already is not an error.
-                if devices::folder(c, owner, &name)?.is_some_and(|f| f.mine) {
+                if folders::find(c, owner, &name)?.is_some_and(|f| f.mine) {
                     return Ok(None);
                 }
-                Ok(Some(super::folders::make(c, owner, &name)?))
+                Ok(Some(crate::folders::api::make(c, owner, &name)?))
             })
             .await?;
         if let Some(folder) = made {
@@ -379,7 +396,7 @@ impl Collector for Service {
             .blocking_at(who, false, move |c, at, _| {
                 let complete = deletions_may_be_missing(c, since);
                 // A caller that may have missed deletions is sent everything that is live, to compare with what it has.
-                let changes = files::changes_since(c, at.device.id, if complete { 0 } else { since })?;
+                let changes = files::changes_since(c, at.folder()?.id, if complete { 0 } else { since })?;
                 Ok((changes, complete))
             })
             .await?;
@@ -415,8 +432,8 @@ impl Collector for Service {
                 let mut found = Vec::new();
                 for name in asked {
                     // The caller may name a folder by its stable id; the answer names it the way it was asked.
-                    if let Some(f) = devices::folder(c, user, &name)? {
-                        found.push((name, f.folder));
+                    if let Some(f) = folders::find(c, user, &name)? {
+                        found.push((name, f.key));
                     }
                 }
                 Ok(found)
@@ -470,10 +487,11 @@ impl Collector for Service {
         let file_path = {
             let path = path.clone();
             self.blocking_at(who, false, move |c, at, _| {
-                if files::live_content(c, at.device.id, &path)?.is_none() {
+                let folder = at.folder()?;
+                if files::live_content(c, folder.id, &path)?.is_none() {
                     return Err(Status::not_found("no such file").into());
                 }
-                Ok(store.live_path(&at.device.name, &path)?)
+                Ok(store.live_path(&folder.key, &path)?)
             })
             .await?
         };

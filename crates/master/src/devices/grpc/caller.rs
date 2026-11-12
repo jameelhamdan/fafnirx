@@ -1,10 +1,9 @@
-//! Who is calling the device-facing API, which device or folder a call works on, and the lease that lets one computer at a time use a
-//! device.
+//! Who is calling the device-facing API, which folder a call works on, and the lease that lets one client at a time use a device.
 
 use super::sanitize;
 use crate::devices::call::{internal, CallError};
-use crate::platform::db::{self, Device};
-use crate::repo::{alerts, devices};
+use crate::platform::db::{self, DeviceRef, FolderRef};
+use crate::repo::{alerts, devices, folders};
 use fafnirx_common::unix_now;
 use postgres::Client;
 use tonic::{Request, Status};
@@ -24,11 +23,11 @@ pub struct Caller {
     pub(super) token: String,
     pub(super) instance: String,
     pub(super) ip: Option<String>,
-    /// The folder the call acts on instead of the device, named in the `x-fafnirx-folder` metadata.
+    /// The folder the call acts on instead of the files of the device itself, named in the `x-fafnirx-folder` metadata.
     pub(super) folder: Option<String>,
 }
 
-/// The instance of a caller that does not name one: all such callers count as one computer.
+/// The instance of a caller that does not name one: all such callers count as one client.
 pub(super) const UNNAMED_INSTANCE: &str = "unnamed";
 
 /// The address a request comes from: the connection's, or behind a trusted proxy the one the proxy saw.
@@ -54,80 +53,106 @@ pub(super) fn caller_of<T>(req: &Request<T>, trusted: &crate::platform::proxy::T
     Ok(Caller { token: bearer(req)?, instance, ip: address_of(req, trusted), folder })
 }
 
-/// Where a call works: a device (a computer, or a folder it names). Paths in the messages are relative to it.
+/// Where a call works: the device that makes it and, when it names one, a folder. Without a folder the call is about the files of
+/// the device itself, whose paths start with the directory they are in.
 pub(super) struct Place {
-    pub(super) device: Device,
-    /// A call that names a folder: what is written there has to be named so that every kind of computer can hold it.
-    pub(super) folder: bool,
+    pub(super) device: DeviceRef,
+    /// The folder named in the metadata: paths in the messages are relative to it, and what is written there has to be named so
+    /// that every kind of device can hold it.
+    pub(super) named: Option<FolderRef>,
+}
+
+impl Place {
+    /// The named folder, for the calls that only work on one.
+    pub(super) fn folder(&self) -> Result<&FolderRef, CallError> {
+        self.named.as_ref().ok_or_else(|| Status::invalid_argument("name the folder").into())
+    }
+
+    /// The folder a path belongs to and the path inside it: the named folder, or, for the files of the device itself, the folder of
+    /// the directory the path starts with (made when `create`; `None` when it is not there and not asked to be).
+    pub(super) fn locate(&self, conn: &mut Client, path: &str, create: bool) -> Result<Option<(FolderRef, String)>, CallError> {
+        if let Some(folder) = &self.named {
+            return Ok(Some((folder.clone(), path.to_string())));
+        }
+        let (directory, inside) = path
+            .split_once('/')
+            .ok_or_else(|| Status::invalid_argument("a path starts with the directory it is in"))?;
+        let found = if create {
+            Some(folders::backup(conn, self.device.id, directory, unix_now())?)
+        } else {
+            folders::backup_of(conn, self.device.id, directory)?
+        };
+        Ok(found.map(|(id, key)| (FolderRef { id, key }, inside.to_string())))
+    }
 }
 
 /// The folder a caller names in `x-fafnirx-folder` (or in the message): any folder the user can use is found the same way, by its
 /// name or its stable id, whoever owns it. The owner of a folder reaches it through any of their devices; another user only when the
 /// owner added them (or it is a master folder), and to change it only when they may write. Without a name the call is about the device.
 pub(super) fn place(conn: &mut Client, who: &Caller, write: bool) -> Result<Place, CallError> {
-    let (dev, user) = authenticate_user(conn, who)?;
-    let Some(key) = &who.folder else { return Ok(Place { device: dev, folder: false }) };
-    let found = devices::folder(conn, user, key)?.ok_or_else(|| Status::not_found(format!("no folder called \"{key}\"")))?;
+    let (device, user) = authenticate_user(conn, who)?;
+    let Some(key) = &who.folder else { return Ok(Place { device, named: None }) };
+    let found = folders::find(conn, user, key)?.ok_or_else(|| Status::not_found(format!("no folder called \"{key}\"")))?;
     if write && !found.can_write {
-        // Not PermissionDenied, which is about the device (in use by another computer) and stops the whole client.
+        // Not PermissionDenied, which is about the device (in use by another client) and stops the whole client.
         return Err(Status::failed_precondition(format!("\"{key}\" is shared with you to read only")).into());
     }
-    Ok(Place { device: Device { id: found.id, name: found.folder }, folder: true })
+    Ok(Place { device, named: Some(FolderRef { id: found.id, key: found.key }) })
 }
 
-/// How long a device that is not heard from keeps its credentials to itself. After that another computer using the
-/// same token takes the device over (a reinstalled or replaced computer), and the first one is the one refused.
+/// How long a device that is not heard from keeps its credentials to itself. After that another client using the
+/// same token takes the device over (a reinstalled or replaced device), and the first one is the one refused.
 pub(super) fn lease_secs() -> i64 {
     std::env::var("FAFNIRX_INSTANCE_LEASE_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(90)
 }
 
-/// Finds the device of the token and makes sure the caller is the one computer using it.
+/// Finds the device of the token and makes sure the caller is the one client using it.
 ///
 /// A device is used by one installation of the client at a time: the first to connect holds it, and while it is
 /// heard from (heartbeats, and everything it uploads, set `last_seen`) another is refused and an alert is raised for the
-/// owner, so that two computers with one token cannot send two views of the same folders. One decision, in one
-/// statement, so two computers connecting at once cannot both win.
-pub(super) fn authenticate_user(conn: &mut Client, who: &Caller) -> Result<(Device, i64), CallError> {
-    // The device is its folder (`<user>/<name>`). A device of a disabled user is refused like a revoked one.
+/// owner, so that two clients with one token cannot send two views of the same folders. One decision, in one
+/// statement, so two clients connecting at once cannot both win.
+pub(super) fn authenticate_user(conn: &mut Client, who: &Caller) -> Result<(DeviceRef, i64), CallError> {
+    // A device of a disabled user is refused like a revoked one.
     let found = devices::find_by_token(conn, &db::hash_token(&who.token))?.ok_or_else(|| Status::unauthenticated("unknown or revoked device token"))?;
-    let (id, folder, user) = (found.id, found.folder, found.user_id);
+    let (id, key, user) = (found.id, found.key, found.user_id);
     let holder = found.instance;
     if holder.as_deref() == Some(who.instance.as_str()) {
-        return Ok((Device { id, name: folder }, user));
+        return Ok((DeviceRef { id, key }, user));
     }
     let now = unix_now();
     if devices::take_over(conn, id, &who.instance, now, now - lease_secs()).map_err(internal)? {
         if holder.is_some() {
-            tracing::info!("{folder}: taken over by another computer, the first one went quiet");
-            let _ = alerts::resolve(conn, "device_conflict", &folder);
+            tracing::info!("{key}: taken over by another client, the first one went quiet");
+            let _ = alerts::resolve(conn, "device_conflict", &key);
         }
-        return Ok((Device { id, name: folder }, user));
+        return Ok((DeviceRef { id, key }, user));
     }
     let (host, ip) = (found.hostname, found.ip);
     let holder_is = match (host, ip) {
         (Some(h), Some(i)) => format!("{h}, {i}"),
         (Some(h), None) => h,
         (None, Some(i)) => i,
-        (None, None) => "another computer".into(),
+        (None, None) => "another client".into(),
     };
     let caller_is = who.ip.as_deref().unwrap_or("unknown address");
     let _ = alerts::upsert(
         conn,
         "device_conflict",
-        &folder,
+        &key,
         &format!(
-            "A second computer ({caller_is}) is using the credentials of this device while {holder_is} is connected. \
-             It was refused. If the credentials leaked, rotate the token; to move the device to the other computer, release it."
+            "A second client ({caller_is}) is using the credentials of this device while {holder_is} is connected. \
+             It was refused. If the credentials leaked, rotate the token; to move the device to the other client, release it."
         ),
     );
     Err(Status::permission_denied(format!(
-        "device in use: another computer ({holder_is}) is connected as this device. This one sends nothing until \
+        "device in use: another client ({holder_is}) is connected as this device. This one sends nothing until \
          that one goes quiet or the device is released in the web app"
     ))
     .into())
 }
 
-pub(super) fn authenticate(conn: &mut Client, who: &Caller) -> Result<Device, CallError> {
+pub(super) fn authenticate(conn: &mut Client, who: &Caller) -> Result<DeviceRef, CallError> {
     Ok(authenticate_user(conn, who)?.0)
 }
 

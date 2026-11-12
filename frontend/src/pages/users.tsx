@@ -39,6 +39,7 @@ function AddUser() {
   const [role, setRole] = useState<Role>('normal')
   const [password, setPassword] = useState('')
   const create = useApiMutation(() => api.post('/api/users', { name, role, password }), {
+    inline: true,
     invalidate: [['users']],
     onSuccess: () => {
       setOpen(false)
@@ -84,6 +85,7 @@ function ResetPassword({ user }: { user: UserInfo }) {
   const [open, setOpen] = useState(false)
   const [password, setPassword] = useState('')
   const reset = useApiMutation(() => api.patch(`/api/users/${encodeURIComponent(user.name)}`, { password }), {
+    inline: true,
     success: t('New password set for {name}. Their logins have ended.', { name: user.name }),
     onSuccess: () => {
       setOpen(false)
@@ -116,12 +118,10 @@ function Row({ user, me, view }: { user: UserInfo; me: string; view: TableView }
   const t = useT()
   const change = useApiMutation((body: { role?: Role; disabled?: boolean }) => api.patch(`/api/users/${encodeURIComponent(user.name)}`, body), {
     invalidate: [['users']],
-    toastError: true,
   })
   const remove = useApiMutation(() => api.delete(`/api/users/${encodeURIComponent(user.name)}`), {
     invalidate: [['users'], ['devices']],
     success: t('{name} is deleted.', { name: user.name }),
-    toastError: true,
   })
   const [deleting, setDeleting] = useState(false)
   // A role or a lock logs the user out: asked first, with a word more when it is you.
@@ -137,13 +137,13 @@ function Row({ user, me, view }: { user: UserInfo; me: string; view: TableView }
   return (
     <TableRow className={user.disabled ? 'opacity-60' : undefined}>
       <TableCell>
-        <span className="num text-[13px] font-medium">{user.name}</span>
+        <span className="num text-compact font-medium">{user.name}</span>
         {user.name === me && <Badge variant="secondary" className="ms-2">{t('You')}</Badge>}
         {user.disabled && <Badge variant="outline" className="ms-2">{t('Disabled')}</Badge>}
       </TableCell>
       <TableCell><RoleSelect value={user.role} onChange={(role) => role !== user.role && setAsking({ role })} /></TableCell>
       {view.show('devices') && <TableCell className="num hidden text-end sm:table-cell">{user.devices}</TableCell>}
-      {view.show('added') && <TableCell className="num hidden text-[12px] text-muted-foreground md:table-cell">{dateTime(user.created_at)}</TableCell>}
+      {view.show('added') && <TableCell className="num hidden text-xs text-muted-foreground md:table-cell">{dateTime(user.created_at)}</TableCell>}
       <TableCell>
         <div className="flex justify-end gap-2">
           <ResetPassword user={user} />
@@ -157,11 +157,11 @@ function Row({ user, me, view }: { user: UserInfo; me: string; view: TableView }
         <Confirm
           open={deleting}
           title={t('Delete {name}?', { name: user.name })}
-          description={t('Their computers go with the files they sent (the computers keep their own), and so do their tags, albums and favorites. Their folders must be empty and their sources deleted first. This cannot be undone.')}
+          description={t('Their devices go with the files they sent (the devices keep their own), and so do their tags, albums and favorites. Their folders must be empty and their sources deleted first. This cannot be undone.')}
           action={t('Delete user')}
           destructive
-          onCancel={() => setDeleting(false)}
-          onConfirm={() => { setDeleting(false); remove.mutate() }}
+          onClose={() => setDeleting(false)}
+          onConfirm={() => remove.mutate()}
         />
         <Confirm
           open={asking !== null}
@@ -169,8 +169,8 @@ function Row({ user, me, view }: { user: UserInfo; me: string; view: TableView }
           description={description}
           action={question.action}
           destructive={self || asking?.disabled === true}
-          onCancel={() => setAsking(null)}
-          onConfirm={() => { if (asking) change.mutate(asking); setAsking(null) }}
+          onClose={() => setAsking(null)}
+          onConfirm={() => asking && change.mutate(asking)}
         />
       </TableCell>
     </TableRow>

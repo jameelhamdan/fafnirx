@@ -236,7 +236,7 @@ export default function InfoPanel({ id, onClose, embedded }: { id: string; onClo
             {d.lat !== null && d.lon !== null ? <span className="tabular-nums">{d.lat.toFixed(5)}, {d.lon.toFixed(5)}{d.place_edited && <span className="ml-1.5 text-xs text-muted-foreground">{t('(changed)')}</span>}</span> : <span className="text-muted-foreground">{t('No place')}</span>}
           </Row>
           <Row icon={FolderOpen} label={t('File')}>
-            <Link to={`/files${query({ device: d.device, path: parent(d.path), file: d.path })}`} className="hover:underline">{d.device}/{d.path}</Link>
+            <Link to={`/files${query({ folder: d.folder, path: parent(d.path), file: d.path })}`} className="hover:underline">{d.folder}/{d.path}</Link>
             <p className="mt-1 text-xs text-muted-foreground">
               {bytes(d.size)}{d.width && d.height ? ` · ${d.width} × ${d.height}` : ''}{d.duration_ms ? ` · ${clock(d.duration_ms)}` : ''} · {d.mime}{d.codec ? ` · ${d.codec}` : ''}
             </p>

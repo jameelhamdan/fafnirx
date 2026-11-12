@@ -156,7 +156,7 @@ fn a_module_is_for_whoever_can_see_the_file_and_only_when_it_is_set_up() {
         api.json(
             Method::POST,
             "/api/files/delete",
-            json!({"items": [{"device": "admin/videos", "path": "trip/clip.mkv"}]}),
+            json!({"items": [{"folder": "admin/videos", "path": "trip/clip.mkv"}]}),
         )
         .await;
         assert_eq!(

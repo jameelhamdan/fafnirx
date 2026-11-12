@@ -10,7 +10,7 @@ use crate::platform::id::uuids;
 use crate::platform::id::Id;
 use crate::repo::file_state;
 use crate::repo::tags;
-use crate::web::access::Access;
+use crate::web::access::{Access, Ctx};
 use crate::web::act;
 use crate::web::change;
 use crate::web::done;
@@ -18,10 +18,7 @@ use crate::web::run;
 use crate::web::ApiError;
 use crate::web::Done;
 use crate::web::Res;
-use crate::web::Shared;
 use axum::extract::Path;
-use axum::extract::State;
-use axum::Extension;
 use axum::Json;
 use fafnirx_common::unix_now;
 use fafnirx_db::client::GenericClient;
@@ -145,7 +142,7 @@ fn apply(tx: &mut impl GenericClient, who: &Access, id: uuid::Uuid, e: &Edit) ->
     Ok(())
 }
 
-pub async fn edit(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>, Json(e): Json<Edit>) -> Res<Done> {
+pub async fn edit(Ctx { state, who }: Ctx, Path(Id(id)): Path<Id>, Json(e): Json<Edit>) -> Res<Done> {
     change(&state, crate::platform::db::Topic::Library, move |tx| apply(tx, &who, id, &e)).await?;
     done()
 }
@@ -164,7 +161,7 @@ pub struct Changed {
 }
 
 /// The same change to many files at once (what the selection bar does).
-pub async fn bulk(State(state): State<Shared>, Extension(who): Extension<Access>, Json(b): Json<Bulk>) -> Res<Changed> {
+pub async fn bulk(Ctx { state, who }: Ctx, Json(b): Json<Bulk>) -> Res<Changed> {
     who.require_workspace()?;
     if b.ids.is_empty() {
         return Err(ApiError::bad("Nothing selected"));
@@ -202,7 +199,7 @@ pub struct Tag {
     count: i64,
 }
 
-pub async fn tags(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Vec<Tag>> {
+pub async fn tags(Ctx { state, who }: Ctx) -> Res<Vec<Tag>> {
     let out = run(&state, move |c| {
         Ok(tags::counted(c, who.viewer())?
             .into_iter()
@@ -213,7 +210,7 @@ pub async fn tags(State(state): State<Shared>, Extension(who): Extension<Access>
     Ok(Json(out))
 }
 
-pub async fn delete_tag(State(state): State<Shared>, Extension(who): Extension<Access>, Path(Id(id)): Path<Id>) -> Res<Done> {
+pub async fn delete_tag(Ctx { state, who }: Ctx, Path(Id(id)): Path<Id>) -> Res<Done> {
     act(&state, move |c| {
         if !tags::delete(c, who.user_id, id)? {
             return Err(ApiError::not_found("No such tag").into());

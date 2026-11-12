@@ -2,7 +2,7 @@
 -- A job that worked stays as 'done' for a day (`purge_done_jobs`), so the queue can show what happened lately.
 --
 -- The queries that list jobs take the same numbers for who is looking as the library ones (see library.sql): a job names
--- its device in the payload, and is visible when that device is.
+-- its folder in the payload, and is visible when that folder is.
 
 --! enqueue_job
 -- Work that is already waiting or running is not queued a second time.
@@ -69,19 +69,19 @@ DELETE FROM jobs WHERE status = 'done' AND finished_at < :before;
 -- How many jobs there are of each kind in each state (the ones done since `since` count as done).
 SELECT j.kind, j.status, COUNT(*) AS n FROM jobs j LEFT JOIN links l ON l.id = j.link_id
 WHERE (j.status <> 'done' OR j.finished_at >= :since)
-  AND (:all::boolean OR l.user_id = :scope_user::bigint OR (j.payload::jsonb ->> 'device') IN
-       (SELECT d.folder FROM devices d WHERE visible(d, :scope_user::bigint, false)))
+  AND (:all::boolean OR l.user_id = :scope_user::bigint OR (j.payload::jsonb ->> 'folder') IN
+       (SELECT fo.key FROM folders fo WHERE visible(fo, :scope_user::bigint, false)))
 GROUP BY j.kind, j.status;
 
 --! queue_items : (started_at?, finished_at?, error?, note?, link_name?, link_owner?, link_folder?, link_kind?)
 -- What is running, failed and waiting, then what was done lately; at most `limit` jobs. A run of a source or a mirror says which
 -- (`link_*`): a source is a user's own, a mirror is for the administrators.
 SELECT j.id, j.kind, j.status, j.attempts, j.run_after, j.created_at, j.started_at, j.finished_at, j.error, j.note, j.payload,
-       l.name AS link_name, u.name AS link_owner, d.folder AS link_folder, l.kind AS link_kind
-FROM jobs j LEFT JOIN links l ON l.id = j.link_id LEFT JOIN users u ON u.id = l.user_id LEFT JOIN devices d ON d.id = l.folder_id
+       l.name AS link_name, u.name AS link_owner, fo.key AS link_folder, l.kind AS link_kind
+FROM jobs j LEFT JOIN links l ON l.id = j.link_id LEFT JOIN users u ON u.id = l.user_id LEFT JOIN folders fo ON fo.id = l.folder_id
 WHERE (j.status <> 'done' OR j.finished_at >= :since)
-  AND (:all::boolean OR l.user_id = :scope_user::bigint OR (j.payload::jsonb ->> 'device') IN
-       (SELECT d.folder FROM devices d WHERE visible(d, :scope_user::bigint, false)))
+  AND (:all::boolean OR l.user_id = :scope_user::bigint OR (j.payload::jsonb ->> 'folder') IN
+       (SELECT fo.key FROM folders fo WHERE visible(fo, :scope_user::bigint, false)))
 ORDER BY CASE j.status WHEN 'running' THEN 0 WHEN 'failed' THEN 1 WHEN 'queued' THEN 2 ELSE 3 END,
          CASE WHEN j.status = 'done' THEN -j.finished_at ELSE j.seq END
 LIMIT :limit;
@@ -99,8 +99,8 @@ DELETE FROM jobs WHERE status = :status AND (status <> 'queued' OR kind IN ('met
 --! media_to_read (after?)
 -- The live photos and videos to read again: those never read, videos read without details (before the video module was
 -- set up, or when it failed), or all of them. Newest first; `after` is the last file of the batch before, for the next one.
-SELECT f.id, d.folder, f.path, v.root_hash FROM files f
-JOIN devices d ON d.id = f.device_id JOIN versions v ON v.id = f.current_version_id
+SELECT f.id, fo.key AS folder, f.path, v.root_hash FROM files f
+JOIN folders fo ON fo.id = f.folder_id JOIN versions v ON v.id = f.current_version_id
 LEFT JOIN file_meta m ON m.root_hash = v.root_hash
 WHERE f.deleted_at IS NULL AND f.media IS NOT NULL
   AND (:everything::boolean OR m.root_hash IS NULL OR (f.media = 'video' AND m.duration_ms IS NULL))
@@ -111,5 +111,5 @@ ORDER BY f.id DESC LIMIT :limit;
 -- The work not finished for a file (queued, running or failed), to tell someone who opens it that it is still being processed.
 SELECT j.kind, j.status FROM jobs j
 WHERE j.status IN ('queued', 'running', 'failed')
-  AND j.payload::jsonb ->> 'device' = :device AND j.payload::jsonb ->> 'path' = :path;
+  AND j.payload::jsonb ->> 'folder' = :folder AND j.payload::jsonb ->> 'path' = :path;
 

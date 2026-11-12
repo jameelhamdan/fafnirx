@@ -98,7 +98,6 @@ export default function App() {
             <Route path="/devices" element={<Only allow="workspace" role={role}><Devices /></Only>} />
             <Route path="/devices/:name" element={<Only allow="workspace" role={role}><DeviceDetailPage /></Only>} />
             <Route path="/queue" element={<Queue />} />
-            <Route path="/folders" element={<Navigate to="/devices" replace />} />
             <Route path="/sources" element={<Only allow="workspace" role={role}><Sources /></Only>} />
             <Route path="/mirrors" element={<Only allow="admin" role={role}><Mirrors /></Only>} />
             <Route path="/settings" element={<Only allow="admin" role={role}><Settings /></Only>} />

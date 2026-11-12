@@ -1,5 +1,5 @@
 //! Doing something that needs an administrator (root) from a process that is not one. The system-wide client belongs to the
-//! computer, not to a user, so installing it, changing its config and replacing its program take more than a user has.
+//! device, not to a user, so installing it, changing its config and replacing its program take more than a user has.
 
 use anyhow::{Context, Result};
 use std::ffi::{OsStr, OsString};
@@ -50,7 +50,7 @@ fn on_path(program: &str) -> bool {
 /// Whether this process is root (Linux, macOS) or an administrator with its rights (Windows).
 pub fn is_admin() -> bool {
     if cfg!(windows) {
-        // Only an elevated administrator may list the sessions of the computer.
+        // Only an elevated administrator may list the sessions of the device.
         Command::new("net")
             .arg("session")
             .stdin(Stdio::null())
@@ -152,7 +152,7 @@ pub fn rerun(args: &[OsString]) -> Result<i32> {
     let mut cmd = Command::new(&program);
     cmd.args(&line);
     // pkexec clears the environment, so the token of a scripted install goes in on standard input, where `read_token`
-    // looks next (an argument would be visible to the other users of the computer).
+    // looks next (an argument would be visible to the other users of the device).
     let token = std::env::var("FAFNIRX_TOKEN").ok().filter(|t| !t.trim().is_empty() && program == "pkexec");
     let Some(token) = token else {
         return Ok(cmd.status().context("run as root")?.code().unwrap_or(1));

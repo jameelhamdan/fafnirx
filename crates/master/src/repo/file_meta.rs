@@ -50,7 +50,7 @@ pub fn poster_ms(c: &mut impl GenericClient, root: &[u8]) -> Result<Option<i64>,
     Ok(q::poster_ms_of().bind(c, &root).opt()?.and_then(|r| r.poster_ms))
 }
 
-/// Whether the path of a device still holds this content (a job made for it may be out of date).
-pub fn path_holds(c: &mut impl GenericClient, device: &str, path: &str, root: &[u8]) -> Result<bool, Error> {
-    q::file_holds_content().params(c, &q::FileHoldsContentParams { device, path, root }).one()
+/// Whether the path of a folder still holds this content (a job made for it may be out of date).
+pub fn path_holds(c: &mut impl GenericClient, folder: &str, path: &str, root: &[u8]) -> Result<bool, Error> {
+    q::file_holds_content().params(c, &q::FileHoldsContentParams { folder, path, root }).one()
 }

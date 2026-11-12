@@ -3,7 +3,7 @@
 
 use crate::files::ingest::{self, NewVersion};
 use crate::integrations::SourceRun;
-use crate::platform::db::{self, Db, Device};
+use crate::platform::db::{self, Db, FolderRef};
 use crate::platform::store::{hash_file, Store};
 use crate::repo::links::{self, Due};
 use crate::repo::sources;
@@ -33,11 +33,8 @@ impl Item {
 }
 
 /// The folder a source writes into.
-pub fn device_of(link: &Due) -> Result<Device> {
-    Ok(Device {
-        id: link.folder_id.context("the source has no folder")?,
-        name: link.folder.clone().context("the folder of the source is gone")?,
-    })
+pub fn folder_of(link: &Due) -> Result<FolderRef> {
+    Ok(FolderRef { id: link.folder_id.context("the source has no folder")?, key: link.scope.clone() })
 }
 
 /// A complete file in a temporary location.
@@ -128,17 +125,17 @@ fn plan<'a>(items: &'a [Item], known: &Known, live: &HashSet<String>, removed: &
     plan
 }
 
-/// Where a source's files are stored: the master's store, the source and the device (folder) it writes into.
+/// Where a source's files are stored: the master's store, the source and the folder (folder) it writes into.
 struct Target<'a> {
     store: &'a Store,
     source_id: i64,
-    device: &'a Device,
+    folder: &'a FolderRef,
 }
 
 fn commit(conn: &mut postgres::Client, to: &Target, item: &Item, content: Download) -> Result<()> {
-    let Target { store, source_id, device } = *to;
+    let Target { store, source_id, folder } = *to;
     let version = NewVersion {
-        device,
+        folder,
         path: &item.path,
         root: content.root,
         size: content.size,
@@ -151,7 +148,7 @@ fn commit(conn: &mut postgres::Client, to: &Target, item: &Item, content: Downlo
         conn,
         &links::RemoteItem {
             link_id: source_id,
-            device_id: device.id,
+            folder_id: folder.id,
             path: &item.path,
             remote_id: item.id(),
             version: &item.marker,
@@ -181,12 +178,12 @@ impl Rules {
     pub const ALL: Rules = Rules { limit: usize::MAX, removals: true };
 }
 
-/// A source being run: the database and store, the source and the device (folder) it writes into.
+/// A source being run: the database and store, the source and the folder (folder) it writes into.
 pub struct Source {
     pub db: Db,
     pub store: Arc<Store>,
     pub id: i64,
-    pub device: Device,
+    pub folder: FolderRef,
 }
 
 /// Applies a listing: `fetch` downloads one file of it to a temporary place.
@@ -195,14 +192,14 @@ where
     F: Fn(Item) -> Fut,
     Fut: Future<Output = Result<Download>>,
 {
-    let Source { db, store, id: source_id, device } = src;
-    let device_id = device.id;
+    let Source { db, store, id: source_id, folder } = src;
+    let folder_id = folder.id;
     let (known, live, removed): (Known, HashSet<String>, HashSet<String>) = db::with(&db, move |c| {
         let known = known_of(links::items(c, source_id)?.into_iter().map(|i| (i.remote_id, i.path, i.version)));
-        let live = sources::live_paths(c, device_id)?.into_iter().collect();
+        let live = sources::live_paths(c, folder_id)?.into_iter().collect();
         // Deleted in the web app: still in the trash, or already removed by the retention job (then only the
         // source's own record remembers it).
-        let removed = sources::removed_in_web_app(c, device_id, source_id)?.into_iter().collect();
+        let removed = sources::removed_in_web_app(c, folder_id, source_id)?.into_iter().collect();
         Ok((known, live, removed))
     })
     .await?;
@@ -213,16 +210,16 @@ where
     }
     let mut out = SourceRun { skipped, unchanged: plan.unchanged, ..Default::default() };
     let mut failed = |what: &str, e: anyhow::Error| {
-        tracing::warn!("source {}: {what}: {e:#}", device.name);
+        tracing::warn!("source {}: {what}: {e:#}", folder.key);
         out.failed.push(format!("{what}: {e:#}"));
     };
 
     // Removals go first so that a path is free before a new file takes it over.
     for (id, path) in plan.removals {
         let shown = path.clone();
-        let (store, device) = (store.clone(), device.clone());
+        let (store, folder) = (store.clone(), folder.clone());
         let deleted = db::with(&db, move |c| {
-            let changed = ingest::mark_deleted(c, &store, &device, &path, false)?;
+            let changed = ingest::mark_deleted(c, &store, &folder, &path, false)?;
             links::forget_remote(c, source_id, &id)?;
             Ok(changed)
         })
@@ -236,14 +233,14 @@ where
 
     // A file that only got another name is moved, not made again.
     for (item, from) in plan.renames {
-        let (stored, store, device, from) = (item.clone(), store.clone(), device.clone(), from);
+        let (stored, store, folder, from) = (item.clone(), store.clone(), folder.clone(), from);
         let moved = db::with(&db, move |c| {
-            ingest::move_path(c, &store, &device, &from, &stored.path)?;
+            ingest::move_path(c, &store, &folder, &from, &stored.path)?;
             links::remember_remote(
                 c,
                 &links::RemoteItem {
                     link_id: source_id,
-                    device_id: device.id,
+                    folder_id: folder.id,
                     path: &stored.path,
                     remote_id: stored.id(),
                     version: &stored.marker,
@@ -266,12 +263,12 @@ where
         }
         let fetched = async {
             let content = fetch(item.clone()).await?;
-            let (stored, store, device) = (item.clone(), store.clone(), device.clone());
+            let (stored, store, folder) = (item.clone(), store.clone(), folder.clone());
             db::with(&db, move |c| {
-                commit(c, &Target { store: &store, source_id, device: &device }, &stored, content)?;
+                commit(c, &Target { store: &store, source_id, folder: &folder }, &stored, content)?;
                 // Made again under another name (another format): the file it replaces goes.
                 if let Some(old) = leaves {
-                    ingest::mark_deleted(c, &store, &device, &old, false)?;
+                    ingest::mark_deleted(c, &store, &folder, &old, false)?;
                 }
                 Ok(())
             })

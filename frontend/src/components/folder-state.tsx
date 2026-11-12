@@ -6,7 +6,7 @@ import { useT } from '@/lib/i18n'
 import { folderLink } from '@/lib/links'
 import type { FolderState } from '@/lib/types'
 
-/** What computers say about their folders: one line per folder (`folders`: each name links to its files) or per computer. */
+/** What devices say about their folders: one line per folder (`folders`: each name links to its files) or per device. */
 export function FolderStateList({ rows, folders = false }: { rows: FolderState[]; folders?: boolean }) {
   const t = useT()
   const now = useNow()

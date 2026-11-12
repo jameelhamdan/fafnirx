@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { useApiMutation } from '@/lib/mutation'
 import { Images } from 'lucide-react'
 import { useState } from 'react'
@@ -13,7 +13,7 @@ import { useT } from '@/lib/i18n'
 import type { AlbumInfo } from '@/lib/types'
 
 export interface FolderRef {
-  device: string
+  folder: string
   path: string
 }
 
@@ -22,33 +22,32 @@ const same = (a: string, b: string) => a.replace(/^\/+|\/+$/g, '') === b.replace
 /** The album a folder is, if it is one: an album is a folder shown as a collection, with a name of its own. */
 function useFolderAlbum(folder: FolderRef | null): AlbumInfo | undefined {
   const { data } = useQuery({ queryKey: ['albums'], queryFn: () => api.get<AlbumInfo[]>('/api/albums'), enabled: folder !== null })
-  return folder ? data?.find((a) => a.folder.device === folder.device && same(a.folder.path, folder.path)) : undefined
+  return folder ? data?.find((a) => a.folder.folder === folder.folder && same(a.folder.path, folder.path)) : undefined
 }
 
 /**
  * Makes a folder an album, renames the album, or ends it (the files stay). An album is the folder seen as a collection, a show or a
  * trip: it holds whatever is in the folder, so there is nothing to keep up.
  */
+const ALBUM_KEYS = [['albums'], ['album']]
+
 export function FolderAlbum({ folder, onClose }: { folder: FolderRef | null; onClose: () => void }) {
   const t = useT()
-  const client = useQueryClient()
   const album = useFolderAlbum(folder)
   const [typed, setTyped] = useState<string | null>(null)
-  const fallback = (folder?.path || folder?.device || '').split('/').pop() ?? ''
+  const fallback = (folder?.path || folder?.folder || '').split('/').pop() ?? ''
   const name = typed ?? album?.name ?? fallback
   const done = () => {
-    void client.invalidateQueries({ queryKey: ['albums'] })
-    void client.invalidateQueries({ queryKey: ['album'] })
     setTyped(null)
     onClose()
   }
   const save = useApiMutation(() => (album ? api.patch(`/api/albums/${album.id}`, { name }) : api.post('/api/albums', { name: name.trim(), folder })), {
+    invalidate: ALBUM_KEYS,
     onSuccess: () => { toast.success(album ? t('Album saved.') : t('The folder is an album now.')); done() },
-    toastError: true,
   })
   const end = useApiMutation(() => api.delete(`/api/albums/${album?.id ?? ''}`), {
+    invalidate: ALBUM_KEYS,
     onSuccess: () => { toast.success(t('The folder is not an album any more. Its files are as they were.')); done() },
-    toastError: true,
   })
   return (
     <FormDialog

@@ -46,7 +46,7 @@ function VideoPreview({ info }: { info: FileInfo }) {
     return (
       <div className="grid gap-2 rounded-lg border bg-muted/40 p-4 text-center text-sm text-muted-foreground">
         <p>{t('This video cannot be played in the browser. Download it to watch it.')}</p>
-        <Button variant="outline" size="sm" className="mx-auto" asChild><a href={downloadUrl(info.device, info.path)}><Download className="size-4" />{t('Download')}</a></Button>
+        <Button variant="outline" size="sm" className="mx-auto" asChild><a href={downloadUrl(info.folder, info.path)}><Download className="size-4" />{t('Download')}</a></Button>
       </div>
     )
   }
@@ -66,7 +66,7 @@ function VideoPreview({ info }: { info: FileInfo }) {
     )
   }
   // Without the video module the original plays as it is, in the browser's own player.
-  if (!hasViewer) return <NativeVideo src={downloadUrl(info.device, info.path, { inline: true })} poster={file.poster} onFail={() => setFailed(true)} className="w-full rounded-lg max-h-80" />
+  if (!hasViewer) return <NativeVideo src={downloadUrl(info.folder, info.path, { inline: true })} poster={file.poster} onFail={() => setFailed(true)} className="w-full rounded-lg max-h-80" />
   return (
     <ModuleViewer
       file={file}
@@ -78,7 +78,7 @@ function VideoPreview({ info }: { info: FileInfo }) {
 }
 
 function Preview({ info }: { info: FileInfo }) {
-  const url = downloadUrl(info.device, info.path, { inline: true })
+  const url = downloadUrl(info.folder, info.path, { inline: true })
   if (info.mime.startsWith('video/')) return <VideoPreview info={info} />
   if (info.preview) {
     return (
@@ -123,26 +123,24 @@ function LibrarySection({ id }: { id: string }) {
 }
 
 /** Everything about one file: a preview, its metadata, and its history with download and restore. */
-export function DetailsSheet({ device, path, onClose, onDeleted }: { device: string; path: string | null; onClose: () => void; onDeleted: () => void }) {
+export function DetailsSheet({ folder, path, onClose, onDeleted }: { folder: string; path: string | null; onClose: () => void; onDeleted: () => void }) {
   const t = useT()
   const watch = useWatchState()
   const client = useQueryClient()
   const now = useNow()
   const [confirm, setConfirm] = useState<'delete' | number | null>(null)
   const { data: info, error } = useQuery({
-    queryKey: ['info', device, path],
-    queryFn: () => api.get<FileInfo>(`/api/files/info?device=${encodeURIComponent(device)}&path=${encodeURIComponent(path ?? '')}`),
+    queryKey: ['info', folder, path],
+    queryFn: () => api.get<FileInfo>(`/api/files/info?folder=${encodeURIComponent(folder)}&path=${encodeURIComponent(path ?? '')}`),
     enabled: path !== null,
   })
   const refresh = () => Promise.all([client.invalidateQueries({ queryKey: ['info'] }), client.invalidateQueries({ queryKey: ['files'] })])
 
-  const remove = useApiMutation(() => api.post('/api/files/delete', { items: [{ device, path }] }), {
+  const remove = useApiMutation(() => api.post('/api/files/delete', { items: [{ folder, path }] }), {
     onSuccess: () => { toast.success(t('Deleted. It stays recoverable until the retention period ends.')); onDeleted() },
-    toastError: true,
   })
-  const restore = useApiMutation((version: number) => api.post('/api/files/restore', { device, path, version }), {
+  const restore = useApiMutation((version: number) => api.post('/api/files/restore', { folder, path, version }), {
     onSuccess: () => { toast.success(t('Restored as the newest version')); void refresh() },
-    toastError: true,
   })
 
   const exif = info?.exif ? Object.entries(info.exif) : []
@@ -153,7 +151,7 @@ export function DetailsSheet({ device, path, onClose, onDeleted }: { device: str
       <SheetContent className="w-full gap-0 overflow-y-auto sm:max-w-lg">
         <SheetHeader>
           <SheetTitle className="truncate pr-8">{info?.name ?? path?.split('/').pop()}</SheetTitle>
-          <SheetDescription className="truncate">{device}/{path}</SheetDescription>
+          <SheetDescription className="truncate">{folder}/{path}</SheetDescription>
         </SheetHeader>
         {error ? <div className="p-4"><ErrorNote error={error} /></div> : !info ? (
           <div className="space-y-3 p-4"><Skeleton className="h-48" /><Skeleton className="h-24" /></div>
@@ -162,9 +160,9 @@ export function DetailsSheet({ device, path, onClose, onDeleted }: { device: str
             <Preview info={info} />
             <WorkNote work={info.work} />
             <div className="flex flex-wrap gap-2">
-              <Button asChild><a href={downloadUrl(device, info.path)}><Download className="size-4" />{t('Download')}</a></Button>
+              <Button asChild><a href={downloadUrl(folder, info.path)}><Download className="size-4" />{t('Download')}</a></Button>
               {(info.preview || info.mime.startsWith('video/') || info.mime === 'application/pdf') && (
-                <Button variant="outline" asChild><a href={downloadUrl(device, info.path, { inline: true })} target="_blank" rel="noreferrer"><ExternalLink className="size-4" />{t('Open')}</a></Button>
+                <Button variant="outline" asChild><a href={downloadUrl(folder, info.path, { inline: true })} target="_blank" rel="noreferrer"><ExternalLink className="size-4" />{t('Open')}</a></Button>
               )}
               {inLibrary && <Button variant="outline" asChild><Link to={`/watch/${info.id}`} state={watch}><Clapperboard className="size-4" />{t('Open in viewer')}</Link></Button>}
               {!info.deleted_at && <Button variant="outline" onClick={() => setConfirm('delete')}><Trash2 className="size-4" />{t('Delete')}</Button>}
@@ -214,7 +212,7 @@ export function DetailsSheet({ device, path, onClose, onDeleted }: { device: str
                     </div>
                     {v.available ? (
                       <>
-                        <Button variant="ghost" size="icon" className="size-8" asChild aria-label={t('Download this version')}><a href={downloadUrl(device, info.path, { version: v.id })}><Download className="size-4" /></a></Button>
+                        <Button variant="ghost" size="icon" className="size-8" asChild aria-label={t('Download this version')}><a href={downloadUrl(folder, info.path, { version: v.id })}><Download className="size-4" /></a></Button>
                         {(!v.current || info.deleted_at) && (
                           <Button variant="ghost" size="icon" className="size-8" aria-label={t('Restore this version')} onClick={() => setConfirm(v.id)}><RotateCcw className="size-4" /></Button>
                         )}
@@ -246,16 +244,16 @@ export function DetailsSheet({ device, path, onClose, onDeleted }: { device: str
           description={t('It leaves the file list but stays recoverable until the retention period ends.')}
           action={t('Delete')}
           destructive
-          onCancel={() => setConfirm(null)}
-          onConfirm={() => { setConfirm(null); remove.mutate() }}
+          onClose={() => setConfirm(null)}
+          onConfirm={() => remove.mutate()}
         />
         <Confirm
           open={typeof confirm === 'number'}
           title={t('Restore this version?')}
           description={t('It becomes the newest version. The current content stays in the history.')}
           action={t('Restore')}
-          onCancel={() => setConfirm(null)}
-          onConfirm={() => { if (typeof confirm === 'number') restore.mutate(confirm); setConfirm(null) }}
+          onClose={() => setConfirm(null)}
+          onConfirm={() => typeof confirm === 'number' && restore.mutate(confirm)}
         />
       </SheetContent>
     </Sheet>

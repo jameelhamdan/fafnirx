@@ -7,11 +7,11 @@ import type { AlbumInfo, Asset, Scope, TagInfo } from './types'
 import { useT } from '@/lib/i18n'
 
 /** Everything that shows library data: refreshed after any change. */
-const LIBRARY_KEYS = ['timeline', 'asset', 'folder', 'albums', 'album', 'tags', 'trash', 'files', 'info']
+const LIBRARY_KEYS = ['timeline', 'asset', 'folder', 'albums', 'album', 'tags', 'trash', 'files', 'info'].map((key) => [key])
 
 export function useRefreshLibrary() {
   const client = useQueryClient()
-  return () => Promise.all(LIBRARY_KEYS.map((k) => client.invalidateQueries({ queryKey: [k] })))
+  return () => Promise.all(LIBRARY_KEYS.map((queryKey) => client.invalidateQueries({ queryKey })))
 }
 
 export interface Edit {
@@ -31,20 +31,17 @@ export function useLibraryActions() {
   const refresh = useRefreshLibrary()
 
   const edit = useApiMutation(({ id, ...body }: Edit & { id: string }) => api.patch(`/api/library/${id}`, body), {
-    onSuccess: () => void refresh(),
-    toastError: true,
+    invalidate: LIBRARY_KEYS,
   })
   const bulk = useApiMutation((body: { ids: string[]; favorite?: boolean; archived?: boolean; add_tags?: string[] }) =>
       api.post<{ changed: number }>('/api/library/bulk', body), {
-    onSuccess: () => void refresh(),
-    toastError: true,
+    invalidate: LIBRARY_KEYS,
   })
-  const remove = useApiMutation((items: { device: string; path: string }[]) => api.post<{ deleted: number }>('/api/files/delete', { items }), {
+  const remove = useApiMutation((items: { folder: string; path: string }[]) => api.post<{ deleted: number }>('/api/files/delete', { items }), {
     onSuccess: (r) => {
       toast.success(t('{count} deleted. They stay in the trash until the retention period ends.', { count: count(r.deleted) }))
       void refresh()
     },
-    toastError: true,
   })
   return { edit, bulk, remove }
 }
@@ -60,7 +57,7 @@ export function useTags(enabled = true) {
 /** What a view of the timeline is filtered by. */
 export type TimelineFilters = {
   scope: Scope
-  device: string
+  folder: string
   kind: string
   tag: string
 }

@@ -89,13 +89,13 @@ pub enum Source {
 }
 
 /// The picture that stands for a video, if there is one: its own (`<name>-thumb.jpg`), else the poster of its folder or of a
-/// folder above it (`poster.jpg`, `cover.png` ...). Returns its path in the device, its content and which of the two it is.
+/// folder above it (`poster.jpg`, `cover.png` ...). Returns its path in the folder, its content and which of the two it is.
 /// Not finding one is the usual case, and a failed lookup only means the frame of the video is used.
-pub fn find_picture(c: &mut postgres::Client, device: &str, path: &str) -> Option<(String, Vec<u8>, Source)> {
+pub fn find_picture(c: &mut postgres::Client, folder: &str, path: &str) -> Option<(String, Vec<u8>, Source)> {
     if meta::kind(path) != Some("video") {
         return None;
     }
-    let near = files::neighbours(c, device, path).ok()?;
+    let near = files::neighbours(c, folder, path).ok()?;
     if let Some((art, root)) = picture(path, &near) {
         return Some((art.clone(), root.clone(), Source::Own));
     }
@@ -105,7 +105,7 @@ pub fn find_picture(c: &mut postgres::Client, device: &str, path: &str) -> Optio
         } else {
             // The neighbours of a file named in that folder are the files directly in it.
             let probe = if dir.is_empty() { "x".to_string() } else { format!("{dir}/x") };
-            let up = files::neighbours(c, device, &probe).ok()?;
+            let up = files::neighbours(c, folder, &probe).ok()?;
             folder_picture(&dir, &up).cloned()
         };
         if let Some((art, root)) = found {
@@ -116,9 +116,9 @@ pub fn find_picture(c: &mut postgres::Client, device: &str, path: &str) -> Optio
 }
 
 /// [`find_picture`] with the picture's place in the file store.
-pub fn lookup(c: &mut postgres::Client, store: &Store, device: &str, path: &str) -> Option<(PathBuf, Vec<u8>)> {
-    let (art, root, _) = find_picture(c, device, path)?;
-    Some((store.live_path(device, &art).ok()?, root))
+pub fn lookup(c: &mut postgres::Client, store: &Store, folder: &str, path: &str) -> Option<(PathBuf, Vec<u8>)> {
+    let (art, root, _) = find_picture(c, folder, path)?;
+    Some((store.live_path(folder, &art).ok()?, root))
 }
 
 /// The .nfo that describes a video.

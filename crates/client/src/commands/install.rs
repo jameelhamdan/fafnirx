@@ -1,5 +1,5 @@
-//! `fafnirx install` and `fafnirx uninstall`: everything that sets the client up on a computer or takes it away, in one place. The
-//! install scripts, the Windows setup, the Debian package and Homebrew only get the program onto the computer (or download it) and
+//! `fafnirx install` and `fafnirx uninstall`: everything that sets the client up on a device or takes it away, in one place. The
+//! install scripts, the Windows setup, the Debian package and Homebrew only get the program onto the device (or download it) and
 //! call these.
 
 use crate::config::{self, normalize_server};
@@ -11,8 +11,8 @@ use std::process::Command;
 
 /// What `fafnirx install` was asked.
 pub struct Install {
-    /// The master: `nas.lan`, `nas.lan:7443` or a URL. Enrolls this computer (the token is asked for, or read from
-    /// `FAFNIRX_TOKEN` or standard input); without it an already enrolled computer is only brought up to date.
+    /// The master: `nas.lan`, `nas.lan:7443` or a URL. Enrolls this device (the token is asked for, or read from
+    /// `FAFNIRX_TOKEN` or standard input); without it an already enrolled device is only brought up to date.
     pub server: Option<String>,
     /// Folders to collect.
     pub folders: Vec<PathBuf>,
@@ -105,7 +105,7 @@ pub async fn install(config_path: PathBuf, o: Install) -> Result<()> {
             }
         }
         None if !o.dry_run && !config_path.exists() => {
-            println!("the program is installed; to connect this computer to a master run: fafnirx install --server <address>");
+            println!("the program is installed; to connect this device to a master run: fafnirx install --server <address>");
             return Ok(());
         }
         None => {}
@@ -116,7 +116,7 @@ pub async fn install(config_path: PathBuf, o: Install) -> Result<()> {
         } else {
             super::folder_add(
                 config_path.clone(),
-                super::FolderAdd { paths: vec![folder.clone()], target: "computer".into(), name: None, create: false, mode: None },
+                super::FolderAdd { paths: vec![folder.clone()], target: "device".into(), name: None, create: false, mode: None },
             )
             .await?;
         }
@@ -156,7 +156,7 @@ pub fn uninstall(config_path: &Path, purge_data: bool, keep_binary: bool, dry: b
     if purge_data {
         purge_files(config_path, cfg.as_ref(), dry)?;
     }
-    println!("what this computer sent to the master stays there");
+    println!("what this device sent to the master stays there");
     Ok(())
 }
 

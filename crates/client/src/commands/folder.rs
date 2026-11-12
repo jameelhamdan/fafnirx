@@ -80,7 +80,7 @@ pub async fn create_folder(config_path: PathBuf, name: String) -> Result<()> {
 }
 
 /// Attaches a local folder to a folder on the master (a synced folder, one of yours, or `master:<path>`): what is in the folder
-/// goes to the master and, unless the mode is `up`, what the other computers put there comes here. With `create` the synced
+/// goes to the master and, unless the mode is `up`, what the other devices put there comes here. With `create` the synced
 /// folder is made first when it does not exist.
 pub async fn sync_folder(config_path: PathBuf, name: String, dir: PathBuf, create: bool, mode: Mode) -> Result<()> {
     mode.check_available()?;
@@ -111,7 +111,7 @@ pub async fn sync_folder(config_path: PathBuf, name: String, dir: PathBuf, creat
     Ok(())
 }
 
-/// The name and the saved state of the synced folder `name` of this computer.
+/// The name and the saved state of the synced folder `name` of this device.
 fn attached_state(config_path: &Path, name: &str) -> Result<(String, state::State)> {
     let cfg = Config::load(config_path)?;
     let synced = cfg.attached_named(name)?;
@@ -120,7 +120,7 @@ fn attached_state(config_path: &Path, name: &str) -> Result<(String, state::Stat
 }
 
 /// Keeps the files of a synced folder whose deletion on the master is held back, instead of deleting them here. They are sent
-/// again at the next cycle. Only what other computers deleted is ever held: deletions in the web app are applied at once.
+/// again at the next cycle. Only what other devices deleted is ever held: deletions in the web app are applied at once.
 pub fn keep_held(config_path: &Path, name: &str) -> Result<()> {
     let (folder, state) = attached_state(config_path, name)?;
     let Some((files, _)) = state.pull_hold()? else {
@@ -137,7 +137,7 @@ pub fn keep_held(config_path: &Path, name: &str) -> Result<()> {
 }
 
 /// Shows the mode of a synced folder, or sets it (and with `ask` how long a file waits for an answer).
-/// Sets how a synced folder settles conflicts, after checking that this computer can ask (a mode that asks needs a screen). Returns
+/// Sets how a synced folder settles conflicts, after checking that this device can ask (a mode that asks needs a screen). Returns
 /// the name of the folder in full. The command line and the service (for a user's tray) both call this.
 pub fn change_mode(config_path: &Path, name: &str, mode: Mode, ask_timeout_hours: Option<u64>) -> Result<String> {
     mode.check_available()?;
@@ -175,25 +175,26 @@ pub fn resolve_waiting(config_path: &Path, name: &str, keep: &str, path: Option<
 pub struct FolderAdd {
     pub paths: Vec<PathBuf>,
     pub target: String,
-    /// The name in this computer's own namespace (target "computer" only).
+    /// The name in this device's own namespace (target "device" only).
     pub name: Option<String>,
     /// Make the folder on the master if there is none (a folder of the user).
     pub create: bool,
     pub mode: Option<Mode>,
 }
 
-/// Adds a folder of this computer with a target: `computer` (this computer's own namespace on the master, upload only), a master
+/// Adds a folder of this device with a target: `device` (this device's own namespace on the master, upload only), a master
 /// folder (`master:<path>`), or a folder of the user (`<owner>/<name>`, or the name of one of their own).
 pub async fn folder_add(config_path: PathBuf, add: FolderAdd) -> Result<()> {
     let FolderAdd { paths, target, name, create, mode } = add;
-    if target == "computer" {
+    // `computer` is the old spelling of `device`, still accepted.
+    if target == "device" || target == "computer" {
         if mode.is_some_and(|m| m != Mode::Up) {
-            bail!("a folder collected into this computer's own namespace is uploaded only; pick a master or user folder as the target to sync both ways");
+            bail!("a folder collected into this device's own namespace is uploaded only; pick a master or user folder as the target to sync both ways");
         }
         return super::add_folders(&config_path, &paths, name.as_deref());
     }
     if name.is_some() {
-        bail!("--name only applies to the target \"computer\"; the target names the folder it is synced with");
+        bail!("--name only applies to the target \"device\"; the target names the folder it is synced with");
     }
     let [path] = <[PathBuf; 1]>::try_from(paths).map_err(|_| anyhow::anyhow!("one folder at a time can be synced with \"{target}\""))?;
     sync_folder(config_path, target, path, create, mode.unwrap_or_default()).await

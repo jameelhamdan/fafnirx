@@ -1,19 +1,17 @@
-//! The file browser: folders and files of the devices a user can reach (and the master files), search, details, history,
-//! delete and restore. A device is named by its folder (`<user>/<device>`; `master:<name>` for a master folder).
+//! The file browser: folders and files of the folders a user can reach (and the master files), search, details, history,
+//! delete and restore. A folder is named by its folder (`<user>/<folder>`; `master:<name>` for a master folder).
 
-use crate::devices::api::device_summaries;
-use crate::files::ingest;
 use crate::library::meta;
 use crate::monitoring::api::Recent;
-use crate::platform::db::{self, Device};
-use crate::repo::devices::{self, DeviceKind};
+use crate::platform::db::{self, FolderRef};
+use crate::repo::folders::{self, FolderKind};
 use crate::repo::listing::{self, Listed, Page, Sort};
 use crate::repo::{events, files, settings};
-use crate::web::access::Access;
+use crate::web::access::{Access, Ctx};
 use crate::web::input;
-use crate::web::{act, run, ApiError, Done, Res, Shared};
-use axum::extract::{Query, State};
-use axum::{Extension, Json};
+use crate::web::{run, ApiError, Res};
+use axum::extract::Query;
+use axum::Json;
 use fafnirx_common::{base_name, clean_remote_path, secs_of_ns, DAY_SECS};
 use fafnirx_db::queries as sql;
 use postgres::Client;
@@ -37,7 +35,7 @@ fn extensions(kind: &str) -> Option<&'static [&'static str]> {
 
 #[derive(Deserialize)]
 pub struct ListQuery {
-    device: Option<String>,
+    folder: Option<String>,
     #[serde(default)]
     path: String,
     deleted: Option<u8>,
@@ -54,20 +52,20 @@ pub struct ListQuery {
 #[derive(Serialize, Default)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Entry {
-    /// device, dir or file
-    #[cfg_attr(test, ts(type = "'device' | 'dir' | 'file'"))]
+    /// folder, dir or file
+    #[cfg_attr(test, ts(type = "'folder' | 'dir' | 'file'"))]
     kind: &'static str,
     /// For a file: its id in the library (the address of its viewer, favorites and albums).
     id: Option<crate::platform::id::Id>,
     name: String,
-    device: String,
+    folder: String,
     path: String,
     size: Option<i64>,
-    /// Modification time on the source device, unix seconds.
+    /// Modification time on the source folder, unix seconds.
     mtime: Option<i64>,
     /// When the master recorded the current version.
     changed: Option<i64>,
-    /// Number of files, for folders and devices.
+    /// Number of files, for folders and directories.
     files: Option<i64>,
     versions: Option<i64>,
     deleted_at: Option<i64>,
@@ -77,22 +75,22 @@ pub struct Entry {
     width: Option<i64>,
     height: Option<i64>,
     taken_at: Option<i64>,
-    /// For a device entry: master, device or local.
-    #[cfg_attr(test, ts(type = "'device' | 'local' | 'master' | null"))]
-    device_kind: Option<DeviceKind>,
+    /// For a folder entry: what the folder is.
+    #[cfg_attr(test, ts(type = "'backup' | 'user' | 'master' | null"))]
+    folder_kind: Option<FolderKind>,
     /// For a photo or video: its details have not been read yet, so it is still being processed.
     processing: bool,
-    /// For a device entry: whether the web app may add, change or delete files there.
+    /// For a folder entry: whether the web app may add, change or delete files there.
     writable: bool,
 }
 
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Listing {
-    device: Option<String>,
-    /// What the device is (master, device or local) and whether the web app may change its files.
-    #[cfg_attr(test, ts(type = "'device' | 'local' | 'master' | null"))]
-    device_kind: Option<DeviceKind>,
+    folder: Option<String>,
+    /// What the folder is and whether the web app may change its files.
+    #[cfg_attr(test, ts(type = "'backup' | 'user' | 'master' | null"))]
+    folder_kind: Option<FolderKind>,
     writable: bool,
     path: String,
     entries: Vec<Entry>,
@@ -102,18 +100,18 @@ pub struct Listing {
     retention_days: i64,
 }
 
-/// The device with this folder, if `who` may look at it: a device someone else owns does not exist for them.
-pub fn find_device(c: &mut Client, who: &Access, folder: &str) -> anyhow::Result<Device> {
+/// The folder with this key, if `who` may look at it: a folder someone else owns does not exist for them.
+pub fn find_folder(c: &mut Client, who: &Access, folder: &str) -> anyhow::Result<FolderRef> {
     who.check_see(folder)?;
-    devices::by_folder(c, folder)?
-        .map(|(id, name)| Device { id, name })
-        .ok_or_else(|| ApiError::not_found("No such device").into())
+    folders::id_of(c, folder)?
+        .map(|id| FolderRef { id, key: folder.to_string() })
+        .ok_or_else(|| ApiError::not_found("No such folder").into())
 }
 
 /// The same, for a change: the user must be allowed to write there too.
-pub fn find_device_to_change(c: &mut Client, who: &Access, folder: &str) -> anyhow::Result<Device> {
+pub fn find_folder_to_change(c: &mut Client, who: &Access, folder: &str) -> anyhow::Result<FolderRef> {
     who.check_write(folder)?;
-    find_device(c, who, folder)
+    find_folder(c, who, folder)
 }
 
 /// What a request for a listing asks for, once it is checked.
@@ -169,26 +167,27 @@ impl ListQuery {
     }
 }
 
-/// The top level: one folder per device (the master folders, an administrator's own and the others').
+/// The top level: every folder the user can see (the master folders, their own, those shared with them and, for an administrator, the others').
 fn top_level(c: &mut Client, who: &Access, path: String, retention_days: i64) -> anyhow::Result<Listing> {
-    let entries: Vec<Entry> = device_summaries(c, who, None)?
+    let (all, user) = who.scope_args();
+    let entries: Vec<Entry> = folders::visible(c, all, user)?
         .into_iter()
-        .map(|d| Entry {
-            kind: "device",
-            // Named by its location (`user/name`), as it is when opened.
-            name: d.folder.clone(),
-            writable: d.kind.editable() && who.can_write(&d.folder),
-            device_kind: Some(d.kind),
-            device: d.folder,
-            files: Some(d.files),
-            size: Some(d.bytes),
+        .map(|(key, kind, files, bytes)| Entry {
+            kind: "folder",
+            // Named by its key (`user/name`), as it is when opened.
+            name: key.clone(),
+            writable: kind.editable() && who.can_write(&key),
+            folder_kind: Some(kind),
+            folder: key,
+            files: Some(files),
+            size: Some(bytes),
             ..Default::default()
         })
         .collect();
     let total = entries.len() as i64;
     Ok(Listing {
-        device: None,
-        device_kind: None,
+        folder: None,
+        folder_kind: None,
         writable: false,
         path,
         entries,
@@ -199,13 +198,13 @@ fn top_level(c: &mut Client, who: &Access, path: String, retention_days: i64) ->
 }
 
 /// A file of a listing, named relative to the folder shown (`strip` bytes of its path are the folder).
-fn file_entry(f: Listed, strip: usize, device: &str, retention_days: i64) -> Entry {
+fn file_entry(f: Listed, strip: usize, folder: &str, retention_days: i64) -> Entry {
     let full = f.path;
     Entry {
         kind: "file",
         id: Some(crate::platform::id::Id(f.id)),
         name: full[strip..].to_string(),
-        device: device.to_string(),
+        folder: folder.to_string(),
         mtime: Some(secs_of_ns(f.mtime)),
         size: Some(f.size),
         changed: Some(f.created_at),
@@ -223,17 +222,17 @@ fn file_entry(f: Listed, strip: usize, device: &str, retention_days: i64) -> Ent
     }
 }
 
-/// The inside of a device: either what a search or a type filter finds below the folder, or the folder's own folders
+/// The inside of a folder: either what a search or a type filter finds below the folder, or the folder's own folders
 /// (on the first page only) and files.
-fn inside_device(c: &mut Client, who: &Access, device_name: String, view: View, retention_days: i64) -> anyhow::Result<Listing> {
-    let dev = find_device(c, who, &device_name)?;
-    let kind = devices::kind_of(c, dev.id)?;
-    let writable = kind.editable() && who.can_write(&device_name);
+fn inside_folder(c: &mut Client, who: &Access, key: String, view: View, retention_days: i64) -> anyhow::Result<Listing> {
+    let folder = find_folder(c, who, &key)?;
+    let kind = folders::kind_of(c, folder.id)?;
+    let writable = kind.editable() && who.can_write(&key);
     // SQL counts characters, not bytes.
     let names_start = view.prefix.chars().count() as i32 + 1;
     let below = db::like_prefix(&view.prefix);
     let page = Page {
-        device_id: dev.id,
+        folder_id: folder.id,
         below: &below,
         include_deleted: view.include_deleted,
         sort: view.sort,
@@ -247,11 +246,11 @@ fn inside_device(c: &mut Client, who: &Access, device_name: String, view: View, 
         listing::search(c, &page, view.search.as_deref(), view.type_regex.as_deref())?
     } else {
         if view.offset == 0 {
-            let folders = files::folders_below(c, dev.id, &below, view.include_deleted, names_start)?;
+            let folders = files::folders_below(c, folder.id, &below, view.include_deleted, names_start)?;
             entries.extend(folders.into_iter().map(|f| Entry {
                 kind: "dir",
                 path: format!("{}{}", view.prefix, f.name),
-                device: device_name.clone(),
+                folder: key.clone(),
                 files: Some(f.files),
                 size: Some(f.bytes),
                 changed: f.changed,
@@ -264,10 +263,10 @@ fn inside_device(c: &mut Client, who: &Access, device_name: String, view: View, 
     };
     let total = found.total;
     let strip = view.prefix.len();
-    entries.extend(found.files.into_iter().map(|f| file_entry(f, strip, &device_name, retention_days)));
+    entries.extend(found.files.into_iter().map(|f| file_entry(f, strip, &key, retention_days)));
     Ok(Listing {
-        device: Some(device_name),
-        device_kind: Some(kind),
+        folder: Some(key),
+        folder_kind: Some(kind),
         writable,
         path: view.path,
         entries,
@@ -277,14 +276,14 @@ fn inside_device(c: &mut Client, who: &Access, device_name: String, view: View, 
     })
 }
 
-pub async fn list(State(state): State<Shared>, Extension(who): Extension<Access>, Query(q): Query<ListQuery>) -> Res<Listing> {
+pub async fn list(Ctx { state, who }: Ctx, Query(q): Query<ListQuery>) -> Res<Listing> {
     let view = q.checked()?;
-    let device = q.device;
+    let folder = q.folder;
     let listing = run(&state, move |c| {
-        let retention_days = settings::get_i64(c, "retention_days", 30);
-        match device {
+        let retention_days = settings::retention_days(c);
+        match folder {
             None => top_level(c, &who, view.path, retention_days),
-            Some(device) => inside_device(c, &who, device, view, retention_days),
+            Some(folder) => inside_folder(c, &who, folder, view, retention_days),
         }
     })
     .await?;
@@ -293,7 +292,7 @@ pub async fn list(State(state): State<Shared>, Extension(who): Extension<Access>
 
 #[derive(Deserialize)]
 pub struct FileRef {
-    pub device: String,
+    pub folder: String,
     pub path: String,
 }
 
@@ -316,7 +315,7 @@ pub struct VersionInfo {
 pub struct Info {
     /// The id of the file, which is also its address for the modules (`/api/m/<module>/<id>/...`).
     id: crate::platform::id::Id,
-    device: String,
+    folder: String,
     path: String,
     name: String,
     deleted_at: Option<i64>,
@@ -343,29 +342,29 @@ pub struct Info {
 /// otherwise the folder of the version.
 pub fn version_file(store: &crate::platform::store::Store, v: &VersionAt) -> anyhow::Result<PathBuf> {
     if Some(v.version) == v.current && !v.deleted {
-        store.live_path(v.device, v.path)
+        store.live_path(v.folder, v.path)
     } else {
-        store.version_path(v.version, v.device, v.path)
+        store.version_path(v.version, v.folder, v.path)
     }
 }
 
 /// A version of a file, and whether it is the live one: the current version of a path that is not deleted.
 pub struct VersionAt<'a> {
-    pub device: &'a str,
+    pub folder: &'a str,
     pub path: &'a str,
     pub version: i64,
     pub current: Option<i64>,
     pub deleted: bool,
 }
 
-pub async fn info(State(state): State<Shared>, Extension(who): Extension<Access>, Query(r): Query<FileRef>) -> Res<Info> {
+pub async fn info(Ctx { state, who }: Ctx, Query(r): Query<FileRef>) -> Res<Info> {
     let store = state.store.clone();
     let out = run(&state, move |c| {
-        let dev = find_device(c, &who, &r.device)?;
+        let folder = find_folder(c, &who, &r.folder)?;
         let path = clean_remote_path(&r.path).map_err(|e| ApiError::bad(e.to_string()))?;
-        let retention = settings::get_i64(c, "retention_days", 30);
+        let retention = settings::retention_days(c);
         let row = sql::files::file_info()
-            .bind(c, &dev.id, &path)
+            .bind(c, &folder.id, &path)
             .opt()?
             .ok_or_else(|| ApiError::not_found("No such file"))?;
         let (file_id, current, deleted_at) = (row.id, row.current_version_id, row.deleted_at);
@@ -374,7 +373,7 @@ pub async fn info(State(state): State<Shared>, Extension(who): Extension<Access>
             .map(|v| {
                 let available = version_file(
                     &store,
-                    &VersionAt { device: &dev.name, path: &path, version: v.id, current, deleted: deleted_at.is_some() },
+                    &VersionAt { folder: &folder.key, path: &path, version: v.id, current, deleted: deleted_at.is_some() },
                 )
                 .is_ok_and(|p| p.is_file());
                 VersionInfo {
@@ -389,16 +388,16 @@ pub async fn info(State(state): State<Shared>, Extension(who): Extension<Access>
                 }
             })
             .collect();
-        let events = events::of_file(c, dev.id, &path, 30)?.into_iter().map(Recent::from).collect();
+        let events = events::of_file(c, folder.id, &path, 30)?.into_iter().map(Recent::from).collect();
         let work = if deleted_at.is_none() && meta::wants(&path) {
-            crate::library::photos::work_state(c, &dev.name, &path, row.mime.is_none())?
+            crate::library::photos::work_state(c, &folder.key, &path, row.mime.is_none())?
         } else {
             None
         };
         let exif = row.exif;
         Ok(Info {
             id: crate::platform::id::Id(file_id),
-            device: dev.name,
+            folder: folder.key,
             name: base_name(&path).to_string(),
             deleted_at,
             purge_at: deleted_at.map(|t| t + retention * DAY_SECS),
@@ -420,180 +419,4 @@ pub async fn info(State(state): State<Shared>, Extension(who): Extension<Access>
     })
     .await?;
     Ok(Json(out))
-}
-
-#[derive(Deserialize)]
-pub struct Items {
-    items: Vec<FileRef>,
-}
-
-#[derive(Serialize)]
-pub struct Removed {
-    deleted: usize,
-}
-
-/// The live paths a selection stands for: a file, or every file under a folder.
-pub fn expand(c: &mut Client, dev: &Device, path: &str, include_deleted: bool) -> anyhow::Result<Vec<String>> {
-    let path = path.trim_matches('/');
-    Ok(files::expand(c, dev.id, path, include_deleted)?)
-}
-
-#[derive(Serialize)]
-pub struct Rescan {
-    /// False when a comparison was already running.
-    started: bool,
-}
-
-/// Compares the file store with the database now instead of at the next round (administrators). Files put on the disk
-/// by hand, or over a network share, are picked up either way; this is for when one does not want to wait.
-pub async fn rescan(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Rescan> {
-    who.require_admin()?;
-    Ok(Json(Rescan { started: crate::files::livetree::rescan(state.db.clone(), state.store.clone()) }))
-}
-
-pub async fn remove(State(state): State<Shared>, Extension(who): Extension<Access>, Json(body): Json<Items>) -> Res<Removed> {
-    let store = state.store.clone();
-    let deleted = run(&state, move |c| {
-        let mut deleted = 0;
-        for item in &body.items {
-            let dev = find_device_to_change(c, &who, &item.device)?;
-            for path in expand(c, &dev, &item.path, false)? {
-                if ingest::mark_deleted(c, &store, &dev, &path, true)? {
-                    deleted += 1;
-                }
-            }
-        }
-        db::notify(c, db::Topic::Files, "")?;
-        Ok(deleted)
-    })
-    .await?;
-    Ok(Json(Removed { deleted }))
-}
-
-#[derive(Deserialize)]
-pub struct Restore {
-    device: String,
-    path: String,
-    version: i64,
-}
-
-pub async fn restore(State(state): State<Shared>, Extension(who): Extension<Access>, Json(r): Json<Restore>) -> Res<Done> {
-    let store = state.store.clone();
-    act(&state, move |c| {
-        let dev = find_device_to_change(c, &who, &r.device)?;
-        let path = clean_remote_path(&r.path).map_err(|e| ApiError::bad(e.to_string()))?;
-        let row = sql::files::version_to_restore()
-            .bind(c, &dev.id, &path, &r.version)
-            .opt()?
-            .ok_or_else(|| ApiError::not_found("No such version"))?;
-        let (current, deleted_at) = (row.current_version_id, row.deleted_at);
-        if current == Some(r.version) && deleted_at.is_none() {
-            return Err(ApiError::conflict("That is already the current version").into());
-        }
-        // What a device or a source sends is theirs to change: here it can be brought back from the trash, not edited.
-        let kind = devices::kind_of(c, dev.id)?;
-        if !kind.editable() && deleted_at.is_none() {
-            return Err(ApiError::conflict("Files sent by a device cannot be changed here. Download the version instead.").into());
-        }
-        let from = version_file(
-            &store,
-            &VersionAt { device: &dev.name, path: &path, version: r.version, current, deleted: deleted_at.is_some() },
-        )?;
-        if !from.is_file() {
-            return Err(ApiError::not_found("The content of that version is no longer stored").into());
-        }
-        let staged = store.temp_path();
-        std::fs::copy(&from, &staged)?;
-        let root = row.root_hash;
-        ingest::commit_version(
-            c,
-            &store,
-            &staged,
-            &ingest::NewVersion {
-                device: &dev,
-                path: &path,
-                root: root.try_into().map_err(|_| anyhow::anyhow!("stored hash has the wrong length"))?,
-                size: row.size as u64,
-                mtime: row.mtime,
-                mode: row.mode as u32,
-                renamed_from: None,
-            },
-        )?;
-        Ok(())
-    })
-    .await
-}
-
-#[derive(Deserialize)]
-pub struct MoveBody {
-    device: String,
-    /// A file or a folder of the device.
-    from: String,
-    /// Its new path on the same device.
-    to: String,
-}
-
-#[derive(Serialize)]
-pub struct Moved {
-    moved: usize,
-}
-
-/// Renames or moves a file, or a folder with everything below it, within a device the master owns: a local folder or the
-/// master files. What a device or a source sent is theirs to move, so it answers 409 there.
-pub async fn move_files(State(state): State<Shared>, Extension(who): Extension<Access>, Json(b): Json<MoveBody>) -> Res<Moved> {
-    let store = state.store.clone();
-    let moved = run(&state, move |c| {
-        let dev = find_device_to_change(c, &who, &b.device)?;
-        if !devices::kind_of(c, dev.id)?.editable() {
-            return Err(ApiError::conflict("Files sent by a device or a source cannot be moved here").into());
-        }
-        move_tree(c, &store, &dev, &input::path_inside(&b.from)?, &input::path_inside(&b.to)?)
-    })
-    .await?;
-    Ok(Json(Moved { moved }))
-}
-
-/// Moves a file, or a folder with everything below it, to `to` within a device (both cleaned paths); returns how many files
-/// moved. Nothing moves if something is in the way. The caller checked that the device is changeable.
-pub fn move_tree(c: &mut Client, store: &crate::platform::store::Store, dev: &Device, from: &str, to: &str) -> anyhow::Result<usize> {
-    if to == from || to.starts_with(&format!("{from}/")) {
-        return Err(ApiError::bad("Choose a different place, not inside the folder itself").into());
-    }
-    let paths = expand(c, dev, from, false)?;
-    if paths.is_empty() {
-        return Err(ApiError::not_found("No such file or folder").into());
-    }
-    let targets: Vec<(String, String)> = paths.into_iter().map(|p| (format!("{to}{}", &p[from.len()..]), p)).collect();
-    // Every new path, and every folder above one, must be free: in the database and on the disk.
-    let mut wanted: Vec<String> = targets
-        .iter()
-        .flat_map(|(new, _)| new.match_indices('/').map(|(i, _)| new[..i].to_string()).chain([new.clone()]))
-        .collect();
-    wanted.sort_unstable();
-    wanted.dedup();
-    if let Some(taken) = files::first_live_of(c, dev.id, &wanted)? {
-        return Err(ApiError::conflict(format!("{taken} exists already")).into());
-    }
-    for (new, _) in &targets {
-        if std::fs::symlink_metadata(store.live_path(&dev.name, new)?).is_ok() {
-            return Err(ApiError::conflict(format!("{new} exists already")).into());
-        }
-    }
-    let mut moved: Vec<&(String, String)> = Vec::new();
-    for pair in &targets {
-        let (new, old) = pair;
-        if let Err(e) = ingest::move_path(c, store, dev, old, new) {
-            // Nothing half done: what moved goes back where it was.
-            for (new, old) in moved.into_iter().rev() {
-                if let Err(back) = ingest::move_path(c, store, dev, new, old) {
-                    tracing::error!("could not move {new} back to {old} in {}: {back:#}", dev.name);
-                }
-            }
-            db::notify(c, db::Topic::Files, &dev.name)?;
-            return Err(e);
-        }
-        moved.push(pair);
-    }
-    db::notify(c, db::Topic::Files, &dev.name)?;
-    Ok(targets.len())
 }

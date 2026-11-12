@@ -48,7 +48,7 @@ FAFNIRX_IMAGE=jameelh99/fafnirx:<version>   # pin to upgrade on purpose
 | `FAFNIRX_TRUSTED_PROXY` | none | Proxies whose `X-Forwarded-For` is believed ([proxy](deployment.md#reverse-proxy-with-caddy)) |
 | `RUST_LOG` | `info` | Log level |
 | Tuning: `FAFNIRX_DB_POOL`, `FAFNIRX_JOB_WORKERS`, `FAFNIRX_STREAMS`, `FAFNIRX_TICK_SECS`, `FAFNIRX_INSTANCE_LEASE_SECS` | | Rarely needed: [sizing](deployment.md#sizing-and-tuning) |
-| Compose: `FAFNIRX_DB_PASSWORD`, `*_DIR`, `FAFNIRX_UID/GID`, `FAFNIRX_IMAGE`; with proxy `FAFNIRX_WEB_ADDRESS`, `FAFNIRX_DEVICE_ADDRESS`, `FAFNIRX_HTTP_PORT`, `FAFNIRX_HTTPS_PORT`, `FAFNIRX_DEVICE_PORT`, `FAFNIRX_SUBNET` | | Compose only |
+| Compose: `FAFNIRX_DB_PASSWORD`, `*_DIR`, `FAFNIRX_UID/GID`, `FAFNIRX_IMAGE`, `FAFNIRX_VIDEO_IMAGE`, `FAFNIRX_FETCH_IMAGE`; with proxy `FAFNIRX_WEB_ADDRESS`, `FAFNIRX_DEVICE_ADDRESS`, `FAFNIRX_HTTP_PORT`, `FAFNIRX_HTTPS_PORT`, `FAFNIRX_DEVICE_PORT`, `FAFNIRX_SUBNET` | | Compose only |
 
 ## 2. A client
 
@@ -57,8 +57,8 @@ FAFNIRX_IMAGE=jameelh99/fafnirx:<version>   # pin to upgrade on purpose
 First, in the web app: **Devices → Add device**. The name (`a-z 0-9 . _ -`) becomes the folder `files/users/<you>/<name>/` and cannot
 change; the token is shown **once**. Administrators can add devices for other users.
 
-Then, on the computer (each downloads the program from the [latest release](https://github.com/jameelhamdan/fafnirx/releases/latest),
-checks its `.sha256` and runs `fafnirx install`, which asks for the token, or reads `FAFNIRX_TOKEN`):
+Then, on the device (each downloads the program from the [latest release](https://github.com/jameelhamdan/fafnirx/releases/latest),
+checks its `.sha256` and runs `fafnirx install`, which asks for the token, or reads `FAFNIRX_TOKEN`; `FAFNIRX_VERSION=<version>` picks another release than the latest):
 
 | System | Command |
 |---|---|
@@ -74,8 +74,8 @@ checks its `.sha256` and runs `fafnirx install`, which asks for the token, or re
 
 **What `fafnirx install` does**, in this order, and the same everywhere: copies the program to `/usr/local/bin/fafnirx` (Linux, macOS; owned
 by root, because the service runs as root; `FAFNIRX_ALLOW_UNPROTECTED_EXE=1` lifts the check for a build on the machine it was made on) or `%LocalAppData%\Programs\fafnirx` (Windows; and adds it to your `PATH`, unless
-`--no-path`); enrolls this computer with the master; collects the folders; installs the service and the tray (below) and starts them;
-removes older copies of `fafnirx` that other installs left. Run again on an enrolled computer it brings it up to date. With
+`--no-path`); enrolls this device with the master; collects the folders; installs the service and the tray (below) and starts them;
+removes older copies of `fafnirx` that other installs left. Run again on an enrolled device it brings it up to date. With
 `--in-place` it does not copy the program (a package or the setup put it there); with `--no-start` it installs no service. macOS
 blocking the program: `sudo xattr -d com.apple.quarantine /usr/local/bin/fafnirx`.
 
@@ -84,7 +84,7 @@ Full Disk Access: *System Settings* → *Privacy & Security* → *Full Disk Acce
 `sudo fafnirx restart`. The install says so at the end; without it these folders fail with `Operation not permitted` (see
 Troubleshooting).
 
-On Linux and macOS the client is **a service of the computer**: it starts at boot, is started again when it fails, reads the
+On Linux and macOS the client is **a service of the device**: it starts at boot, is started again when it fails, reads the
 folders of every user, and its tray starts when a user logs in. Its config, token and state are in `/etc/fafnirx` and
 `/var/lib/fafnirx` (Linux), `/Library/Application Support/fafnirx` (macOS), where only administrators can change them; commands
 that change them ask for administrator rights (`sudo`); the tray's folder entries do not, the service applies them. On Windows the client is **yours**: it and its tray start when you log
@@ -108,7 +108,7 @@ stays. **From source:** [Development](development.md#build-and-run).
 | Symptom | Likely cause |
 |---|---|
 | `install`: `could not reach ...` | Wrong address/port, firewall, master down. The device is enrolled and connects once fixed |
-| `not sending: device in use ...` | Another computer uses the token: **Release** on the device page, or wait 90 s |
+| `not sending: device in use ...` | Another device uses the token: **Release** on the device page, or wait 90 s |
 | `unknown or revoked device token` | Token rotated or device revoked: run `fafnirx install --server <master>` again with the new token |
 | `status` says holding deletions | A large part of a folder vanished: [delete guard](usage.md#the-delete-guard) |
 | `folder add`: `... overlaps ... collect one of them` | A folder cannot sit inside, or contain, another collected folder. To share a folder inside one you collect, `folder remove` the outer one and `folder add` its other subfolders (the master keeps its data) |

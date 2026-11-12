@@ -55,7 +55,7 @@ export function TableToolbar({
     <div className="flex min-h-10 flex-wrap items-center gap-2 border-b px-3 py-2">
       <div className="relative w-64 max-w-full">
         <Search className="pointer-events-none absolute start-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input className="h-8 ps-8 pe-7 text-[13px]" value={filter} placeholder={placeholder} aria-label={placeholder} onChange={(e) => onFilter(e.target.value)} />
+        <Input className="h-8 ps-8 pe-7 text-compact" value={filter} placeholder={placeholder} aria-label={placeholder} onChange={(e) => onFilter(e.target.value)} />
         {filter && (
           <Button type="button" variant="ghost" size="icon-xs" className="absolute end-1 top-1/2 -translate-y-1/2 text-muted-foreground" aria-label={t('Clear filter')} onClick={() => onFilter('')}>
             <X />

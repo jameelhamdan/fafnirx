@@ -22,6 +22,11 @@ pub const ALL: &[Migration] = &[
     Migration { version: 1, name: "schema", sql: include_str!("../../migrations/0001_schema.sql") },
     Migration { version: 2, name: "folders", sql: include_str!("../../migrations/0002_folders.sql") },
     Migration { version: 3, name: "link_jobs", sql: include_str!("../../migrations/0003_link_jobs.sql") },
+    Migration {
+        version: 4,
+        name: "devices_and_folders",
+        sql: include_str!("../../migrations/0004_devices_and_folders.sql"),
+    },
 ];
 
 const TRACKING: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (

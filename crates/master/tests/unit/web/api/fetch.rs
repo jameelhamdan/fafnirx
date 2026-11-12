@@ -91,7 +91,7 @@ async fn source_row(api: &Api, name: &str) -> Due {
     let name = name.to_string();
     crate::platform::db::with(&api.db, move |c| {
         let r = c.query_one(
-            "SELECT s.id, s.kind, s.config, s.folder_id, d.folder FROM links s JOIN devices d ON d.id = s.folder_id WHERE s.direction = 'in' AND s.name = $1",
+            "SELECT s.id, s.kind, s.config, s.folder_id, d.key FROM links s JOIN folders d ON d.id = s.folder_id WHERE s.direction = 'in' AND s.name = $1",
             &[&name],
         )?;
         Ok(Due {
@@ -101,7 +101,8 @@ async fn source_row(api: &Api, name: &str) -> Due {
             name: name.clone(),
             config: r.get(2),
             folder_id: r.get(3),
-            folder: r.get(4),
+            device_id: None,
+            scope: r.get(4),
             owner: Some("admin".into()),
         })
     })
@@ -109,8 +110,8 @@ async fn source_row(api: &Api, name: &str) -> Due {
     .unwrap()
 }
 
-async fn live(api: &Api, device_id: i64) -> Vec<String> {
-    let mut paths: Vec<String> = crate::platform::db::with(&api.db, move |c| Ok(crate::repo::sources::live_paths(c, device_id)?))
+async fn live(api: &Api, folder_id: i64) -> Vec<String> {
+    let mut paths: Vec<String> = crate::platform::db::with(&api.db, move |c| Ok(crate::repo::sources::live_paths(c, folder_id)?))
         .await
         .unwrap();
     paths.sort();

@@ -7,7 +7,7 @@ export type FileInfo = {
 /**
  * The id of the file, which is also its address for the modules (`/api/m/<module>/<id>/...`).
  */
-id: Id, device: string, path: string, name: string, deleted_at: number | null, purge_at: number | null, size: number, mtime: number, changed: number, hash: string, mime: string, preview: boolean, 
+id: Id, folder: string, path: string, name: string, deleted_at: number | null, purge_at: number | null, size: number, mtime: number, changed: number, hash: string, mime: string, preview: boolean, 
 /**
  * Work still to do on a photo or video: waiting, running or failed.
  */

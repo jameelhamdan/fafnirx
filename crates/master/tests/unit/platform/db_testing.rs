@@ -21,12 +21,22 @@ pub fn open_alerts(c: &mut Client) -> i64 {
     c.query_one("SELECT COUNT(*) FROM alerts WHERE resolved_at IS NULL", &[]).unwrap().get(0)
 }
 
-/// The device made by [`db_with_device`].
-pub fn device() -> Device {
-    Device { id: 1, name: "admin/d".into() }
+/// The folder made by [`db_with_folder`].
+pub fn folder() -> FolderRef {
+    FolderRef { id: 1, key: "admin/f".into() }
 }
 
-/// `db()` with one ordinary device named `d` (id 1) of the administrator (user 1), so its folder is `admin/d`.
+/// `db()` with one folder named `f` (id 1) of the administrator (user 1), so its key is `admin/f`.
+pub fn db_with_folder() -> Db {
+    let db = db();
+    db.get()
+        .unwrap()
+        .execute("INSERT INTO folders (name, kind, created_at, user_id) VALUES ('f', 'user', 0, 1)", &[])
+        .unwrap();
+    db
+}
+
+/// `db()` with one device named `d` (id 1) of the administrator (user 1), so its key is `admin/d`.
 pub fn db_with_device() -> Db {
     let db = db();
     db.get()

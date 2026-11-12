@@ -90,9 +90,9 @@ pub async fn run(db: Db, store: Arc<Store>, src: Due) -> Result<SourceRun> {
     let (config, entries, kind) = (&config, &entries, &kind);
     let fetch_store = store.clone();
     let source_id = src.id;
-    let device = syncsource::device_of(&src)?;
+    let folder = syncsource::folder_of(&src)?;
     let out = syncsource::apply(
-        syncsource::Source { db: db.clone(), store, id: source_id, device },
+        syncsource::Source { db: db.clone(), store, id: source_id, folder },
         Listing { items, skipped: listing.skipped + left_out },
         rules,
         |item| {

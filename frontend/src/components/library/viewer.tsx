@@ -324,11 +324,8 @@ export function Viewer({
         description={t('It moves to the trash and stays recoverable until the retention period ends. The original on your device is not touched.')}
         action={t('Delete')}
         destructive
-        onCancel={() => setDialog(null)}
-        onConfirm={() => {
-          setDialog(null)
-          remove.mutate([{ device: asset.device, path: asset.path }], { onSuccess: moveOn })
-        }}
+        onClose={() => setDialog(null)}
+        onConfirm={() => remove.mutate([{ folder: asset.folder, path: asset.path }], { onSuccess: moveOn })}
       />
     </div>
   )

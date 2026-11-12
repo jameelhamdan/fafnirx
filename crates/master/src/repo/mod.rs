@@ -14,6 +14,7 @@ pub mod events;
 pub mod file_meta;
 pub mod file_state;
 pub mod files;
+pub mod folders;
 pub mod jobs;
 pub mod library;
 pub mod links;

@@ -175,7 +175,7 @@ pub fn drop_where(c: &mut impl GenericClient, status: JobStatus, id: Option<Uuid
     q::drop_jobs().bind(c, &status.as_str(), &id)
 }
 
-/// A photo or video to read: (file id, device folder, path, content hash).
+/// A photo or video to read: (file id, folder, path, content hash).
 pub type ToRead = (Uuid, String, String, Vec<u8>);
 
 /// The photos and videos to read again, newest first, from the file after `after` on: see `ToRead`.
@@ -190,9 +190,9 @@ pub fn media_to_read(c: &mut impl GenericClient, everything: bool, after: Option
 }
 
 /// The unfinished work of a file as (kind, status): queued, running or failed.
-pub fn pending_of(c: &mut impl GenericClient, device: &str, path: &str) -> Result<Vec<(String, JobStatus)>, Error> {
+pub fn pending_of(c: &mut impl GenericClient, folder: &str, path: &str) -> Result<Vec<(String, JobStatus)>, Error> {
     Ok(q::pending_jobs_of_file()
-        .bind(c, &device, &path)
+        .bind(c, &folder, &path)
         .all()?
         .into_iter()
         .filter_map(|j| JobStatus::parse(&j.status).map(|s| (j.kind, s)))

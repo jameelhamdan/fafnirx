@@ -37,28 +37,52 @@ pub fn key(c: &mut impl GenericClient, name: &str) -> Result<Option<Key>, Error>
     }))
 }
 
-/// Every live file of the folder a mirror holds (everything when it holds none in particular), in the order they are uploaded.
-pub fn live_files(c: &mut impl GenericClient, folder_id: Option<i64>) -> Result<Vec<Live>, Error> {
-    q::live_files_for_mirror().bind(c, &folder_id).all()
+/// Every live file of the folder (or of the folders of the device) a mirror holds, everything when it holds none in particular, in
+/// the order they are uploaded.
+pub fn live_files(c: &mut impl GenericClient, folder_id: Option<i64>, device_id: Option<i64>) -> Result<Vec<Live>, Error> {
+    q::live_files_for_mirror().bind(c, &folder_id, &device_id).all()
 }
 
-/// The folder of every device, by id.
-pub fn device_folders(c: &mut impl GenericClient) -> Result<Vec<(i64, String)>, Error> {
-    Ok(q::device_folders().bind(c).all()?.into_iter().map(|d| (d.id, d.folder)).collect())
+/// What a mirror holds: one folder, the folders of one device, or everything (neither set).
+#[derive(Clone, Copy, Default)]
+pub struct Scope {
+    pub folder_id: Option<i64>,
+    pub device_id: Option<i64>,
 }
 
-/// What a mirror holds, as (device id, path, root hash).
+/// The scope named by a key: a device, a folder, or everything for none. `None` when nothing has that key.
+pub fn scope_of(c: &mut impl GenericClient, key: &str) -> Result<Option<Scope>, Error> {
+    if key.is_empty() {
+        return Ok(Some(Scope::default()));
+    }
+    if let Some(id) = super::devices::id_of(c, key)? {
+        return Ok(Some(Scope { device_id: Some(id), folder_id: None }));
+    }
+    Ok(super::folders::id_of(c, key)?.map(|id| Scope { folder_id: Some(id), device_id: None }))
+}
+
+/// The keys a mirror can be told to hold: every device and every folder.
+pub fn scopes(c: &mut impl GenericClient) -> Result<Vec<String>, Error> {
+    q::mirror_scopes().bind(c).all()
+}
+
+/// The key of every folder, by id.
+pub fn folder_keys(c: &mut impl GenericClient) -> Result<Vec<(i64, String)>, Error> {
+    Ok(q::folder_keys().bind(c).all()?.into_iter().map(|d| (d.id, d.key)).collect())
+}
+
+/// What a mirror holds, as (folder id, path, root hash).
 pub fn items(c: &mut impl GenericClient, mirror_id: i64) -> Result<Vec<(i64, String, Vec<u8>)>, Error> {
     Ok(links::items(c, mirror_id)?
         .into_iter()
-        .filter_map(|i| Some((i.device_id, i.path, hex::decode(i.version).ok()?)))
+        .filter_map(|i| Some((i.folder_id, i.path, hex::decode(i.version).ok()?)))
         .collect())
 }
 
-pub fn remember_item(c: &mut impl GenericClient, mirror_id: i64, device_id: i64, path: &str, root_hash: &[u8]) -> Result<(), Error> {
-    links::remember(c, mirror_id, device_id, path, &hex::encode(root_hash))
+pub fn remember_item(c: &mut impl GenericClient, mirror_id: i64, folder_id: i64, path: &str, root_hash: &[u8]) -> Result<(), Error> {
+    links::remember(c, mirror_id, folder_id, path, &hex::encode(root_hash))
 }
 
-pub fn forget_item(c: &mut impl GenericClient, mirror_id: i64, device_id: i64, path: &str) -> Result<(), Error> {
-    links::forget(c, mirror_id, device_id, path)
+pub fn forget_item(c: &mut impl GenericClient, mirror_id: i64, folder_id: i64, path: &str) -> Result<(), Error> {
+    links::forget(c, mirror_id, folder_id, path)
 }

@@ -14,7 +14,7 @@ import { monthBodyHeight, monthHeight, useGrid } from '@/lib/grid'
 import { monthQuery, useTags, type TimelineFilters } from '@/lib/library'
 import { msg, useT } from '@/lib/i18n'
 import { useOpenMedia, useViewerSource } from '@/lib/viewer-source'
-import type { Asset, Buckets, DeviceSummary, Scope } from '@/lib/types'
+import type { Asset, Buckets, DeviceSummary, Folder, Scope } from '@/lib/types'
 
 const TITLES: Record<Scope, string> = { timeline: msg('Photos'), favorites: msg('Favorites'), archive: msg('Archive') }
 const DESCRIPTIONS: Record<Scope, string> = {
@@ -78,8 +78,8 @@ export default function Timeline({ scope }: { scope: Scope }) {
   const t = useT()
   const client = useQueryClient()
   const [params, setParams] = useSearchParams()
-  const filters: TimelineFilters = { scope, device: params.get('device') ?? '', kind: params.get('kind') ?? '', tag: params.get('tag') ?? '' }
-  const setFilter = (key: 'device' | 'kind' | 'tag', value: string) => {
+  const filters: TimelineFilters = { scope, folder: params.get('folder') ?? '', kind: params.get('kind') ?? '', tag: params.get('tag') ?? '' }
+  const setFilter = (key: 'folder' | 'kind' | 'tag', value: string) => {
     const next = new URLSearchParams(params)
     if (value && value !== 'all') next.set(key, value)
     else next.delete(key)
@@ -94,6 +94,7 @@ export default function Timeline({ scope }: { scope: Scope }) {
     placeholderData: keepPreviousData,
   })
   const devices = useQuery({ queryKey: ['devices'], queryFn: () => api.get<DeviceSummary[]>('/api/devices') })
+  const folders = useQuery({ queryKey: ['folders'], queryFn: () => api.get<Folder[]>('/api/folders') })
   const tags = useTags()
   const months = useMemo(() => buckets.data?.months ?? [], [buckets.data])
 
@@ -149,14 +150,14 @@ export default function Timeline({ scope }: { scope: Scope }) {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [viewer, months, client, filters.scope, filters.device, filters.kind, filters.tag],
+    [viewer, months, client, filters.scope, filters.folder, filters.kind, filters.tag],
   )
 
   const source = useMemo(() => (viewer ? { assets: viewedAssets, onEdge: extend } : null), [viewer, viewedAssets, extend])
   useViewerSource(source)
 
   const total = buckets.data?.total ?? 0
-  const filtering = filters.device !== '' || filters.kind !== '' || filters.tag !== ''
+  const filtering = filters.folder !== '' || filters.kind !== '' || filters.tag !== ''
   const selectedList = [...selected.values()]
 
   return (
@@ -168,11 +169,11 @@ export default function Timeline({ scope }: { scope: Scope }) {
           <SelectionBar selected={selectedList} onClear={clear} />
         ) : (
           <div className="flex h-11 flex-wrap items-center gap-2 overflow-hidden">
-            <Select value={filters.device || 'all'} onValueChange={(v) => setFilter('device', v)}>
-              <SelectTrigger className="w-40" aria-label={t('Device')}><SelectValue /></SelectTrigger>
+            <Select value={filters.folder || 'all'} onValueChange={(v) => setFilter('folder', v)}>
+              <SelectTrigger className="w-40" aria-label={t('Device or folder')}><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">{t('All devices')}</SelectItem>
-                {devices.data?.filter((d) => d.files > 0).map((d) => <SelectItem key={d.folder} value={d.folder}>{d.folder}</SelectItem>)}
+                <SelectItem value="all">{t('All devices and folders')}</SelectItem>
+                {[...(devices.data ?? []), ...(folders.data ?? [])].filter((d) => d.files > 0).map((d) => <SelectItem key={d.key} value={d.key}>{d.key}</SelectItem>)}
               </SelectContent>
             </Select>
             <Select value={filters.kind || 'all'} onValueChange={(v) => setFilter('kind', v)}>
@@ -201,7 +202,7 @@ export default function Timeline({ scope }: { scope: Scope }) {
           <Skeleton className="h-96" />
         ) : months.length === 0 ? (
           filtering ? (
-            <Empty title={t('Nothing matches')}>{t('Try another device, type or tag.')}</Empty>
+            <Empty title={t('Nothing matches')}>{t('Try another device or folder, type or tag.')}</Empty>
           ) : scope === 'timeline' ? (
             <Empty title={t('No photos or videos yet')}>{t('Photos and videos appear here as devices send them. Back up a folder with the fafnirx client, or upload into a local folder on the Files page.')}</Empty>
           ) : scope === 'favorites' ? (

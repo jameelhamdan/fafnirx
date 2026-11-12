@@ -36,7 +36,7 @@ impl Attached {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            // The mode of the other computer, but never one the owner cannot read and write.
+            // The mode of the other device, but never one the owner cannot read and write.
             if change.mode & 0o777 != 0 {
                 let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(change.mode & 0o777 | 0o600));
             }

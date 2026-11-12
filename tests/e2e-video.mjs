@@ -137,7 +137,7 @@ try {
   const before = calledSegments().length
   check((await stream('720p/seg1.ts')).status === 200 && calledSegments().length === before + 1, 'changed content gets new segments, never stale ones')
 
-  await admin.post('/api/files/delete', { items: [{ device: 'admin/videos', path: 'trip/clip.mkv' }] })
+  await admin.post('/api/files/delete', { items: [{ folder: 'admin/videos', path: 'trip/clip.mkv' }] })
   check((await stream('master.m3u8')).status === 404, 'a deleted file is not streamed')
 
   // --- the master without the module ---------------------------------------------------------------------------------------------------

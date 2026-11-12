@@ -1,4 +1,3 @@
-import { useQueryClient } from '@tanstack/react-query'
 import { useApiMutation } from '@/lib/mutation'
 import { useState } from 'react'
 import { FormDialog } from '../form-dialog'
@@ -9,21 +8,24 @@ import { useT } from '@/lib/i18n'
 
 /**
  * Gives a folder another name: one of yours (a local or shared one), or with `masterId` a master folder, whose name is its path
- * in the master files. Its files, members, albums, sources and mirrors stay with it, and the computers that use it follow the new name.
+ * in the master files. Its files, members, albums, sources and mirrors stay with it, and the devices that use it follow the new name.
  */
+/** Everything that names a folder. */
+const RENAMED_KEYS = ['devices', 'files', 'folders', 'albums', 'album', 'sources'].map((key) => [key])
+
 export function RenameFolder({ folder, masterId, onClose, onRenamed }: { folder: string | null; masterId?: string; onClose: () => void; onRenamed: (folder: string) => void }) {
   const t = useT()
-  const client = useQueryClient()
   const current = masterId ? (folder ?? '') : (folder?.split('/').pop() ?? '')
   const [name, setName] = useState('')
   const rename = useApiMutation(
     async (to: string) =>
       masterId
         ? api.post(`/api/master-folders/${masterId}/rename`, { path: to }).then(() => ({ folder: to }))
-        : api.post<{ folder: string }>(`/api/devices/${encodeURIComponent(folder ?? '')}/rename`, { name: to }),
+        : api.post<{ folder: string }>(`/api/folders/${encodeURIComponent(current)}/rename`, { name: to }),
     {
+      inline: true,
+      invalidate: RENAMED_KEYS,
       onSuccess: (done) => {
-        for (const key of ['devices', 'files', 'folders', 'albums', 'album', 'sources']) void client.invalidateQueries({ queryKey: [key] })
         setName('')
         onRenamed(done.folder)
       },
@@ -34,7 +36,7 @@ export function RenameFolder({ folder, masterId, onClose, onRenamed }: { folder:
       open={folder !== null}
       onOpenChange={(o) => { if (!o) { onClose(); rename.reset(); setName('') } }}
       title={t('Rename folder')}
-      description={t('The files, the people it is shared with, its albums and its sources stay with the folder. Computers that use it follow the new name.')}
+      description={t('The files, the people it is shared with, its albums and its sources stay with the folder. Devices that use it follow the new name.')}
       onSubmit={() => rename.mutate(name.trim())}
       submit={t('Rename')}
       disabled={!name.trim() || name.trim() === current}

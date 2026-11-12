@@ -17,12 +17,12 @@ export function EventList({ events, empty, showFolder = false, folder }: { event
   return (
     <ul className="divide-y">
       {events.map((e) => (
-        <li key={e.id} className="flex items-baseline gap-2 py-1 text-[13px]">
+        <li key={e.id} className="flex items-baseline gap-2 py-1 text-compact">
           <span className={cn('w-16 shrink-0 text-xs font-medium', COLOUR[e.action] ?? 'text-success')}>{t(ACTION[e.action] ?? e.action)}</span>
-          <Link to={filesLink(folder ?? e.device, '', e.path)} className="num min-w-0 flex-1 text-[12px] [overflow-wrap:anywhere] hover:underline" title={e.path}>
-            {showFolder && <span className="text-muted-foreground">{e.device}/</span>}{e.path}
+          <Link to={filesLink(folder ?? e.folder, '', e.path)} className="num min-w-0 flex-1 text-xs [overflow-wrap:anywhere] hover:underline" title={e.path}>
+            {showFolder && <span className="text-muted-foreground">{e.folder}/</span>}{e.path}
           </Link>
-          <span className="num shrink-0 text-[11px] text-muted-foreground">{ago(e.ts, now)}</span>
+          <span className="num shrink-0 text-2xs text-muted-foreground">{ago(e.ts, now)}</span>
         </li>
       ))}
     </ul>

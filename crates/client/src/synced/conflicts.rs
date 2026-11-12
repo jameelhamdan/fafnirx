@@ -24,7 +24,7 @@ impl Attached {
     }
 
     /// A file changed here and on the master (or changed here and deleted there): does what the policy of the folder says.
-    /// `Settled::Receive`: this computer's version is out of the way, the master's may take its place. `Settled::Leave`: the
+    /// `Settled::Receive`: this device's version is out of the way, the master's may take its place. `Settled::Leave`: the
     /// file here stays as it is and nothing is received for it now.
     pub(super) fn settle(&self, path: &str, target: &Path, master: Master<'_>, report: &mut Report) -> Result<Settled, SyncError> {
         let state = &self.engine.state;
@@ -54,13 +54,13 @@ impl Attached {
                 return Ok(Settled::Leave);
             }
         };
-        // This computer's version is gone from the path (or is no longer the one in step): if receiving the master's fails, the
+        // This device's version is gone from the path (or is no longer the one in step): if receiving the master's fails, the
         // path must not look deleted here, or the send would delete it on the master.
         state.remove_synced(path)?;
         Ok(settled)
     }
 
-    /// Moves this computer's version of a file into `CONFLICT_DIR` (never synced), so that the master's can take its place.
+    /// Moves this device's version of a file into `CONFLICT_DIR` (never synced), so that the master's can take its place.
     pub(super) fn put_aside(&self, path: &str, target: &Path, report: &mut Report) -> Result<(), SyncError> {
         let dir = self.synced.path.join(CONFLICT_DIR);
         let kept = conflict_name(&local_path(&dir, path), &self.host, unix_now());
@@ -68,7 +68,7 @@ impl Attached {
         std::fs::rename(target, &kept)?;
         report.conflicts += 1;
         self.engine.report_error(format!(
-            "{}/{path}: changed here and on the server. The server's is kept; this computer's is in {CONFLICT_DIR}/{}",
+            "{}/{path}: changed here and on the server. The server's is kept; this device's is in {CONFLICT_DIR}/{}",
             self.synced.name,
             kept.strip_prefix(&dir).unwrap_or(&kept).display()
         ));
@@ -114,8 +114,7 @@ impl Attached {
             from_web: p.from_web,
         };
         if here {
-            // (An answer `mine`, given before that choice was removed and not yet applied, keeps both.)
-            if matches!(choice, "both" | "mine") {
+            if choice == "both" {
                 self.keep_as_conflict(&p.path, &target, report)?;
             } else {
                 self.put_aside(&p.path, &target, report)?;
@@ -128,13 +127,13 @@ impl Attached {
         Ok(())
     }
 
-    /// Moves this computer's version of a file to a name of its own, so that the master's can take its place.
+    /// Moves this device's version of a file to a name of its own, so that the master's can take its place.
     pub(super) fn keep_as_conflict(&self, path: &str, target: &Path, report: &mut Report) -> Result<(), SyncError> {
         let kept = conflict_name(target, &self.host, unix_now());
         std::fs::rename(target, &kept)?;
         report.conflicts += 1;
         self.engine.report_error(format!(
-            "{}/{path}: changed here and on the server. Both are kept; the one from this computer is {}",
+            "{}/{path}: changed here and on the server. Both are kept; the one from this device is {}",
             self.synced.name,
             kept.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
         ));

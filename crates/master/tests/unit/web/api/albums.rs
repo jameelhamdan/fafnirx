@@ -13,7 +13,7 @@ fn a_folder_is_an_album_and_what_comes_into_it_is_in_the_album() {
             api.upload("admin/show", path, &png(4, 4, [shade, shade, shade])).await;
         }
         api.upload("admin/other", "x.png", &png(4, 4, [3, 3, 3])).await;
-        let folder = json!({"device": "admin/show", "path": ""});
+        let folder = json!({"folder": "admin/show", "path": ""});
 
         // The folder is the album: its name is the folder's, and what is below it is in it, in the order of the names.
         let (status, album) = api.json(Method::POST, "/api/albums", json!({"name": "", "folder": folder})).await;
@@ -48,7 +48,7 @@ fn a_folder_is_an_album_and_what_comes_into_it_is_in_the_album() {
         assert_eq!(api.get("/api/albums").await.1[0]["count"], 3);
 
         // A folder that is not there for this user cannot be an album.
-        let nobody = json!({"device": "nobody/none", "path": ""});
+        let nobody = json!({"folder": "nobody/none", "path": ""});
         assert_eq!(
             api.json(Method::POST, "/api/albums", json!({"name": "x", "folder": nobody})).await.0,
             StatusCode::NOT_FOUND
@@ -67,7 +67,7 @@ fn an_album_shows_its_folder_and_leaves_the_files_alone() {
         api.json(Method::POST, "/api/folders", json!({"name": "other"})).await;
         api.upload("admin/other", "c.png", &png(2, 2, [3, 3, 3])).await;
         let (a, b) = (photo_id(&api, "a.png").await, photo_id(&api, "b.png").await);
-        let whole = json!({"device": "admin/photos", "path": ""});
+        let whole = json!({"folder": "admin/photos", "path": ""});
 
         // An album needs a folder.
         assert_eq!(
@@ -96,7 +96,7 @@ fn an_album_shows_its_folder_and_leaves_the_files_alone() {
         assert_eq!((edited["name"].clone(), edited["cover"].clone()), (json!("Trip 2024"), json!(b)));
 
         // Deleting a file takes it out of the album's count; restoring puts it back; deleting the album leaves the photos.
-        api.json(Method::POST, "/api/files/delete", json!({"items": [{"device": "admin/photos", "path": "a.png"}]}))
+        api.json(Method::POST, "/api/files/delete", json!({"items": [{"folder": "admin/photos", "path": "a.png"}]}))
             .await;
         assert_eq!(api.get("/api/albums").await.1[0]["count"], 1);
         let version = api.get("/api/trash").await.1["entries"][0]["version"].clone();
@@ -104,7 +104,7 @@ fn an_album_shows_its_folder_and_leaves_the_files_alone() {
             .json(
                 Method::POST,
                 "/api/files/restore",
-                json!({"device": "admin/photos", "path": "a.png", "version": version}),
+                json!({"folder": "admin/photos", "path": "a.png", "version": version}),
             )
             .await;
         assert_eq!(restored.0, StatusCode::OK);
@@ -126,7 +126,7 @@ fn an_album_uses_its_poster_as_the_cover_and_a_viewer_steps_through_a_folder() {
         }
         let poster = photo_id(&api, "poster.png").await;
         let (_, album) = api
-            .json(Method::POST, "/api/albums", json!({"name": "", "folder": {"device": "admin/show", "path": ""}}))
+            .json(Method::POST, "/api/albums", json!({"name": "", "folder": {"folder": "admin/show", "path": ""}}))
             .await;
         assert_eq!(album["cover"], poster.as_str(), "the poster nearest the top of the folder is the cover");
         let id = album["id"].as_str().unwrap().to_string();

@@ -128,7 +128,7 @@ export function Scrubber({
       className={cn('fixed top-16 right-0 bottom-3 z-30 w-9 touch-none select-none outline-offset-[-2px] focus-visible:outline-2 focus-visible:outline-ring', !ready && 'hidden')}
     >
       {labels.map((l) => (
-        <span key={l.text} className="pointer-events-none absolute right-2 -translate-y-px text-[10px] font-medium text-muted-foreground tabular-nums" style={{ top: l.top }}>
+        <span key={l.text} className="pointer-events-none absolute right-2 -translate-y-px text-2xs font-medium text-muted-foreground tabular-nums" style={{ top: l.top }}>
           {l.text}
         </span>
       ))}

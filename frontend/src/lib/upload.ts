@@ -7,7 +7,7 @@ const RETRIES = 4
 
 export interface UploadItem {
   id: number
-  device: string
+  folder: string
   path: string
   size: number
   sent: number
@@ -54,12 +54,12 @@ export function clearFinishedUploads() {
   emit()
 }
 
-/** Queues files for upload into `device`; `path` of each is relative to the device root. */
-export function enqueueUploads(device: string, files: Source[]) {
+/** Queues files for upload into `folder`; `path` of each is relative to the folder root. */
+export function enqueueUploads(folder: string, files: Source[]) {
   for (const f of files) {
     const id = nextId++
     sources.set(id, f)
-    items.push({ id, device, path: f.path, size: f.file.size, sent: 0, status: 'queued' })
+    items.push({ id, folder, path: f.path, size: f.file.size, sent: 0, status: 'queued' })
   }
   emit()
   pump()
@@ -88,7 +88,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 async function send(item: UploadItem) {
   const src = sources.get(item.id)!
   const started = await api.post<{ id: string }>('/api/uploads', {
-    device: item.device,
+    folder: item.folder,
     path: item.path,
     size: item.size,
     mtime_ms: src.file.lastModified,

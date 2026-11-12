@@ -4,7 +4,12 @@ import type { DashboardDay } from "./DashboardDay";
 import type { DashboardDisk } from "./DashboardDisk";
 import type { DashboardTotals } from "./DashboardTotals";
 import type { DeviceSummary } from "./DeviceSummary";
+import type { FolderTotal } from "./FolderTotal";
 import type { JobState } from "./JobState";
 import type { Recent } from "./Recent";
 
-export type Dashboard = { devices: Array<DeviceSummary>, online: number, totals: DashboardTotals, activity: Array<DashboardDay>, recent: Array<Recent>, sources: Array<JobState>, mirrors: Array<JobState>, alerts: Array<Alert>, disk: DashboardDisk | null, };
+export type Dashboard = { devices: Array<DeviceSummary>, 
+/**
+ * What each folder holds, the biggest first.
+ */
+folders: Array<FolderTotal>, online: number, totals: DashboardTotals, activity: Array<DashboardDay>, recent: Array<Recent>, sources: Array<JobState>, mirrors: Array<JobState>, alerts: Array<Alert>, disk: DashboardDisk | null, };

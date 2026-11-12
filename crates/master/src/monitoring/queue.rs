@@ -3,17 +3,16 @@
 //! mirrors, and what the modules that are set up report (files being fetched, segments being cut), each row saying what it is
 //! for and which module (`plugin`) does it.
 //!
-//! Everybody sees the jobs of the devices they can see. Only an administrator holds the queue back, retries, cancels or asks
+//! Everybody sees the jobs of the folders they can see. Only an administrator holds the queue back, retries, cancels or asks
 //! for files to be read again.
 
 use crate::library::meta::PAUSED;
 use crate::platform::id::Id;
 use crate::repo::jobs::{self, JobKind, JobStatus};
 use crate::repo::settings;
-use crate::web::access::Access;
-use crate::web::{done, run, ApiError, Done, Res, Shared};
-use axum::extract::State;
-use axum::{Extension, Json};
+use crate::web::access::{Access, Ctx};
+use crate::web::{done, run, ApiError, Done, Res};
+use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -40,7 +39,7 @@ pub struct Job {
     kind: String,
     #[cfg_attr(test, ts(type = "'queued' | 'running' | 'failed' | 'done'"))]
     status: JobStatus,
-    device: String,
+    folder: String,
     path: String,
     attempts: i64,
     error: Option<String>,
@@ -69,19 +68,19 @@ pub struct Queue {
 #[derive(Deserialize)]
 struct JobPayload {
     #[serde(default)]
-    device: String,
+    folder: String,
     #[serde(default)]
     path: String,
 }
 
 impl From<jobs::Item> for Job {
     fn from(j: jobs::Item) -> Self {
-        let p: JobPayload = serde_json::from_str(&j.payload).unwrap_or(JobPayload { device: String::new(), path: String::new() });
+        let p: JobPayload = serde_json::from_str(&j.payload).unwrap_or(JobPayload { folder: String::new(), path: String::new() });
         let status = JobStatus::parse(&j.status).unwrap_or(JobStatus::Failed);
         let waiting_to_retry = status == JobStatus::Queued && j.attempts > 0;
         // A run of a source is for the folder it writes into and named `<owner>/<name>`; a mirror by its name. A source a module reads
         // names the module.
-        let (device, path, plugin) = match &j.link {
+        let (folder, path, plugin) = match &j.link {
             Some(l) => (
                 l.folder.clone().unwrap_or_default(),
                 l.owner.as_ref().map_or_else(|| l.name.clone(), |owner| format!("{owner}/{}", l.name)),
@@ -91,13 +90,13 @@ impl From<jobs::Item> for Job {
                     String::new()
                 },
             ),
-            None => (p.device, p.path, String::new()),
+            None => (p.folder, p.path, String::new()),
         };
         Job {
             id: Id(j.id),
             kind: j.kind,
             status,
-            device,
+            folder,
             path,
             attempts: j.attempts,
             error: j.error,
@@ -129,13 +128,13 @@ fn summarize(counts: Vec<jobs::Count>) -> Vec<Summary> {
     by_kind.into_values().collect()
 }
 
-/// Whether a user sees the file a module names: `users/<user>/<device>/<path>` for the files of a device, `<name>/<path>` for a
+/// Whether a user sees the file a module names: `users/<key>/<path>` for the files of a folder of a user or a device, `<name>/<path>` for a
 /// file of a master folder, which everybody sees (see `store::tree_path`).
 fn sees_path(who: &Access, p: &str) -> bool {
     use crate::platform::store::USERS_DIR;
     let mut parts = p.strip_prefix(USERS_DIR).and_then(|r| r.strip_prefix('/')).unwrap_or("").splitn(3, '/');
     match (parts.next(), parts.next(), parts.next()) {
-        (Some(user), Some(device), Some(_)) => who.can_see(&format!("{user}/{device}")),
+        (Some(user), Some(folder), Some(_)) => who.can_see(&format!("{user}/{folder}")),
         _ => true,
     }
 }
@@ -170,7 +169,7 @@ fn module_jobs(module: &str, report: &serde_json::Value) -> Vec<Job> {
             id: id_of(&format!("{module}/{}/{}/{since}", text(a, "kind"), text(a, "path"))),
             kind: text(a, "kind"),
             status: if running { JobStatus::Running } else { JobStatus::Queued },
-            device: String::new(),
+            folder: String::new(),
             path: text(a, "path"),
             attempts: 0,
             error: None,
@@ -188,7 +187,7 @@ fn module_jobs(module: &str, report: &serde_json::Value) -> Vec<Job> {
             id: id_of(&format!("{module}/failed/{}/{}/{at}", text(f, "kind"), text(f, "path"))),
             kind: text(f, "kind"),
             status: JobStatus::Failed,
-            device: String::new(),
+            folder: String::new(),
             path: text(f, "path"),
             attempts: 1,
             error: Some(text(f, "error")),
@@ -220,7 +219,7 @@ fn count_rows(summary: &mut Vec<Summary>, rows: &[Job]) {
     }
 }
 
-pub async fn show(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Queue> {
+pub async fn show(Ctx { state, who }: Ctx) -> Res<Queue> {
     let (all, user) = who.scope_args();
     let (paused, mut summary, listed) = run(&state, move |c| {
         let paused = settings::get_i64(c, PAUSED, 0) == 1;
@@ -253,7 +252,7 @@ pub struct Pause {
     paused: bool,
 }
 
-pub async fn pause(State(state): State<Shared>, Extension(who): Extension<Access>, Json(b): Json<Pause>) -> Res<Done> {
+pub async fn pause(Ctx { state, who }: Ctx, Json(b): Json<Pause>) -> Res<Done> {
     who.require_admin()?;
     run(&state, move |c| Ok(settings::set(c, PAUSED, if b.paused { "1" } else { "0" })?)).await?;
     done()
@@ -271,7 +270,7 @@ pub struct Changed {
 }
 
 /// Failed jobs run again from the start.
-pub async fn retry(State(state): State<Shared>, Extension(who): Extension<Access>, Json(b): Json<Target>) -> Res<Changed> {
+pub async fn retry(Ctx { state, who }: Ctx, Json(b): Json<Target>) -> Res<Changed> {
     who.require_admin()?;
     let changed = run(&state, move |c| Ok(jobs::retry_failed(c, b.id.map(|i| i.0))?)).await?;
     Ok(Json(Changed { changed }))
@@ -285,7 +284,7 @@ pub struct Cancel {
 }
 
 /// Forgets failed jobs, or cancels jobs that have not started. A running job cannot be stopped: it ends by itself.
-pub async fn cancel(State(state): State<Shared>, Extension(who): Extension<Access>, Json(b): Json<Cancel>) -> Res<Changed> {
+pub async fn cancel(Ctx { state, who }: Ctx, Json(b): Json<Cancel>) -> Res<Changed> {
     who.require_admin()?;
     let status = JobStatus::parse(&b.status)
         .filter(|s| matches!(s, JobStatus::Failed | JobStatus::Queued))
@@ -302,7 +301,7 @@ pub struct Rebuild {
 }
 
 /// Queues reading photos and videos: those never read, or all of them.
-pub async fn rebuild(State(state): State<Shared>, Extension(who): Extension<Access>, Json(b): Json<Rebuild>) -> Res<Changed> {
+pub async fn rebuild(Ctx { state, who }: Ctx, Json(b): Json<Rebuild>) -> Res<Changed> {
     who.require_admin()?;
     let changed = run(&state, move |c| {
         let (mut after, mut n) = (None, 0u64);
@@ -312,8 +311,8 @@ pub async fn rebuild(State(state): State<Shared>, Extension(who): Extension<Acce
             let Some((last, ..)) = files.last() else { break };
             after = Some(*last);
             n += files.len() as u64;
-            for (_, device, path, root) in files {
-                jobs::enqueue(c, JobKind::Meta, &serde_json::json!({ "device": device, "path": path, "root": hex::encode(root) }))?;
+            for (_, folder, path, root) in files {
+                jobs::enqueue(c, JobKind::Meta, &serde_json::json!({ "folder": folder, "path": path, "root": hex::encode(root) }))?;
             }
         }
         Ok(n)

@@ -20,7 +20,7 @@ import { useT } from '@/lib/i18n'
 /** The most files the server removes in one call. */
 const PURGE_AT_ONCE = 500
 
-/** Deleted files of every device. They are removed for good when the retention period ends, or at once on request (to get the space back); until then they come back with one click. */
+/** Deleted files of every folder. They are removed for good when the retention period ends, or at once on request (to get the space back); until then they come back with one click. */
 export default function TrashPage() {
   const t = useT()
   const now = useNow()
@@ -45,7 +45,7 @@ export default function TrashPage() {
   const restore = useApiMutation(async (list: TrashEntry[]) => {
     let done = 0
     for (const e of list) {
-      await api.post('/api/files/restore', { device: e.device, path: e.path, version: e.version })
+      await api.post('/api/files/restore', { folder: e.folder, path: e.path, version: e.version })
       done++
     }
     return done
@@ -111,8 +111,8 @@ export default function TrashPage() {
                     <Checkbox checked={on} onCheckedChange={() => toggle(e.id)} aria-label={t('Select {name}', { name: e.name })} className={cn('absolute top-2 left-2 bg-background/90', !on && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-sm:opacity-100')} />
                   </div>
                   <div className="space-y-1 p-2.5">
-                    <p className="truncate text-sm font-medium" title={`${e.device}/${e.path}`}>{e.name}</p>
-                    <p className="truncate text-xs text-muted-foreground">{e.device} · {bytes(e.size)}</p>
+                    <p className="truncate text-sm font-medium" title={`${e.folder}/${e.path}`}>{e.name}</p>
+                    <p className="truncate text-xs text-muted-foreground">{e.folder} · {bytes(e.size)}</p>
                     <p className="text-xs text-muted-foreground" title={t('Removed for good on {date}', { date: date(e.purge_at) })}>{t('Deleted {when} · gone {date}', { when: ago(e.deleted_at, now), date: date(e.purge_at) })}</p>
                     <div className="mt-1 flex gap-1.5">
                       <Button size="sm" variant="outline" className="flex-1" disabled={restore.isPending || purge.isPending} onClick={() => restore.mutate([e])}><RotateCcw className="size-3.5" />{t('Restore')}</Button>
@@ -136,7 +136,7 @@ export default function TrashPage() {
         description={t('{files} will be removed for good, with their versions, albums and tags. This cannot be undone.', { files: plural(purging?.length ?? 0, 'file') })}
         action={t('Delete forever')}
         onConfirm={() => purging && purge.mutate(purging)}
-        onCancel={() => setPurging(null)}
+        onClose={() => setPurging(null)}
       />
     </div>
   )

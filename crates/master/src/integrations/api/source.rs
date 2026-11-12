@@ -8,32 +8,29 @@ use super::rclone_config;
 use super::touch_link;
 use super::Touch;
 use super::SOURCE_PREFIX;
-use crate::files::browse::find_device_to_change;
+use crate::files::browse::find_folder_to_change;
 use crate::files::ingest;
 use crate::integrations::fetch_source;
 use crate::integrations::spec::normalize_storage;
 use crate::platform::db;
 use crate::platform::store::Store;
 use crate::repo::alerts;
-use crate::repo::devices;
+use crate::repo::folders;
 use crate::repo::links;
 use crate::repo::links::Dir;
 use crate::repo::links::SourceKind;
 use crate::repo::sources;
-use crate::web::access::Access;
+use crate::web::access::{Access, Ctx};
 use crate::web::act;
 use crate::web::input;
 use crate::web::run;
 use crate::web::ApiError;
 use crate::web::Done;
 use crate::web::Res;
-use crate::web::Shared;
 use axum::extract::Path;
-use axum::extract::State;
-use axum::Extension;
 use axum::Json;
 use fafnirx_common::unix_now;
-use fafnirx_common::valid_device_name;
+use fafnirx_common::valid_name;
 use postgres::Client;
 use serde::Deserialize;
 use serde_json::Value;
@@ -74,24 +71,24 @@ pub struct NewSource {
 /// A folder a source writes into.
 #[derive(Deserialize, Clone)]
 pub struct Place {
-    device: String,
+    folder: String,
 }
 
 /// The folder `place`, if `who` may change it and the web app edits it in place.
-fn destination(c: &mut Client, who: &Access, place: &Place) -> anyhow::Result<db::Device> {
-    let device = find_device_to_change(c, who, &place.device)?;
-    if !devices::kind_of(c, device.id)?.editable() {
+fn destination(c: &mut Client, who: &Access, place: &Place) -> anyhow::Result<db::FolderRef> {
+    let folder = find_folder_to_change(c, who, &place.folder)?;
+    if !folders::kind_of(c, folder.id)?.editable() {
         return Err(ApiError::bad("A source can write into your own folders, shared folders and the master folders").into());
     }
-    Ok(device)
+    Ok(folder)
 }
 
 /// Adds a source that copies a folder of any storage rclone supports.
-pub async fn create_source(State(state): State<Shared>, Extension(who): Extension<Access>, Json(b): Json<NewSource>) -> Res<Done> {
+pub async fn create_source(Ctx { state, who }: Ctx, Json(b): Json<NewSource>) -> Res<Done> {
     who.require_workspace()?;
-    let name = input::device_name(&b.name)?;
-    let device = format!("{SOURCE_PREFIX}{name}");
-    if !valid_device_name(&device) {
+    let name = input::name(&b.name)?;
+    let folder = format!("{SOURCE_PREFIX}{name}");
+    if !valid_name(&folder) {
         return Err(ApiError::bad("Name: too long for a source"));
     }
     let secs = hours_to_secs(b.interval_hours)?;
@@ -114,8 +111,8 @@ pub async fn create_source(State(state): State<Shared>, Extension(who): Extensio
             Some(dest) => (dest, false),
             None => {
                 // A folder of its own in the workspace of the user, for a source that was given none.
-                let (id, folder) = sources::insert_device(&mut tx, who.user_id, &device, unix_now())?.ok_or_else(|| ApiError::conflict(format!("You have a device or folder called {device} already")))?;
-                (db::Device { id, name: folder }, true)
+                let (id, folder) = sources::insert_folder(&mut tx, who.user_id, &folder, unix_now())?.ok_or_else(|| ApiError::conflict(format!("You have a device or folder called {folder} already")))?;
+                (db::FolderRef { id, key: folder }, true)
             }
         };
         let new = links::New {
@@ -125,6 +122,7 @@ pub async fn create_source(State(state): State<Shared>, Extension(who): Extensio
             kind: kind.as_str(),
             config: &config.to_string(),
             folder_id: Some(dest.id),
+            device_id: None,
             interval_secs: secs,
         };
         if links::add(&mut tx, &new, unix_now())?.is_none() {
@@ -133,7 +131,7 @@ pub async fn create_source(State(state): State<Shared>, Extension(who): Extensio
         db::notify(&mut tx, db::Topic::Jobs, &format!("{}/{name}", who.name))?;
         tx.commit()?;
         if own {
-            let _ = std::fs::create_dir_all(store.live_dir(&dest.name));
+            let _ = std::fs::create_dir_all(store.live_dir(&dest.key));
         }
         Ok(())
     })
@@ -176,17 +174,17 @@ fn merge_secrets(stored: &Value, mut new: Value) -> Value {
 /// and the source collects everything again where it now writes.
 fn leave_folder(c: &mut Client, store: &Store, id: i64) -> anyhow::Result<()> {
     let due = links::due(c, id)?.ok_or_else(|| ApiError::not_found("No such source"))?;
-    let device = db::Device { id: due.folder_id.unwrap_or_default(), name: due.folder.clone().unwrap_or_default() };
+    let folder = db::FolderRef { id: due.folder_id.unwrap_or_default(), key: due.scope.clone() };
     for item in links::items(c, id)? {
-        ingest::mark_deleted(c, store, &device, &item.path, false)?;
+        ingest::mark_deleted(c, store, &folder, &item.path, false)?;
     }
     Ok(())
 }
 
 /// Changes a source: its name, where it writes, how often it runs and what it reads. Credentials left out keep their value.
-pub async fn edit_source(State(state): State<Shared>, Extension(who): Extension<Access>, Path((user, name)): Path<(String, String)>, Json(b): Json<SourceEdit>) -> Res<Done> {
+pub async fn edit_source(Ctx { state, who }: Ctx, Path((user, name)): Path<(String, String)>, Json(b): Json<SourceEdit>) -> Res<Done> {
     who.require_workspace()?;
-    let new_name = b.name.as_deref().map(input::device_name).transpose()?;
+    let new_name = b.name.as_deref().map(input::name).transpose()?;
     let secs = b.interval_hours.map(hours_to_secs).transpose()?;
     let stored_id = {
         let (who, user, name) = (who.clone(), user.clone(), name.clone());
@@ -285,9 +283,9 @@ pub async fn edit_source(State(state): State<Shared>, Extension(who): Extension<
 /// Only what the source collected is deleted, not what else is in the folder it wrote into.
 pub fn remove_source(c: &mut Client, store: &Store, id: i64, key: &str) -> anyhow::Result<()> {
     let due = links::due(c, id)?.ok_or_else(|| ApiError::not_found("No such source"))?;
-    let device = db::Device { id: due.folder_id.unwrap_or_default(), name: due.folder.clone().unwrap_or_default() };
+    let folder = db::FolderRef { id: due.folder_id.unwrap_or_default(), key: due.scope.clone() };
     for item in links::items(c, id)? {
-        ingest::mark_deleted(c, store, &device, &item.path, true)?;
+        ingest::mark_deleted(c, store, &folder, &item.path, true)?;
     }
     links::delete(c, id)?;
     alerts::resolve(c, "source_failed", key)?;
@@ -295,7 +293,7 @@ pub fn remove_source(c: &mut Client, store: &Store, id: i64, key: &str) -> anyho
     Ok(())
 }
 
-pub async fn delete_source(State(state): State<Shared>, Extension(who): Extension<Access>, Path((user, name)): Path<(String, String)>) -> Res<Done> {
+pub async fn delete_source(Ctx { state, who }: Ctx, Path((user, name)): Path<(String, String)>) -> Res<Done> {
     who.require_workspace()?;
     let store = state.store.clone();
     act(&state, move |c| {
@@ -305,10 +303,10 @@ pub async fn delete_source(State(state): State<Shared>, Extension(who): Extensio
     .await
 }
 
-pub async fn run_source(State(state): State<Shared>, Extension(who): Extension<Access>, Path((user, name)): Path<(String, String)>) -> Res<Done> {
+pub async fn run_source(Ctx { state, who }: Ctx, Path((user, name)): Path<(String, String)>) -> Res<Done> {
     touch_link(&state, who, Some(user), name, Touch::RunNow).await
 }
 
-pub async fn toggle_source(State(state): State<Shared>, Extension(who): Extension<Access>, Path((user, name)): Path<(String, String)>) -> Res<Done> {
+pub async fn toggle_source(Ctx { state, who }: Ctx, Path((user, name)): Path<(String, String)>) -> Res<Done> {
     touch_link(&state, who, Some(user), name, Touch::ToggleEnabled).await
 }

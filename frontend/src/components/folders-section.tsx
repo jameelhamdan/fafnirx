@@ -57,16 +57,16 @@ function Avatar({ name, className }: { name: string; className?: string }) {
   )
 }
 
-/** How the computers that have the folder are doing, in one word. */
+/** How the devices that have the folder are doing, in one word. */
 function syncBadge(folder: Folder, t: ReturnType<typeof useT>) {
-  const rows = folder.computers
+  const rows = folder.devices
   if (rows.length === 0) return <Badge variant="outline">{t('Not attached')}</Badge>
   if (rows.some((r) => r.last_error !== '' || r.failing > 0)) return <Badge variant="destructive">{t('Needs attention')}</Badge>
   if (rows.some((r) => r.last_cycle === 0)) return <Badge variant="outline">{t('Not synced yet')}</Badge>
   return <Badge variant="secondary">{t('In step')}</Badge>
 }
 
-/** Marks a folder that a source fills: its files come from there, not from a computer. */
+/** Marks a folder that a source fills: its files come from there, not from a device. */
 export function SourceBadge({ folder }: { folder: Folder }) {
   const t = useT()
   const sources = folder.rules.sources
@@ -79,7 +79,7 @@ export function SourceBadge({ folder }: { folder: Folder }) {
   )
 }
 
-/** The button that makes a folder; the next step, sharing it and attaching it to a computer, is in the panel that opens. */
+/** The button that makes a folder; the next step, sharing it and attaching it to a device, is in the panel that opens. */
 export function AddFolder({ onMade }: { onMade: (folder: string) => void }) {
   const t = useT()
   const [open, setOpen] = useState(false)
@@ -104,14 +104,12 @@ function People({ folder }: { folder: Folder }) {
   // Adding a user and changing what they may do are the same request.
   const save = useApiMutation((m: { user: string; can_write: boolean }) => api.post(members, m), {
     onSuccess: refresh,
-    toastError: true,
   })
   const remove = useApiMutation((m: { user: string; can_write: boolean }) => api.delete(`${members}/${encodeURIComponent(m.user)}`), {
     onSuccess: (_, m) => {
       refresh()
       toast(t('Stopped sharing with {name}', { name: m.user }), { action: { label: t('Undo'), onClick: () => save.mutate(m) } })
     },
-    toastError: true,
   })
   // Several names at once, separated by commas or spaces; the ones that fail stay in the field with the reason.
   const add = useApiMutation(async () => {
@@ -184,11 +182,11 @@ function People({ folder }: { folder: Folder }) {
   )
 }
 
-/** The command that syncs a folder of a computer with this shared folder, to copy. */
+/** The command that syncs a folder of a device with this shared folder, to copy. */
 function AttachHint({ folder }: { folder: Folder }) {
   const t = useT()
   const [copied, setCopied] = useState(false)
-  const command = `fafnirx folder add <folder> --target ${folder.folder}`
+  const command = `fafnirx folder add <folder> --target ${folder.key}`
   const copy = () => {
     void copyText(command).then((ok) => {
       if (!ok) return toast.error(t('Could not copy: select the text and copy it by hand.'))
@@ -198,7 +196,7 @@ function AttachHint({ folder }: { folder: Folder }) {
   }
   return (
     <div className="space-y-1">
-      <p className="text-sm text-muted-foreground">{t('Not attached to any computer yet. From the tray menu of a computer, or with this command:')}</p>
+      <p className="text-sm text-muted-foreground">{t('Not attached to any device yet. From the tray menu of a device, or with this command:')}</p>
       <div className="flex items-center gap-2">
         <code className="min-w-0 flex-1 break-all rounded bg-muted px-2 py-1 text-xs">{command}</code>
         <Button size="icon" variant="ghost" aria-label={t('Copy the command')} onClick={copy}>
@@ -209,22 +207,19 @@ function AttachHint({ folder }: { folder: Folder }) {
   )
 }
 
-/** Everything about one folder: who has it, which computers keep it, and the ways to end it. */
+/** Everything about one folder: who has it, which devices keep it, and the ways to end it. */
 export function FolderPanel({ folder, onClose }: { folder: Folder | undefined; onClose: () => void }) {
   const t = useT()
   const refresh = useRefreshFolders()
   const admin = useRole() === 'admin'
   const [asking, setAsking] = useState<'delete' | 'leave' | null>(null)
   const [renaming, setRenaming] = useState(false)
-  const ended = () => { setAsking(null); onClose(); refresh() }
-  const failed = (e: Error) => { setAsking(null); toast.error(e.message) }
+  const ended = () => { onClose(); refresh() }
   const remove = useApiMutation(() => (folder?.master ? api.delete(`/api/master-folders/${folder.public_id}`) : api.delete(`/api/folders/${encodeURIComponent(folder?.name ?? '')}`)), {
     onSuccess: ended,
-    onError: failed,
   })
-  const leave = useApiMutation(() => api.post('/api/folders/leave', { folder: folder?.folder }), {
+  const leave = useApiMutation(() => api.post('/api/folders/leave', { folder: folder?.key }), {
     onSuccess: ended,
-    onError: failed,
   })
   return (
     <Sheet open={folder !== undefined} onOpenChange={(o) => !o && onClose()}>
@@ -232,7 +227,7 @@ export function FolderPanel({ folder, onClose }: { folder: Folder | undefined; o
         {folder && (
           <>
             <SheetHeader>
-              <SheetTitle className="break-all">{folder.folder}</SheetTitle>
+              <SheetTitle className="break-all">{folder.key}</SheetTitle>
               <SheetDescription>
                 {folder.master ? t('Master files') : folder.mine ? t('Yours') : t('Shared by {owner}', { owner: folder.owner })}
                 {!folder.mine && <> · {folder.can_write ? t('Read and change') : t('Read only')}</>}
@@ -241,14 +236,14 @@ export function FolderPanel({ folder, onClose }: { folder: Folder | undefined; o
             <div className="space-y-6 px-4 pb-6">
               <div className="flex flex-wrap items-center gap-2">
                 <Button size="sm" variant="outline" asChild>
-                  <Link to={folderLink(folder.folder)}><FolderOpen className="size-4" />{t('Browse files')}</Link>
+                  <Link to={folderLink(folder.key)}><FolderOpen className="size-4" />{t('Browse files')}</Link>
                 </Button>
                 <span className="text-sm text-muted-foreground"><Summary folder={folder} /></span>
               </div>
               {folder.mine && <People folder={folder} />}
               <section className="space-y-2">
-                <h3 className="text-sm font-medium">{folder.mine || (folder.master && admin) ? t('Computers it is attached to') : t('Your computers that have it')}</h3>
-                {folder.computers.length > 0 ? <FolderStateList rows={folder.computers} /> : <AttachHint folder={folder} />}
+                <h3 className="text-sm font-medium">{folder.mine || (folder.master && admin) ? t('Devices it is attached to') : t('Your devices that have it')}</h3>
+                {folder.devices.length > 0 ? <FolderStateList rows={folder.devices} /> : <AttachHint folder={folder} />}
               </section>
               <Rules folder={folder} />
               <section className="flex flex-wrap gap-2 border-t pt-4">
@@ -269,7 +264,7 @@ export function FolderPanel({ folder, onClose }: { folder: Folder | undefined; o
                 )}
               </section>
               <RenameFolder
-                folder={renaming ? (folder.master ? folder.name : folder.folder) : null}
+                folder={renaming ? (folder.master ? folder.name : folder.key) : null}
                 masterId={folder.master ? folder.public_id : undefined}
                 onClose={() => setRenaming(false)}
                 onRenamed={() => { setRenaming(false); onClose(); refresh() }}
@@ -277,21 +272,21 @@ export function FolderPanel({ folder, onClose }: { folder: Folder | undefined; o
             </div>
             <Confirm
               open={asking === 'delete'}
-              title={folder.master ? t('Remove {name}?', { name: folder.name }) : t('Delete {name}?', { name: folder.folder })}
+              title={folder.master ? t('Remove {name}?', { name: folder.name }) : t('Delete {name}?', { name: folder.key })}
               description={t('This removes the folder for good, with its trash and the history of its files. It can only be deleted once all its files are deleted.')}
               action={folder.master ? t('Remove') : t('Delete')}
               destructive
               onConfirm={() => remove.mutate()}
-              onCancel={() => setAsking(null)}
+              onClose={() => setAsking(null)}
             />
             <Confirm
               open={asking === 'leave'}
-              title={t('Stop using {name}?', { name: folder.folder })}
-              description={t('Your computers stop syncing it. Nothing is deleted. {owner} can add you again.', { owner: folder.owner })}
+              title={t('Stop using {name}?', { name: folder.key })}
+              description={t('Your devices stop syncing it. Nothing is deleted. {owner} can add you again.', { owner: folder.owner })}
               action={t('Leave')}
               destructive
               onConfirm={() => leave.mutate()}
-              onCancel={() => setAsking(null)}
+              onClose={() => setAsking(null)}
             />
           </>
         )}
@@ -373,7 +368,7 @@ function Row({ folder, onOpen }: { folder: Folder; onOpen: () => void }) {
         <DropdownMenu>
           <DropdownMenuTrigger asChild><Button size="icon" variant="ghost" aria-label={t('More')}><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem asChild><Link to={folderLink(folder.folder)}><FolderOpen className="size-4" />{t('Browse files')}</Link></DropdownMenuItem>
+            <DropdownMenuItem asChild><Link to={folderLink(folder.key)}><FolderOpen className="size-4" />{t('Browse files')}</Link></DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -390,7 +385,7 @@ export function FoldersSection({ folders, onOpen }: { folders: Folder[]; onOpen:
     const word = search.trim().toLowerCase()
     const wanted = (f: Folder) =>
       show === 'all' || (show === 'master' ? f.master : show === 'mine' ? f.mine : show === 'sourced' ? f.rules.sources.length > 0 : !f.mine && !f.master)
-    return folders.filter((f) => wanted(f) && (word === '' || f.folder.toLowerCase().includes(word)))
+    return folders.filter((f) => wanted(f) && (word === '' || f.key.toLowerCase().includes(word)))
   }, [folders, show, search])
   const mine = folders.filter((f) => f.mine).length
   const master = folders.filter((f) => f.master).length
@@ -414,7 +409,7 @@ export function FoldersSection({ folders, onOpen }: { folders: Folder[]; onOpen:
         <p className="text-sm text-muted-foreground">{t('No folder matches.')}</p>
       ) : (
         <ul className="divide-y rounded-lg border bg-card">
-          {shown.map((f) => <Row key={f.folder} folder={f} onOpen={() => onOpen(f.folder)} />)}
+          {shown.map((f) => <Row key={f.key} folder={f} onOpen={() => onOpen(f.key)} />)}
         </ul>
       )}
     </div>

@@ -9,14 +9,11 @@ use crate::platform::id::Id;
 use crate::repo::library;
 use crate::repo::settings;
 use crate::repo::snapshot;
-use crate::web::access::Access;
+use crate::web::access::Ctx;
 use crate::web::run;
 use crate::web::ApiError;
 use crate::web::Res;
-use crate::web::Shared;
 use axum::extract::Query;
-use axum::extract::State;
-use axum::Extension;
 use axum::Json;
 use fafnirx_common::base_name;
 use fafnirx_common::unix_now;
@@ -30,7 +27,7 @@ use serde::Serialize;
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct TrashEntry {
     id: Id,
-    device: String,
+    folder: String,
     path: String,
     name: String,
     size: i64,
@@ -57,11 +54,11 @@ pub struct TrashQuery {
     offset: i64,
 }
 
-/// Deleted files of the devices the user can see, newest deletion first. They are removed for good when the retention
+/// Deleted files of the folders the user can see, newest deletion first. They are removed for good when the retention
 /// period ends; restoring one is `POST /api/files/restore` with its `version`.
-pub async fn trash(State(state): State<Shared>, Extension(who): Extension<Access>, Query(q): Query<TrashQuery>) -> Res<Trash> {
+pub async fn trash(Ctx { state, who }: Ctx, Query(q): Query<TrashQuery>) -> Res<Trash> {
     let out = run(&state, move |c| {
-        let retention_days = settings::get_i64(c, "retention_days", 30);
+        let retention_days = settings::retention_days(c);
         let rows = library::trash(c, who.viewer(), TRASH_PAGE, q.offset.max(0))?;
         let total = rows.first().map_or(0, |r| r.total);
         let entries = rows
@@ -69,7 +66,7 @@ pub async fn trash(State(state): State<Shared>, Extension(who): Extension<Access
             .map(|r| TrashEntry {
                 id: Id(r.id),
                 name: base_name(&r.path).to_string(),
-                device: r.folder,
+                folder: r.folder,
                 size: r.size,
                 deleted_at: r.deleted_at,
                 purge_at: r.deleted_at + retention_days * DAY_SECS,
@@ -100,7 +97,7 @@ pub struct Purged {
 
 /// Removes files from the trash for good, with their versions, albums, tags and state, before the retention period ends.
 /// Only what the trash lists, and only where the user may change files.
-pub async fn purge(State(state): State<Shared>, Extension(who): Extension<Access>, Json(b): Json<PurgeBody>) -> Res<Purged> {
+pub async fn purge(Ctx { state, who }: Ctx, Json(b): Json<PurgeBody>) -> Res<Purged> {
     if b.ids.is_empty() || b.ids.len() > TRASH_PAGE as usize {
         return Err(ApiError::bad("Name between 1 and 500 files"));
     }
@@ -117,20 +114,20 @@ pub async fn purge(State(state): State<Shared>, Extension(who): Extension<Access
             who.check_write(folder)?;
         }
         let ids: Vec<_> = files.iter().map(|f| f.id).collect();
-        let devices: Vec<_> = files.iter().map(|f| f.device_id).collect();
+        let folder_ids: Vec<_> = files.iter().map(|f| f.folder_id).collect();
         let bytes = library::versions_size(&mut tx, &ids)?;
         let versions = crate::repo::retention::delete_versions_of(&mut tx, &ids)?;
         crate::repo::retention::delete_files(&mut tx, &ids)?;
-        // A computer that has not heard of these deletions must not send the files again: the deletions removed here are no
+        // A device that has not heard of these deletions must not send the files again: the deletions removed here are no
         // longer all known, so it is given the whole list (the same rule as when retention removes them).
         let newest = files.iter().map(|f| f.deleted_at).max().unwrap_or(0) + 1;
         let known_from = settings::get_i64(&mut tx, settings::DELETIONS_KNOWN_FROM, 0).max(newest);
         settings::set(&mut tx, settings::DELETIONS_KNOWN_FROM, &known_from.to_string())?;
-        sql::devices::mark_totals_stale().bind(&mut tx, &devices).map(drop)?;
+        sql::folders::mark_totals_stale().bind(&mut tx, &folder_ids).map(drop)?;
         for folder in &folders {
             db::notify(&mut tx, db::Topic::Files, folder)?;
         }
-        db::notify(&mut tx, db::Topic::Devices, "")?;
+        db::notify(&mut tx, db::Topic::Folders, "")?;
         tx.commit()?;
         Ok((Purged { files: ids.len(), bytes }, versions))
     })
@@ -142,7 +139,7 @@ pub async fn purge(State(state): State<Shared>, Extension(who): Extension<Access
 }
 
 /// The tables a mirror keeps a copy of, so that albums, tags and favorites survive losing the database. Everything is
-/// named by user, device folder and path rather than by id, because ids do not survive a restore.
+/// named by user, folder and path rather than by id, because ids do not survive a restore.
 pub fn snapshot(c: &mut Client) -> anyhow::Result<serde_json::Value> {
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -150,8 +147,8 @@ pub fn snapshot(c: &mut Client) -> anyhow::Result<serde_json::Value> {
     /// The files of each tag, by the id of the tag.
     fn files_by<'a>(rows: impl Iterator<Item = (uuid::Uuid, &'a str, &'a str)>) -> BTreeMap<uuid::Uuid, Vec<serde_json::Value>> {
         let mut map: BTreeMap<uuid::Uuid, Vec<serde_json::Value>> = BTreeMap::new();
-        for (id, device, path) in rows {
-            map.entry(id).or_default().push(json!({ "device": device, "path": path }));
+        for (id, folder, path) in rows {
+            map.entry(id).or_default().push(json!({ "folder": folder, "path": path }));
         }
         map
     }
@@ -162,7 +159,7 @@ pub fn snapshot(c: &mut Client) -> anyhow::Result<serde_json::Value> {
         .into_iter()
         .map(|a| {
             json!({ "user": a.owner, "name": a.name, "description": a.description, "created_at": a.created_at,
-                    "folder": { "device": a.folder, "path": "" } })
+                    "folder": { "folder": a.folder, "path": "" } })
         })
         .collect();
 
@@ -178,7 +175,7 @@ pub fn snapshot(c: &mut Client) -> anyhow::Result<serde_json::Value> {
         .all()?
         .into_iter()
         .map(|s| {
-            json!({ "user": s.owner, "device": s.folder, "path": s.path, "favorite": s.favorite, "archived": s.archived,
+            json!({ "user": s.owner, "folder": s.folder, "path": s.path, "favorite": s.favorite, "archived": s.archived,
                     "rating": s.rating, "description": s.description, "taken_at": s.taken_at, "lat": s.lat, "lon": s.lon })
         })
         .collect();

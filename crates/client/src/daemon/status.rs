@@ -32,7 +32,7 @@ pub struct Activity {
     pub speed_bps: u64,
 }
 
-/// What one synced folder attached to this computer is doing, for `status`, the tray and the master.
+/// What one synced folder attached to this device is doing, for `status`, the tray and the master.
 #[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct SyncedStatus {
@@ -54,7 +54,7 @@ pub struct SyncedStatus {
     pub conflicts: Vec<ConflictInfo>,
     /// The folder can be read but not changed by this user: nothing is sent from here.
     pub read_only: bool,
-    /// How this computer settles a file changed on both sides (`up`, `both`, `keep` or `ask`).
+    /// How this device settles a file changed on both sides (`up`, `both`, `keep` or `ask`).
     pub mode: String,
 }
 

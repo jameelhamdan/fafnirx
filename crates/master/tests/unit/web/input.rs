@@ -2,9 +2,9 @@ use super::*;
 
 #[test]
 fn names_are_trimmed_lowered_and_checked() {
-    assert_eq!(device_name("  Family ").unwrap(), "family");
+    assert_eq!(name("  Family ").unwrap(), "family");
     for bad in ["", "a b", "con", "-x", &"a".repeat(64)] {
-        assert!(device_name(bad).is_err(), "{bad:?}");
+        assert!(name(bad).is_err(), "{bad:?}");
     }
 }
 

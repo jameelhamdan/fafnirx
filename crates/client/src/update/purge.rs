@@ -1,4 +1,4 @@
-//! Only one version of the client may live on a computer. A new install or update can leave an older program behind: in the place
+//! Only one version of the client may live on a device. A new install or update can leave an older program behind: in the place
 //! an earlier setup used, in `/usr/bin` when the new one went to `/usr/local/bin`, or in a folder of the `PATH` that comes before
 //! the new one, so that typing `fafnirx` runs the old client. After an install, the programs found are asked their version, and
 //! those older than the one running are stopped and removed.

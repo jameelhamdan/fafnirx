@@ -23,6 +23,16 @@ pub fn get_i64(c: &mut impl GenericClient, key: &str, default: i64) -> i64 {
     get(c, key).ok().flatten().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
 
+/// Days a deleted file stays recoverable before retention removes it.
+pub fn retention_days(c: &mut impl GenericClient) -> i64 {
+    get_i64(c, "retention_days", 30)
+}
+
+/// How many versions of a file are kept.
+pub fn version_count(c: &mut impl GenericClient) -> i64 {
+    get_i64(c, "version_count", 5)
+}
+
 pub fn set(c: &mut impl GenericClient, key: &str, value: &str) -> Result<(), Error> {
     q::set_setting().bind(c, &key, &value).map(drop)
 }

@@ -2,8 +2,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
 /**
- * A request made when somebody clicks: it says that it worked (`success`), or why it did not (`toastError`; a dialog shows the error
- * itself, from the result), and has the pages that show what it changed ask again (`invalidate`, the query keys).
+ * A request made when somebody clicks: it says that it worked (`success`), or why it did not (a toast; a dialog that shows the error
+ * itself, from the result, sets `inline`), and has the pages that show what it changed ask again (`invalidate`, the query keys).
  */
 export function useApiMutation<V = void, R = unknown>(
   request: (v: V) => Promise<R>,
@@ -11,13 +11,14 @@ export function useApiMutation<V = void, R = unknown>(
     invalidate?: string[][]
     success?: string | ((result: R, v: V) => string)
     onSuccess?: (result: R, v: V) => void
-    toastError?: boolean
+    /** The caller shows the error itself (a form), so no toast. */
+    inline?: boolean
     /** Instead of the toast, when something else must happen on a failure. */
     onError?: (error: Error) => void
   } = {},
 ) {
   const client = useQueryClient()
-  const { invalidate = [], success, onSuccess, toastError = false, onError } = options
+  const { invalidate = [], success, onSuccess, inline = false, onError } = options
   return useMutation<R, Error, V>({
     mutationFn: request,
     onSuccess: (result, v) => {
@@ -26,6 +27,6 @@ export function useApiMutation<V = void, R = unknown>(
       for (const queryKey of invalidate) void client.invalidateQueries({ queryKey })
       onSuccess?.(result, v)
     },
-    onError: onError ?? (toastError ? (e) => toast.error(e.message) : undefined),
+    onError: onError ?? (inline ? undefined : (e) => toast.error(e.message)),
   })
 }

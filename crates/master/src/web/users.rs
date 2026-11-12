@@ -1,14 +1,14 @@
 //! Users (administrators only). A user is disabled first and can then be deleted with what is theirs.
 
-use super::access::{Access, Role};
+use super::access::{Ctx, Role};
 use super::auth::{self, MIN_PASSWORD};
-use super::{act, run, ApiError, Done, Res, Shared};
+use super::{act, run, ApiError, Done, Res};
 use crate::platform::db;
-use crate::repo::{devices, users};
+use crate::repo::{devices, folders, users};
 use crate::web::input::NAME_RULE;
-use axum::extract::{Path, State};
-use axum::{Extension, Json};
-use fafnirx_common::{unix_now, valid_device_name};
+use axum::extract::Path;
+use axum::Json;
+use fafnirx_common::{unix_now, valid_name};
 use fafnirx_db::client::GenericClient;
 use fafnirx_db::queries as sql;
 use serde::{Deserialize, Serialize};
@@ -22,14 +22,22 @@ pub struct UserInfo {
     disabled: bool,
     created_at: i64,
     devices: i64,
+    folders: i64,
 }
 
-pub async fn list(State(state): State<Shared>, Extension(who): Extension<Access>) -> Res<Vec<UserInfo>> {
+pub async fn list(Ctx { state, who }: Ctx) -> Res<Vec<UserInfo>> {
     who.require_admin()?;
     let users = run(&state, |c| {
         Ok(users::list(c)?
             .into_iter()
-            .map(|u| UserInfo { name: u.name, role: u.role, disabled: u.disabled, created_at: u.created_at, devices: u.devices })
+            .map(|u| UserInfo {
+                name: u.name,
+                role: u.role,
+                disabled: u.disabled,
+                created_at: u.created_at,
+                devices: u.devices,
+                folders: u.folders,
+            })
             .collect())
     })
     .await?;
@@ -46,7 +54,7 @@ pub fn ensure_dirs(conn: &mut postgres::Client, store: &crate::platform::store::
 
 /// Adds a user and their folder.
 pub fn add_user(c: &mut impl GenericClient, live_root: &std::path::Path, name: &str, role: Role, password_hash: &str) -> anyhow::Result<()> {
-    if !valid_device_name(name) {
+    if !valid_name(name) {
         let rule = NAME_RULE.trim_start_matches("Name: ");
         return Err(ApiError::bad(format!("User name: {rule}")).into());
     }
@@ -77,7 +85,7 @@ fn check_password(password: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-pub async fn create(State(state): State<Shared>, Extension(who): Extension<Access>, Json(body): Json<NewUser>) -> Res<Done> {
+pub async fn create(Ctx { state, who }: Ctx, Json(body): Json<NewUser>) -> Res<Done> {
     who.require_admin()?;
     let name = body.name.trim().to_lowercase();
     let role = role_of(&body.role)?;
@@ -104,7 +112,7 @@ pub struct UserChange {
     password: Option<String>,
 }
 
-pub async fn update(State(state): State<Shared>, Extension(who): Extension<Access>, Path(name): Path<String>, Json(body): Json<UserChange>) -> Res<Done> {
+pub async fn update(Ctx { state, who }: Ctx, Path(name): Path<String>, Json(body): Json<UserChange>) -> Res<Done> {
     who.require_admin()?;
     let role = body.role.as_deref().map(role_of).transpose()?;
     if let Some(password) = &body.password {
@@ -146,10 +154,10 @@ pub async fn update(State(state): State<Shared>, Extension(who): Extension<Acces
     .await
 }
 
-/// Deletes a disabled user. Their computers go with what they sent (the computers keep their own files), and so do their
+/// Deletes a disabled user. Their devices go with what they sent (the devices keep their own files), and so do their
 /// memberships, favorites, tags, albums and sessions. Their folders must be empty, and they must have no sources left, so that
 /// nothing of theirs is lost without being looked at; a mirror or another user's source on one of their folders is in the way too.
-pub async fn delete(State(state): State<Shared>, Extension(who): Extension<Access>, Path(name): Path<String>) -> Res<Done> {
+pub async fn delete(Ctx { state, who }: Ctx, Path(name): Path<String>) -> Res<Done> {
     who.require_admin()?;
     if name == who.name {
         return Err(ApiError::conflict("You cannot delete your own account"));
@@ -171,36 +179,38 @@ pub async fn delete(State(state): State<Shared>, Extension(who): Extension<Acces
         if let Some((link, folder)) = users::link_on_folders_of(&mut tx, account.id)? {
             return Err(ApiError::conflict(format!("{link} mirrors or writes into {folder}: delete it first")).into());
         }
-        let owned = users::devices_of(&mut tx, account.id)?;
+        let (owned_devices, owned_folders) = (users::devices_of(&mut tx, account.id)?, users::folders_of(&mut tx, account.id)?);
         let mut versions = Vec::new();
-        for d in &owned {
-            devices::lock(&mut tx, d.id)?;
-            // What a computer sent is a copy of its files; a folder's files are kept only here.
-            if d.kind == "local" && devices::has_live_files(&mut tx, d.id)? {
-                let folder = &d.folder;
-                return Err(ApiError::conflict(format!("{folder} still has files: delete or move them first")).into());
+        // What a device sent is a copy of its files; a folder's files are kept only here.
+        for f in &owned_folders {
+            folders::lock(&mut tx, f.id)?;
+            if folders::has_live_files(&mut tx, f.id)? {
+                let key = &f.key;
+                return Err(ApiError::conflict(format!("{key} still has files: delete or move them first")).into());
             }
-            versions.extend(devices::delete_contents(&mut tx, d.id)?);
-            devices::delete(&mut tx, d.id)?;
+            versions.extend(folders::delete_contents(&mut tx, f.id)?);
+            folders::delete(&mut tx, f.id)?;
+        }
+        for d in &owned_devices {
+            versions.extend(devices::delete(&mut tx, d.id)?);
         }
         users::delete(&mut tx, account.id, &name, unix_now())?;
         db::notify(&mut tx, db::Topic::Users, &name)?;
         db::notify(&mut tx, db::Topic::Devices, "")?;
+        db::notify(&mut tx, db::Topic::Folders, "")?;
         tx.commit()?;
 
         for version in versions {
             store.remove_version(version);
         }
-        for d in &owned {
-            let dir = store.live_dir(&d.folder);
-            if d.kind == "device" {
-                let _ = std::fs::remove_dir_all(dir);
-            } else {
-                crate::devices::folders::remove_if_only_folders(&dir);
-            }
+        for d in &owned_devices {
+            let _ = std::fs::remove_dir_all(store.live_dir(&d.key));
         }
-        crate::devices::folders::remove_if_only_folders(&store.live_root().join(crate::platform::store::USERS_DIR).join(&name));
-        tracing::info!("deleted the user {name} with {} computers and folders", owned.len());
+        for f in &owned_folders {
+            crate::folders::api::remove_if_only_folders(&store.live_dir(&f.key));
+        }
+        crate::folders::api::remove_if_only_folders(&store.live_root().join(crate::platform::store::USERS_DIR).join(&name));
+        tracing::info!("deleted the user {name} with {} devices and {} folders", owned_devices.len(), owned_folders.len());
         Ok(())
     })
     .await

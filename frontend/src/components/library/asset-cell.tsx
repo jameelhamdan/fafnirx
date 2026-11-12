@@ -34,7 +34,7 @@ export function AssetCell({
         <Thumb src={src} className="size-full" fallback={<ImageIcon className="size-6 text-muted-foreground" />} />
       </button>
       {asset.kind === 'video' && (
-        <span className="pointer-events-none absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-black/55 px-1.5 py-0.5 text-[11px] font-medium text-white">
+        <span className="pointer-events-none absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-black/55 px-1.5 py-0.5 text-2xs font-medium text-white">
           {asset.duration_ms ? clock(asset.duration_ms) : null}
           <Play className="size-3 fill-white" />
         </span>

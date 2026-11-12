@@ -85,7 +85,7 @@ pub async fn run(db: Db, store: Arc<Store>, src: Due) -> Result<SourceRun> {
     let (items, skipped) = items_of(&listing)?;
     let (rc, base) = (&rc, &base);
     let fetch_store = store.clone();
-    let source = syncsource::Source { db, store, id: src.id, device: syncsource::device_of(&src)? };
+    let source = syncsource::Source { db, store, id: src.id, folder: syncsource::folder_of(&src)? };
     syncsource::apply(source, Listing { items, skipped }, Rules::ALL, |item| {
         let store = fetch_store.clone();
         async move {

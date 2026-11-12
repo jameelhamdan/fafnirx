@@ -322,9 +322,9 @@ export default function VideoPlayer({ source, onFail, onNotice, t = same, lang, 
           <span className="ms-1 text-xs tabular-nums text-white/90">{clock(time)} / {clock(duration)}</span>
           <span className="flex-1" />
           {stream.mode === 'stream' && stream.level === AUTO && stream.shown !== null && stream.heights[stream.shown] && (
-            <span className="me-1 hidden rounded bg-white/15 px-1.5 py-0.5 text-[11px] font-medium tabular-nums sm:inline">{stream.heights[stream.shown]}p</span>
+            <span className="me-1 hidden rounded bg-white/15 px-1.5 py-0.5 text-2xs font-medium tabular-nums sm:inline">{stream.heights[stream.shown]}p</span>
           )}
-          {stream.mode === 'original' && stream.canStream && <span className="me-1 hidden rounded bg-white/15 px-1.5 py-0.5 text-[11px] font-medium sm:inline">{t('Original')}</span>}
+          {stream.mode === 'original' && stream.canStream && <span className="me-1 hidden rounded bg-white/15 px-1.5 py-0.5 text-2xs font-medium sm:inline">{t('Original')}</span>}
           {subs.tracks.length > 0 && (
             <button type="button" className={cx(iconButton, captionsOn && 'bg-white/20')} aria-label={t('Subtitles')} aria-pressed={captionsOn} onClick={toggleCaptions}>
               {captionsOn ? <Captions className="size-5" /> : <CaptionsOff className="size-5" />}

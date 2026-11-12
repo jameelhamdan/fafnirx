@@ -16,7 +16,7 @@ export const fileOfInfo = (info: FileInfo): ModuleFile => ({
   id: info.id,
   name: info.name,
   kind: info.mime.startsWith('video/') ? 'video' : info.mime.startsWith('image/') ? 'image' : null,
-  src: downloadUrl(info.device, info.path, { inline: true }),
+  src: downloadUrl(info.folder, info.path, { inline: true }),
   poster: info.preview ? mediaUrl(info.id, 'preview') : undefined,
   deleted: info.deleted_at !== null,
 })

@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { FolderOpen, KeyRound, Ban, Unplug } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ActivityView, ErrorNote, Fact, KindBadge, PageHeader, StatusDot } from '@/components/common'
+import { ActivityView, ErrorNote, Fact, PageHeader, StatusDot } from '@/components/common'
 import { EnrollDialog } from '@/components/enroll-dialog'
 import { FolderStateList } from '@/components/folder-state'
 import { Confirm } from '@/components/confirm'
@@ -26,11 +26,11 @@ export default function DeviceDetailPage() {
   const [token, setToken] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<'revoke' | 'rotate' | 'release' | null>(null)
   const { data, error } = useQuery({ queryKey: ['device', name], queryFn: () => api.get<DeviceDetail>(`/api/devices/${deviceAddress(name)}`) })
-  const here = { invalidate: [['device', name]], toastError: true }
+  const here = { invalidate: [['device', name]] }
   const rotate = useApiMutation(() => api.post<DeviceDetail>(`/api/devices/${deviceAddress(name)}/token`), { ...here, onSuccess: (made) => setToken(made.token) })
   const release = useApiMutation(() => api.post(`/api/devices/${deviceAddress(name)}/release`), {
     ...here,
-    success: t('{name} released. The next computer that connects with its token takes it over.', { name }),
+    success: t('{name} released. The next client that connects with its token takes it over.', { name }),
   })
   const revoke = useApiMutation(() => api.post(`/api/devices/${deviceAddress(name)}/revoke`), { ...here, success: t('{name} revoked. Its data is kept.', { name }) })
 
@@ -41,18 +41,16 @@ export default function DeviceDetailPage() {
   return (
     <div>
       <PageHeader
-        title={d.folder}
-        description={<span className="flex items-center gap-3"><KindBadge kind={d.kind} />{d.kind === 'device' && <StatusDot status={d.revoked ? 'revoked' : d.online ? 'online' : 'offline'} label={d.revoked ? t('Revoked') : d.online ? t('Online') : t('Offline, seen {when}', { when: ago(d.last_seen, now) })} />}</span>}
+        title={d.key}
+        description={<span className="flex items-center gap-3"><StatusDot status={d.revoked ? 'revoked' : d.online ? 'online' : 'offline'} label={d.revoked ? t('Revoked') : d.online ? t('Online') : t('Offline, seen {when}', { when: ago(d.last_seen, now) })} /></span>}
         actions={
           <>
-            <Button variant="outline" asChild><Link to={filesLink(d.folder)}><FolderOpen className="size-4" />{t('Browse files')}</Link></Button>
-            {d.kind === 'device' && (
-              <>
-                <Button variant="outline" onClick={() => setConfirm('rotate')}><KeyRound className="size-4" />{d.revoked ? t('New token (re-enables)') : t('Rotate token')}</Button>
+            <Button variant="outline" asChild><Link to={filesLink(d.key)}><FolderOpen className="size-4" />{t('Browse files')}</Link></Button>
+            <>
+              <Button variant="outline" onClick={() => setConfirm('rotate')}><KeyRound className="size-4" />{d.revoked ? t('New token (re-enables)') : t('Rotate token')}</Button>
                 {!d.revoked && <Button variant="outline" onClick={() => setConfirm('release')}><Unplug className="size-4" />{t('Release')}</Button>}
                 {!d.revoked && <Button variant="outline" onClick={() => setConfirm('revoke')}><Ban className="size-4" />{t('Revoke')}</Button>}
-              </>
-            )}
+            </>
           </>
         }
       />
@@ -84,7 +82,7 @@ export default function DeviceDetailPage() {
         <Card className="lg:col-span-2">
           <CardHeader><CardTitle>{t('Recent changes')}</CardTitle></CardHeader>
           <CardContent>
-            <EventList events={data.events} empty={t('Nothing collected yet.')} folder={d.folder} />
+            <EventList events={data.events} empty={t('Nothing collected yet.')} folder={d.key} />
           </CardContent>
         </Card>
       </div>
@@ -101,16 +99,16 @@ export default function DeviceDetailPage() {
         title={t('Rotate the token?')}
         description={t('The old token stops working at once. The device must be enrolled again with the new one.')}
         action={t('Rotate')}
-        onCancel={() => setConfirm(null)}
-        onConfirm={() => { setConfirm(null); rotate.mutate() }}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => rotate.mutate()}
       />
       <Confirm
         open={confirm === 'release'}
         title={t('Release {name}?', { name: d.name })}
-        description={t('A device is used by one computer at a time, and a second one using its token is refused. Release it to let the next computer that connects take it over, for example after replacing the computer. The computer that has it now is refused from then on.')}
+        description={t('A device is used by one client at a time, and a second client using its token is refused. Release it to let the next client that connects take it over, for example after replacing the device. The client that has it now is refused from then on.')}
         action={t('Release')}
-        onCancel={() => setConfirm(null)}
-        onConfirm={() => { setConfirm(null); release.mutate() }}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => release.mutate()}
       />
       <Confirm
         open={confirm === 'revoke'}
@@ -118,8 +116,8 @@ export default function DeviceDetailPage() {
         description={t('It can no longer send data. What it already sent stays on the master.')}
         action={t('Revoke')}
         destructive
-        onCancel={() => setConfirm(null)}
-        onConfirm={() => { setConfirm(null); revoke.mutate() }}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => revoke.mutate()}
       />
       <EnrollDialog name={d.name} token={token} onClose={() => setToken(null)} />
     </div>

@@ -8,7 +8,7 @@ repository.workspace = true
 # Debian package, built by .github/workflows/release.yml with `cargo deb -p fafnirx --no-build`.
 [package.metadata.deb]
 maintainer = "Jameel Hamdan <jameelhamdan@users.noreply.github.com>"
-extended-description = "Backs up folders to your own fafnirx master. After installing, run `sudo fafnirx install --server <address>` (it asks for the token): that enrolls this computer and installs and starts the fafnirx service."
+extended-description = "Backs up folders to your own fafnirx master. After installing, run `sudo fafnirx install --server <address>` (it asks for the token): that enrolls this device and installs and starts the fafnirx service."
 section = "utils"
 priority = "optional"
 depends = "$auto"

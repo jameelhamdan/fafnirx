@@ -1,13 +1,11 @@
 //! Live updates: changes are announced with PostgreSQL `NOTIFY`; the master listens for them on a connection of its
 //! own and passes them on to browsers as server-sent events.
 
-use super::access::Access;
-use super::Shared;
+use super::access::{Access, Ctx};
+use super::App;
 use crate::platform::db::{Reach, Topic, CHANNEL};
-use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::Extension;
 use futures_util::Stream;
 use postgres::{Config, NoTls};
 use std::convert::Infallible;
@@ -17,7 +15,7 @@ use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 use tokio_stream::StreamExt;
 
 /// Listens for notifications on a connection of its own and feeds them to the event streams.
-pub fn listen(state: Shared, url: String) {
+pub fn listen(state: App, url: String) {
     std::thread::spawn(move || {
         let config: Config = match url.parse() {
             Ok(c) => c,
@@ -32,7 +30,7 @@ pub fn listen(state: Shared, url: String) {
     });
 }
 
-fn listen_once(state: &Shared, config: &Config) -> Result<(), postgres::Error> {
+fn listen_once(state: &App, config: &Config) -> Result<(), postgres::Error> {
     use postgres::fallible_iterator::FallibleIterator;
     let mut client = config.connect(NoTls)?;
     client.batch_execute(&format!("LISTEN {CHANNEL}"))?;
@@ -73,7 +71,7 @@ fn is_for(who: &Access, payload: &str) -> bool {
 /// whose session ended (logged out, disabled) closes; the browser's reconnect then meets the login check.
 const RECHECK: Duration = Duration::from_secs(60);
 
-pub async fn stream(State(state): State<Shared>, Extension(who): Extension<Access>, headers: HeaderMap) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+pub async fn stream(Ctx { state, who }: Ctx, headers: HeaderMap) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
     let mut changes = BroadcastStream::new(state.events.subscribe());
     tokio::spawn(async move {

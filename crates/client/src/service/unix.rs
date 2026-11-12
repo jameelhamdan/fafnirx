@@ -115,7 +115,7 @@ pub fn set_dir_modes(config_dir: &Path, data: &Path, state: &Path, control: &Pat
     Ok(())
 }
 
-/// Whether the service is installed on this computer.
+/// Whether the service is installed on this device.
 pub fn installed() -> bool {
     Path::new(if cfg!(target_os = "macos") { MAC_DAEMON } else { SYSTEMD_UNIT }).exists()
 }
@@ -148,7 +148,7 @@ fn console_user() -> Option<String> {
 
 /// Makes sure the tray starts when a user logs in: writes its LaunchAgent (macOS) or autostart entry (Linux) when it is missing or
 /// belongs to another program file, and on a Mac loads it for the user at the console. An update replaces only the program file,
-/// so a computer that got here from a version without the entry would otherwise never have a tray. Only the service (root) does
+/// so a device that got here from a version without the entry would otherwise never have a tray. Only the service (root) does
 /// this. Best effort.
 pub fn ensure_login_start(config: &Path) {
     if !cfg!(feature = "tray") || !super::elevate::is_admin() || !crate::config::is_system_config(config) {
@@ -174,13 +174,13 @@ pub fn ensure_login_start(config: &Path) {
     }
 }
 
-/// Installs the service and the tray of every user, and starts the service. Needs an administrator; the config of the computer
+/// Installs the service and the tray of every user, and starts the service. Needs an administrator; the config of the device
 /// (`fafnirx install --server <address>`) comes first, because the service starts with it.
 pub fn install_service(_config_path: &Path, exe: &Path, dry: bool) -> Result<()> {
     let config = system_config_path();
     if !dry {
         if !config.exists() {
-            bail!("there is no config for the computer yet: run `fafnirx install --server <address>` first");
+            bail!("there is no config for the device yet: run `fafnirx install --server <address>` first");
         }
         check_exe_is_protected(exe)?;
         super::prepare_dirs(&config)?;
