@@ -144,24 +144,24 @@ try {
   check(!('users/admin/source-photos/sub/b.txt' in files) && !('users/admin/source-photos/big.bin' in files), 'deleted and renamed-away files are not in the current tree')
   const stats = JSON.parse(fs.readFileSync(path.join(mirrorDir, 'meta', 'stats.json'), 'utf8'))
   check(stats.files === Object.keys(files).length && new Set(stats.namespaces.map((n) => n.namespace)).size === 2, `stats.json describes the tree (${stats.files} files)`)
-  const listing = JSON.parse(fs.readFileSync(path.join(mirrorDir, 'meta', 'admin_laptop.json'), 'utf8'))
-  check(listing.files.length === 2 && listing.files.every((f) => f.root_hash && f.size), 'a file list per device is written as JSON')
+  const listing = JSON.parse(fs.readFileSync(path.join(mirrorDir, 'meta', 'admin_laptop_docs.json'), 'utf8'))
+  check(listing.files.length === 2 && listing.files.every((f) => f.root_hash && f.size), 'a file list per folder is written as JSON')
   const library = JSON.parse(fs.readFileSync(path.join(mirrorDir, 'meta', 'library.json'), 'utf8'))
   check(Array.isArray(library.albums) && Array.isArray(library.tags) && Array.isArray(library.files), 'albums, tags and what was said about files are written as JSON too')
   check(
-    Object.entries(files).filter(([k]) => k.startsWith('users/admin/laptop/')).every(([k, v]) => v.length === listing.files.find((f) => `users/admin/laptop/${f.path}` === k).size),
+    Object.entries(files).filter(([k]) => k.startsWith('users/admin/laptop/')).every(([k, v]) => v.length === listing.files.find((f) => `users/admin/laptop/docs/${f.path}` === k).size),
     'file list sizes match the mirrored files',
   )
   check(Number((await schema.rows("SELECT last_files FROM links WHERE direction = 'out'"))[0][0]) === Object.keys(files).length, 'the mirrored file count is recorded')
 
-  // --- a mirror of one folder holds only that folder, at the same place below files/ ---------------------------------------------
+  // --- a mirror of one device holds only that device, at the same place below files/ ---------------------------------------------
   const scopedDir = path.join(tmp, 'offsite-docs')
-  const scoped = { ...form, name: 'docs-only', remote_path: scopedDir.replaceAll('\\', '/'), folder: 'admin/laptop' }
-  check((await admin.post('/api/mirrors', { ...scoped, name: 'nowhere', folder: 'admin/nope' })).status === 400, 'a folder that does not exist cannot be mirrored')
-  check((await admin.get('/api/mirrors/folders')).json.includes('admin/laptop'), 'the folders are offered to pick from')
-  check((await admin.post('/api/mirrors', scoped)).status === 200, 'a mirror of one folder is added')
+  const scoped = { ...form, name: 'docs-only', remote_path: scopedDir.replaceAll('\\', '/'), scope: 'admin/laptop' }
+  check((await admin.post('/api/mirrors', { ...scoped, name: 'nowhere', scope: 'admin/nope' })).status === 400, 'a device or folder that does not exist cannot be mirrored')
+  check((await admin.get('/api/mirrors/scopes')).json.includes('admin/laptop'), 'the devices and folders are offered to pick from')
+  check((await admin.post('/api/mirrors', scoped)).status === 200, 'a mirror of one device is added')
   const m3 = await until(() => finished('mirrors', 'docs-only'), 90)
-  check(m3?.[0] === 'ok', `the mirror of one folder succeeds (${m3?.[0]}: ${JSON.stringify(m3?.[1])})`)
+  check(m3?.[0] === 'ok', `the mirror of one device succeeds (${m3?.[0]}: ${JSON.stringify(m3?.[1])})`)
   check(
     Object.keys(tree(path.join(scopedDir, 'files'))).sort().join() === 'users/admin/laptop/docs/deep/y.txt,users/admin/laptop/docs/x.txt',
     'it holds only the files of that folder, with the same paths as the master',
