@@ -14,7 +14,7 @@ const stored = (folder, p) => {
   return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null
 }
 const live = async (folder) =>
-  (await schema.rows('SELECT f.path FROM files f JOIN folders d ON d.id = f.folder_id WHERE (d.key = $1 OR starts_with(d.key, $1 || '/')) AND f.deleted_at IS NULL ORDER BY f.path', [folder])).map((r) => r[0])
+  (await schema.rows(`SELECT f.path FROM files f JOIN folders d ON d.id = f.folder_id WHERE (d.key = $1 OR starts_with(d.key, $1 || '/')) AND f.deleted_at IS NULL ORDER BY f.path`, [folder])).map((r) => r[0])
 
 try {
   await master.start()
