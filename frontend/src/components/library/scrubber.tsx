@@ -125,22 +125,22 @@ export function Scrubber({
         setHover(null)
       }}
       onPointerLeave={() => !dragging && setHover(null)}
-      className={cn('fixed top-16 right-0 bottom-3 z-30 w-9 touch-none select-none outline-offset-[-2px] focus-visible:outline-2 focus-visible:outline-ring', !ready && 'hidden')}
+      className={cn('fixed top-16 end-0 bottom-3 z-30 w-9 touch-none select-none outline-offset-[-2px] focus-visible:outline-2 focus-visible:outline-ring', !ready && 'hidden')}
     >
       {labels.map((l) => (
-        <span key={l.text} className="pointer-events-none absolute right-2 -translate-y-px text-2xs font-medium text-muted-foreground tabular-nums" style={{ top: l.top }}>
+        <span key={l.text} className="pointer-events-none absolute end-2 -translate-y-px text-2xs font-medium text-muted-foreground tabular-nums" style={{ top: l.top }}>
           {l.text}
         </span>
       ))}
       {ready && (
         <>
           <span
-            className={cn('pointer-events-none absolute right-0 h-1 w-7 rounded-l bg-primary shadow transition-[width]', active && 'w-9')}
+            className={cn('pointer-events-none absolute end-0 h-1 w-7 rounded-s bg-primary shadow transition-[width]', active && 'w-9')}
             style={{ top: clamp(here * height - 2, 0, Math.max(0, height - 4)) }}
           />
           {active && (
             <span
-              className="pointer-events-none absolute right-10 -translate-y-1/2 rounded-md bg-popover px-2.5 py-1 text-xs font-medium whitespace-nowrap text-popover-foreground shadow-md ring-1 ring-border"
+              className="pointer-events-none absolute end-10 -translate-y-1/2 rounded-md bg-popover px-2.5 py-1 text-xs font-medium whitespace-nowrap text-popover-foreground shadow-md ring-1 ring-border"
               style={{ top: clamp((hover ?? here) * height, 14, Math.max(14, height - 14)) }}
             >
               {monthTitle(months[shown].month)}

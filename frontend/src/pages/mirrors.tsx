@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { BookOpen, Copy, Download, FolderOpen, KeyRound, Lock, Plus, RefreshCw, RotateCcw } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { Picker, ErrorNote, PageHeader } from '@/components/common'
+import { Picker, ErrorNote, PageHeader, Callout } from '@/components/common'
 import { Confirm } from '@/components/confirm'
 import { JobList } from '@/components/job-list'
 import { StorageForm } from '@/components/storage-form'
@@ -79,7 +79,7 @@ function KeyField({ form, set }: { form: typeof BLANK; set: (patch: Partial<type
   const filled = form.crypt_password !== '' && form.crypt_salt !== ''
   const text = `${t('fafnirx backup key for {name}', { name: form.name || '…' })}\n\n${t('Password')}: ${form.crypt_password}\n${t('Salt')}: ${form.crypt_salt}\n`
   return (
-    <div className="space-y-3 rounded-md border border-warning/40 bg-warning/5 p-3">
+    <Callout className="space-y-3">
       <p className="text-sm">{t('The backup is encrypted with a key only you hold. Without it nothing can be restored, not even by the master.')}</p>
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant="outline" size="sm" onClick={() => set({ crypt_password: randomSecret(), crypt_salt: randomSecret(), saved: false })}>
@@ -107,7 +107,7 @@ function KeyField({ form, set }: { form: typeof BLANK; set: (patch: Partial<type
         <Checkbox checked={form.saved} disabled={!filled} onCheckedChange={(v) => set({ saved: v === true })} />
         {t('I have saved this key somewhere safe, away from the master')}
       </label>
-    </div>
+    </Callout>
   )
 }
 
@@ -243,12 +243,12 @@ function Guide({ open }: { open: boolean }) {
           <p className="text-muted-foreground">{t('The same folders and files as the master, readable by anything. Use it for a NAS or a disk you want to browse.')}</p>
         </div>
       </div>
-      <ul className="mt-3 list-disc space-y-1 pl-5 text-muted-foreground">
+      <ul className="mt-3 list-disc space-y-1 ps-5 text-muted-foreground">
         <li>{t('Only new and changed files are sent; a renamed file is moved on the mirror, not sent again.')}</li>
         <li>{t('A mirror never deletes: replaced and deleted files go to a history of runs, and only the oldest runs are removed.')}</li>
         <li>{t('Keep the key of a backup away from the master: a disk that fails takes the key with it.')}</li>
       </ul>
-      <a className="mt-3 inline-block text-primary hover:underline" href={docs('mirrors')} target="_blank" rel="noreferrer">{t('Read the full guide')} →</a>
+      <a className="mt-3 inline-block text-primary-ink hover:underline" href={docs('mirrors')} target="_blank" rel="noreferrer">{t('Read the full guide')} →</a>
       </CollapsibleContent>
     </Collapsible>
   )

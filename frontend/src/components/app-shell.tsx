@@ -128,6 +128,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-svh">
+      <a href="#main" className="skip-link">{t('Skip to content')}</a>
       <aside className="sticky top-0 hidden h-svh w-60 shrink-0 flex-col overflow-y-auto border-e bg-sidebar md:flex">
         <Brand />
         <Nav />
@@ -157,7 +158,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <TooltipTrigger asChild>
               <span className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground sm:px-2">
                 <span className={cn('size-2 rounded-full', live ? 'bg-success' : 'animate-pulse bg-warning')} />
-                <span className="hidden sm:inline">{live ? t('Live') : t('Reconnecting')}</span>
+                <span className="sr-only sm:not-sr-only">{live ? t('Live') : t('Reconnecting')}</span>
               </span>
             </TooltipTrigger>
             <TooltipContent>{live ? t('Changes appear as they happen') : t('Updates paused; reconnecting')}</TooltipContent>
@@ -194,7 +195,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </DropdownMenuContent>
           </DropdownMenu>
         </header>
-        <main className="min-w-0 flex-1 p-3 md:p-6">
+        <main id="main" tabIndex={-1} className="min-w-0 flex-1 p-3 outline-none md:p-6">
           <PluginAlert />
           {children}
         </main>

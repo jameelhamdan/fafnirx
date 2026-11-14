@@ -1,4 +1,5 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
+import { Panel } from '../common'
 import { ArrowDown, ArrowUp, Loader2, Play } from 'lucide-react'
 import { useRef } from 'react'
 import { Link } from 'react-router-dom'
@@ -53,13 +54,13 @@ export function FileList({
   const all = entries.length > 0 && entries.every((e) => selected.has(entryKey(e)))
 
   return (
-    <div className="overflow-hidden rounded-lg border bg-card">
+    <Panel>
       <div className={cn('grid items-center gap-2 border-b bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground', COLUMNS)}>
         <Checkbox checked={all} onCheckedChange={onToggleAll} aria-label={t('Select all')} className={HIT_AREA} />
         <SortHeader field="name" label={t('Name')} {...{ sort, order, onSort }} />
         <SortHeader field="size" label={t('Size')} {...{ sort, order, onSort }} className="justify-end" />
         <SortHeader field="modified" label={t('Modified')} {...{ sort, order, onSort }} className="hidden sm:flex" />
-        <span className="hidden text-right lg:block">{t('Versions')}</span>
+        <span className="hidden text-end lg:block">{t('Versions')}</span>
       </div>
       <div ref={parent} className="h-[calc(100svh-22rem)] min-h-72 overflow-y-auto">
         <div className="relative w-full" style={{ height: virtual.getTotalSize() }}>
@@ -73,12 +74,12 @@ export function FileList({
                 key={key}
                 role="row"
                 aria-selected={on}
-                className={cn('absolute top-0 left-0 grid w-full items-center gap-2 border-b px-3 text-sm', COLUMNS, on ? 'bg-accent' : 'hover:bg-muted/50')}
+                className={cn('absolute top-0 start-0 grid w-full items-center gap-2 border-b px-3 text-sm', COLUMNS, on ? 'bg-accent' : 'hover:bg-muted/50')}
                 style={{ height: row.size, transform: `translateY(${row.start}px)` }}
               >
                 <Checkbox checked={on} onCheckedChange={() => onToggle(key)} aria-label={t('Select {name}', { name: e.name })} className={HIT_AREA} />
                 <div className="flex min-w-0 items-center gap-1">
-                  <button type="button" onClick={() => onOpen(e)} className="flex min-w-0 flex-1 items-center gap-2.5 text-left" title={e.name}>
+                  <button type="button" onClick={() => onOpen(e)} className="flex min-w-0 flex-1 items-center gap-2.5 text-start" title={e.name}>
                     <FileIcon entry={e} />
                     <span className={cn('truncate', e.kind !== 'file' && 'font-medium', gone && 'text-muted-foreground line-through')}>{e.name}</span>
                     {e.processing && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-label={t('Still being processed')} />}
@@ -91,16 +92,16 @@ export function FileList({
                     <Link to={`/watch/${e.id}`} state={watch} className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={t('Open in viewer')} title={t('Open in viewer')}><Play className="size-4" /></Link>
                   )}
                 </div>
-                <span className="text-right text-muted-foreground tabular-nums" title={e.size === null ? undefined : t('{n} bytes', { n: e.size.toLocaleString() })}>
+                <span className="text-end text-muted-foreground tabular-nums" title={e.size === null ? undefined : t('{n} bytes', { n: e.size.toLocaleString() })}>
                   {bytes(e.size)}
                 </span>
                 <span className="hidden text-muted-foreground sm:block">{e.kind === 'file' ? ago(e.mtime ?? e.changed, now) : e.changed ? ago(e.changed, now) : ''}</span>
-                <span className="hidden text-right text-muted-foreground tabular-nums lg:block">{e.kind === 'file' && (e.versions ?? 0) > 1 ? e.versions : ''}</span>
+                <span className="hidden text-end text-muted-foreground tabular-nums lg:block">{e.kind === 'file' && (e.versions ?? 0) > 1 ? e.versions : ''}</span>
               </div>
             )
           })}
         </div>
       </div>
-    </div>
+    </Panel>
   )
 }

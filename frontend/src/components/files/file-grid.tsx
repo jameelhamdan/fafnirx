@@ -29,8 +29,8 @@ export function FileGrid({
         const key = entryKey(e)
         const on = selected.has(key)
         return (
-          <div key={key} className={cn('group relative overflow-hidden rounded-lg border bg-card transition-colors', on && 'border-primary ring-2 ring-primary/40')}>
-            <button type="button" onClick={() => onOpen(e)} className="block w-full text-left" title={e.name}>
+          <div key={key} className={cn('group relative overflow-hidden rounded-md border bg-card transition-colors', on && 'border-primary ring-2 ring-primary/40')}>
+            <button type="button" onClick={() => onOpen(e)} className="block w-full text-start" title={e.name}>
               <div className="grid aspect-square place-items-center bg-muted/40">
                 {e.kind === 'file' && e.preview ? (
                   <Thumb src={e.id ? mediaUrl(e.id, 'thumb') : thumbUrl(e.folder, e.path)} className={cn('size-full', e.deleted_at && 'opacity-40')} fallback={<FileIcon entry={e} className="size-10" />} />
@@ -49,7 +49,7 @@ export function FileGrid({
               checked={on}
               onCheckedChange={() => onToggle(key)}
               aria-label={t('Select {name}', { name: e.name })}
-              className={cn('absolute top-2 left-2 bg-background/90', !on && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-sm:opacity-100')}
+              className={cn('absolute top-2 start-2 bg-background/90', !on && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-sm:opacity-100')}
             />
           </div>
         )

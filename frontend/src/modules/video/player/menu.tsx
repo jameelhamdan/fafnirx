@@ -10,7 +10,7 @@ export function Choice({ on, onPick, children }: { on: boolean; onPick: () => vo
       role="menuitemradio"
       aria-checked={on}
       onClick={onPick}
-      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm hover:bg-white/15 focus-visible:bg-white/15 focus-visible:outline-none"
+      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm hover:bg-on-media-faint focus-visible:bg-on-media-faint focus-visible:outline-none"
     >
       <Check className={cx('size-4 shrink-0', !on && 'opacity-0')} />
       <span className="truncate">{children}</span>
@@ -25,17 +25,17 @@ export function Door({ label, value, onOpen }: { label: string; value?: string; 
       type="button"
       role="menuitem"
       onClick={onOpen}
-      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm hover:bg-white/15 focus-visible:bg-white/15 focus-visible:outline-none"
+      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm hover:bg-on-media-faint focus-visible:bg-on-media-faint focus-visible:outline-none"
     >
       <span className="flex-1 truncate">{label}</span>
-      {value && <span className="max-w-24 truncate text-xs text-white/60">{value}</span>}
-      <ChevronRight className="size-4 shrink-0 text-white/60 rtl:rotate-180" />
+      {value && <span className="max-w-24 truncate text-xs text-on-media-muted">{value}</span>}
+      <ChevronRight className="size-4 shrink-0 text-on-media-muted rtl:rotate-180" />
     </button>
   )
 }
 
 export function Heading({ children }: { children: ReactNode }) {
-  return <p className="px-2 pt-2 pb-0.5 text-2xs font-medium tracking-wide text-white/60 uppercase first:pt-1">{children}</p>
+  return <p className="px-2 pt-2 pb-0.5 text-2xs font-medium tracking-wide text-on-media-muted uppercase first:pt-1">{children}</p>
 }
 
 /** The top of a page of the menu that was opened from another: a way back. */
@@ -44,7 +44,7 @@ export function Back({ label, onBack }: { label: string; onBack: () => void }) {
     <button
       type="button"
       onClick={onBack}
-      className="mb-1 flex w-full items-center gap-1 rounded-md px-1 py-1.5 text-sm font-medium hover:bg-white/15 focus-visible:bg-white/15 focus-visible:outline-none"
+      className="mb-1 flex w-full items-center gap-1 rounded-md px-1 py-1.5 text-sm font-medium hover:bg-on-media-faint focus-visible:bg-on-media-faint focus-visible:outline-none"
     >
       <ChevronLeft className="size-4 rtl:rotate-180" />
       {label}
@@ -64,7 +64,7 @@ export function Slider({ label, value, shown, min, max, step, onChange }: {
 }) {
   return (
     <label className="block px-2 py-1">
-      <span className="flex justify-between text-xs text-white/80">
+      <span className="flex justify-between text-xs text-on-media-muted">
         <span>{label}</span>
         <span className="tabular-nums">{shown}</span>
       </span>
@@ -90,7 +90,7 @@ export function Segments<T extends string>({ label, value, options, onChange }: 
 }) {
   return (
     <div className="px-2 py-1" role="radiogroup" aria-label={label}>
-      <span className="text-xs text-white/80">{label}</span>
+      <span className="text-xs text-on-media-muted">{label}</span>
       <div className="mt-1 grid auto-cols-fr grid-flow-col gap-1">
         {options.map((o) => (
           <button
@@ -100,8 +100,8 @@ export function Segments<T extends string>({ label, value, options, onChange }: 
             aria-checked={o.value === value}
             onClick={() => onChange(o.value)}
             className={cx(
-              'rounded-md px-1.5 py-1 text-xs hover:bg-white/20 focus-visible:bg-white/20 focus-visible:outline-none',
-              o.value === value ? 'bg-white/25 font-medium' : 'bg-white/10',
+              'rounded-md px-1.5 py-1 text-xs hover:bg-on-media-faint focus-visible:bg-on-media-faint focus-visible:outline-none',
+              o.value === value ? 'bg-on-media-faint font-medium' : 'bg-on-media-faint',
             )}
           >
             {o.label}

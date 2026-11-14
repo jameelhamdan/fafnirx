@@ -34,24 +34,24 @@ export function AssetCell({
         <Thumb src={src} className="size-full" fallback={<ImageIcon className="size-6 text-muted-foreground" />} />
       </button>
       {asset.kind === 'video' && (
-        <span className="pointer-events-none absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-black/55 px-1.5 py-0.5 text-2xs font-medium text-white">
+        <span className="pointer-events-none absolute top-1.5 end-1.5 flex items-center gap-1 rounded bg-media-ground/55 px-1.5 py-0.5 text-2xs font-medium text-on-media">
           {asset.duration_ms ? clock(asset.duration_ms) : null}
-          <Play className="size-3 fill-white" />
+          <Play className="size-3 fill-on-media" />
         </span>
       )}
       {asset.processing && (
-        <span title={t('Still being processed')} className="pointer-events-none absolute right-1.5 bottom-1.5 grid size-5 place-items-center rounded-full bg-black/55 text-white">
+        <span title={t('Still being processed')} className="pointer-events-none absolute end-1.5 bottom-1.5 grid size-5 place-items-center rounded-full bg-media-ground/55 text-on-media">
           <Loader2 className="size-3 animate-spin" />
         </span>
       )}
-      {asset.favorite && <Heart className="pointer-events-none absolute bottom-1.5 left-1.5 size-4 fill-white text-white drop-shadow" />}
+      {asset.favorite && <Heart className="pointer-events-none absolute bottom-1.5 start-1.5 size-4 fill-on-media text-on-media drop-shadow" />}
       <button
         type="button"
         onClick={onToggle}
         aria-label={selected ? t('Deselect {name}', { name: asset.name }) : t('Select {name}', { name: asset.name })}
         aria-pressed={selected}
         className={cn(
-          'absolute top-1.5 left-1.5 grid size-5 place-items-center rounded-full border-2 border-white bg-black/30 text-white shadow transition-opacity focus-visible:opacity-100',
+          'absolute top-1.5 start-1.5 grid size-5 place-items-center rounded-full border-2 border-on-media bg-media-ground/30 text-on-media shadow transition-opacity focus-visible:opacity-100',
           selected ? 'border-primary bg-primary opacity-100' : 'opacity-0 group-hover:opacity-100 max-sm:opacity-70',
         )}
       >

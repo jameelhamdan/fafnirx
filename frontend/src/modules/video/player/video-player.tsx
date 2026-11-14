@@ -14,7 +14,7 @@ const SKIP = 10
 const same: Translate = (text) => text
 
 const iconButton =
-  'grid size-9 shrink-0 place-items-center rounded-full text-white/90 transition-colors hover:bg-white/15 hover:text-white focus-visible:bg-white/15 focus-visible:outline-none'
+  'grid size-9 shrink-0 place-items-center rounded-full text-on-media-muted transition-colors hover:bg-on-media-faint hover:text-on-media focus-visible:bg-on-media-faint focus-visible:outline-none'
 
 /** The parts of a key press the player looks at; both the page's and React's key events have them. */
 interface Press {
@@ -194,7 +194,7 @@ export default function VideoPlayer({ source, onFail, onNotice, t = same, lang, 
       onPointerMove={wake}
       onPointerDown={(e) => { wake(); if (!(e.target as HTMLElement).closest('button, input, [role="slider"]')) box.current?.focus({ preventScroll: true }) }}
       className={cx(
-        'group/player relative flex max-h-full max-w-full items-center justify-center overflow-hidden bg-black shadow-2xl ring-1 ring-white/10 outline-none sm:rounded-xl',
+        'group/player relative flex max-h-full max-w-full items-center justify-center overflow-hidden bg-media-ground shadow-2xl ring-1 ring-on-media-faint outline-none sm:rounded-xl',
         full && 'size-full rounded-none ring-0',
         !showControls && 'cursor-none',
         className,
@@ -234,7 +234,7 @@ export default function VideoPlayer({ source, onFail, onNotice, t = same, lang, 
 
       {waiting && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center">
-          <Loader2 className="size-10 animate-spin text-white/80 drop-shadow" />
+          <Loader2 className="size-10 animate-spin text-on-media-muted drop-shadow" />
         </div>
       )}
       {!playing && !waiting && (
@@ -242,7 +242,7 @@ export default function VideoPlayer({ source, onFail, onNotice, t = same, lang, 
           type="button"
           aria-label={t('Play')}
           onClick={toggle}
-          className="absolute top-1/2 left-1/2 grid size-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/55 text-white backdrop-blur-md ring-1 ring-white/20 transition-transform hover:scale-105 hover:bg-black/70"
+          className="absolute top-1/2 left-1/2 grid size-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-media-ground/55 text-on-media backdrop-blur-md ring-1 ring-on-media-faint transition-transform hover:scale-105 hover:bg-media-ground/70"
         >
           <Play className="size-7 translate-x-0.5 fill-current" />
         </button>
@@ -251,7 +251,7 @@ export default function VideoPlayer({ source, onFail, onNotice, t = same, lang, 
       <div
         ref={controls}
         className={cx(
-          'absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/45 to-transparent px-3 pt-12 pb-2 text-white transition-opacity duration-200',
+          'absolute inset-x-0 bottom-0 bg-gradient-to-t from-media-ground/85 via-media-ground/45 to-transparent px-3 pt-12 pb-2 text-on-media transition-opacity duration-200',
           showControls ? 'opacity-100' : 'pointer-events-none opacity-0',
         )}
       >
@@ -280,16 +280,16 @@ export default function VideoPlayer({ source, onFail, onNotice, t = same, lang, 
           onPointerLeave={() => setHover(null)}
           className="group/bar relative flex h-5 cursor-pointer touch-none items-center focus-visible:outline-none"
         >
-          <div className="relative h-1 w-full rounded-full bg-white/25 transition-[height] group-hover/bar:h-1.5 group-focus-visible/bar:h-1.5">
-            <div className="absolute inset-y-0 start-0 rounded-full bg-white/35" style={{ width: `${loaded}%` }} />
+          <div className="relative h-1 w-full rounded-full bg-on-media-faint transition-[height] group-hover/bar:h-1.5 group-focus-visible/bar:h-1.5">
+            <div className="absolute inset-y-0 start-0 rounded-full bg-on-media-faint" style={{ width: `${loaded}%` }} />
             <div className="absolute inset-y-0 start-0 rounded-full bg-primary" style={{ width: `${progress}%` }} />
             <div
-              className={cx('absolute top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow ring-2 ring-white transition-transform', scrubbing ? 'scale-110' : 'scale-0 group-hover/bar:scale-100 group-focus-visible/bar:scale-100')}
+              className={cx('absolute top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow ring-2 ring-on-media transition-transform', scrubbing ? 'scale-110' : 'scale-0 group-hover/bar:scale-100 group-focus-visible/bar:scale-100')}
               style={{ left: `${progress}%` }}
             />
           </div>
           {hover && duration > 0 && (
-            <div className="pointer-events-none absolute bottom-6 -translate-x-1/2 rounded-md bg-black/80 px-1.5 py-0.5 text-xs tabular-nums" style={{ left: `${hover.x}%` }}>
+            <div className="pointer-events-none absolute bottom-6 -translate-x-1/2 rounded-md bg-media-ground/80 px-1.5 py-0.5 text-xs tabular-nums" style={{ left: `${hover.x}%` }}>
               {clock(hover.at)}
             </div>
           )}
@@ -319,19 +319,19 @@ export default function VideoPlayer({ source, onFail, onNotice, t = same, lang, 
               className="h-1 w-0 cursor-pointer accent-white opacity-0 transition-all group-focus-within/volume:mx-1 group-focus-within/volume:w-20 group-focus-within/volume:opacity-100 group-hover/volume:mx-1 group-hover/volume:w-20 group-hover/volume:opacity-100"
             />
           </div>
-          <span className="ms-1 text-xs tabular-nums text-white/90">{clock(time)} / {clock(duration)}</span>
+          <span className="ms-1 text-xs tabular-nums text-on-media-muted">{clock(time)} / {clock(duration)}</span>
           <span className="flex-1" />
           {stream.mode === 'stream' && stream.level === AUTO && stream.shown !== null && stream.heights[stream.shown] && (
-            <span className="me-1 hidden rounded bg-white/15 px-1.5 py-0.5 text-2xs font-medium tabular-nums sm:inline">{stream.heights[stream.shown]}p</span>
+            <span className="me-1 hidden rounded bg-on-media-faint px-1.5 py-0.5 text-2xs font-medium tabular-nums sm:inline">{stream.heights[stream.shown]}p</span>
           )}
-          {stream.mode === 'original' && stream.canStream && <span className="me-1 hidden rounded bg-white/15 px-1.5 py-0.5 text-2xs font-medium sm:inline">{t('Original')}</span>}
+          {stream.mode === 'original' && stream.canStream && <span className="me-1 hidden rounded bg-on-media-faint px-1.5 py-0.5 text-2xs font-medium sm:inline">{t('Original')}</span>}
           {subs.tracks.length > 0 && (
-            <button type="button" className={cx(iconButton, captionsOn && 'bg-white/20')} aria-label={t('Subtitles')} aria-pressed={captionsOn} onClick={toggleCaptions}>
+            <button type="button" className={cx(iconButton, captionsOn && 'bg-on-media-faint')} aria-label={t('Subtitles')} aria-pressed={captionsOn} onClick={toggleCaptions}>
               {captionsOn ? <Captions className="size-5" /> : <CaptionsOff className="size-5" />}
             </button>
           )}
           <div className="relative">
-            <button type="button" className={cx(iconButton, menu && 'bg-white/15')} aria-label={t('Settings')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((v) => !v)}>
+            <button type="button" className={cx(iconButton, menu && 'bg-on-media-faint')} aria-label={t('Settings')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((v) => !v)}>
               <Settings className={cx('size-5 transition-transform', menu && 'rotate-45')} />
             </button>
             {menu && (
@@ -339,7 +339,7 @@ export default function VideoPlayer({ source, onFail, onNotice, t = same, lang, 
                 role="menu"
                 // As tall as fits above the controls in this player (a small player scrolls its menu instead of cutting it off).
                 style={{ maxHeight: Math.min(384, Math.max(96, height - covered - 8)) }}
-                className="absolute end-0 bottom-11 w-60 overflow-y-auto rounded-xl bg-black/85 p-1.5 text-white shadow-2xl ring-1 ring-white/15 backdrop-blur-md"
+                className="absolute end-0 bottom-11 w-60 overflow-y-auto rounded-xl bg-media-ground/85 p-1.5 text-on-media shadow-2xl ring-1 ring-on-media-faint backdrop-blur-md"
               >
                 <SettingsMenu
                   t={t}

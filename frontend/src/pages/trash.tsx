@@ -88,9 +88,9 @@ export default function TrashPage() {
     <div>
       <PageHeader title={t('Trash')} description={t('Deleted files stay here for {days} days, then they are removed for good. Restoring puts a file back where it was, with its albums, tags and favorite.', { days: retention })} />
       {chosen.length > 0 && (
-        <div className="mb-3 flex items-center gap-2 rounded-lg border bg-popover p-2 shadow-sm">
+        <div className="mb-3 flex items-center gap-2 rounded-md border bg-popover p-2 shadow-sm">
           <span className="px-1 text-sm font-medium">{t('{count} selected', { count: chosen.length })}</span>
-          <Button size="sm" className="ml-auto" disabled={restore.isPending || purge.isPending} onClick={() => restore.mutate(chosen)}><RotateCcw className="size-4" />{t('Restore')}</Button>
+          <Button size="sm" className="ms-auto" disabled={restore.isPending || purge.isPending} onClick={() => restore.mutate(chosen)}><RotateCcw className="size-4" />{t('Restore')}</Button>
           <Button size="sm" variant="destructive" disabled={restore.isPending || purge.isPending} onClick={() => setPurging(chosen)}><Trash2 className="size-4" />{t('Delete forever')}</Button>
           <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>{t('Clear')}</Button>
         </div>
@@ -105,10 +105,10 @@ export default function TrashPage() {
             {entries.map((e) => {
               const on = selected.has(e.id)
               return (
-                <li key={e.id} className={cn('overflow-hidden rounded-lg border bg-card', on && 'border-primary ring-2 ring-primary/40')}>
+                <li key={e.id} className={cn('overflow-hidden rounded-md border bg-card', on && 'border-primary ring-2 ring-primary/40')}>
                   <div className="group relative aspect-square bg-muted/50">
                     {e.kind ? <Thumb src={mediaUrl(e.id, 'thumb', e.hash)} className="size-full opacity-70" fallback={<File className="size-8 text-muted-foreground" />} /> : <div className="grid size-full place-items-center"><File className="size-8 text-muted-foreground" /></div>}
-                    <Checkbox checked={on} onCheckedChange={() => toggle(e.id)} aria-label={t('Select {name}', { name: e.name })} className={cn('absolute top-2 left-2 bg-background/90', !on && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-sm:opacity-100')} />
+                    <Checkbox checked={on} onCheckedChange={() => toggle(e.id)} aria-label={t('Select {name}', { name: e.name })} className={cn('absolute top-2 start-2 bg-background/90', !on && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-sm:opacity-100')} />
                   </div>
                   <div className="space-y-1 p-2.5">
                     <p className="truncate text-sm font-medium" title={`${e.folder}/${e.path}`}>{e.name}</p>

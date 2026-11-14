@@ -4,7 +4,7 @@ import { Archive, ArchiveRestore, Clapperboard, Download, ExternalLink, Heart, H
 import { lazy, Suspense, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
-import { ErrorNote, Fact } from '../common'
+import { Callout, ErrorNote, Fact } from '../common'
 import { Confirm } from '../confirm'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -44,7 +44,7 @@ function VideoPreview({ info }: { info: FileInfo }) {
   const [failed, setFailed] = useState(false)
   if (failed) {
     return (
-      <div className="grid gap-2 rounded-lg border bg-muted/40 p-4 text-center text-sm text-muted-foreground">
+      <div className="grid gap-2 rounded-md border bg-muted/40 p-4 text-center text-sm text-muted-foreground">
         <p>{t('This video cannot be played in the browser. Download it to watch it.')}</p>
         <Button variant="outline" size="sm" className="mx-auto" asChild><a href={downloadUrl(info.folder, info.path)}><Download className="size-4" />{t('Download')}</a></Button>
       </div>
@@ -56,10 +56,10 @@ function VideoPreview({ info }: { info: FileInfo }) {
         type="button"
         aria-label={t('Play')}
         onClick={() => setStarted(true)}
-        className="group relative grid h-56 w-full place-items-center overflow-hidden rounded-lg border bg-black"
+        className="group relative grid h-56 w-full place-items-center overflow-hidden rounded-md border bg-media-ground"
       >
         {file.poster && <img src={file.poster} alt="" className="absolute inset-0 size-full object-contain opacity-80" />}
-        <span className="relative grid size-14 place-items-center rounded-full bg-black/55 text-white ring-1 ring-white/20 transition-transform group-hover:scale-105">
+        <span className="relative grid size-14 place-items-center rounded-full bg-media-ground/55 text-on-media ring-1 ring-on-media-faint transition-transform group-hover:scale-105">
           <Play className="size-6 translate-x-0.5 fill-current" />
         </span>
       </button>
@@ -82,14 +82,14 @@ function Preview({ info }: { info: FileInfo }) {
   if (info.mime.startsWith('video/')) return <VideoPreview info={info} />
   if (info.preview) {
     return (
-      <a href={url} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg border bg-muted/40">
+      <a href={url} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-md border bg-muted/40">
         <Thumb src={mediaUrl(info.id, 'preview')} fit="contain" className="mx-auto max-h-80 w-full" fallback={<FileIcon entry={{ kind: 'file', mime: info.mime }} className="size-10" />} />
       </a>
     )
   }
   if (info.mime.startsWith('audio/')) return <audio src={url} controls className="w-full" />
   return (
-    <div className="grid h-32 place-items-center rounded-lg border bg-muted/40">
+    <div className="grid h-32 place-items-center rounded-md border bg-muted/40">
       <FileIcon entry={{ kind: 'file', mime: info.mime }} className="size-10" />
     </div>
   )
@@ -150,7 +150,7 @@ export function DetailsSheet({ folder, path, onClose, onDeleted }: { folder: str
     <Sheet open={path !== null} onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="w-full gap-0 overflow-y-auto sm:max-w-lg">
         <SheetHeader>
-          <SheetTitle className="truncate pr-8">{info?.name ?? path?.split('/').pop()}</SheetTitle>
+          <SheetTitle className="truncate pe-8">{info?.name ?? path?.split('/').pop()}</SheetTitle>
           <SheetDescription className="truncate">{folder}/{path}</SheetDescription>
         </SheetHeader>
         {error ? <div className="p-4"><ErrorNote error={error} /></div> : !info ? (
@@ -168,9 +168,9 @@ export function DetailsSheet({ folder, path, onClose, onDeleted }: { folder: str
               {!info.deleted_at && <Button variant="outline" onClick={() => setConfirm('delete')}><Trash2 className="size-4" />{t('Delete')}</Button>}
             </div>
             {info.deleted_at && (
-              <p className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
+              <Callout>
                 {t('Deleted {when}. It is removed for good on {date}. Restore a version below to bring it back.', { when: ago(info.deleted_at, now), date: dateTime(info.purge_at) })}
-              </p>
+              </Callout>
             )}
 
             <dl className="grid grid-cols-2 gap-4">
@@ -203,7 +203,7 @@ export function DetailsSheet({ folder, path, onClose, onDeleted }: { folder: str
             <Separator />
             <section>
               <h3 className="mb-2 flex items-center gap-2 text-sm font-medium"><History className="size-4" />{t('History')}</h3>
-              <ul className="divide-y rounded-lg border">
+              <ul className="divide-y rounded-md border">
                 {info.versions.map((v) => (
                   <li key={v.id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
                     <div className="min-w-0 flex-1">

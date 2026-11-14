@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, X } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { ActivityView, ErrorNote, PageHeader, StatusDot } from '@/components/common'
+import { ActivityView, ErrorNote, PageHeader, Panel, StatusDot } from '@/components/common'
 import { DataTable, TableToolbar } from '@/components/data-table'
 import { matches, useTableView } from '@/lib/table-view'
 import { EventList } from '@/components/event-list'
@@ -32,15 +32,15 @@ const ALERT: Record<string, string> = {
 
 
 /** A titled block of the page: a hairline-framed panel with a header strip, not a card. */
-function Panel({ title, aside, children, className }: { title: string; aside?: ReactNode; children: ReactNode; className?: string }) {
+function Block({ title, aside, children, className }: { title: string; aside?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <section className={cn('min-w-0 overflow-hidden rounded-xl border bg-card', className)}>
+    <Panel as="section" className={cn('min-w-0', className)}>
       <header className="flex h-10 items-center justify-between gap-2 border-b px-4">
         <h2 className="text-sm font-semibold">{title}</h2>
         {aside && <div className="num text-2xs text-muted-foreground">{aside}</div>}
       </header>
       {children}
-    </section>
+    </Panel>
   )
 }
 
@@ -155,7 +155,7 @@ function DevicesTable({ data }: { data: DashboardData }) {
   const total = data.devices.reduce((n, d) => n + d.bytes, 0)
   const rows = data.devices.filter((d) => matches(filter, d.key, d.os, d.hostname))
   return (
-    <Panel title={t('Devices')} aside={`${data.online} / ${data.devices.length} ${t('online')}`}>
+    <Block title={t('Devices')} aside={`${data.online} / ${data.devices.length} ${t('online')}`}>
       <DataTable view={view} className="rounded-none border-0" toolbar={<TableToolbar view={view} filter={filter} onFilter={setFilter} placeholder={t('Filter devices')} shown={rows.length} total={data.devices.length} />}>
         <Table>
           <TableHeader>
@@ -199,7 +199,7 @@ function DevicesTable({ data }: { data: DashboardData }) {
           </TableBody>
         </Table>
       </DataTable>
-    </Panel>
+    </Block>
   )
 }
 
@@ -232,7 +232,7 @@ export default function Dashboard() {
       <PageHeader title={t('Dashboard')} description={t('What the master holds, who is sending it, and anything that needs attention.')} />
 
       {data.alerts.length > 0 && (
-        <ul className="overflow-hidden rounded-xl border border-warning/50 bg-warning/10" aria-label={t('Alerts')}>
+        <Panel as="ul" className="border-warning/50 bg-warning/10" aria-label={t('Alerts')}>
           {data.alerts.map((a) => (
             <li key={a.id} className="flex items-start gap-2 border-b border-warning/25 px-3 py-1.5 text-compact last:border-b-0">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" />
@@ -244,10 +244,10 @@ export default function Dashboard() {
               <Button variant="ghost" size="icon-xs" onClick={() => dismiss.mutate(a.id)} aria-label={t('Dismiss alert')}><X /></Button>
             </li>
           ))}
-        </ul>
+        </Panel>
       )}
 
-      <section className="overflow-hidden rounded-xl border bg-card" aria-label={t('Summary')}>
+      <Panel as="section" aria-label={t('Summary')}>
         <div className="grid grid-cols-2 divide-x divide-border rtl:divide-x-reverse sm:grid-cols-4">
           <Figure label={t('Devices online')} value={`${data.online}/${data.devices.length}`} note={offline > 0 ? t('{count} offline', { count: offline }) : data.devices.length === 0 ? t('no device added') : undefined} tone={offline > 0 ? 'warning' : undefined} />
           <Figure label={t('Files')} value={count(data.totals.files)} note={data.totals.marked_deleted ? t('{count} deleted, waiting for retention', { count: count(data.totals.marked_deleted) }) : undefined} />
@@ -255,17 +255,17 @@ export default function Dashboard() {
           <Figure label={t('Master disk')} value={disk ? `${disk.percent}%` : '—'} note={disk ? t('{free} free of {total}', { free: bytes(disk.free), total: bytes(disk.total) }) : undefined} tone={diskTone} />
         </div>
         <DiskBar data={data} />
-      </section>
+      </Panel>
 
       <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="min-w-0 space-y-3">
           <DevicesTable data={data} />
-          <Panel title={t('Changes, last 14 days')} aside={`${count(data.activity.reduce((n, d) => n + d.added + d.updated + d.renamed + d.deleted, 0))}`}>
+          <Block title={t('Changes, last 14 days')} aside={`${count(data.activity.reduce((n, d) => n + d.added + d.updated + d.renamed + d.deleted, 0))}`}>
             <ActivityChart days={data.activity} />
-          </Panel>
+          </Block>
         </div>
         <div className="min-w-0 space-y-3">
-          <Panel title={t('Sources and mirrors')} aside={failing > 0 ? t('{count} need attention', { count: failing }) : jobs.length > 0 ? t('all nominal') : undefined}>
+          <Block title={t('Sources and mirrors')} aside={failing > 0 ? t('{count} need attention', { count: failing }) : jobs.length > 0 ? t('all nominal') : undefined}>
             {jobs.length === 0 ? (
               <p className="px-3 py-4 text-compact text-muted-foreground">{t('None configured.')}</p>
             ) : (
@@ -280,12 +280,12 @@ export default function Dashboard() {
                 ))}
               </ul>
             )}
-          </Panel>
-          <Panel title={t('Recent activity')}>
+          </Block>
+          <Block title={t('Recent activity')}>
             <div className="px-3 py-1">
               <EventList events={data.recent} empty={t('Nothing has been collected yet.')} showFolder />
             </div>
-          </Panel>
+          </Block>
         </div>
       </div>
     </div>

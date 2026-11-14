@@ -1,5 +1,5 @@
 import { AlertTriangle } from 'lucide-react'
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, type ComponentProps, type ReactNode } from 'react'
 import { bytes, duration, percent } from '@/lib/format'
 import { msg, useT } from '@/lib/i18n'
 import type { Activity } from '@/lib/types'
@@ -73,13 +73,28 @@ export function Empty({ title, children }: { title: string; children?: ReactNode
   )
 }
 
+/** A hairline box on the card surface: the one shape for lists, tables and groups of controls. */
+export function Panel({ as: Tag = 'div', className, ...props }: ComponentProps<'div'> & { as?: 'div' | 'section' | 'ul' }) {
+  return <Tag className={cn('overflow-hidden rounded-md border bg-card', className)} {...(props as object)} />
+}
+
+const CALLOUT = {
+  warning: 'border-warning/50 bg-warning/10',
+  danger: 'border-destructive/40 bg-destructive/10 text-destructive',
+}
+
+/** A short notice in the flow of a page: `warning` for something to know, `danger` for something that went wrong. */
+export function Callout({ tone = 'warning', className, ...props }: ComponentProps<'div'> & { tone?: keyof typeof CALLOUT }) {
+  return <div className={cn('rounded-md border p-3 text-sm', CALLOUT[tone], className)} {...props} />
+}
+
 export function ErrorNote({ error }: { error: unknown }) {
   const t = useT()
   return (
-    <div className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+    <Callout tone="danger" role="alert" className="flex items-center gap-2">
       <AlertTriangle className="size-4 shrink-0" />
       {error instanceof Error ? error.message : t('Something went wrong')}
-    </div>
+    </Callout>
   )
 }
 

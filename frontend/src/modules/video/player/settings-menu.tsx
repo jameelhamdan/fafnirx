@@ -60,7 +60,7 @@ export function SettingsMenu({ t, source, subs, rate, onRate, close, onSubtitleP
           type="button"
           role="menuitem"
           onClick={() => picker.current?.click()}
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm hover:bg-white/15 focus-visible:bg-white/15 focus-visible:outline-none"
+          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm hover:bg-on-media-faint focus-visible:bg-on-media-faint focus-visible:outline-none"
         >
           <FolderOpen className="size-4 shrink-0" />
           <span className="truncate">{t('Load from a file…')}</span>
@@ -69,7 +69,7 @@ export function SettingsMenu({ t, source, subs, rate, onRate, close, onSubtitleP
         <Heading>{t('Appearance')}</Heading>
         <Slider label={t('Size')} value={style.size} shown={`${style.size}%`} {...{ min: LIMITS.size[0], max: LIMITS.size[1], step: 10 }} onChange={(size) => subs.changeStyle({ size })} />
         <div className="px-2 py-1" role="radiogroup" aria-label={t('Text color')}>
-          <span className="text-xs text-white/80">{t('Text color')}</span>
+          <span className="text-xs text-on-media-muted">{t('Text color')}</span>
           <div className="mt-1 flex gap-2">
             {COLORS.map((color) => (
               <button
@@ -80,7 +80,7 @@ export function SettingsMenu({ t, source, subs, rate, onRate, close, onSubtitleP
                 aria-label={color}
                 onClick={() => subs.changeStyle({ color })}
                 style={{ backgroundColor: color }}
-                className={cx('size-6 rounded-full ring-2 ring-offset-1 ring-offset-black/80 focus-visible:outline-none', style.color === color ? 'ring-white' : 'ring-transparent hover:ring-white/50')}
+                className={cx('size-6 rounded-full ring-2 ring-offset-1 ring-offset-media-ground/80 focus-visible:outline-none', style.color === color ? 'ring-on-media' : 'ring-transparent hover:ring-on-media/50')}
               />
             ))}
           </div>
@@ -92,16 +92,16 @@ export function SettingsMenu({ t, source, subs, rate, onRate, close, onSubtitleP
 
         <Heading>{t('Timing')}</Heading>
         <div className="flex items-center gap-1 px-2 py-1">
-          <span className="flex-1 text-xs text-white/80">{t('Delay')}</span>
-          <button type="button" aria-label={t('Earlier')} onClick={() => subs.changeDelay(subs.delay - 0.1)} className="grid size-7 place-items-center rounded-md bg-white/10 hover:bg-white/20 focus-visible:bg-white/20 focus-visible:outline-none">−</button>
+          <span className="flex-1 text-xs text-on-media-muted">{t('Delay')}</span>
+          <button type="button" aria-label={t('Earlier')} onClick={() => subs.changeDelay(subs.delay - 0.1)} className="grid size-7 place-items-center rounded-md bg-on-media-faint hover:bg-on-media-faint focus-visible:bg-on-media-faint focus-visible:outline-none">−</button>
           <span className="w-14 text-center text-xs tabular-nums">{signedSeconds(subs.delay)}</span>
-          <button type="button" aria-label={t('Later')} onClick={() => subs.changeDelay(subs.delay + 0.1)} className="grid size-7 place-items-center rounded-md bg-white/10 hover:bg-white/20 focus-visible:bg-white/20 focus-visible:outline-none">+</button>
+          <button type="button" aria-label={t('Later')} onClick={() => subs.changeDelay(subs.delay + 0.1)} className="grid size-7 place-items-center rounded-md bg-on-media-faint hover:bg-on-media-faint focus-visible:bg-on-media-faint focus-visible:outline-none">+</button>
         </div>
         <button
           type="button"
           role="menuitem"
           onClick={subs.resetStyle}
-          className="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm hover:bg-white/15 focus-visible:bg-white/15 focus-visible:outline-none"
+          className="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm hover:bg-on-media-faint focus-visible:bg-on-media-faint focus-visible:outline-none"
         >
           <RotateCcw className="size-4 shrink-0" />
           <span className="truncate">{t('Reset the look and the delay')}</span>

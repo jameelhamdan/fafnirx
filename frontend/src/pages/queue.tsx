@@ -3,7 +3,7 @@ import { useApiMutation } from '@/lib/mutation'
 import { Pause, Play, RefreshCw, RotateCcw, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { Picker, Empty, ErrorNote, PageHeader, StatusDot } from '@/components/common'
+import { Picker, Empty, ErrorNote, PageHeader, StatusDot, Callout, Panel } from '@/components/common'
 import { DataTable, SelectAll, SelectRow, TableToolbar } from '@/components/data-table'
 import { matches, useSelection, useTableView, type Selection, type TableView } from '@/lib/table-view'
 import { Badge } from '@/components/ui/badge'
@@ -51,7 +51,7 @@ const steered = (kind: string) => kind === 'meta' || kind === 'thumb'
 function Counts({ queued, running, failed, done }: { queued: number; running: number; failed: number; done: number }) {
   const t = useT()
   const parts: [number, string, string][] = [
-    [running, t('running'), running > 0 ? 'text-primary' : 'text-muted-foreground'],
+    [running, t('running'), running > 0 ? 'text-primary-ink' : 'text-muted-foreground'],
     [queued, t('waiting'), queued > 0 ? '' : 'text-muted-foreground'],
     [failed, t('failed'), failed > 0 ? 'text-destructive' : 'text-muted-foreground'],
     [done, t('done today'), 'text-muted-foreground'],
@@ -166,8 +166,8 @@ export default function Queue() {
       {!data && !error && <Skeleton className="h-48" />}
       {data && (
         <>
-          {data.paused && <p role="status" className="rounded-md border border-warning/50 bg-warning/10 px-3 py-1.5 text-compact">{t('Paused: nothing new is started. What is running now finishes.')}</p>}
-          <section className="flex flex-wrap overflow-hidden rounded-xl border bg-card" aria-label={t('Work by kind')}>
+          {data.paused && <Callout role="status" className="py-1.5 text-compact">{t('Paused: nothing new is started. What is running now finishes.')}</Callout>}
+          <Panel as="section" className="flex flex-wrap" aria-label={t('Work by kind')}>
             {cards.map((kind) => {
               const s = data.summary.find((x) => x.kind === kind) ?? { kind, queued: 0, running: 0, failed: 0, done: 0 }
               return (
@@ -177,7 +177,7 @@ export default function Queue() {
                 </div>
               )
             })}
-          </section>
+          </Panel>
           {data.jobs.length === 0 ? (
             <Empty title={t('Nothing in the queue')}>{t('Files that arrive are queued here, and stay in the list for a day after they are done.')}</Empty>
           ) : (
