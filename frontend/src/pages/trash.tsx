@@ -88,7 +88,7 @@ export default function TrashPage() {
     <div>
       <PageHeader title={t('Trash')} description={t('Deleted files stay here for {days} days, then they are removed for good. Restoring puts a file back where it was, with its albums, tags and favorite.', { days: retention })} />
       {chosen.length > 0 && (
-        <div className="mb-3 flex items-center gap-2 rounded-md border bg-popover p-2 shadow-sm">
+        <div className="mb-3 flex items-center gap-2 rounded-md border bg-popover p-2 ">
           <span className="px-1 text-sm font-medium">{t('{count} selected', { count: chosen.length })}</span>
           <Button size="sm" className="ms-auto" disabled={restore.isPending || purge.isPending} onClick={() => restore.mutate(chosen)}><RotateCcw className="size-4" />{t('Restore')}</Button>
           <Button size="sm" variant="destructive" disabled={restore.isPending || purge.isPending} onClick={() => setPurging(chosen)}><Trash2 className="size-4" />{t('Delete forever')}</Button>

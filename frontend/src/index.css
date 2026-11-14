@@ -24,10 +24,7 @@
   --input: oklch(0.9 0.006 85);
   --ring: oklch(0.72 0.17 150);
   --success: oklch(0.55 0.14 150);
-  --success-foreground: oklch(0.99 0 0);
   --warning: oklch(0.72 0.16 75);
-  --warning-foreground: oklch(0.2 0.005 85);
-  --info: oklch(0.55 0.1 245);
   --sidebar: oklch(0.995 0.002 85);
   --sidebar-foreground: oklch(0.22 0.005 85);
   --sidebar-accent: oklch(0.95 0.015 150);
@@ -35,14 +32,9 @@
   /* Dialog and sheet backdrop, and the dark chrome drawn over pictures and video. Same in both themes. */
   --overlay: oklch(0 0 0 / 50%);
   --media-ground: oklch(0.13 0 0);
-  --media-surface: oklch(0.15 0 0 / 70%);
   --on-media: oklch(1 0 0);
   --on-media-muted: oklch(1 0 0 / 65%);
   --on-media-faint: oklch(1 0 0 / 15%);
-  --z-header: 20;
-  --z-scrubber: 30;
-  --z-panel: 40;
-  --z-overlay: 50;
 }
 
 .dark {
@@ -67,10 +59,7 @@
   --input: oklch(1 0 0 / 14%);
   --ring: oklch(0.72 0.17 150);
   --success: oklch(0.7 0.14 160);
-  --success-foreground: oklch(0.14 0.004 85);
   --warning: oklch(0.8 0.15 80);
-  --warning-foreground: oklch(0.14 0.004 85);
-  --info: oklch(0.72 0.1 245);
   --sidebar: oklch(0.19 0.004 85);
   --sidebar-foreground: oklch(0.96 0.004 85);
   --sidebar-accent: oklch(0.28 0.03 150);
@@ -111,7 +100,7 @@
   position: fixed;
   inset-block-start: 0.5rem;
   inset-inline-start: 0.5rem;
-  z-index: var(--z-overlay);
+  z-index: 50;
   padding: 0.5rem 0.75rem;
   border-radius: 4px;
   background: var(--primary);

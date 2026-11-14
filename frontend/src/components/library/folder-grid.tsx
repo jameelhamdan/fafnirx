@@ -40,7 +40,7 @@ export function FolderGrid({ assets, root, src, selected, onOpen, onToggle }: {
     <div ref={ref}>
       {groups.map(({ folder, assets: group }, i) => (
         <section key={`${i}-${folder}`} className="mb-4" aria-label={folder || undefined}>
-          {folder && <h3 className="mb-1.5 text-sm font-medium">{folder}</h3>}
+          {folder && <h2 className="mb-1.5 text-sm font-medium">{folder}</h2>}
           <div className="grid" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: GAP }}>
             {group.map((a) => (
               <div key={a.id} className="min-w-0">

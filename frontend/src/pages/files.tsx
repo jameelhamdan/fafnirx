@@ -244,7 +244,7 @@ export default function Files() {
       </div>
 
       {chosen.length > 0 && (
-        <div className="sticky top-16 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-md border bg-popover p-2 shadow-sm">
+        <div className="sticky top-16 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-md border bg-popover p-2 ">
           <Button variant="ghost" size="icon" className="size-8" aria-label={t('Clear selection')} onClick={() => setSelected(new Set())}><X className="size-4" /></Button>
           <span className="text-sm font-medium">{t('{count} selected', { count: chosen.length })}</span>
           <div className="ms-auto flex gap-2">

@@ -65,10 +65,10 @@ function KindCard({ value, icon, title, children }: { value: Kind; icon: ReactNo
 function Step({ n, title, children }: { n: number; title: string; children: ReactNode }) {
   return (
     <section className="space-y-3">
-      <h3 className="flex items-center gap-2 text-sm font-semibold">
+      <h2 className="flex items-center gap-2 text-sm font-semibold">
         <span className="grid size-5 place-content-center rounded-full bg-primary text-xs text-primary-foreground">{n}</span>
         {title}
-      </h3>
+      </h2>
       {children}
     </section>
   )
