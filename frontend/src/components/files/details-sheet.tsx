@@ -5,6 +5,7 @@ import { lazy, Suspense, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Callout, ErrorNote, Fact } from '../common'
+import { ACTION } from '../event-list'
 import { Confirm } from '../confirm'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -227,7 +228,7 @@ export function DetailsSheet({ folder, path, onClose, onDeleted }: { folder: str
                 <ul className="space-y-1 text-sm">
                   {info.events.map((e) => (
                     <li key={e.id} className="flex justify-between gap-3">
-                      <span><span className="font-medium capitalize">{e.action}</span>{e.detail && <span className="text-muted-foreground"> · {e.detail}</span>}</span>
+                      <span><span className="font-medium capitalize">{t(ACTION[e.action] ?? e.action)}</span>{e.detail && <span className="text-muted-foreground"> · {e.detail}</span>}</span>
                       <span className="shrink-0 text-xs text-muted-foreground">{ago(e.ts, now)}</span>
                     </li>
                   ))}

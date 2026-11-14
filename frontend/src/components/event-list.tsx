@@ -6,7 +6,8 @@ import { filesLink } from '@/lib/links'
 import type { Recent } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-const ACTION: Record<string, string> = { add: msg('add'), update: msg('update'), delete: msg('delete'), rename: msg('rename') }
+/** What a change to a file is called, in words the translations know. */
+export const ACTION: Record<string, string> = { add: msg('add'), update: msg('update'), delete: msg('delete'), rename: msg('rename') }
 const COLOUR: Record<string, string> = { delete: 'text-destructive', update: 'text-warning', rename: 'text-foreground' }
 
 /** Recent changes to files, newest first, each linking to the file; `showFolder` names the folder in front of the path. */
