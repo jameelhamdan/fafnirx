@@ -1,4 +1,5 @@
 import { AlignJustify, Columns3, Search, X } from 'lucide-react'
+import { Panel } from './common'
 import type { ReactNode } from 'react'
 import { msg, useT } from '@/lib/i18n'
 import type { Density, Selection, TableView } from '@/lib/table-view'
@@ -108,10 +109,10 @@ export function TableToolbar({
 /** A table with its toolbar in one bordered frame; the density applies to the rows inside. */
 export function DataTable({ view, toolbar, children, className }: { view: TableView; toolbar: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <div data-density={view.density} className={cn('overflow-hidden rounded-xl border bg-card', className)}>
+    <Panel data-density={view.density} className={className}>
       {toolbar}
       {children}
-    </div>
+    </Panel>
   )
 }
 

@@ -27,9 +27,9 @@ export function SelectionBar({ selected, onClear }: { selected: Asset[]; onClear
   }
 
   return (
-    <div role="toolbar" aria-label={t('Selection')} className="flex items-center gap-1 rounded-lg border bg-popover p-1.5 shadow-md">
+    <div role="toolbar" aria-label={t('Selection')} className="flex items-center gap-1 rounded-md border bg-popover p-1.5 shadow-md">
       <Button variant="ghost" size="icon" className="size-8" aria-label={t('Clear selection')} onClick={onClear}><X className="size-4" /></Button>
-      <span className="mr-auto px-1 text-sm font-medium">{t('{count} selected', { count: selected.length })}</span>
+      <span className="me-auto px-1 text-sm font-medium">{t('{count} selected', { count: selected.length })}</span>
       {mine && (
         <Button variant="ghost" size="sm" aria-label={allFavorite ? t('Remove from favorites') : t('Add to favorites')} onClick={() => bulk.mutate({ ids, favorite: !allFavorite }, { onSuccess: onClear })}>
           <Heart className={allFavorite ? 'size-4 fill-current' : 'size-4'} /><span className="max-sm:sr-only">{allFavorite ? t('Unfavorite') : t('Favorite')}</span>

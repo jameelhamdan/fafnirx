@@ -76,7 +76,7 @@ function LibraryForm({ data }: { data: SettingsData }) {
       </CardHeader>
       <CardContent>
         <form onSubmit={submit} className="space-y-4">
-          <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
+          <div className="flex items-start justify-between gap-4 rounded-md border p-3">
             <div className="space-y-1">
               <Label htmlFor="thumbnails">{t('Thumbnails and previews')}</Label>
               <p className="text-sm text-muted-foreground">
@@ -85,7 +85,7 @@ function LibraryForm({ data }: { data: SettingsData }) {
             </div>
             <Switch id="thumbnails" checked={thumbnails} onCheckedChange={setThumbnails} />
           </div>
-          <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
+          <div className="flex items-start justify-between gap-4 rounded-md border p-3">
             <div className="space-y-1">
               <Label htmlFor="photos">{t('Photo pages')}</Label>
               <p className="text-sm text-muted-foreground">
@@ -141,7 +141,7 @@ function Plugins() {
                 <div className="min-w-0 flex-1">
                   <p className="font-medium">
                     {p.id} <span className="text-sm font-normal text-muted-foreground">{p.version}</span>
-                    {p.expected && <Badge variant="outline" className="ml-2">{t('Required')}</Badge>}
+                    {p.expected && <Badge variant="outline" className="ms-2">{t('Required')}</Badge>}
                   </p>
                   {p.problem && <p className="text-xs text-destructive">{p.problem}</p>}
                 </div>

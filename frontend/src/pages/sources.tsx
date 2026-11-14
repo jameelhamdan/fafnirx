@@ -71,7 +71,7 @@ function AddSource() {
       description={
         <>
           {current ? t(current.intro) : t('The master reads a folder of this storage on a schedule and keeps its own copy. Nothing is ever written back.')}{' '}
-          <a className="text-primary hover:underline" href={docs('sources')} target="_blank" rel="noreferrer">{t('Read the guide')} →</a>
+          <a className="text-primary-ink hover:underline" href={docs('sources')} target="_blank" rel="noreferrer">{t('Read the guide')} →</a>
         </>
       }
       onSubmit={() => create.mutate()}

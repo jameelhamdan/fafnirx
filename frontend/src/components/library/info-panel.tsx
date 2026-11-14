@@ -95,7 +95,7 @@ function Tags({ id, tags, suggested }: { id: string; tags: { id: string; name: s
       {names.length > 0 && (
         <ul className="flex flex-wrap gap-1.5">
           {tags.map((tag) => (
-            <li key={tag.id} className="flex items-center gap-1 rounded-md border bg-secondary py-0.5 pr-1 pl-2.5 text-xs">
+            <li key={tag.id} className="flex items-center gap-1 rounded-md border bg-secondary py-0.5 pe-1 ps-2.5 text-xs">
               {tag.name}
               <button type="button" aria-label={t('Remove tag {name}', { name: tag.name })} onClick={() => edit.mutate({ id, tags: names.filter((n) => n !== tag.name) })} className="grid size-4 place-items-center rounded-full hover:bg-accent">
                 <X className="size-3" />
@@ -230,10 +230,10 @@ export default function InfoPanel({ id, onClose, embedded }: { id: string; onClo
 
           <Row icon={Calendar} label={t('Date')} action={mine ? <Button variant="ghost" size="sm" onClick={() => setDialog('date')}>{t('Edit')}</Button> : undefined}>
             {whenText(d.when)}
-            {d.when_edited && <span className="ml-1.5 text-xs text-muted-foreground">{t('(changed)')}</span>}
+            {d.when_edited && <span className="ms-1.5 text-xs text-muted-foreground">{t('(changed)')}</span>}
           </Row>
           <Row icon={MapPin} label={t('Place')} action={mine ? <Button variant="ghost" size="sm" onClick={() => setDialog('place')}>{d.lat === null ? t('Add') : t('Edit')}</Button> : undefined}>
-            {d.lat !== null && d.lon !== null ? <span className="tabular-nums">{d.lat.toFixed(5)}, {d.lon.toFixed(5)}{d.place_edited && <span className="ml-1.5 text-xs text-muted-foreground">{t('(changed)')}</span>}</span> : <span className="text-muted-foreground">{t('No place')}</span>}
+            {d.lat !== null && d.lon !== null ? <span className="tabular-nums">{d.lat.toFixed(5)}, {d.lon.toFixed(5)}{d.place_edited && <span className="ms-1.5 text-xs text-muted-foreground">{t('(changed)')}</span>}</span> : <span className="text-muted-foreground">{t('No place')}</span>}
           </Row>
           <Row icon={FolderOpen} label={t('File')}>
             <Link to={`/files${query({ folder: d.folder, path: parent(d.path), file: d.path })}`} className="hover:underline">{d.folder}/{d.path}</Link>
@@ -246,7 +246,7 @@ export default function InfoPanel({ id, onClose, embedded }: { id: string; onClo
             <section className="space-y-1">
               <h3 className="text-xs text-muted-foreground">{d.described.show ?? t('Description')}</h3>
               <p className="text-sm font-medium">
-                {d.described.season !== null && d.described.episode !== null && <span className="mr-1.5 tabular-nums text-muted-foreground">S{String(d.described.season).padStart(2, '0')}E{String(d.described.episode).padStart(2, '0')}</span>}
+                {d.described.season !== null && d.described.episode !== null && <span className="me-1.5 tabular-nums text-muted-foreground">S{String(d.described.season).padStart(2, '0')}E{String(d.described.episode).padStart(2, '0')}</span>}
                 {d.described.title}
               </p>
               {d.described.aired && <p className="text-xs text-muted-foreground">{d.described.aired}</p>}

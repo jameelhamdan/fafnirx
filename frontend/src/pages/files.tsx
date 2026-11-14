@@ -172,7 +172,7 @@ export default function Files() {
       className="relative"
     >
       {dragging && (
-        <div className="pointer-events-none fixed inset-3 z-30 grid place-items-center rounded-xl border-2 border-dashed border-primary bg-primary/10 backdrop-blur-sm">
+        <div className="pointer-events-none fixed inset-3 z-30 grid place-items-center rounded-md border-2 border-dashed border-primary bg-primary/10 backdrop-blur-sm">
           <p className="text-lg font-medium">{t('Drop to upload to {target}', { target: folder + (path ? `/${path}` : '') })}</p>
         </div>
       )}
@@ -210,14 +210,14 @@ export default function Files() {
           </span>
         ))}
         {folder && listing.data && (
-          <span className="ml-2"><AccessBadge writable={canUpload} kind={listing.data.pages[0]?.folder_kind ?? null} /></span>
+          <span className="ms-2"><AccessBadge writable={canUpload} kind={listing.data.pages[0]?.folder_kind ?? null} /></span>
         )}
       </nav>}
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="relative min-w-48 flex-1 sm:max-w-xs">
-          <Search className="absolute top-2.5 left-2.5 size-4 text-muted-foreground" />
-          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={folder ? t('Search in {where}', { where: folder + (path ? `/${path}` : '') }) : t('Search a folder first')} disabled={!folder} className="pl-8" aria-label={t('Search')} />
+          <Search className="absolute top-2.5 start-2.5 size-4 text-muted-foreground" />
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={folder ? t('Search in {where}', { where: folder + (path ? `/${path}` : '') }) : t('Search a folder first')} disabled={!folder} className="ps-8" aria-label={t('Search')} />
         </div>
         <Select value={type} onValueChange={(v) => go({ type: v === 'all' ? null : v }, true)} disabled={!folder}>
           <SelectTrigger className="w-36" aria-label={t('File type')}><SelectValue /></SelectTrigger>
@@ -234,7 +234,7 @@ export default function Files() {
           <Switch checked={showDeleted} onCheckedChange={(v) => go({ deleted: v ? '1' : null }, true)} disabled={!folder} />
           {t('Deleted')}
         </label>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ms-auto flex items-center gap-2">
           {folder && !path && hasWorkspace(role) && !showDeleted && <FolderAlbumButton folder={{ folder, path }} />}
           <ToggleGroup value={view} onValueChange={(v) => v && go({ view: v === 'grid' ? 'grid' : null }, true)}>
             <ToggleGroupItem value="list" aria-label={t('List')} title={t('List')}><List /></ToggleGroupItem>
@@ -244,10 +244,10 @@ export default function Files() {
       </div>
 
       {chosen.length > 0 && (
-        <div className="sticky top-16 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-lg border bg-popover p-2 shadow-sm">
+        <div className="sticky top-16 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-md border bg-popover p-2 shadow-sm">
           <Button variant="ghost" size="icon" className="size-8" aria-label={t('Clear selection')} onClick={() => setSelected(new Set())}><X className="size-4" /></Button>
           <span className="text-sm font-medium">{t('{count} selected', { count: chosen.length })}</span>
-          <div className="ml-auto flex gap-2">
+          <div className="ms-auto flex gap-2">
             <Button size="sm" variant="outline" onClick={() => downloadZip(chosen.map((e) => ({ folder: e.folder, path: e.kind === 'folder' ? '' : e.path })), lastPart(chosen.length === 1 ? chosen[0].name : folder) || 'fafnirx')}>
               <Download className="size-4" />{chosen.length === 1 && chosen[0].kind === 'file' ? t('Download') : t('Download as zip')}
             </Button>

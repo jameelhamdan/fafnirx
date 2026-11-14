@@ -53,7 +53,7 @@ function MonthSection({
   return (
     <section aria-label={monthTitle(month)} className="pb-2">
       <h2 className="mb-1 py-2 text-base font-semibold">
-        {monthTitle(month)} <span className="ml-1 text-xs font-normal text-muted-foreground">{count(size)}</span>
+        {monthTitle(month)} <span className="ms-1 text-xs font-normal text-muted-foreground">{count(size)}</span>
       </h2>
       {error ? (
         <ErrorNote error={error} />
@@ -161,7 +161,7 @@ export default function Timeline({ scope }: { scope: Scope }) {
   const selectedList = [...selected.values()]
 
   return (
-    <div className="md:pr-9">
+    <div className="md:pe-9">
       <PageHeader title={t(TITLES[scope])} description={buckets.data ? `${t('{count} photos and videos.', { count: count(total) })} ${t(DESCRIPTIONS[scope])}` : t(DESCRIPTIONS[scope])} />
 
       <div className="sticky top-14 z-20 -mx-3 mb-2 bg-background/90 px-3 py-2 backdrop-blur md:-mx-6 md:px-6">
@@ -219,7 +219,7 @@ export default function Timeline({ scope }: { scope: Scope }) {
                   key={item.key}
                   data-index={item.index}
                   ref={virtual.measureElement}
-                  className="absolute top-0 left-0 w-full"
+                  className="absolute top-0 start-0 w-full"
                   style={{ transform: `translateY(${item.start - virtual.options.scrollMargin}px)` }}
                 >
                   <MonthSection

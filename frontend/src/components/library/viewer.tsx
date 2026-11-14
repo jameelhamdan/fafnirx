@@ -21,8 +21,8 @@ import { useT } from '@/lib/i18n'
 const InfoPanel = lazy(() => import('./info-panel'))
 
 /** Round buttons over the picture: frosted, so that they read on a bright photo and a dark one. */
-const glass = 'rounded-full border border-white/10 bg-black/35 text-white backdrop-blur-md hover:bg-black/55 hover:text-white'
-const bare = 'text-white hover:bg-white/15 hover:text-white'
+const glass = 'rounded-full border border-on-media-faint bg-media-ground/35 text-on-media backdrop-blur-md hover:bg-media-ground/55 hover:text-on-media'
+const bare = 'text-on-media hover:bg-on-media-faint hover:text-on-media'
 
 /** True when the key press belongs to something else (a field, a menu, a dialog on top). */
 function busyElsewhere(e: KeyboardEvent) {
@@ -34,8 +34,8 @@ function busyElsewhere(e: KeyboardEvent) {
 function Unavailable({ asset, video, retry }: { asset: Asset; video?: boolean; retry?: () => void }) {
   const t = useT()
   return (
-    <div className="flex max-w-sm flex-col items-center gap-3 p-6 text-center text-white/90">
-      <FileImage className="size-10 text-white/60" />
+    <div className="flex max-w-sm flex-col items-center gap-3 p-6 text-center text-on-media-muted">
+      <FileImage className="size-10 text-on-media-muted" />
       <p className="text-sm">
         {video ? t('This video cannot be played in the browser. Download it to watch it.') : t('No picture could be made of this file.')}
       </p>
@@ -80,7 +80,7 @@ function Photo({ asset, onFail }: { asset: Asset; onFail: () => void }) {
   const waiting = picture.state === 'pending'
   return (
     <>
-      {waiting && <Loader2 className="size-8 animate-spin text-white/70" aria-label={t('Making the picture')} />}
+      {waiting && <Loader2 className="size-8 animate-spin text-on-media-muted" aria-label={t('Making the picture')} />}
     <img
       key={picture.attempt}
       src={mediaUrl(asset.id, 'preview', asset.hash)}
@@ -139,7 +139,7 @@ function Media({ asset }: { asset: Asset }) {
         file={file}
         onFail={() => setFailed(true)}
         globalKeys
-        loading={<Skeleton className="h-64 w-96 max-w-full bg-white/10" />}
+        loading={<Skeleton className="h-64 w-96 max-w-full bg-on-media-faint" />}
       />
     )
   }
@@ -257,13 +257,13 @@ export function Viewer({
       aria-modal="true"
       aria-label={asset.name}
       tabIndex={-1}
-      className="fixed inset-0 z-50 flex flex-col bg-black text-white outline-none"
+      className="fixed inset-0 z-50 flex flex-col bg-media-ground text-on-media outline-none"
     >
-      <header className="z-10 flex items-center gap-1 bg-gradient-to-b from-black/75 via-black/30 to-transparent p-2 pb-6">
+      <header className="z-10 flex items-center gap-1 bg-gradient-to-b from-media-ground/75 via-media-ground/30 to-transparent p-2 pb-6">
         <Button variant="ghost" size="icon" className={bare} aria-label={t('Close')} onClick={onClose}><X className="size-5" /></Button>
-        <div className="mr-auto min-w-0 px-2">
+        <div className="me-auto min-w-0 px-2">
           <p className="truncate text-sm font-medium">{asset.name}</p>
-          <p className="text-xs text-white/70">{whenText(asset.when)}{asset.processing && <span className="ml-2">· {t('Still being processed')}</span>}</p>
+          <p className="text-xs text-on-media-muted">{whenText(asset.when)}{asset.processing && <span className="ms-2">· {t('Still being processed')}</span>}</p>
         </div>
         {mine && (
           <Button variant="ghost" size="icon" className={bare} aria-label={asset.favorite ? t('Remove from favorites') : t('Add to favorites')} aria-pressed={asset.favorite} onClick={() => edit.mutate({ id: asset.id, favorite: !asset.favorite })}>
@@ -289,7 +289,7 @@ export function Viewer({
 
       <div className="relative flex min-h-0 flex-1">
         <div
-          className="relative grid min-w-0 flex-1 place-items-center overflow-hidden bg-neutral-950"
+          className="relative grid min-w-0 flex-1 place-items-center overflow-hidden bg-media-ground"
           onTouchStart={(e) => { touch.current = e.touches.length === 1 ? e.touches[0].clientX : null }}
           onTouchEnd={(e) => {
             const start = touch.current
@@ -305,14 +305,14 @@ export function Viewer({
             <Media key={asset.id} asset={asset} />
           </div>
           {before && (
-            <Button variant="ghost" size="icon" className={cn(glass, 'absolute top-1/2 left-2 z-[2] size-11 -translate-y-1/2 max-sm:hidden')} aria-label={t('Previous')} onClick={() => go(-1)}><ChevronLeft className="size-6" /></Button>
+            <Button variant="ghost" size="icon" className={cn(glass, 'absolute top-1/2 start-2 z-[2] size-11 -translate-y-1/2 max-sm:hidden')} aria-label={t('Previous')} onClick={() => go(-1)}><ChevronLeft className="rtl:rotate-180 size-6" /></Button>
           )}
           {after && (
-            <Button variant="ghost" size="icon" className={cn(glass, 'absolute top-1/2 right-2 z-[2] size-11 -translate-y-1/2 max-sm:hidden')} aria-label={t('Next')} onClick={() => go(1)}><ChevronRight className="size-6" /></Button>
+            <Button variant="ghost" size="icon" className={cn(glass, 'absolute top-1/2 end-2 z-[2] size-11 -translate-y-1/2 max-sm:hidden')} aria-label={t('Next')} onClick={() => go(1)}><ChevronRight className="rtl:rotate-180 size-6" /></Button>
           )}
         </div>
         {info && (
-          <aside aria-label={t('Details')} className="shrink-0 overflow-y-auto bg-background text-foreground max-lg:absolute max-lg:inset-x-0 max-lg:bottom-0 max-lg:max-h-[75%] max-lg:rounded-t-2xl max-lg:shadow-2xl lg:w-96 lg:border-l">
+          <aside aria-label={t('Details')} className="shrink-0 overflow-y-auto bg-background text-foreground max-lg:absolute max-lg:inset-x-0 max-lg:bottom-0 max-lg:max-h-[75%] max-lg:rounded-t-2xl max-lg:shadow-2xl lg:w-96 lg:border-s">
             <Suspense fallback={<div className="p-4"><Skeleton className="h-64" /></div>}><InfoPanel id={asset.id} onClose={() => setInfo(false)} /></Suspense>
           </aside>
         )}

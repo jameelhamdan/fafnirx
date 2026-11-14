@@ -20,11 +20,11 @@ function CopyBox({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
   return (
     <div className="relative">
-      <pre className="overflow-x-auto rounded-md border bg-muted p-3 pr-12 text-xs leading-relaxed whitespace-pre-wrap break-all">{text}</pre>
+      <pre className="overflow-x-auto rounded-md border bg-muted p-3 pe-12 text-xs leading-relaxed whitespace-pre-wrap break-all">{text}</pre>
       <Button
         variant="ghost"
         size="icon"
-        className="absolute top-1.5 right-1.5 size-8"
+        className="absolute top-1.5 end-1.5 size-8"
         aria-label={t('Copy')}
         onClick={() => {
           void copyText(text).then((ok) => {
