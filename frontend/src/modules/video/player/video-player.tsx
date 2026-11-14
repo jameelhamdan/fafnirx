@@ -14,7 +14,7 @@ const SKIP = 10
 const same: Translate = (text) => text
 
 const iconButton =
-  'grid size-9 shrink-0 place-items-center rounded-full text-on-media-muted transition-colors hover:bg-on-media-faint hover:text-on-media focus-visible:bg-on-media-faint focus-visible:outline-none'
+  'grid size-9 shrink-0 place-items-center rounded-full text-on-media-muted transition-colors hover:bg-on-media-hover hover:text-on-media focus-visible:bg-on-media-hover focus-visible:outline-none'
 
 /** The parts of a key press the player looks at; both the page's and React's key events have them. */
 interface Press {
@@ -242,7 +242,7 @@ export default function VideoPlayer({ source, onFail, onNotice, t = same, lang, 
           type="button"
           aria-label={t('Play')}
           onClick={toggle}
-          className="absolute top-1/2 left-1/2 grid size-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-media-ground/55 text-on-media backdrop-blur-md ring-1 ring-on-media-faint transition-transform hover:scale-105 hover:bg-media-ground/70"
+          className="absolute top-1/2 left-1/2 grid size-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-media-ground/55 text-on-media backdrop-blur-md ring-1 ring-on-media-active transition-transform hover:scale-105 hover:bg-media-ground/70"
         >
           <Play className="size-7 translate-x-0.5 fill-current" />
         </button>
@@ -280,8 +280,8 @@ export default function VideoPlayer({ source, onFail, onNotice, t = same, lang, 
           onPointerLeave={() => setHover(null)}
           className="group/bar relative flex h-5 cursor-pointer touch-none items-center focus-visible:outline-none"
         >
-          <div className="relative h-1 w-full rounded-full bg-on-media-faint transition-[height] group-hover/bar:h-1.5 group-focus-visible/bar:h-1.5">
-            <div className="absolute inset-y-0 start-0 rounded-full bg-on-media-faint" style={{ width: `${loaded}%` }} />
+          <div className="relative h-1 w-full rounded-full bg-on-media-soft transition-[height] group-hover/bar:h-1.5 group-focus-visible/bar:h-1.5">
+            <div className="absolute inset-y-0 start-0 rounded-full bg-on-media-strong" style={{ width: `${loaded}%` }} />
             <div className="absolute inset-y-0 start-0 rounded-full bg-primary" style={{ width: `${progress}%` }} />
             <div
               className={cx('absolute top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow ring-2 ring-on-media transition-transform', scrubbing ? 'scale-110' : 'scale-0 group-hover/bar:scale-100 group-focus-visible/bar:scale-100')}
@@ -322,16 +322,16 @@ export default function VideoPlayer({ source, onFail, onNotice, t = same, lang, 
           <span className="ms-1 text-xs tabular-nums text-on-media-muted">{clock(time)} / {clock(duration)}</span>
           <span className="flex-1" />
           {stream.mode === 'stream' && stream.level === AUTO && stream.shown !== null && stream.heights[stream.shown] && (
-            <span className="me-1 hidden rounded bg-on-media-faint px-1.5 py-0.5 text-2xs font-medium tabular-nums sm:inline">{stream.heights[stream.shown]}p</span>
+            <span className="me-1 hidden rounded bg-on-media-hover px-1.5 py-0.5 text-2xs font-medium tabular-nums sm:inline">{stream.heights[stream.shown]}p</span>
           )}
-          {stream.mode === 'original' && stream.canStream && <span className="me-1 hidden rounded bg-on-media-faint px-1.5 py-0.5 text-2xs font-medium sm:inline">{t('Original')}</span>}
+          {stream.mode === 'original' && stream.canStream && <span className="me-1 hidden rounded bg-on-media-hover px-1.5 py-0.5 text-2xs font-medium sm:inline">{t('Original')}</span>}
           {subs.tracks.length > 0 && (
-            <button type="button" className={cx(iconButton, captionsOn && 'bg-on-media-faint')} aria-label={t('Subtitles')} aria-pressed={captionsOn} onClick={toggleCaptions}>
+            <button type="button" className={cx(iconButton, captionsOn && 'bg-on-media-active')} aria-label={t('Subtitles')} aria-pressed={captionsOn} onClick={toggleCaptions}>
               {captionsOn ? <Captions className="size-5" /> : <CaptionsOff className="size-5" />}
             </button>
           )}
           <div className="relative">
-            <button type="button" className={cx(iconButton, menu && 'bg-on-media-faint')} aria-label={t('Settings')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((v) => !v)}>
+            <button type="button" className={cx(iconButton, menu && 'bg-on-media-hover')} aria-label={t('Settings')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((v) => !v)}>
               <Settings className={cx('size-5 transition-transform', menu && 'rotate-45')} />
             </button>
             {menu && (
@@ -339,7 +339,7 @@ export default function VideoPlayer({ source, onFail, onNotice, t = same, lang, 
                 role="menu"
                 // As tall as fits above the controls in this player (a small player scrolls its menu instead of cutting it off).
                 style={{ maxHeight: Math.min(384, Math.max(96, height - covered - 8)) }}
-                className="absolute end-0 bottom-11 w-60 overflow-y-auto rounded-xl bg-media-ground/85 p-1.5 text-on-media shadow-2xl ring-1 ring-on-media-faint backdrop-blur-md"
+                className="absolute end-0 bottom-11 w-60 overflow-y-auto rounded-xl bg-media-ground/85 p-1.5 text-on-media shadow-2xl ring-1 ring-on-media-hover backdrop-blur-md"
               >
                 <SettingsMenu
                   t={t}

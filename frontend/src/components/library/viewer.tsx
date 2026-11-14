@@ -22,7 +22,7 @@ const InfoPanel = lazy(() => import('./info-panel'))
 
 /** Round buttons over the picture: frosted, so that they read on a bright photo and a dark one. */
 const glass = 'rounded-full border border-on-media-faint bg-media-ground/35 text-on-media backdrop-blur-md hover:bg-media-ground/55 hover:text-on-media'
-const bare = 'text-on-media hover:bg-on-media-faint hover:text-on-media'
+const bare = 'text-on-media hover:bg-on-media-hover hover:text-on-media'
 
 /** True when the key press belongs to something else (a field, a menu, a dialog on top). */
 function busyElsewhere(e: KeyboardEvent) {

@@ -61,7 +61,7 @@ function VideoPreview({ info }: { info: FileInfo }) {
         className="group relative grid h-56 w-full place-items-center overflow-hidden rounded-md border bg-media-ground"
       >
         {file.poster && <img src={file.poster} alt="" className="absolute inset-0 size-full object-contain opacity-80" />}
-        <span className="relative grid size-14 place-items-center rounded-full bg-media-ground/55 text-on-media ring-1 ring-on-media-faint transition-transform group-hover:scale-105">
+        <span className="relative grid size-14 place-items-center rounded-full bg-media-ground/55 text-on-media ring-1 ring-on-media-active transition-transform group-hover:scale-105">
           <Play className="size-6 translate-x-0.5 fill-current" />
         </span>
       </button>

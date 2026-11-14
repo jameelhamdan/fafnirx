@@ -60,7 +60,7 @@ export function SettingsMenu({ t, source, subs, rate, onRate, close, onSubtitleP
           type="button"
           role="menuitem"
           onClick={() => picker.current?.click()}
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm hover:bg-on-media-faint focus-visible:bg-on-media-faint focus-visible:outline-none"
+          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm hover:bg-on-media-hover focus-visible:bg-on-media-hover focus-visible:outline-none"
         >
           <FolderOpen className="size-4 shrink-0" />
           <span className="truncate">{t('Load from a file…')}</span>
@@ -93,15 +93,15 @@ export function SettingsMenu({ t, source, subs, rate, onRate, close, onSubtitleP
         <Heading>{t('Timing')}</Heading>
         <div className="flex items-center gap-1 px-2 py-1">
           <span className="flex-1 text-xs text-on-media-muted">{t('Delay')}</span>
-          <button type="button" aria-label={t('Earlier')} onClick={() => subs.changeDelay(subs.delay - 0.1)} className="grid size-7 place-items-center rounded-md bg-on-media-faint hover:bg-on-media-faint focus-visible:bg-on-media-faint focus-visible:outline-none">−</button>
+          <button type="button" aria-label={t('Earlier')} onClick={() => subs.changeDelay(subs.delay - 0.1)} className="grid size-7 place-items-center rounded-md bg-on-media-faint hover:bg-on-media-active focus-visible:bg-on-media-active focus-visible:outline-none">−</button>
           <span className="w-14 text-center text-xs tabular-nums">{signedSeconds(subs.delay)}</span>
-          <button type="button" aria-label={t('Later')} onClick={() => subs.changeDelay(subs.delay + 0.1)} className="grid size-7 place-items-center rounded-md bg-on-media-faint hover:bg-on-media-faint focus-visible:bg-on-media-faint focus-visible:outline-none">+</button>
+          <button type="button" aria-label={t('Later')} onClick={() => subs.changeDelay(subs.delay + 0.1)} className="grid size-7 place-items-center rounded-md bg-on-media-faint hover:bg-on-media-active focus-visible:bg-on-media-active focus-visible:outline-none">+</button>
         </div>
         <button
           type="button"
           role="menuitem"
           onClick={subs.resetStyle}
-          className="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm hover:bg-on-media-faint focus-visible:bg-on-media-faint focus-visible:outline-none"
+          className="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm hover:bg-on-media-hover focus-visible:bg-on-media-hover focus-visible:outline-none"
         >
           <RotateCcw className="size-4 shrink-0" />
           <span className="truncate">{t('Reset the look and the delay')}</span>

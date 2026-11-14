@@ -31,10 +31,15 @@
   --sidebar-border: oklch(0.9 0.006 85);
   /* Dialog and sheet backdrop, and the dark chrome drawn over pictures and video. Same in both themes. */
   --overlay: oklch(0 0 0 / 50%);
+  --radius: 0.375rem;
   --media-ground: oklch(0.13 0 0);
   --on-media: oklch(1 0 0);
   --on-media-muted: oklch(1 0 0 / 65%);
-  --on-media-faint: oklch(1 0 0 / 15%);
+  --on-media-faint: oklch(1 0 0 / 10%);
+  --on-media-hover: oklch(1 0 0 / 15%);
+  --on-media-active: oklch(1 0 0 / 20%);
+  --on-media-soft: oklch(1 0 0 / 25%);
+  --on-media-strong: oklch(1 0 0 / 35%);
 }
 
 .dark {
@@ -85,14 +90,18 @@
   }
 }
 
-/* Animation is feedback, not decoration: with the system setting on, every transition and loop is cut short. */
+/* Transitions and entrance animations are cut short with the system setting on. A spinner keeps turning (it says that work is going on);
+   a pulse becomes a still dot. */
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+  *:not(.animate-spin, .animate-pulse), *:not(.animate-spin, .animate-pulse)::before, *:not(.animate-spin, .animate-pulse)::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+  .animate-pulse { animation: none; }
 }
 
 /* First stop for the keyboard: jumps past the header and the menu. */
