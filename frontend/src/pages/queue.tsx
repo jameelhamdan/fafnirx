@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { useApiMutation } from '@/lib/mutation'
 import { Pause, Play, RefreshCw, RotateCcw, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -11,10 +11,11 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useNow } from '@/hooks/use-now'
-import { api } from '@/lib/api'
+import { cancelJobs, pauseQueue, rebuildPictures, retryJobs, useQueue } from '@/services/jobs'
+import { KEYS } from '@/services/keys'
 import { ago, dateTime } from '@/lib/format'
 import { msg, useT } from '@/lib/i18n'
-import type { QueueJob, QueueState } from '@/lib/types'
+import type { QueueJob } from '@/lib/types'
 
 /** What each kind of work is, in words a person knows. A kind a module brings that is not here is shown as the module names it. */
 const KIND: Record<string, string> = {
@@ -99,16 +100,16 @@ function JobRow({ job, canControl, view, selection, onCancel, onRetry }: { job: 
 export default function Queue() {
   const t = useT()
   const client = useQueryClient()
-  const { data, error } = useQuery({ queryKey: ['queue'], queryFn: () => api.get<QueueState>('/api/queue'), refetchInterval: 3000 })
-  const refresh = () => client.invalidateQueries({ queryKey: ['queue'] })
-  const act = useApiMutation(({ url, body }: { url: string; body?: unknown; message?: (changed: number) => string }) => api.post<{ changed: number } | null>(url, body), {
+  const { data, error } = useQueue()
+  const refresh = () => client.invalidateQueries({ queryKey: KEYS.queue })
+  const act = useApiMutation(({ run }: { run: () => Promise<{ changed: number } | null>; message?: (changed: number) => string }) => run(), {
     onSuccess: (r, v) => {
       if (v.message && r) toast.success(v.message(r.changed))
     },
-    invalidate: [['queue']],
+    invalidate: [KEYS.queue],
   })
-  const retry = (id?: string) => act.mutate({ url: '/api/queue/retry', body: { id }, message: (n) => t('{n} job(s) will run again', { n }) })
-  const cancel = (status: 'failed' | 'queued', id?: string) => act.mutate({ url: '/api/queue/cancel', body: { status, id } })
+  const retry = (id?: string) => act.mutate({ run: () => retryJobs(id), message: (n) => t('{n} job(s) will run again', { n }) })
+  const cancel = (status: 'failed' | 'queued', id?: string) => act.mutate({ run: () => cancelJobs(status, id) })
   const failed = data?.summary.filter((s) => steered(s.kind)).reduce((n, s) => n + s.failed, 0) ?? 0
   const waiting = data?.summary.filter((s) => steered(s.kind)).reduce((n, s) => n + s.queued, 0) ?? 0
   const cards = data ? [...CARDS.slice(0, 2), ...CARDS.slice(2).filter((k) => data.summary.some((s) => s.kind === k)), ...data.summary.map((s) => s.kind).filter((k) => !CARDS.includes(k))] : []
@@ -124,7 +125,7 @@ export default function Queue() {
   async function bulk(what: 'retry' | 'cancel') {
     const rows = picked.filter((j) => (what === 'retry' ? j.status === 'failed' : j.status === 'failed' || j.status === 'queued'))
     try {
-      await Promise.all(rows.map((j) => (what === 'retry' ? api.post('/api/queue/retry', { id: j.id }) : api.post('/api/queue/cancel', { status: j.status, id: j.id }))))
+      await Promise.all(rows.map((j) => (what === 'retry' ? retryJobs(j.id) : cancelJobs(j.status as 'failed' | 'queued', j.id))))
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t('Something went wrong'))
     }
@@ -139,7 +140,7 @@ export default function Queue() {
         description={t('All the work done in the background: reading details, making pictures, reading sources, copying to mirrors, and what the modules that are set up are working on.')}
         actions={data?.can_control ? (
           <>
-            <Button size="sm" variant="outline" onClick={() => act.mutate({ url: '/api/queue/pause', body: { paused: !data.paused } })}>
+            <Button size="sm" variant="outline" onClick={() => act.mutate({ run: () => pauseQueue(!data.paused) })}>
               {data.paused ? <Play /> : <Pause />}{data.paused ? t('Resume') : t('Pause')}
             </Button>
             <Button size="sm" variant="outline" disabled={failed === 0} onClick={() => retry()}><RotateCcw />{t('Retry failed')}</Button>
@@ -148,14 +149,14 @@ export default function Queue() {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => act.mutate({ url: '/api/queue/rebuild', body: { everything: false }, message: (n) => t('{n} file(s) queued', { n }) })}
+              onClick={() => act.mutate({ run: () => rebuildPictures(false), message: (n) => t('{n} file(s) queued', { n }) })}
             >
               <RefreshCw />{t('Process missing')}
             </Button>
             <Button
               size="sm"
               variant="outline"
-              onClick={() => act.mutate({ url: '/api/queue/rebuild', body: { everything: true }, message: (n) => t('{n} file(s) queued', { n }) })}
+              onClick={() => act.mutate({ run: () => rebuildPictures(true), message: (n) => t('{n} file(s) queued', { n }) })}
             >
               <RefreshCw />{t('Read everything again')}
             </Button>

@@ -1,6 +1,7 @@
 import { Pause, Play, RefreshCw, Trash2 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
-import { api } from '@/lib/api'
+import { KEYS } from '@/services/keys'
+import { removeJob, runJob } from '@/services/jobs'
 import { ago, duration } from '@/lib/format'
 import type { JobState } from '@/lib/types'
 import { useNow } from '@/hooks/use-now'
@@ -30,12 +31,12 @@ export function JobList({
   const now = useNow()
   const t = useT()
   const [removing, setRemoving] = useState<JobState | null>(null)
-  const act = useApiMutation(({ job, what }: { job: JobState; what: 'run' | 'toggle' }) => api.post(`/api/${kind}/${job.key}/${what}`), {
-    invalidate: [[kind]],
+  const act = useApiMutation(({ job, what }: { job: JobState; what: 'run' | 'toggle' }) => runJob(kind, job.key, what), {
+    invalidate: [KEYS[kind]],
     success: (_d, v) => (v.what === 'run' ? t('Run requested for {name}. It starts within a few seconds.', { name: v.job.key }) : ''),
   })
-  const remove = useApiMutation((job: JobState) => api.delete(`/api/${kind}/${job.key}`), {
-    invalidate: [[kind]],
+  const remove = useApiMutation((job: JobState) => removeJob(kind, job.key), {
+    invalidate: [KEYS[kind]],
     success: (_d, job) => t('{name} removed', { name: job.key }),
   })
 

@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query'
 import { useApiMutation } from '@/lib/mutation'
 import { ArrowLeft, FolderOpen, Image as ImageIcon, Pencil, Trash2 } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
@@ -13,9 +12,10 @@ import { FormDialog } from '@/components/form-dialog'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
-import { api, mediaUrl, query } from '@/lib/api'
+import { mediaUrl, query } from '@/lib/api'
+import { patchAlbum, removeAlbum, useAlbum } from '@/services/library'
 import { bytes, plural } from '@/lib/format'
-import { useRefreshLibrary } from '@/lib/library'
+import { useRefreshLibrary } from '@/services/library'
 import { useOpenMedia, useViewerSource } from '@/lib/viewer-source'
 import type { AlbumInfo, Asset } from '@/lib/types'
 import { useT } from '@/lib/i18n'
@@ -28,7 +28,7 @@ function EditAlbum({ album, onClose }: { album: AlbumInfo; onClose: () => void }
   const refresh = useRefreshLibrary()
   const [name, setName] = useState(album.name)
   const [description, setDescription] = useState(album.description)
-  const save = useApiMutation(() => api.patch(`/api/albums/${album.id}`, { name, description }), {
+  const save = useApiMutation(() => patchAlbum(album.id, { name, description }), {
     onSuccess: () => {
       void refresh()
       onClose()
@@ -57,7 +57,7 @@ export default function Album() {
   const id = useParams().id ?? ""
   const navigate = useNavigate()
   const refresh = useRefreshLibrary()
-  const { data, error } = useQuery({ queryKey: ['album', id], queryFn: () => api.get<{ album: AlbumInfo; assets: Asset[]; more: boolean }>(`/api/albums/${id}`), enabled: id !== "" })
+  const { data, error } = useAlbum(id)
   const [selected, setSelected] = useState<Map<string, Asset>>(new Map())
   const openMedia = useOpenMedia()
   const [dialog, setDialog] = useState<'edit' | 'delete' | null>(null)
@@ -72,10 +72,10 @@ export default function Album() {
   const source = useMemo(() => (assets ? { assets } : null), [assets])
   useViewerSource(source)
 
-  const cover = useApiMutation((file: string) => api.patch(`/api/albums/${id}`, { cover: file }), {
+  const cover = useApiMutation((file: string) => patchAlbum(id, { cover: file }), {
     onSuccess: () => { toast.success(t('Cover changed')); clear(); void refresh() },
   })
-  const remove = useApiMutation(() => api.delete(`/api/albums/${id}`), {
+  const remove = useApiMutation(() => removeAlbum(id), {
     onSuccess: () => { toast.success(t('Album deleted. Its photos are untouched.')); void refresh(); navigate('/albums') },
   })
 

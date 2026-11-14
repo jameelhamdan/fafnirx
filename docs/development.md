@@ -142,7 +142,9 @@ module also offers `load` in the SDK so the Edit form can show its settings.
 Vite, React 19, TypeScript, Tailwind v4, shadcn/ui, TanStack Query, React Router.
 
 - `src/lib/api.ts` is the only JSON `fetch`; ids are strings. `src/lib/live.tsx` invalidates query families by SSE topic.
-  `src/lib/upload.ts` is the upload queue. Pages load lazily; the file list is virtualized.
+  Pages and components never call it: every request lives in `src/services/<domain>.ts` (typed functions and query hooks, with the query keys in
+  `services/keys.ts`), and oxlint rejects importing the `api` object anywhere else. `src/services/upload.ts` is the upload queue.
+  Pages load lazily; the file list is virtualized.
 - `/watch/:id` (`pages/watch.tsx`) is the standalone viewer; the Files sheet reuses `InfoPanel` (`embedded`) and `WorkNote`.
 - **Translations:** write every visible string in English in `t('…')` (`useT()`; `msg('…')` for strings in data shown with `t`
   later; `tr('…')` outside components); `{name}` placeholders come from the second argument. `npm run i18n` updates

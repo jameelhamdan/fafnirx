@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { useApiMutation } from '@/lib/mutation'
 import { Check, Copy, DownloadCloud, FolderOpen, FolderSync, LogOut, MoreHorizontal, Pencil, Plus, Server, Trash2, UserPlus, X } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
@@ -16,22 +16,22 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { useNow } from '@/hooks/use-now'
-import { api } from '@/lib/api'
+import { KEYS } from '@/services/keys'
+import { leaveFolder, removeFolder, removeMasterFolder, shareFolder, unshareFolder, useFolderPeople } from '@/services/folders'
 import { ago, bytes, count } from '@/lib/format'
 import { copyText } from '@/lib/clipboard'
 import { useT } from '@/lib/i18n'
 import { folderLink } from '@/lib/links'
-import { useRole, useSession } from '@/lib/session'
+import { useRole, useSession } from '@/services/session'
 import { cn } from '@/lib/utils'
 import type { Folder } from '@/lib/types'
 
 type Show = 'all' | 'mine' | 'others' | 'master' | 'sourced'
-type Person = { name: string; can_write: boolean }
 
 /** Refetches the folders after a change. */
 function useRefreshFolders() {
   const client = useQueryClient()
-  return () => void client.invalidateQueries({ queryKey: ['folders'] })
+  return () => void client.invalidateQueries({ queryKey: KEYS.folders })
 }
 
 
@@ -98,14 +98,13 @@ function People({ folder }: { folder: Folder }) {
   const refresh = useRefreshFolders()
   const [names, setNames] = useState('')
   const [canWrite, setCanWrite] = useState(true)
-  const members = `/api/folders/${encodeURIComponent(folder.name)}/members`
-  const people = useQuery({ queryKey: ['folders', 'people'], queryFn: () => api.get<Person[]>('/api/folders/people'), staleTime: 60_000 })
+  const people = useFolderPeople()
   const suggestions = (people.data ?? []).filter((p) => !folder.members.some((m) => m.user === p.name))
   // Adding a user and changing what they may do are the same request.
-  const save = useApiMutation((m: { user: string; can_write: boolean }) => api.post(members, m), {
+  const save = useApiMutation((m: { user: string; can_write: boolean }) => shareFolder(folder.name, m), {
     onSuccess: refresh,
   })
-  const remove = useApiMutation((m: { user: string; can_write: boolean }) => api.delete(`${members}/${encodeURIComponent(m.user)}`), {
+  const remove = useApiMutation((m: { user: string; can_write: boolean }) => unshareFolder(folder.name, m.user), {
     onSuccess: (_, m) => {
       refresh()
       toast(t('Stopped sharing with {name}', { name: m.user }), { action: { label: t('Undo'), onClick: () => save.mutate(m) } })
@@ -118,7 +117,7 @@ function People({ folder }: { folder: Folder }) {
       try {
         // A read-only account can only read: give it that instead of failing.
         const reader = people.data?.find((p) => p.name === name.toLowerCase())?.can_write === false
-        await api.post(members, { user: name, can_write: canWrite && !reader })
+        await shareFolder(folder.name, { user: name, can_write: canWrite && !reader })
       } catch (e) {
         failed.push({ name, why: e instanceof Error ? e.message : String(e) })
       }
@@ -215,10 +214,10 @@ export function FolderPanel({ folder, onClose }: { folder: Folder | undefined; o
   const [asking, setAsking] = useState<'delete' | 'leave' | null>(null)
   const [renaming, setRenaming] = useState(false)
   const ended = () => { onClose(); refresh() }
-  const remove = useApiMutation(() => (folder?.master ? api.delete(`/api/master-folders/${folder.public_id}`) : api.delete(`/api/folders/${encodeURIComponent(folder?.name ?? '')}`)), {
+  const remove = useApiMutation(() => (folder?.master ? removeMasterFolder(folder.public_id) : removeFolder(folder?.name ?? '')), {
     onSuccess: ended,
   })
-  const leave = useApiMutation(() => api.post('/api/folders/leave', { folder: folder?.key }), {
+  const leave = useApiMutation(() => leaveFolder(folder?.key ?? ''), {
     onSuccess: ended,
   })
   return (

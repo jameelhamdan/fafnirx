@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query'
 import { useApiMutation } from '@/lib/mutation'
 import { Pencil, Plus } from 'lucide-react'
 import { useState } from 'react'
@@ -15,7 +14,8 @@ import { FormDialog } from '@/components/form-dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api } from '@/lib/api'
+import { createSource, patchSource, useJobs } from '@/services/jobs'
+import { SOURCE_KEYS } from '@/services/keys'
 import { NO_STORAGE, storageBody, storageProblem } from '@/lib/storage'
 import { docs, filesLink } from '@/lib/links'
 import { ScheduleField } from '@/components/schedule-field'
@@ -25,7 +25,6 @@ import { useT } from '@/lib/i18n'
 import { useSourceKinds } from '@/sdk/registry'
 
 /** A source change shows in the sources list and in the files it writes. */
-const SOURCE_KEYS = [['sources'], ['files']]
 
 function AddSource() {
   const t = useT()
@@ -49,7 +48,7 @@ function AddSource() {
     if (current) return { name, kind: current.id, config: current.body(value), interval_hours, folder }
     return { name, kind: 'rclone', ...storageBody(storage), interval_hours, folder }
   }
-  const create = useApiMutation(() => api.post('/api/sources', body()), {
+  const create = useApiMutation(() => createSource(body()), {
     inline: true,
     invalidate: SOURCE_KEYS,
     onSuccess: () => {
@@ -142,7 +141,7 @@ function EditSource({ job }: { job: JobState }) {
       if (place && place !== detail.folder) body.folder = { folder: place }
       if (kind?.load) body.config = kind.body(form)
       else if (rclone && remotePath !== String(detail.config?.remote_path ?? '')) body.remote_path = remotePath
-      return api.patch(`/api/sources/${job.key}`, body)
+      return patchSource(job.key, body)
     }, {
     inline: true,
     invalidate: SOURCE_KEYS,
@@ -187,7 +186,7 @@ function EditSource({ job }: { job: JobState }) {
 
 export default function Sources() {
   const t = useT()
-  const { data, error } = useQuery({ queryKey: ['sources'], queryFn: () => api.get<JobState[]>('/api/sources') })
+  const { data, error } = useJobs('sources')
   return (
     <div>
       <PageHeader

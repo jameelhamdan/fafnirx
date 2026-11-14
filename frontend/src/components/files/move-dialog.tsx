@@ -3,9 +3,9 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { FormDialog } from '../form-dialog'
 import { Input } from '../ui/input'
-import { api } from '@/lib/api'
+import { moveFile } from '@/services/files'
 import { useT } from '@/lib/i18n'
-import { useRefreshLibrary } from '@/lib/library'
+import { useRefreshLibrary } from '@/services/library'
 
 /**
  * Renames or moves a file, or a folder with what is in it, within a folder the master owns (a local or shared folder, or the
@@ -15,7 +15,7 @@ export function MoveDialog({ folder, path, onClose, onMoved }: { folder: string;
   const t = useT()
   const refresh = useRefreshLibrary()
   const [to, setTo] = useState(path)
-  const move = useApiMutation(() => api.post<{ moved: number }>('/api/files/move', { folder, from: path, to }), {
+  const move = useApiMutation(() => moveFile(folder, path, to), {
     onSuccess: (r) => {
       toast.success(t('Moved {count} file(s)', { count: r.moved }))
       void refresh()

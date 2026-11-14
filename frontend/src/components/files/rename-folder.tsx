@@ -3,7 +3,8 @@ import { useState } from 'react'
 import { FormDialog } from '../form-dialog'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
-import { api } from '@/lib/api'
+import { RENAMED_KEYS } from '@/services/keys'
+import { renameFolder, renameMasterFolder } from '@/services/folders'
 import { useT } from '@/lib/i18n'
 
 /**
@@ -11,7 +12,6 @@ import { useT } from '@/lib/i18n'
  * in the master files. Its files, members, albums, sources and mirrors stay with it, and the devices that use it follow the new name.
  */
 /** Everything that names a folder. */
-const RENAMED_KEYS = ['devices', 'files', 'folders', 'albums', 'album', 'sources'].map((key) => [key])
 
 export function RenameFolder({ folder, masterId, onClose, onRenamed }: { folder: string | null; masterId?: string; onClose: () => void; onRenamed: (folder: string) => void }) {
   const t = useT()
@@ -19,9 +19,7 @@ export function RenameFolder({ folder, masterId, onClose, onRenamed }: { folder:
   const [name, setName] = useState('')
   const rename = useApiMutation(
     async (to: string) =>
-      masterId
-        ? api.post(`/api/master-folders/${masterId}/rename`, { path: to }).then(() => ({ folder: to }))
-        : api.post<{ folder: string }>(`/api/folders/${encodeURIComponent(current)}/rename`, { name: to }),
+      masterId ? renameMasterFolder(masterId, to) : renameFolder(current, to),
     {
       inline: true,
       invalidate: RENAMED_KEYS,

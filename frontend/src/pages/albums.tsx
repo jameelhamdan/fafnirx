@@ -5,7 +5,7 @@ import { Thumb } from '@/components/library/thumb'
 import { Skeleton } from '@/components/ui/skeleton'
 import { mediaUrl } from '@/lib/api'
 import { bytes, plural } from '@/lib/format'
-import { useAlbums } from '@/lib/library'
+import { useAlbums } from '@/services/library'
 import { useT } from '@/lib/i18n'
 
 export default function Albums() {

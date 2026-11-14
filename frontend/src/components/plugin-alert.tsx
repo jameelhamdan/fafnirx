@@ -1,7 +1,7 @@
 import { TriangleAlert } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useI18n } from '@/lib/i18n'
-import { usePlugins } from '@/lib/plugins'
+import { usePlugins } from '@/services/settings'
 import { Callout } from './common'
 
 /** A plugin the server administrator said must run (`FAFNIRX_PLUGINS`) but that is not working. Shown on every page to administrators. */

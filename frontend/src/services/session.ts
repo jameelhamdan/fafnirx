@@ -1,13 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
-import { api } from './api'
-import type { Role, Session } from './types'
+import { api } from '@/lib/api'
+import type { Role, Session } from '@/lib/types'
+import { KEYS } from './keys'
 
-/** The device that holds the master files: they belong to nobody and everybody can see them. */
+/** The session query itself, for the one place that must tell "still loading" from "nobody logged in". */
+export function useSessionQuery() {
+  return useQuery({ queryKey: KEYS.session, queryFn: () => api.get<Session>('/api/session'), staleTime: Infinity })
+}
 
 /** Who is logged in. The app only renders behind a login, so there always is a user. */
 export function useSession() {
-  const { data } = useQuery({ queryKey: ['session'], queryFn: () => api.get<Session>('/api/session'), staleTime: Infinity })
-  return data
+  return useSessionQuery().data
 }
 
 export function useRole(): Role {
@@ -24,3 +27,8 @@ export const hasWorkspace = (role: Role) => role !== 'readonly'
 
 /** The path, as the API names a device in an address: `<user>/<name>` has a slash in it. */
 export const deviceAddress = (folder: string) => encodeURIComponent(folder)
+
+export const fetchSession = () => api.get<Session>('/api/session')
+export const login = (username: string, password: string) => api.post('/api/login', { username, password })
+export const logout = () => api.post('/api/logout')
+export const changePassword = (current: string, next: string) => api.post('/api/me/password', { current, new: next })

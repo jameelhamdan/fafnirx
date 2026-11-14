@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { useApiMutation } from '@/lib/mutation'
 import { ArrowDownUp, ChevronRight, Download, FolderInput, FolderPlus, Grid2x2, Images, List, Pencil, Search, Trash2, Upload, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
@@ -22,16 +22,18 @@ import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useNow } from '@/hooks/use-now'
-import { api, downloadZip, query } from '@/lib/api'
+import { downloadZip } from '@/lib/api'
+import { deleteFiles, useFileListing } from '@/services/files'
+import { KEYS } from '@/services/keys'
 import { count, joinPath, plural } from '@/lib/format'
 import { msg, useT } from '@/lib/i18n'
 import { isLibraryFile } from '@/lib/entries'
-import { hasWorkspace, useRole } from '@/lib/session'
+import { hasWorkspace, useRole } from '@/services/session'
 import { useOpenMedia } from '@/lib/viewer-source'
 import { AccessBadge } from '@/components/files/access-badge'
 import { RescanButton } from '@/components/files/rescan-button'
-import type { Entry, Listing } from '@/lib/types'
-import { collectDropped, enqueueUploads, fromInput } from '@/lib/upload'
+import type { Entry } from '@/lib/types'
+import { collectDropped, enqueueUploads, fromInput } from '@/services/upload'
 import { cn } from '@/lib/utils'
 
 const TYPES = [
@@ -101,18 +103,7 @@ export default function Files() {
 
   const role = useRole()
 
-  const listing = useInfiniteQuery({
-    queryKey: ['files', folder, path, q, type, sort, order, showDeleted],
-    initialPageParam: 0,
-    queryFn: ({ pageParam }) =>
-      api.get<Listing>(`/api/files${query({ folder, path, q, type: type === 'all' ? '' : type, sort, order, deleted: showDeleted, offset: pageParam })}`),
-    getNextPageParam: (last, pages) => {
-      if (last.folder === null) return undefined
-      const loaded = pages.reduce((n, p) => n + p.entries.filter((e) => e.kind === 'file').length, 0)
-      return loaded < last.total ? loaded : undefined
-    },
-    placeholderData: (previous) => previous,
-  })
+  const listing = useFileListing({ folder, path, q, type, sort, order, showDeleted })
   const entries = useMemo(() => listing.data?.pages.flatMap((p) => p.entries) ?? [], [listing.data])
   const total = listing.data?.pages[0]?.total ?? 0
   const searching = listing.data?.pages[0]?.searching ?? false
@@ -139,12 +130,12 @@ export default function Files() {
 
   // A folder can be shown as an album (a show, a trip): the dialog makes it, renames it or ends it.
   const [albumOf, setAlbumOf] = useState<FolderRef | null>(null)
-  const remove = useApiMutation(() => api.post<{ deleted: number }>('/api/files/delete', { items: chosen.map((e) => ({ folder: e.folder, path: e.path })) }), {
+  const remove = useApiMutation(() => deleteFiles(chosen.map((e) => ({ folder: e.folder, path: e.path }))), {
     onSuccess: (r) => {
       toast.success(t('{files} deleted. Recoverable until the retention period ends.', { files: plural(r.deleted, 'file') }))
       setSelected(new Set())
     },
-    invalidate: [['files']],
+    invalidate: [KEYS.files],
   })
 
   const upload = (files: { file: File; path: string }[]) => {
@@ -298,7 +289,7 @@ export default function Files() {
         </>
       )}
 
-      <DetailsSheet folder={folder} path={openFile} onClose={() => go({ file: null }, true)} onDeleted={() => { go({ file: null }, true); void client.invalidateQueries({ queryKey: ['files'] }) }} />
+      <DetailsSheet folder={folder} path={openFile} onClose={() => go({ file: null }, true)} onDeleted={() => { go({ file: null }, true); void client.invalidateQueries({ queryKey: KEYS.files }) }} />
       {moving && <MoveDialog folder={moving.folder} path={moving.path} onClose={() => setMoving(null)} onMoved={() => { setMoving(null); setSelected(new Set()) }} />}
       <FolderAlbum folder={albumOf} onClose={() => setAlbumOf(null)} />
       <RenameFolder folder={renaming} onClose={() => setRenaming(null)} onRenamed={(folder) => { setRenaming(null); setSelected(new Set()); if (folder) go({ folder: folder, path: null }) }} />

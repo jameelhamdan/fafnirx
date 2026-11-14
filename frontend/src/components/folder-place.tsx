@@ -1,9 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
 import { Picker } from '@/components/common'
 import { Label } from '@/components/ui/label'
-import { api } from '@/lib/api'
+import { usePlaces } from '@/services/files'
 import { useT } from '@/lib/i18n'
-import type { Listing } from '@/lib/types'
 
 /**
  * Picks the folder a source writes into: one of your folders, a shared folder you may change, or a master folder. `own` offers a
@@ -11,7 +9,7 @@ import type { Listing } from '@/lib/types'
  */
 export function FolderPlace({ value, onChange, own }: { value: string; onChange: (next: string) => void; own?: boolean }) {
   const t = useT()
-  const places = useQuery({ queryKey: ['files', 'places'], queryFn: () => api.get<Listing>('/api/files') })
+  const places = usePlaces()
   const folders = (places.data?.entries ?? []).filter((e) => e.kind === 'folder' && e.writable && ['user', 'master'].includes(e.folder_kind ?? ''))
   return (
     <div className="space-y-1.5">

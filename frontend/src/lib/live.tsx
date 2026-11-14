@@ -1,4 +1,5 @@
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { KEYS } from '@/services/keys'
 import { useEffect, useState, type ReactNode } from 'react'
 import { LiveContext } from './live-state'
 import { pictureReady } from './pictures'
@@ -60,7 +61,7 @@ export function LiveUpdates({ children }: { children: ReactNode }) {
     source.onerror = () => {
       setConnected(false)
       // The browser reconnects by itself, except after an HTTP error such as an ended login: then check the session.
-      if (source.readyState === EventSource.CLOSED) void client.invalidateQueries({ queryKey: ['session'] })
+      if (source.readyState === EventSource.CLOSED) void client.invalidateQueries({ queryKey: KEYS.session })
     }
     source.onmessage = (e) => {
       try {

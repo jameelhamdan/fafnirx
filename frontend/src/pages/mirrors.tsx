@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query'
 import { BookOpen, Copy, Download, FolderOpen, KeyRound, Lock, Plus, RefreshCw, RotateCcw } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
@@ -15,7 +14,8 @@ import { FormDialog } from '@/components/form-dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api } from '@/lib/api'
+import { createMirror, restoreKit, resyncMirror, useJobs, useMirrorScopes } from '@/services/jobs'
+import { KEYS } from '@/services/keys'
 import { useApiMutation } from '@/lib/mutation'
 import { NO_STORAGE, storageBody, storageProblem } from '@/lib/storage'
 import { bytes, count } from '@/lib/format'
@@ -23,7 +23,6 @@ import { copyText } from '@/lib/clipboard'
 import { useT } from '@/lib/i18n'
 import { docs } from '@/lib/links'
 import { ScheduleField } from '@/components/schedule-field'
-import type { JobState } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 type Kind = 'backup' | 'replica'
@@ -126,7 +125,7 @@ function problem(form: typeof BLANK, t: ReturnType<typeof useT>): string | null 
 /** Picks what a mirror holds: one device with its folders, one whole folder, or everything. */
 function ScopeChoice({ value, onChange }: { value: string; onChange: (scope: string) => void }) {
   const t = useT()
-  const { data, error } = useQuery({ queryKey: ['mirrors', 'scopes'], queryFn: () => api.get<string[]>('/api/mirrors/scopes') })
+  const { data, error } = useMirrorScopes()
   return (
     <div className="space-y-1.5">
       <Picker
@@ -151,7 +150,7 @@ function AddMirror() {
   const set = (patch: Partial<typeof BLANK>) => setForm((f) => ({ ...f, ...patch }))
   const blocked = problem(form, t)
   const create = useApiMutation(() =>
-      api.post('/api/mirrors', {
+      createMirror({
         name: form.name,
         kind: form.kind,
         ...storageBody(form.storage),
@@ -167,7 +166,7 @@ function AddMirror() {
       setOpen(false)
       setForm(BLANK)
     },
-    invalidate: [['mirrors']],
+    invalidate: [KEYS.mirrors],
   })
   return (
     <FormDialog
@@ -257,13 +256,13 @@ function Guide({ open }: { open: boolean }) {
 export default function Mirrors() {
   const t = useT()
   const [resync, setResync] = useState<string | null>(null)
-  const { data, error } = useQuery({ queryKey: ['mirrors'], queryFn: () => api.get<JobState[]>('/api/mirrors') })
-  const resyncNow = useApiMutation((name: string) => api.post(`/api/mirrors/${name}/resync`), {
-    invalidate: [['mirrors']],
+  const { data, error } = useJobs('mirrors')
+  const resyncNow = useApiMutation((name: string) => resyncMirror(name), {
+    invalidate: [KEYS.mirrors],
     success: (_r, name) => t('{name} will re-send every file on its next run.', { name }),
   })
   const kit = useApiMutation(
-    (name: string) => api.get<{ config: string }>(`/api/mirrors/${name}/restore-kit`).then((r) => ({ name, config: r.config })),
+    restoreKit,
     { onSuccess: ({ name, config }) => saveText(`${name}-restore.conf`, config) },
   )
   return (

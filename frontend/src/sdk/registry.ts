@@ -11,7 +11,7 @@
  */
 import { useMemo, useSyncExternalStore, type ComponentType } from 'react'
 import type { T } from '@/lib/i18n'
-import { useSession } from '@/lib/session'
+import { useSession } from '@/services/session'
 
 /** A file as the app shows it to a module: the same for a photo of the library and a file of the file browser. */
 export interface ModuleFile {

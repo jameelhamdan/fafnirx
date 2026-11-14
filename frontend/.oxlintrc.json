@@ -31,6 +31,22 @@
       }
     },
     {
+      // Pages and components ask for data through src/services (typed functions and query hooks) and never call the API themselves.
+      "files": ["src/pages/**/*.tsx", "src/components/**/*.ts", "src/components/**/*.tsx", "src/App.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              { "name": "@/lib/api", "importNames": ["api"], "message": "Use a function or hook from src/services; HTTP calls live there." },
+              { "name": "./lib/api.ts", "importNames": ["api"], "message": "Use a function or hook from src/services; HTTP calls live there." }
+            ],
+            "patterns": [{ "group": ["@/modules/**", "**/modules/**"], "message": "Modules join the app through @/sdk; nothing else imports them." }]
+          }
+        ]
+      }
+    },
+    {
       // The files at the root of a module have nothing above them but other modules.
       "files": ["src/modules/*/*.ts", "src/modules/*/*.tsx"],
       "rules": {
