@@ -1,5 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, X } from 'lucide-react'
+import { KEYS } from '@/services/keys'
 import { useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { ActivityView, ErrorNote, PageHeader, Panel, StatusDot } from '@/components/common'
@@ -10,11 +10,11 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useNow } from '@/hooks/use-now'
-import { api } from '@/lib/api'
+import { dismissAlert, useDashboard } from '@/services/dashboard'
 import { ago, bytes, count, duration } from '@/lib/format'
 import { locale, msg, useT } from '@/lib/i18n'
 import { useApiMutation } from '@/lib/mutation'
-import { deviceAddress } from '@/lib/session'
+import { deviceAddress } from '@/services/session'
 import { STATUS } from '@/lib/status'
 import type { Dashboard as DashboardData } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -206,9 +206,9 @@ function DevicesTable({ data }: { data: DashboardData }) {
 export default function Dashboard() {
   const t = useT()
   const now = useNow()
-  const { data, error } = useQuery({ queryKey: ['dashboard'], queryFn: () => api.get<DashboardData>('/api/dashboard') })
-  const dismiss = useApiMutation((id: string) => api.post(`/api/alerts/${id}/dismiss`), {
-    invalidate: [['dashboard']],
+  const { data, error } = useDashboard()
+  const dismiss = useApiMutation((id: string) => dismissAlert(id), {
+    invalidate: [KEYS.dashboard],
   })
 
   if (error) return <ErrorNote error={error} />

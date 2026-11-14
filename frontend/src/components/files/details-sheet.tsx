@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { useApiMutation } from '@/lib/mutation'
 import { Archive, ArchiveRestore, Clapperboard, Download, ExternalLink, Heart, History, Play, RotateCcw, Trash2 } from 'lucide-react'
 import { lazy, Suspense, useState } from 'react'
@@ -12,15 +12,17 @@ import { Separator } from '../ui/separator'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../ui/sheet'
 import { Skeleton } from '../ui/skeleton'
 import { useNow } from '@/hooks/use-now'
-import { api, downloadUrl, mediaUrl } from '@/lib/api'
+import { downloadUrl, mediaUrl } from '@/lib/api'
+import { deleteFiles, restoreFile, useFileInfo } from '@/services/files'
+import { KEYS } from '@/services/keys'
 import { isLibraryFile } from '@/lib/entries'
-import { useLibraryActions } from '@/lib/library'
+import { useAsset, useLibraryActions } from '@/services/library'
 import { ago, bytes, dateTime } from '@/lib/format'
 import { fileOfInfo } from '@/lib/module-file'
 import { useReadyUrl } from '@/lib/pictures'
-import { hasWorkspace, useRole } from '@/lib/session'
+import { hasWorkspace, useRole } from '@/services/session'
 import { useWatchState } from '@/lib/viewer-source'
-import type { AssetDetail, FileInfo } from '@/lib/types'
+import type { FileInfo } from '@/lib/types'
 import { Thumb } from '../library/thumb'
 import { WorkNote } from '../work-note'
 import { FileIcon } from './file-icon'
@@ -103,7 +105,7 @@ function LibrarySection({ id }: { id: string }) {
   const t = useT()
   const mine = hasWorkspace(useRole())
   const { edit } = useLibraryActions()
-  const { data: d } = useQuery({ queryKey: ['asset', id], queryFn: () => api.get<AssetDetail>(`/api/library/${id}`) })
+  const { data: d } = useAsset(id)
   return (
     <section className="space-y-3">
       <h3 className="text-sm font-medium">{t('In the library')}</h3>
@@ -129,17 +131,13 @@ export function DetailsSheet({ folder, path, onClose, onDeleted }: { folder: str
   const client = useQueryClient()
   const now = useNow()
   const [confirm, setConfirm] = useState<'delete' | number | null>(null)
-  const { data: info, error } = useQuery({
-    queryKey: ['info', folder, path],
-    queryFn: () => api.get<FileInfo>(`/api/files/info?folder=${encodeURIComponent(folder)}&path=${encodeURIComponent(path ?? '')}`),
-    enabled: path !== null,
-  })
-  const refresh = () => Promise.all([client.invalidateQueries({ queryKey: ['info'] }), client.invalidateQueries({ queryKey: ['files'] })])
+  const { data: info, error } = useFileInfo(folder, path)
+  const refresh = () => Promise.all([client.invalidateQueries({ queryKey: KEYS.info }), client.invalidateQueries({ queryKey: KEYS.files })])
 
-  const remove = useApiMutation(() => api.post('/api/files/delete', { items: [{ folder, path }] }), {
+  const remove = useApiMutation(() => deleteFiles([{ folder, path: path ?? '' }]), {
     onSuccess: () => { toast.success(t('Deleted. It stays recoverable until the retention period ends.')); onDeleted() },
   })
-  const restore = useApiMutation((version: number) => api.post('/api/files/restore', { folder, path, version }), {
+  const restore = useApiMutation((version: number) => restoreFile({ folder, path: path ?? '', version }), {
     onSuccess: () => { toast.success(t('Restored as the newest version')); void refresh() },
   })
 

@@ -1,5 +1,5 @@
 import { EventList } from '@/components/event-list'
-import { useQuery } from '@tanstack/react-query'
+import { KEYS } from '@/services/keys'
 import { FolderOpen, KeyRound, Ban, Unplug } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
@@ -11,12 +11,10 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useNow } from '@/hooks/use-now'
-import { api } from '@/lib/api'
+import { releaseDevice, revokeDevice, rotateToken, useDevice } from '@/services/devices'
 import { ago, bytes, count, dateTime } from '@/lib/format'
-import type { DeviceDetail } from '@/lib/types'
 import { useT } from '@/lib/i18n'
 import { filesLink } from '@/lib/links'
-import { deviceAddress } from '@/lib/session'
 import { useApiMutation } from '@/lib/mutation'
 
 export default function DeviceDetailPage() {
@@ -25,14 +23,14 @@ export default function DeviceDetailPage() {
   const now = useNow()
   const [token, setToken] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<'revoke' | 'rotate' | 'release' | null>(null)
-  const { data, error } = useQuery({ queryKey: ['device', name], queryFn: () => api.get<DeviceDetail>(`/api/devices/${deviceAddress(name)}`) })
-  const here = { invalidate: [['device', name]] }
-  const rotate = useApiMutation(() => api.post<DeviceDetail>(`/api/devices/${deviceAddress(name)}/token`), { ...here, onSuccess: (made) => setToken(made.token) })
-  const release = useApiMutation(() => api.post(`/api/devices/${deviceAddress(name)}/release`), {
+  const { data, error } = useDevice(name)
+  const here = { invalidate: [KEYS.device(name)] }
+  const rotate = useApiMutation(() => rotateToken(name), { ...here, onSuccess: (made) => setToken(made.token) })
+  const release = useApiMutation(() => releaseDevice(name), {
     ...here,
     success: t('{name} released. The next client that connects with its token takes it over.', { name }),
   })
-  const revoke = useApiMutation(() => api.post(`/api/devices/${deviceAddress(name)}/revoke`), { ...here, success: t('{name} revoked. Its data is kept.', { name }) })
+  const revoke = useApiMutation(() => revokeDevice(name), { ...here, success: t('{name} revoked. Its data is kept.', { name }) })
 
   if (error) return <ErrorNote error={error} />
   if (!data) return <Skeleton className="h-64" />

@@ -1,5 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
+import { KEYS } from '@/services/keys'
 import { useMemo, useState } from 'react'
 import { Picker, Empty, ErrorNote, PageHeader } from '@/components/common'
 import { DataTable, TableToolbar } from '@/components/data-table'
@@ -12,10 +12,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { api } from '@/lib/api'
+import { createUser, patchUser, removeUser, useUsers } from '@/services/users'
 import { dateTime } from '@/lib/format'
 import { msg, useT } from '@/lib/i18n'
-import { useSession } from '@/lib/session'
+import { useSession } from '@/services/session'
 import type { Role, UserInfo } from '@/lib/types'
 import { useApiMutation } from '@/lib/mutation'
 
@@ -38,9 +38,9 @@ function AddUser() {
   const [name, setName] = useState('')
   const [role, setRole] = useState<Role>('normal')
   const [password, setPassword] = useState('')
-  const create = useApiMutation(() => api.post('/api/users', { name, role, password }), {
+  const create = useApiMutation(() => createUser({ name, role, password }), {
     inline: true,
-    invalidate: [['users']],
+    invalidate: [KEYS.users],
     onSuccess: () => {
       setOpen(false)
       setName('')
@@ -84,7 +84,7 @@ function ResetPassword({ user }: { user: UserInfo }) {
   const t = useT()
   const [open, setOpen] = useState(false)
   const [password, setPassword] = useState('')
-  const reset = useApiMutation(() => api.patch(`/api/users/${encodeURIComponent(user.name)}`, { password }), {
+  const reset = useApiMutation(() => patchUser(user.name, { password }), {
     inline: true,
     success: t('New password set for {name}. Their logins have ended.', { name: user.name }),
     onSuccess: () => {
@@ -116,11 +116,11 @@ function ResetPassword({ user }: { user: UserInfo }) {
 
 function Row({ user, me, view }: { user: UserInfo; me: string; view: TableView }) {
   const t = useT()
-  const change = useApiMutation((body: { role?: Role; disabled?: boolean }) => api.patch(`/api/users/${encodeURIComponent(user.name)}`, body), {
-    invalidate: [['users']],
+  const change = useApiMutation((body: { role?: Role; disabled?: boolean }) => patchUser(user.name, body), {
+    invalidate: [KEYS.users],
   })
-  const remove = useApiMutation(() => api.delete(`/api/users/${encodeURIComponent(user.name)}`), {
-    invalidate: [['users'], ['devices']],
+  const remove = useApiMutation(() => removeUser(user.name), {
+    invalidate: [KEYS.users, KEYS.devices],
     success: t('{name} is deleted.', { name: user.name }),
   })
   const [deleting, setDeleting] = useState(false)
@@ -180,7 +180,7 @@ function Row({ user, me, view }: { user: UserInfo; me: string; view: TableView }
 export default function Users() {
   const t = useT()
   const me = useSession()?.user?.name ?? ''
-  const { data, error } = useQuery({ queryKey: ['users'], queryFn: () => api.get<UserInfo[]>('/api/users') })
+  const { data, error } = useUsers()
   const [filter, setFilter] = useState('')
   const [role, setRole] = useState('')
   const columns = useMemo(() => [{ id: 'name', label: t('Name'), locked: true }, { id: 'role', label: t('Role'), locked: true }, { id: 'devices', label: t('Devices') }, { id: 'added', label: t('Added') }], [t])

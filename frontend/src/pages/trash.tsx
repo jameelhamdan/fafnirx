@@ -1,4 +1,3 @@
-import { useInfiniteQuery } from '@tanstack/react-query'
 import { useApiMutation } from '@/lib/mutation'
 import { File, RotateCcw, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -10,10 +9,12 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useNow } from '@/hooks/use-now'
-import { api, mediaUrl } from '@/lib/api'
+import { mediaUrl } from '@/lib/api'
+import { restoreFile } from '@/services/files'
+import { purgeTrash, useTrash } from '@/services/trash'
 import { ago, bytes, count, date, plural } from '@/lib/format'
-import { useRefreshLibrary } from '@/lib/library'
-import type { Trash, TrashEntry } from '@/lib/types'
+import { useRefreshLibrary } from '@/services/library'
+import type { TrashEntry } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useT } from '@/lib/i18n'
 
@@ -28,15 +29,7 @@ export default function TrashPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   /** The files the person is asked to remove for good. */
   const [purging, setPurging] = useState<TrashEntry[] | null>(null)
-  const trash = useInfiniteQuery({
-    queryKey: ['trash'],
-    initialPageParam: 0,
-    queryFn: ({ pageParam }) => api.get<Trash>(`/api/trash?offset=${pageParam}`),
-    getNextPageParam: (last, pages) => {
-      const loaded = pages.reduce((n, p) => n + p.entries.length, 0)
-      return loaded < last.total ? loaded : undefined
-    },
-  })
+  const trash = useTrash()
   const entries = useMemo(() => trash.data?.pages.flatMap((p) => p.entries) ?? [], [trash.data])
   const total = trash.data?.pages[0]?.total ?? 0
   const retention = trash.data?.pages[0]?.retention_days ?? 30
@@ -45,7 +38,7 @@ export default function TrashPage() {
   const restore = useApiMutation(async (list: TrashEntry[]) => {
     let done = 0
     for (const e of list) {
-      await api.post('/api/files/restore', { folder: e.folder, path: e.path, version: e.version })
+      await restoreFile({ folder: e.folder, path: e.path, version: e.version })
       done++
     }
     return done
@@ -64,7 +57,7 @@ export default function TrashPage() {
     let files = 0
     let freed = 0
     for (let i = 0; i < list.length; i += PURGE_AT_ONCE) {
-      const done = await api.post<{ files: number; bytes: number }>('/api/trash/purge', { ids: list.slice(i, i + PURGE_AT_ONCE).map((e) => e.id) })
+      const done = await purgeTrash(list.slice(i, i + PURGE_AT_ONCE).map((e) => e.id))
       files += done.files
       freed += done.bytes
     }

@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { useApiMutation } from '@/lib/mutation'
 import { useEffect, useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
@@ -11,9 +11,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
-import { api } from '@/lib/api'
-import { usePlugins } from '@/lib/plugins'
-import { useSession } from '@/lib/session'
+import { KEYS } from '@/services/keys'
+import { saveSettings, useSettings } from '@/services/settings'
+import { usePlugins } from '@/services/settings'
+import { useSession } from '@/services/session'
 import type { PluginState, Settings as SettingsData } from '@/lib/types'
 import { msg, useT } from '@/lib/i18n'
 
@@ -21,11 +22,11 @@ import { msg, useT } from '@/lib/i18n'
 function useSaveSettings(data: SettingsData) {
   const t = useT()
   const client = useQueryClient()
-  return useApiMutation((changes: Partial<SettingsData>) => api.put<SettingsData>('/api/settings', { ...data, ...changes }), {
+  return useApiMutation((changes: Partial<SettingsData>) => saveSettings({ ...data, ...changes }), {
     onSuccess: (saved) => {
-      client.setQueryData(['settings'], saved)
+      client.setQueryData(KEYS.settings, saved)
       // The menu follows the session.
-      void client.invalidateQueries({ queryKey: ['session'] })
+      void client.invalidateQueries({ queryKey: KEYS.session })
       toast.success(t('Settings saved'))
     },
   })
@@ -118,7 +119,7 @@ function Plugins() {
   const known = Object.keys(session?.modules ?? {}).sort().join()
   const running = (data?.plugins ?? []).filter((p) => p.state === 'up' || p.state === 'setup').map((p) => p.id).sort().join()
   useEffect(() => {
-    if (data && known !== running) void client.invalidateQueries({ queryKey: ['session'] })
+    if (data && known !== running) void client.invalidateQueries({ queryKey: KEYS.session })
   }, [client, data, known, running])
 
   return (
@@ -173,7 +174,7 @@ function FileStore() {
 /** The settings of the whole application, for administrators. What belongs to one person (their password, logging out) is in the menu of their name. */
 export default function Settings() {
   const t = useT()
-  const { data, error } = useQuery({ queryKey: ['settings'], queryFn: () => api.get<SettingsData>('/api/settings') })
+  const { data, error } = useSettings()
   // Two columns of cards that each take the height they need, so there are no gaps between them; on a narrow screen one column.
   const column = 'flex min-w-0 flex-1 flex-col gap-6'
   return (

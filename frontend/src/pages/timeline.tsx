@@ -1,4 +1,4 @@
-import { keepPreviousData, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useWindowVirtualizer } from '@tanstack/react-virtual'
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -8,13 +8,15 @@ import { Scrubber } from '@/components/library/scrubber'
 import { SelectionBar } from '@/components/library/selection-bar'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api, mediaUrl, query } from '@/lib/api'
+import { mediaUrl } from '@/lib/api'
+import { useDevices } from '@/services/devices'
+import { useFolders } from '@/services/folders'
 import { count, monthTitle } from '@/lib/format'
 import { monthBodyHeight, monthHeight, useGrid } from '@/lib/grid'
-import { monthQuery, useTags, type TimelineFilters } from '@/lib/library'
+import { monthQuery, useTags, useTimelineBuckets, type TimelineFilters } from '@/services/library'
 import { msg, useT } from '@/lib/i18n'
 import { useOpenMedia, useViewerSource } from '@/lib/viewer-source'
-import type { Asset, Buckets, DeviceSummary, Folder, Scope } from '@/lib/types'
+import type { Asset, Scope } from '@/lib/types'
 
 const TITLES: Record<Scope, string> = { timeline: msg('Photos'), favorites: msg('Favorites'), archive: msg('Archive') }
 const DESCRIPTIONS: Record<Scope, string> = {
@@ -88,13 +90,9 @@ export default function Timeline({ scope }: { scope: Scope }) {
     window.scrollTo({ top: 0 })
   }
 
-  const buckets = useQuery({
-    queryKey: ['timeline', 'buckets', filters],
-    queryFn: () => api.get<Buckets>(`/api/timeline/buckets${query(filters)}`),
-    placeholderData: keepPreviousData,
-  })
-  const devices = useQuery({ queryKey: ['devices'], queryFn: () => api.get<DeviceSummary[]>('/api/devices') })
-  const folders = useQuery({ queryKey: ['folders'], queryFn: () => api.get<Folder[]>('/api/folders') })
+  const buckets = useTimelineBuckets(filters)
+  const devices = useDevices()
+  const folders = useFolders()
   const tags = useTags()
   const months = useMemo(() => buckets.data?.months ?? [], [buckets.data])
 

@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { FormDialog } from '@/components/form-dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { api } from '@/lib/api'
+import { changePassword } from '@/services/session'
 import { useT } from '@/lib/i18n'
 
 /** Everybody changes their own password here. Their other logins end; this one stays. */
@@ -13,7 +13,7 @@ export function ChangePassword({ open, onClose }: { open: boolean; onClose: () =
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [again, setAgain] = useState('')
-  const change = useApiMutation(() => api.post('/api/me/password', { current, new: next }), {
+  const change = useApiMutation(() => changePassword(current, next), {
     inline: true,
     onSuccess: () => {
       toast.success(t('Password changed. Your other logins have ended.'))

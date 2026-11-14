@@ -1,6 +1,6 @@
 import { Archive, Cog, FolderOpen, GalleryVerticalEnd, HardDrive, Heart, Images, LayoutDashboard, Monitor, Settings, Trash2, UploadCloud, Users } from 'lucide-react'
 import { msg } from '@/lib/i18n'
-import { hasWorkspace } from '@/lib/session'
+import { hasWorkspace } from '@/services/session'
 import type { Role } from '@/lib/types'
 
 /** Who sees an entry: everybody, the roles with a workspace of their own (not read-only), or administrators. */

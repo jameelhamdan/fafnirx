@@ -1,12 +1,11 @@
-import { useQuery } from '@tanstack/react-query'
 import { CornerDownLeft, FolderOpen, Monitor, Search } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api } from '@/lib/api'
+import { useDevices } from '@/services/devices'
+import { useFolders } from '@/services/folders'
 import { useT } from '@/lib/i18n'
 import { folderLink } from '@/lib/links'
-import { deviceAddress, hasWorkspace, usePhotos, useRole } from '@/lib/session'
-import type { DeviceSummary, Folder } from '@/lib/types'
+import { deviceAddress, hasWorkspace, usePhotos, useRole } from '@/services/session'
 import { cn } from '@/lib/utils'
 import { matches } from '@/lib/table-view'
 import { visibleNav } from './nav'
@@ -24,8 +23,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const [active, setActive] = useState(0)
   const list = useRef<HTMLUListElement>(null)
   const workspace = hasWorkspace(role)
-  const devices = useQuery({ queryKey: ['devices'], queryFn: () => api.get<DeviceSummary[]>('/api/devices'), enabled: open && workspace })
-  const folders = useQuery({ queryKey: ['folders'], queryFn: () => api.get<Folder[]>('/api/folders'), enabled: open && workspace })
+  const devices = useDevices(open && workspace)
+  const folders = useFolders(open && workspace)
 
   const hits = useMemo(() => {
     const all: Hit[] = [

@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query'
 import { Calendar, FolderOpen, MapPin, RotateCcw, Star, X } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
@@ -7,10 +6,10 @@ import { FormDialog } from '../form-dialog'
 import { Input } from '../ui/input'
 import { Skeleton } from '../ui/skeleton'
 import { Textarea } from '../ui/textarea'
-import { api, query } from '@/lib/api'
+import { query } from '@/lib/api'
 import { bytes, clock, fromInputValue, toInputValue, whenText } from '@/lib/format'
-import { useLibraryActions, useTags } from '@/lib/library'
-import { hasWorkspace, usePhotos, useRole } from '@/lib/session'
+import { useAsset, useLibraryActions, useTags } from '@/services/library'
+import { hasWorkspace, usePhotos, useRole } from '@/services/session'
 import type { AssetDetail } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { WorkNote } from '../work-note'
@@ -206,7 +205,7 @@ export default function InfoPanel({ id, onClose, embedded }: { id: string; onClo
   const mine = hasWorkspace(useRole())
   const photos = usePhotos()
   const [dialog, setDialog] = useState<'date' | 'place' | null>(null)
-  const { data: d, error } = useQuery({ queryKey: ['asset', id], queryFn: () => api.get<AssetDetail>(`/api/library/${id}`) })
+  const { data: d, error } = useAsset(id)
   const exif = d?.exif ? Object.entries(d.exif) : []
 
   return (

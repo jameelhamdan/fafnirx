@@ -1,5 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
 import { ChevronRight, Plus } from 'lucide-react'
+import { KEYS } from '@/services/keys'
 import { useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { ActivityView, Picker, Empty, ErrorNote, PageHeader, StatusDot } from '@/components/common'
@@ -16,12 +16,14 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useNow } from '@/hooks/use-now'
-import { api } from '@/lib/api'
+import { createDevice, useDevice, useDevices } from '@/services/devices'
+import { useFolders } from '@/services/folders'
+import { useUsers } from '@/services/users'
 import { ago, bytes, count } from '@/lib/format'
-import type { DeviceDetail, DeviceSummary, Folder, UserInfo } from '@/lib/types'
+import type { DeviceDetail, DeviceSummary, Folder } from '@/lib/types'
 import { useT } from '@/lib/i18n'
 import { folderLink } from '@/lib/links'
-import { deviceAddress, useRole, useSession } from '@/lib/session'
+import { deviceAddress, useRole, useSession } from '@/services/session'
 import { useApiMutation } from '@/lib/mutation'
 
 function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail) => void }) {
@@ -32,10 +34,10 @@ function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail) => voi
   const session = useSession()
   const isAdmin = session?.user?.role === 'admin'
   // An administrator can add a device for any user who can have one.
-  const users = useQuery({ queryKey: ['users'], queryFn: () => api.get<UserInfo[]>('/api/users'), enabled: isAdmin && open })
-  const create = useApiMutation(() => api.post<DeviceDetail>('/api/devices', { name, user: owner || undefined }), {
+  const users = useUsers(isAdmin && open)
+  const create = useApiMutation(() => createDevice(name, owner || undefined), {
     inline: true,
-    invalidate: [['devices']],
+    invalidate: [KEYS.devices],
     onSuccess: (made) => {
       setOpen(false)
       setName('')
@@ -84,7 +86,7 @@ function AddDeviceDialog({ onCreated }: { onCreated: (made: DeviceDetail) => voi
 function DeviceFolders({ device, folders, onOpen }: { device: DeviceDetail['device']; folders: Folder[]; onOpen: (folder: string) => void }) {
   const t = useT()
   const now = useNow()
-  const { data, error } = useQuery({ queryKey: ['device', device.key], queryFn: () => api.get<DeviceDetail>(`/api/devices/${deviceAddress(device.key)}`) })
+  const { data, error } = useDevice(device.key)
   if (error) return <ErrorNote error={error} />
   if (!data) return <Skeleton className="h-10" />
   if (data.folders.length === 0) return <p className="text-sm text-muted-foreground">{t('No folder is attached to this device yet.')}</p>
@@ -162,8 +164,8 @@ export default function Devices() {
   const [made, setMade] = useState<DeviceDetail | null>(null)
   const [opened, setOpened] = useState<string | null>(null)
   const admin = useRole() === 'admin'
-  const devices = useQuery({ queryKey: ['devices'], queryFn: () => api.get<DeviceSummary[]>('/api/devices') })
-  const folders = useQuery({ queryKey: ['folders'], queryFn: () => api.get<Folder[]>('/api/folders') })
+  const devices = useDevices()
+  const folders = useFolders()
   const all = folders.data ?? []
   const [filter, setFilter] = useState('')
   const [only, setOnly] = useState('')

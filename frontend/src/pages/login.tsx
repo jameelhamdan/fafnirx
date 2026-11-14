@@ -5,9 +5,9 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { api } from '@/lib/api'
+import { fetchSession, login } from '@/services/session'
+import { KEYS } from '@/services/keys'
 import { useT } from '@/lib/i18n'
-import type { Session } from '@/lib/types'
 
 export default function Login() {
   const t = useT()
@@ -22,8 +22,8 @@ export default function Login() {
     setBusy(true)
     setError('')
     try {
-      await api.post('/api/login', { username, password })
-      client.setQueryData(['session'], await api.get<Session>('/api/session'))
+      await login(username, password)
+      client.setQueryData(KEYS.session, await fetchSession())
     } catch (err) {
       setError(err instanceof Error ? err.message : t('Could not log in'))
     } finally {

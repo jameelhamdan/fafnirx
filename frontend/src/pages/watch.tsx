@@ -1,12 +1,11 @@
-import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { ErrorNote } from '@/components/common'
 import { Viewer } from '@/components/library/viewer'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api, query } from '@/lib/api'
-import type { Asset } from '@/lib/types'
+import { query } from '@/lib/api'
+import { useFolderAssets } from '@/services/library'
 import { backgroundOf, useCurrentSource } from '@/lib/viewer-source'
 import { useT } from '@/lib/i18n'
 
@@ -27,11 +26,7 @@ export default function Watch() {
   const given = source?.assets.some((a) => a.id === id) ? source : null
   // The folder is listed once, for the file the page was opened on; moving to the next file only changes the address.
   const [opened] = useState(id)
-  const { data, error } = useQuery({
-    queryKey: ['folder', opened],
-    queryFn: () => api.get<{ assets: Asset[] }>(`/api/library/${opened}/folder`),
-    enabled: given === null,
-  })
+  const { data, error } = useFolderAssets(opened, given === null)
   // Moving on replaces the address and keeps the page under the viewer.
   const step = (next: string) => navigate(`/watch/${next}`, { replace: true, state: location.state })
   if (given) {

@@ -1,8 +1,9 @@
 import { useQueryClient } from '@tanstack/react-query'
+import { KEYS } from '@/services/keys'
 import { AlertCircle, Check, ChevronDown, ChevronUp, Loader2, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { bytes, percent, plural } from '@/lib/format'
-import { clearFinishedUploads, setUploadsDoneHandler, useUploads } from '@/lib/upload'
+import { clearFinishedUploads, setUploadsDoneHandler, useUploads } from '@/services/upload'
 import { Button } from '../ui/button'
 import { Progress } from '../ui/progress'
 import { useT } from '@/lib/i18n'
@@ -15,7 +16,7 @@ export function UploadPanel() {
   const [open, setOpen] = useState(true)
 
   useEffect(() => {
-    setUploadsDoneHandler(() => void client.invalidateQueries({ queryKey: ['files'] }))
+    setUploadsDoneHandler(() => void client.invalidateQueries({ queryKey: KEYS.files }))
   }, [client])
 
   if (items.length === 0) return null

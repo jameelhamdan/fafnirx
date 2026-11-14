@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { registerModule, type FrontendModule } from '@/sdk'
 import { addStrings, useI18n, type Lang } from './i18n'
 import { publishRuntime, SDK } from '@/sdk/runtime'
-import { useSession } from './session'
+import { useSession } from '@/services/session'
 import type { ModuleInfo } from './types'
 
 const started = new Set<string>()

@@ -1,10 +1,11 @@
 import { useState } from 'react'
+import { KEYS } from '@/services/keys'
 import { FormDialog } from '@/components/form-dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { api } from '@/lib/api'
+import { createFolder } from '@/services/folders'
 import { useT } from '@/lib/i18n'
-import { useSession } from '@/lib/session'
+import { useSession } from '@/services/session'
 import { useApiMutation } from '@/lib/mutation'
 
 /**
@@ -15,9 +16,9 @@ export function NewFolder({ open, onClose, onCreated }: { open: boolean; onClose
   const t = useT()
   const me = useSession()?.user?.name
   const [name, setName] = useState('')
-  const create = useApiMutation((): Promise<{ folder: string }> => api.post('/api/folders', { name }), {
+  const create = useApiMutation((): Promise<{ folder: string }> => createFolder(name), {
     inline: true,
-    invalidate: [['folders'], ['devices'], ['files']],
+    invalidate: [KEYS.folders, KEYS.devices, KEYS.files],
     onSuccess: (made) => {
       setName('')
       onCreated(made.folder)

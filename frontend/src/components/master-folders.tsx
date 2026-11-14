@@ -1,10 +1,11 @@
 import { Plus } from 'lucide-react'
+import { KEYS } from '@/services/keys'
 import { useState } from 'react'
 import { FormDialog } from '@/components/form-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { api } from '@/lib/api'
+import { createMasterFolder } from '@/services/folders'
 import { useT } from '@/lib/i18n'
 import { useApiMutation } from '@/lib/mutation'
 
@@ -13,9 +14,9 @@ export function AddMasterFolder() {
   const t = useT()
   const [open, setOpen] = useState(false)
   const [path, setPath] = useState('')
-  const create = useApiMutation(() => api.post('/api/master-folders', { path }), {
+  const create = useApiMutation(() => createMasterFolder(path), {
     inline: true,
-    invalidate: [['folders']],
+    invalidate: [KEYS.folders],
     onSuccess: () => {
       setOpen(false)
       setPath('')

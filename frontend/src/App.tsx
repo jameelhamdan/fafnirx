@@ -1,12 +1,13 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { lazy, Suspense, useEffect, type ReactNode } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AppShell } from './components/app-shell.tsx'
-import { api, UNAUTHORIZED } from './lib/api.ts'
+import { UNAUTHORIZED } from './lib/api.ts'
 import { LiveUpdates } from './lib/live.tsx'
 import { backgroundOf } from './lib/viewer-source'
 import { ViewerSourceProvider } from './components/viewer-source-provider'
-import { hasWorkspace } from './lib/session.ts'
+import { hasWorkspace, useSessionQuery } from './services/session.ts'
+import { KEYS } from './services/keys.ts'
 import type { Role, Session } from './lib/types.ts'
 import { Skeleton } from './components/ui/skeleton.tsx'
 import { Button } from './components/ui/button.tsx'
@@ -50,11 +51,11 @@ function Centered({ children }: { children: ReactNode }) {
 export default function App() {
   const t = useT()
   const client = useQueryClient()
-  const session = useQuery({ queryKey: ['session'], queryFn: () => api.get<Session>('/api/session'), staleTime: Infinity })
+  const session = useSessionQuery()
 
   // Any call that finds the login ended sends the user back to the login page.
   useEffect(() => {
-    const ended = () => client.setQueryData<Session>(['session'], { user: null })
+    const ended = () => client.setQueryData<Session>(KEYS.session, { user: null })
     window.addEventListener(UNAUTHORIZED, ended)
     return () => window.removeEventListener(UNAUTHORIZED, ended)
   }, [client])

@@ -4,7 +4,7 @@ import { FormDialog } from '../form-dialog'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { plural } from '@/lib/format'
-import { useLibraryActions, useTags } from '@/lib/library'
+import { useLibraryActions, useTags } from '@/services/library'
 import { useT } from '@/lib/i18n'
 
 /** Adds tags to many files at once. Tags they already have are kept. */

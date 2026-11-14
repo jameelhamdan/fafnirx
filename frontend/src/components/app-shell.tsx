@@ -4,10 +4,9 @@ import { useTheme } from 'next-themes'
 import { useEffect, useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import { toast } from 'sonner'
-import { api } from '@/lib/api'
 import { msg, useI18n } from '@/lib/i18n'
 import { useLive } from '@/lib/live-state'
-import { usePhotos, useRole, useSession } from '@/lib/session'
+import { logout as endSession, usePhotos, useRole, useSession } from '@/services/session'
 import { cn } from '@/lib/utils'
 import { ChangePassword } from './change-password'
 import { CommandPalette } from './command-palette'
@@ -115,7 +114,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   async function logout() {
     try {
-      await api.post('/api/logout')
+      await endSession()
     } catch (e) {
       // Still logged in: say so instead of showing a login page the server would not honour.
       toast.error(e instanceof Error ? e.message : t('Could not log out'))
