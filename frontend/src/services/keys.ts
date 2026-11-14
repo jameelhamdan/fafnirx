@@ -14,6 +14,7 @@ export const KEYS = {
   files: ['files'],
   places: ['files', 'places'],
   info: ['info'],
+  folder: (id: string) => ['folder', id],
   asset: (id: string) => ['asset', id],
   albums: ['albums'],
   album: ['album'],

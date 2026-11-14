@@ -29,6 +29,10 @@
   --color-on-media: var(--on-media);
   --color-on-media-muted: var(--on-media-muted);
   --color-on-media-faint: var(--on-media-faint);
+  --color-on-media-hover: var(--on-media-hover);
+  --color-on-media-active: var(--on-media-active);
+  --color-on-media-soft: var(--on-media-soft);
+  --color-on-media-strong: var(--on-media-strong);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-accent: var(--sidebar-accent);

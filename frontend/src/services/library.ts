@@ -53,7 +53,7 @@ export function useAsset(id: string) {
 /** The other files of the folder that holds a library file: what the viewer steps through when opened from a folder. */
 export function useFolderAssets(id: string, enabled: boolean) {
   return useQuery({
-    queryKey: ['folder', id],
+    queryKey: KEYS.folder(id),
     queryFn: () => api.get<{ assets: Asset[] }>(`/api/library/${id}/folder`),
     enabled,
   })

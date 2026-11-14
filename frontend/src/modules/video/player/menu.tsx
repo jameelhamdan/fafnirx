@@ -10,7 +10,7 @@ export function Choice({ on, onPick, children }: { on: boolean; onPick: () => vo
       role="menuitemradio"
       aria-checked={on}
       onClick={onPick}
-      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm hover:bg-on-media-faint focus-visible:bg-on-media-faint focus-visible:outline-none"
+      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm hover:bg-on-media-hover focus-visible:bg-on-media-hover focus-visible:outline-none"
     >
       <Check className={cx('size-4 shrink-0', !on && 'opacity-0')} />
       <span className="truncate">{children}</span>
@@ -25,7 +25,7 @@ export function Door({ label, value, onOpen }: { label: string; value?: string; 
       type="button"
       role="menuitem"
       onClick={onOpen}
-      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm hover:bg-on-media-faint focus-visible:bg-on-media-faint focus-visible:outline-none"
+      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm hover:bg-on-media-hover focus-visible:bg-on-media-hover focus-visible:outline-none"
     >
       <span className="flex-1 truncate">{label}</span>
       {value && <span className="max-w-24 truncate text-xs text-on-media-muted">{value}</span>}
@@ -44,7 +44,7 @@ export function Back({ label, onBack }: { label: string; onBack: () => void }) {
     <button
       type="button"
       onClick={onBack}
-      className="mb-1 flex w-full items-center gap-1 rounded-md px-1 py-1.5 text-sm font-medium hover:bg-on-media-faint focus-visible:bg-on-media-faint focus-visible:outline-none"
+      className="mb-1 flex w-full items-center gap-1 rounded-md px-1 py-1.5 text-sm font-medium hover:bg-on-media-hover focus-visible:bg-on-media-hover focus-visible:outline-none"
     >
       <ChevronLeft className="size-4 rtl:rotate-180" />
       {label}
@@ -100,8 +100,8 @@ export function Segments<T extends string>({ label, value, options, onChange }: 
             aria-checked={o.value === value}
             onClick={() => onChange(o.value)}
             className={cx(
-              'rounded-md px-1.5 py-1 text-xs hover:bg-on-media-faint focus-visible:bg-on-media-faint focus-visible:outline-none',
-              o.value === value ? 'bg-on-media-faint font-medium' : 'bg-on-media-faint',
+              'rounded-md px-1.5 py-1 text-xs hover:bg-on-media-active focus-visible:bg-on-media-active focus-visible:outline-none',
+              o.value === value ? 'bg-on-media-soft font-medium' : 'bg-on-media-faint',
             )}
           >
             {o.label}

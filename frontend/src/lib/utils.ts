@@ -1,5 +1,8 @@
 import { clsx, type ClassValue } from 'clsx'
-import { twMerge } from 'tailwind-merge'
+import { extendTailwindMerge } from 'tailwind-merge'
+
+/** `text-2xs` and `text-compact` are font sizes (theme.css): without this they would be taken for colours and not replace `text-sm`. */
+const twMerge = extendTailwindMerge({ extend: { classGroups: { 'font-size': [{ text: ['2xs', 'compact'] }] } } })
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))

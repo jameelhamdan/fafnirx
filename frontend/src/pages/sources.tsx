@@ -24,8 +24,6 @@ import type { JobState } from '@/lib/types'
 import { useT } from '@/lib/i18n'
 import { useSourceKinds } from '@/sdk/registry'
 
-/** A source change shows in the sources list and in the files it writes. */
-
 function AddSource() {
   const t = useT()
   const [open, setOpen] = useState(false)
