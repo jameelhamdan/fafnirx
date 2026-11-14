@@ -25,10 +25,10 @@ const ROLES: [Role, string, string][] = [
   ['readonly', msg('Read only'), msg('Reads the master files. No devices, albums or favorites.')],
 ]
 
-function RoleSelect({ id, value, onChange }: { id?: string; value: Role; onChange: (role: Role) => void }) {
+function RoleSelect({ id, label, value, onChange }: { id?: string; label?: string; value: Role; onChange: (role: Role) => void }) {
   const t = useT()
   return (
-    <Picker id={id} className="w-full" value={value} onChange={(v) => onChange(v as Role)} options={ROLES.map(([role, label]) => [role, t(label)])} />
+    <Picker id={id} label={label} className="w-full" value={value} onChange={(v) => onChange(v as Role)} options={ROLES.map(([role, label]) => [role, t(label)])} />
   )
 }
 
@@ -141,7 +141,7 @@ function Row({ user, me, view }: { user: UserInfo; me: string; view: TableView }
         {user.name === me && <Badge variant="secondary" className="ms-2">{t('You')}</Badge>}
         {user.disabled && <Badge variant="outline" className="ms-2">{t('Disabled')}</Badge>}
       </TableCell>
-      <TableCell className="w-40 sm:w-48"><RoleSelect value={user.role} onChange={(role) => role !== user.role && setAsking({ role })} /></TableCell>
+      <TableCell className="w-40 sm:w-48"><RoleSelect label={`${t('Role')}: ${user.name}`} value={user.role} onChange={(role) => role !== user.role && setAsking({ role })} /></TableCell>
       {view.show('devices') && <TableCell className="num hidden text-end sm:table-cell">{user.devices}</TableCell>}
       {view.show('added') && <TableCell className="num hidden text-xs text-muted-foreground md:table-cell">{dateTime(user.created_at)}</TableCell>}
       <TableCell>

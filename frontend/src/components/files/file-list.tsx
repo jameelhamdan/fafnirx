@@ -72,8 +72,6 @@ export function FileList({
             return (
               <div
                 key={key}
-                role="row"
-                aria-selected={on}
                 className={cn('absolute top-0 start-0 grid w-full items-center gap-2 border-b px-3 text-sm', COLUMNS, on ? 'bg-accent' : 'hover:bg-muted/50')}
                 style={{ height: row.size, transform: `translateY(${row.start}px)` }}
               >
