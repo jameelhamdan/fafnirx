@@ -203,6 +203,7 @@ export default function Devices() {
               <TableToolbar view={view} filter={filter} onFilter={setFilter} placeholder={t('Filter by name, system or address')} shown={shown.length} total={devices.data.length}>
                 <Picker
                   size="sm"
+                  className="w-40"
                   label={t('Status')}
                   value={only}
                   onChange={setOnly}
