@@ -201,6 +201,7 @@ export default function Queue() {
                 >
                   <Picker
                     size="sm"
+                    className="w-40"
                     label={t('State')}
                     value={state}
                     onChange={setState}

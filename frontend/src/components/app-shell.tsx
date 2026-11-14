@@ -27,7 +27,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
   const { t } = useI18n()
   const groups = visibleNav(useRole(), usePhotos())
   return (
-    <nav className="flex flex-col gap-5 py-4 pe-3" aria-label={t('Main')}>
+    <nav className="flex flex-col gap-5 py-4" aria-label={t('Main')}>
       {groups.map(({ title, items }) => (
         <div key={title} className="flex flex-col gap-0.5">
           <p className="px-5 pb-1.5 text-xs font-medium text-muted-foreground">{t(title)}</p>
@@ -39,7 +39,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
               onClick={onNavigate}
               className={({ isActive }) =>
                 cn(
-                  'flex items-center gap-3 rounded-e-full py-2.5 ps-5 pe-4 text-sm font-medium transition-colors',
+                  'flex items-center gap-3 py-2.5 ps-5 pe-4 text-sm font-medium transition-colors',
                   isActive ? 'bg-primary/15 text-foreground [&>svg]:text-primary' : 'text-muted-foreground hover:bg-sidebar-accent hover:text-foreground',
                 )
               }

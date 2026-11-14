@@ -28,7 +28,7 @@ const ROLES: [Role, string, string][] = [
 function RoleSelect({ id, value, onChange }: { id?: string; value: Role; onChange: (role: Role) => void }) {
   const t = useT()
   return (
-    <Picker id={id} value={value} onChange={(v) => onChange(v as Role)} options={ROLES.map(([role, label]) => [role, t(label)])} />
+    <Picker id={id} className="w-full" value={value} onChange={(v) => onChange(v as Role)} options={ROLES.map(([role, label]) => [role, t(label)])} />
   )
 }
 
@@ -141,11 +141,11 @@ function Row({ user, me, view }: { user: UserInfo; me: string; view: TableView }
         {user.name === me && <Badge variant="secondary" className="ms-2">{t('You')}</Badge>}
         {user.disabled && <Badge variant="outline" className="ms-2">{t('Disabled')}</Badge>}
       </TableCell>
-      <TableCell><RoleSelect value={user.role} onChange={(role) => role !== user.role && setAsking({ role })} /></TableCell>
+      <TableCell className="w-40 sm:w-48"><RoleSelect value={user.role} onChange={(role) => role !== user.role && setAsking({ role })} /></TableCell>
       {view.show('devices') && <TableCell className="num hidden text-end sm:table-cell">{user.devices}</TableCell>}
       {view.show('added') && <TableCell className="num hidden text-xs text-muted-foreground md:table-cell">{dateTime(user.created_at)}</TableCell>}
       <TableCell>
-        <div className="flex justify-end gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           <ResetPassword user={user} />
           <Button size="xs" variant="outline" disabled={change.isPending} onClick={() => (user.disabled ? change.mutate({ disabled: false }) : setAsking({ disabled: true }))}>
             {user.disabled ? t('Enable') : t('Disable')}
@@ -204,6 +204,7 @@ export default function Users() {
             <TableToolbar view={view} filter={filter} onFilter={setFilter} placeholder={t('Filter users')} shown={shown.length} total={data.length}>
               <Picker
                 size="sm"
+                className="w-40"
                 label={t('Role')}
                 value={role}
                 onChange={setRole}
