@@ -74,8 +74,9 @@ export function Empty({ title, children }: { title: string; children?: ReactNode
 }
 
 /** A hairline box on the card surface: the one shape for lists, tables and groups of controls. */
-export function Panel({ as: Tag = 'div', className, ...props }: ComponentProps<'div'> & { as?: 'div' | 'section' | 'ul' }) {
-  return <Tag className={cn('overflow-hidden rounded-md border bg-card', className)} {...(props as object)} />
+export function Panel({ as, className, ...props }: ComponentProps<'div'> & { as?: 'div' | 'section' | 'ul' }) {
+  const Tag = (as ?? 'div') as 'div'
+  return <Tag className={cn('overflow-hidden rounded-md border bg-card', className)} {...props} />
 }
 
 const CALLOUT = {
