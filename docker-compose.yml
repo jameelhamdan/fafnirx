@@ -1,0 +1,43 @@
+# Simple hosted setup: the master and its database. All persistent data is under /data in each container
+# (the master's files, versions and updates; PostgreSQL in /data/pgdata), so a backup of /data covers everything.
+x-hosting:
+  expose: master
+  port: 8080
+
+services:
+  master:
+    image: jameelh99/fafnirx:latest
+    ports:
+      - "8080:8080" # web app and web API
+      - "7443:7443" # devices (gRPC)
+    environment:
+      FAFNIRX_DATABASE_URL: postgresql://fafnirx:fafnirx@db/fafnirx
+      # Read at the first start only; change it in the web app afterwards.
+      FAFNIRX_ADMIN_PASSWORD: change-me
+      FAFNIRX_DATA: /data
+      HOME: /tmp # rclone wants a writable home for its cache
+    volumes:
+      - masterdata:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: fafnirx
+      POSTGRES_USER: fafnirx
+      POSTGRES_PASSWORD: fafnirx
+      PGDATA: /data/pgdata
+    volumes:
+      - pgdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fafnirx -d fafnirx"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  masterdata:
+  pgdata:
