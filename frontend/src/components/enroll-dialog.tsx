@@ -8,9 +8,11 @@ import { toast } from 'sonner'
 import { copyText } from '@/lib/clipboard'
 import { INSTALL_SCRIPT } from '@/lib/links'
 import { useT } from '@/lib/i18n'
+import { useSession } from '@/services/session'
 
 /** Where devices reach the master: the gRPC port on this host, or this host itself behind an https proxy. */
-function guessServer(): string {
+function guessServer(configured?: string): string {
+  if (configured) return configured
   const { protocol, hostname, host } = window.location
   return protocol === 'https:' ? `https://${host}` : `http://${hostname}:7443`
 }
@@ -43,7 +45,8 @@ function CopyBox({ text }: { text: string }) {
 /** Shown once after a device is created or its token rotated: the token and the command that uses it. */
 export function EnrollDialog({ name, token, onClose }: { name: string; token: string | null; onClose: () => void }) {
   const t = useT()
-  const [server, setServer] = useState(guessServer)
+  const session = useSession()
+  const [server, setServer] = useState(() => guessServer(session?.public_url))
   return (
     <Dialog open={token !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-xl">

@@ -38,6 +38,7 @@ services:
       # or not working shows a warning to administrators.
       FAFNIRX_PLUGINS: "${FAFNIRX_PLUGINS:-${COMPOSE_PROFILES:-}}"
       # Sizes for the machine, empty = the default (docs/deployment.md#sizing-and-tuning)
+      FAFNIRX_PUBLIC_URL: "${FAFNIRX_PUBLIC_URL:-}"
       FAFNIRX_DB_POOL: "${FAFNIRX_DB_POOL:-}"
       FAFNIRX_JOB_WORKERS: "${FAFNIRX_JOB_WORKERS:-}"
       FAFNIRX_STREAMS: "${FAFNIRX_STREAMS:-}"

@@ -9,9 +9,12 @@
 //!   FAFNIRX_DATABASE_URL    PostgreSQL connection string, e.g. postgres://user:password@host/database (required)
 //!   FAFNIRX_DATA            data directory (default ./data)
 //!   FAFNIRX_LISTEN          gRPC listen address for devices (default 0.0.0.0:7443)
-//!   FAFNIRX_HTTP            web listen address (default 0.0.0.0:8080)
+//!   FAFNIRX_HTTP            web listen address (default 0.0.0.0:8080); it serves the device API too, as HTTP/2 (gRPC), so a
+//!                           proxy with one address can carry both
 //!   FAFNIRX_ADMIN_PASSWORD  password of the user "admin", set once (required until the user has one; after that the
 //!                           password is changed in the web app and this is not read)
+//!   FAFNIRX_PUBLIC_URL      the address devices reach the master at (e.g. https://fafnirx.example.com or http://nas.lan:7443);
+//!                           the web app puts it in the setup it hands out (default: guessed from the browser's address)
 //!   FAFNIRX_RCLONE          rclone binary used by mirrors (default: rclone from PATH)
 //!   FAFNIRX_RCLONE_CONFIG   rclone config file for mirrors that name a remote (default <FAFNIRX_DATA>/rclone.conf)
 //!   FAFNIRX_TICK_SECS       how often sources and mirrors are checked for being due (default 15)
@@ -44,8 +47,6 @@ mod repo;
 mod web;
 
 use anyhow::{bail, Context, Result};
-use fafnirx_common::pb::collector_server::CollectorServer;
-use fafnirx_common::MAX_MESSAGE;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -109,21 +110,19 @@ async fn run() -> Result<()> {
     let addr = address("FAFNIRX_HTTP", "0.0.0.0:8080")?;
     let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("listen on {addr}"))?;
     tracing::info!("web app on http://{addr}");
-    let trusted = state.trusted.clone();
-    let events = state.events.clone();
-    let app = web::router(state).into_make_service_with_connect_info::<SocketAddr>();
+    let svc = Arc::new(devices::grpc::Service { db, store, trusted: state.trusted.clone(), events: state.events.clone() });
+    // The device API is also served on the web port, so that one address behind one TLS proxy carries both; the dedicated
+    // port below stays for networks without a proxy.
+    let app = web::router(state)
+        .merge(devices::grpc::routes(svc.clone()))
+        .into_make_service_with_connect_info::<SocketAddr>();
     servers.spawn(async move { axum::serve(listener, app).await.context("web server") });
 
-    let svc = devices::grpc::Service { db, store, trusted, events };
     let addr = address("FAFNIRX_LISTEN", "0.0.0.0:7443")?;
     tracing::info!("fafnirx-master listening for devices on {addr}");
     servers.spawn(async move {
         tonic::transport::Server::builder()
-            .add_service(
-                CollectorServer::new(svc)
-                    .max_decoding_message_size(MAX_MESSAGE)
-                    .max_encoding_message_size(MAX_MESSAGE),
-            )
+            .add_service(devices::grpc::collector(svc))
             .serve(addr)
             .await
             .context("device server")

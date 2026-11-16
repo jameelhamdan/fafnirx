@@ -20,6 +20,7 @@ mod auth;
 mod devices;
 mod fetch;
 mod files;
+mod grpc_on_web_port;
 mod library;
 mod master_sync;
 mod modules;

@@ -33,7 +33,11 @@ pub(super) const UNNAMED_INSTANCE: &str = "unnamed";
 /// The address a request comes from: the connection's, or behind a trusted proxy the one the proxy saw.
 pub(super) fn address_of<T>(req: &Request<T>, trusted: &crate::platform::proxy::Trusted) -> Option<String> {
     let forwarded = req.metadata().get("x-forwarded-for").and_then(|v| v.to_str().ok());
-    req.remote_addr().map(|a| trusted.client_ip(a.ip(), forwarded).to_string())
+    // On the dedicated port tonic knows the peer; on the web port axum does (it keeps it as ConnectInfo).
+    let peer = req
+        .remote_addr()
+        .or_else(|| req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0))?;
+    Some(trusted.client_ip(peer.ip(), forwarded).to_string())
 }
 
 pub(super) fn caller_of<T>(req: &Request<T>, trusted: &crate::platform::proxy::Trusted) -> Result<Caller, Status> {

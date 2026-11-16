@@ -54,6 +54,8 @@ pub struct AppState {
     pub streams: Arc<Semaphore>,
     /// The modules that are set up (see `modules`).
     pub modules: Arc<crate::modules::Registry>,
+    /// The address devices reach the master at (`FAFNIRX_PUBLIC_URL`), if the administrator said.
+    pub public_url: Option<String>,
 }
 
 pub type App = Arc<AppState>;
@@ -72,6 +74,10 @@ impl AppState {
             uploads: Mutex::default(),
             streams: Arc::new(Semaphore::new(crate::platform::tuning::get("FAFNIRX_STREAMS").unwrap_or(32))),
             modules,
+            public_url: std::env::var("FAFNIRX_PUBLIC_URL")
+                .ok()
+                .map(|u| u.trim().trim_end_matches('/').to_string())
+                .filter(|u| !u.is_empty()),
         })
     }
 }

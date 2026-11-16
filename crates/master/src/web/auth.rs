@@ -238,6 +238,10 @@ pub struct Session {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
     photos: Option<bool>,
+    /// Where devices reach the master (`FAFNIRX_PUBLIC_URL`); only told to a logged-in user.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    public_url: Option<String>,
 }
 
 pub async fn session(State(state): State<App>, access: Option<Extension<Access>>) -> Res<Session> {
@@ -246,6 +250,7 @@ pub async fn session(State(state): State<App>, access: Option<Extension<Access>>
     let photos = if logged_in { Some(run(&state, |c| Ok(settings::photos_on(c))).await?) } else { None };
     Ok(Json(Session {
         photos,
+        public_url: if logged_in { state.public_url.clone() } else { None },
         user: access.map(|a| Who { name: a.name, role: a.role.as_str() }),
         version: logged_in.then_some(env!("CARGO_PKG_VERSION")),
         modules: if logged_in { state.modules.active() } else { Default::default() },

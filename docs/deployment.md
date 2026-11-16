@@ -80,6 +80,25 @@ visitor one address (five wrong guesses from anyone block the login for a minute
 (`http://proxy:80`, `http://proxy:7443`) or set `FAFNIRX_TRUSTED_PROXY` to its address. Responses carry CSP, `X-Frame-Options:
 DENY`, `nosniff`, and HSTS behind https. Browser uploads use 8 MiB pieces; live updates use SSE with a 15 s keep-alive. A VPN is equally safe.
 
+## One port for the web app and the devices
+
+The web port (`8080`) also answers the device API (gRPC, HTTP/2, also without TLS), so a platform that routes one HTTP port per
+app, or a proxy that refuses raw ports like `7443`, can carry everything. The dedicated `7443` stays for networks without such a
+proxy. The proxy must speak HTTP/2 to the master for gRPC (Caddy: `reverse_proxy h2c://master:8080` for requests with
+`Content-Type: application/grpc*`; ghuyum.cloud does that by itself).
+
+[`docker-compose.cloud.yml`](../docker/docker-compose.cloud.yml) is the stack for such a platform: the master and PostgreSQL, all
+data under `/data`, secrets set in the platform (nothing in the file). With two hostnames on the one app:
+
+| Hostname | Use | Protect with |
+|---|---|---|
+| `files.apps.example.com` | the web app | Cloudflare Access (or another login in front) |
+| `sync.apps.example.com` | devices: `fafnirx install --server https://sync.apps.example.com` | nothing in front: devices use tokens |
+
+Set `FAFNIRX_PUBLIC_URL=https://sync.apps.example.com` so the web app's setup steps show the device address, and turn on
+**gRPC** for the Cloudflare zone when it proxies the hostnames. Both hostnames reach the same master, so either works for either
+purpose; two names let Access guard only the web app.
+
 ## Backups
 
 | Back up | How |

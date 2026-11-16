@@ -6,7 +6,7 @@ use crate::files::ingest;
 use crate::platform::db::{self, Db};
 use crate::platform::store::Store;
 use crate::repo::{alerts, devices, files, folders, settings};
-use fafnirx_common::pb::collector_server::Collector;
+use fafnirx_common::pb::collector_server::{Collector, CollectorServer};
 use fafnirx_common::pb::*;
 use fafnirx_common::{chunk_count, chunk_hash, clean_remote_path, root_hash, to_hash, unix_now, CHUNK_SIZE, HASH_LEN};
 use postgres::Client;
@@ -22,6 +22,21 @@ pub struct Service {
     pub trusted: crate::platform::proxy::Trusted,
     /// What the database announced (`{"topic":..,"key":..}`), the same stream the web app listens to.
     pub events: tokio::sync::broadcast::Sender<String>,
+}
+
+/// The device API as a tonic service.
+pub fn collector(svc: Arc<Service>) -> CollectorServer<Service> {
+    CollectorServer::from_arc(svc)
+        .max_decoding_message_size(fafnirx_common::MAX_MESSAGE)
+        .max_encoding_message_size(fafnirx_common::MAX_MESSAGE)
+}
+
+/// The device API as routes of the web server, under its own path `/<package>.Collector/<method>`. Merged into the web
+/// router, one address (behind one TLS proxy) serves both the web app and the devices: HTTP/2 is negotiated per
+/// connection, also without TLS, so a proxy may speak h2c to the master. The routes sit outside the web app's login.
+pub fn routes(svc: Arc<Service>) -> axum::Router {
+    let path = format!("/{}/{{*method}}", <CollectorServer<Service> as tonic::server::NamedService>::NAME);
+    axum::Router::new().route_service(&path, collector(svc))
 }
 
 /// How long a burst of changes to a shared folder is allowed to gather before devices are told: an upload of a thousand

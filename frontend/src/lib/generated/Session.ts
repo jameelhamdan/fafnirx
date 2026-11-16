@@ -17,4 +17,8 @@ modules: Record<string, unknown>,
 /**
  * Whether the web app offers the photo pages (administrator setting); only told to a logged-in user.
  */
-photos?: boolean, };
+photos?: boolean, 
+/**
+ * Where devices reach the master (`FAFNIRX_PUBLIC_URL`); only told to a logged-in user.
+ */
+public_url?: string, };
