@@ -36,3 +36,5 @@ tests
 *.md
 LICENSE
 docker
+# ... except what the master image copies in (docker/Dockerfile.master)
+!docker/entrypoint-master.sh
