@@ -49,11 +49,14 @@ RUN apt-get update \
     && useradd --uid 1000 --create-home fafnirx \
     && mkdir /data /config && chown fafnirx /data /config
 COPY --from=build /src/target/release/fafnirx-master /usr/local/bin/fafnirx-master
+COPY docker/entrypoint-master.sh /usr/local/bin/entrypoint-master
+RUN chmod 755 /usr/local/bin/entrypoint-master
 # /config holds rclone.conf, if you use one for mirrors. Map a host folder onto it.
 ENV FAFNIRX_DATA=/data FAFNIRX_RCLONE_CONFIG=/config/rclone.conf FAFNIRX_HTTP=0.0.0.0:8080
 VOLUME /data /config
 EXPOSE 7443 8080
-USER fafnirx
+# Starts as root only to give /data and /config to fafnirx when a mount made them root's, then runs as fafnirx (uid 1000).
+ENTRYPOINT ["entrypoint-master"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${FAFNIRX_HTTP##*:}/healthz" || exit 1
 CMD ["fafnirx-master"]
