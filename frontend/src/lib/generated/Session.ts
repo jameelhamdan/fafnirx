@@ -19,6 +19,6 @@ modules: Record<string, unknown>,
  */
 photos?: boolean, 
 /**
- * Where devices reach the master (`FAFNIRX_PUBLIC_URL`); only told to a logged-in user.
+ * Where devices sync to (`FAFNIRX_SYNC_URL`); only told to a logged-in user.
  */
-public_url?: string, };
+sync_url?: string, };

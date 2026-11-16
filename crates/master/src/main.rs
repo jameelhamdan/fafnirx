@@ -13,8 +13,9 @@
 //!                           proxy with one address can carry both
 //!   FAFNIRX_ADMIN_PASSWORD  password of the user "admin", set once (required until the user has one; after that the
 //!                           password is changed in the web app and this is not read)
-//!   FAFNIRX_PUBLIC_URL      the address devices reach the master at (e.g. https://fafnirx.example.com or http://nas.lan:7443);
-//!                           the web app puts it in the setup it hands out (default: guessed from the browser's address)
+//!   FAFNIRX_SYNC_URL        the address devices sync to (e.g. https://fafnirx.example.com or http://nas.lan:7443);
+//!                           the web app puts it in the setup it hands out (default: guessed from the browser's address);
+//!                           FAFNIRX_PUBLIC_URL, its old name, still works
 //!   FAFNIRX_RCLONE          rclone binary used by mirrors (default: rclone from PATH)
 //!   FAFNIRX_RCLONE_CONFIG   rclone config file for mirrors that name a remote (default <FAFNIRX_DATA>/rclone.conf)
 //!   FAFNIRX_TICK_SECS       how often sources and mirrors are checked for being due (default 15)

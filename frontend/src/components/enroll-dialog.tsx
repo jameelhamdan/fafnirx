@@ -46,7 +46,7 @@ function CopyBox({ text }: { text: string }) {
 export function EnrollDialog({ name, token, onClose }: { name: string; token: string | null; onClose: () => void }) {
   const t = useT()
   const session = useSession()
-  const [server, setServer] = useState(() => guessServer(session?.public_url))
+  const [server, setServer] = useState(() => guessServer(session?.sync_url))
   return (
     <Dialog open={token !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-xl">

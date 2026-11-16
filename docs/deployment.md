@@ -95,7 +95,7 @@ data under `/data`, secrets set in the platform (nothing in the file). With two 
 | `files.apps.example.com` | the web app | Cloudflare Access (or another login in front) |
 | `sync.apps.example.com` | devices: `fafnirx install --server https://sync.apps.example.com` | nothing in front: devices use tokens |
 
-Set `FAFNIRX_PUBLIC_URL=https://sync.apps.example.com` so the web app's setup steps show the device address, and turn on
+Set `FAFNIRX_SYNC_URL=https://sync.apps.example.com` so the web app's setup steps show the device address, and turn on
 **gRPC** for the Cloudflare zone when it proxies the hostnames. Both hostnames reach the same master, so either works for either
 purpose; two names let Access guard only the web app.
 

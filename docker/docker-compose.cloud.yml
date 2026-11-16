@@ -7,7 +7,7 @@
 #
 # Set up in the platform:
 #   Secrets      master: FAFNIRX_ADMIN_PASSWORD (read at the first start only)    db: POSTGRES_PASSWORD (`openssl rand -hex 24`)
-#   Environment  master: FAFNIRX_PUBLIC_URL=https://sync.apps.example.com  (what devices connect to, shown in the web app)
+#   Environment  master: FAFNIRX_SYNC_URL=https://sync.apps.example.com  (what devices connect to, shown in the web app)
 #   Domains      two hostnames on the app, e.g. files.apps.example.com (web app) and sync.apps.example.com (devices);
 #                both reach the master on 8080, which also answers the device API (gRPC over HTTP/2)
 #   Backups      a policy on master and on db
