@@ -34,10 +34,11 @@ flowchart LR
 
 ```sh
 mkdir fafnirx && cd fafnirx
-curl -fsSLO https://raw.githubusercontent.com/jameelhamdan/fafnirx/master/docker/docker-compose.yml
-printf 'FAFNIRX_ADMIN_PASSWORD=choose-one\nFAFNIRX_DB_PASSWORD=another-one\n' > .env
-docker compose up -d
+curl -fsSL https://raw.githubusercontent.com/jameelhamdan/fafnirx/master/docker/install.sh | sh     # add: -s -- --video --fetch --domain example.com
 ```
+
+It uses the pre-built images from Docker Hub, generates the passwords and prints the login. By hand, or to see the options:
+[Installation](docs/installation.md#1-the-master).
 
 Open `http://<server>:8080`, log in as `admin`, add a device (its token is shown once). On the device (Linux, macOS; Windows has
 `get.ps1` and a setup, see [Installation](docs/installation.md#2-a-client)):

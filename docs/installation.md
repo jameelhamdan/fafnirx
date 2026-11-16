@@ -12,8 +12,22 @@ put [TLS in front](deployment.md).
 
 ```sh
 mkdir fafnirx && cd fafnirx
+curl -fsSL https://raw.githubusercontent.com/jameelhamdan/fafnirx/master/docker/install.sh | sh
+```
+
+The script downloads `docker-compose.yml`, writes a `.env` with generated passwords and secret (never overwriting an existing
+one), creates the data folders, starts the stack and prints the login. Options go after `sh -s --`: `--video`, `--fetch`
+(add-on [modules](modules.md)), `--domain fafnirx.example.com` (Caddy with automatic https), `--version 6.1.0` (pin the images),
+`--no-start`.
+
+By hand instead:
+
+```sh
 curl -fsSLO https://raw.githubusercontent.com/jameelhamdan/fafnirx/master/docker/docker-compose.yml
-printf 'FAFNIRX_ADMIN_PASSWORD=choose-one\nFAFNIRX_DB_PASSWORD=another-one\nFAFNIRX_PLUGIN_SECRET=%s\n' "$(openssl rand -hex 24)" > .env
+printf 'FAFNIRX_ADMIN_PASSWORD=choose-one
+FAFNIRX_DB_PASSWORD=another-one
+FAFNIRX_PLUGIN_SECRET=%s
+' "$(openssl rand -hex 24)" > .env
 docker compose up -d
 ```
 
