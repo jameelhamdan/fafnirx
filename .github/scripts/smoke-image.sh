@@ -27,6 +27,7 @@ port=${SMOKE_PORT:-18081}
 cleanup() {
   docker rm -f "$name-master" "$name-db" "$name-video" "$name-fetch" "$name-$module" >/dev/null 2>&1 || true
   docker network rm "$name" >/dev/null 2>&1 || true
+  docker volume rm "$name-data" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -66,7 +67,13 @@ fetch)
 master|connect)
   if [ "$kind" = master ]; then
     echo "== programs in the image"
-    docker run --rm --entrypoint sh "$image" -c 'rclone version | head -1 | grep -q "^rclone v1\.75\.2$" && test "$(id -u)" = 1000 && ! command -v ffmpeg'
+    docker run --rm --entrypoint sh "$image" -c 'rclone version | head -1 | grep -q "^rclone v1\.75\.2$" && ! command -v ffmpeg'
+    # The master runs as uid 1000 (the entrypoint starts as root only to fix the ownership of a mount, then drops), also on
+    # a /data that a platform made root's: it must be able to write there.
+    test "$(docker run --rm "$image" id -u)" = 1000
+    docker volume create "$name-data" >/dev/null
+    docker run --rm -v "$name-data:/data" --entrypoint sh "$image" -c 'touch /data/.owned-by-root && chown 0:0 /data /data/.owned-by-root'
+    docker run --rm -v "$name-data:/data" "$image" sh -c 'touch /data/can-write && test "$(stat -c %u /data)" = 1000'
     docker run --rm --entrypoint sh "$image" -c 'for b in fafnirx-master; do command -v $b; done'
   fi
 
