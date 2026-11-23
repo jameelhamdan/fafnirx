@@ -20,6 +20,8 @@ pub struct Album {
     pub cover: Option<Uuid>,
     /// The folder the album shows: its key.
     pub folder: String,
+    /// The path inside that folder the album shows; empty for the whole folder.
+    pub path: String,
 }
 
 impl From<q::FindAlbums> for Album {
@@ -34,6 +36,7 @@ impl From<q::FindAlbums> for Album {
             bytes: a.bytes,
             cover: a.chosen,
             folder: a.folder_key,
+            path: a.folder_prefix,
         }
     }
 }
@@ -55,15 +58,27 @@ pub fn media(c: &mut impl GenericClient, album_id: Uuid) -> Result<Vec<(Uuid, St
     Ok(q::media_of_album().bind(c, &album_id).all()?.into_iter().map(|f| (f.id, f.path)).collect())
 }
 
-/// The id of the user's album of this folder.
-pub fn of_folder(c: &mut impl GenericClient, user_id: i64, folder_id: i64) -> Result<Option<Uuid>, Error> {
-    q::album_of_folder().bind(c, &user_id, &folder_id).opt()
+/// The id of the user's album of this folder, or of the path `prefix` inside it (empty for the whole folder).
+pub fn of_folder(c: &mut impl GenericClient, user_id: i64, folder_id: i64, prefix: &str) -> Result<Option<Uuid>, Error> {
+    q::album_of_folder().bind(c, &user_id, &folder_id, &prefix).opt()
 }
 
 /// A new album showing the folder with this folder id. Returns its id.
 pub fn insert(c: &mut impl GenericClient, a: &NewAlbum) -> Result<Uuid, Error> {
-    let params = q::InsertAlbumParams { name: a.name, description: a.description, now: a.now, user_id: a.user_id, folder_id: a.folder_id };
+    let params = q::InsertAlbumParams {
+        name: a.name,
+        description: a.description,
+        now: a.now,
+        user_id: a.user_id,
+        folder_id: a.folder_id,
+        prefix: a.prefix,
+    };
     q::insert_album().params(c, &params).one()
+}
+
+/// The albums of a folder that show `from` or a folder inside it follow it to `to` (cleaned paths): it was moved or renamed.
+pub fn follow_move(c: &mut impl GenericClient, folder_id: i64, from: &str, to: &str) -> Result<(), Error> {
+    q::move_album_prefixes().params(c, &q::MoveAlbumPrefixesParams { folder_id, from, to }).map(drop)
 }
 
 /// What a new album is made of: its owner, its words, the folder it shows and when it was made.
@@ -72,6 +87,8 @@ pub struct NewAlbum<'a> {
     pub name: &'a str,
     pub description: &'a str,
     pub folder_id: i64,
+    /// The path inside the folder, without slashes at the ends; empty for the whole folder.
+    pub prefix: &'a str,
     pub now: i64,
 }
 

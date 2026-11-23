@@ -27,6 +27,7 @@ pub const ALL: &[Migration] = &[
         name: "devices_and_folders",
         sql: include_str!("../../migrations/0004_devices_and_folders.sql"),
     },
+    Migration { version: 5, name: "album_prefix", sql: include_str!("../../migrations/0005_album_prefix.sql") },
 ];
 
 const TRACKING: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (

@@ -57,6 +57,37 @@ fn a_folder_is_an_album_and_what_comes_into_it_is_in_the_album() {
 }
 
 #[test]
+fn a_folder_inside_a_folder_is_an_album_and_follows_a_rename() {
+    let mut api = Api::new();
+    block(async {
+        api.cookie = login(&api).await;
+        api.json(Method::POST, "/api/folders", json!({"name": "show"})).await;
+        for (path, shade) in [("S1/E1.png", 1), ("S1x/E1.png", 2), ("S2/E1.png", 3), ("S2/E2.png", 4)] {
+            api.upload("admin/show", path, &png(4, 4, [shade, shade, shade])).await;
+        }
+        let season = json!({"folder": "admin/show", "path": "S2/"});
+        let (status, album) = api.json(Method::POST, "/api/albums", json!({"name": "", "folder": season})).await;
+        assert_eq!(status, StatusCode::OK, "{album}");
+        let id = album["id"].as_str().unwrap().to_string();
+        assert_eq!(
+            (album["name"].clone(), album["count"].clone(), album["folder"].clone()),
+            (json!("S2"), json!(2), json!({"folder": "admin/show", "path": "S2"})),
+            "only the files below the folder are in it"
+        );
+        let whole = json!({"folder": "admin/show", "path": ""});
+        let (_, all) = api.json(Method::POST, "/api/albums", json!({"name": "", "folder": whole})).await;
+        assert_ne!(all["id"], album["id"], "the whole folder and a folder in it are albums of their own");
+        assert_eq!(all["count"], 4);
+
+        // Renaming the folder moves the album with it.
+        let (status, moved) = api.json(Method::POST, "/api/files/move", json!({"folder": "admin/show", "from": "S2", "to": "Season 2"})).await;
+        assert_eq!(status, StatusCode::OK, "{moved}");
+        let (_, album) = api.get(&format!("/api/albums/{id}")).await;
+        assert_eq!((album["album"]["folder"]["path"].clone(), album["album"]["count"].clone()), (json!("Season 2"), json!(2)));
+    });
+}
+
+#[test]
 fn an_album_shows_its_folder_and_leaves_the_files_alone() {
     let mut api = Api::new();
     block(async {

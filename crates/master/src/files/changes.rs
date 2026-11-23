@@ -186,6 +186,9 @@ pub fn move_tree(c: &mut Client, store: &crate::platform::store::Store, folder: 
         }
         moved.push(pair);
     }
+    // An album of the folder that was moved goes with it.
+    crate::repo::albums::follow_move(c, folder.id, from, to)?;
     db::notify(c, db::Topic::Files, &folder.key)?;
+    db::notify(c, db::Topic::Library, "")?;
     Ok(targets.len())
 }

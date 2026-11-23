@@ -159,7 +159,7 @@ pub fn snapshot(c: &mut Client) -> anyhow::Result<serde_json::Value> {
         .into_iter()
         .map(|a| {
             json!({ "user": a.owner, "name": a.name, "description": a.description, "created_at": a.created_at,
-                    "folder": { "folder": a.folder, "path": "" } })
+                    "folder": { "folder": a.folder, "path": a.path } })
         })
         .collect();
 

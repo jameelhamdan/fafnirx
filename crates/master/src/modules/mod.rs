@@ -378,6 +378,15 @@ pub fn can_poster() -> bool {
     RUNNING.get().is_some_and(|r| r.registry.provider(capability::POSTER).is_some())
 }
 
+/// Fails with a plain reason when the file the module is going to be asked about is not on the master's own disk: then the
+/// module's "no such file" is not a problem of the module's mount, and the library is the one that is out of step with the disk.
+fn in_the_tree(file: &Path, p: &str, module: &str) -> Result<()> {
+    if !file.is_file() {
+        bail!("{p} is in the library but not in the master's file store ({}), so the {module} module cannot read it", file.display());
+    }
+    Ok(())
+}
+
 /// What the video module says about a video file; none when there is no such module.
 ///
 /// For the threads of the job queue: it waits for the answer.
@@ -385,6 +394,7 @@ pub fn probe_video(file: &Path, hash: &str) -> Result<Option<Probe>> {
     let Some(run) = RUNNING.get() else { return Ok(None) };
     let Some(module) = run.registry.provider(capability::PROBE_VIDEO) else { return Ok(None) };
     let p = crate::platform::store::tree_path_of(&run.files, file)?;
+    in_the_tree(file, &p, module.id())?;
     run.runtime.block_on(async {
         let reply = module.get("/probe").query(&[("p", p.as_str()), ("h", hash)]).timeout(DERIVE_TIMEOUT).send().await?;
         if reply.status() == reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE {
@@ -402,6 +412,7 @@ pub fn poster(file: &Path, hash: &str, max: u32, at_ms: Option<i64>) -> Result<O
     let Some(run) = RUNNING.get() else { return Ok(None) };
     let Some(module) = run.registry.provider(capability::POSTER) else { return Ok(None) };
     let p = crate::platform::store::tree_path_of(&run.files, file)?;
+    in_the_tree(file, &p, module.id())?;
     run.runtime.block_on(async {
         let mut query = vec![("p", p.clone()), ("h", hash.to_string()), ("max", max.to_string())];
         query.extend(at_ms.map(|ms| ("at_ms", ms.to_string())));

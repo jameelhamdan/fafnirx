@@ -105,7 +105,8 @@ Synchronous `postgres` behind an `r2d2` pool.
   (`ingest::commit_version` is the model).
 - A rename is `commit_version` with `renamed_from` (clients), `adopt_live` with `renamed_from` (watcher) or
   `move_path` (web app; only `user` and `master` folders). Each logs one `rename`, calls `files::vacate_renamed` (never
-  `delete_path`). Albums show a whole folder, so a rename needs nothing more.
+  `delete_path`). An album shows a folder or a folder inside one (`albums.folder_prefix`): renaming a folder inside it
+  (`files::changes::move_tree`) moves the prefix of the albums with it (`repo::albums::follow_move`).
 - A job returns `Ok(Some(note))` to show a note in Processing.
 
 ## Changing things

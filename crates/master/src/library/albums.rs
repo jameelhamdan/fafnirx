@@ -56,7 +56,7 @@ impl From<albums::Album> for AlbumInfo {
             count: a.files,
             bytes: a.bytes,
             cover: a.cover.map(Id),
-            folder: Folder { folder: a.folder, path: String::new() },
+            folder: Folder { folder: a.folder, path: a.path },
         }
     }
 }
@@ -124,7 +124,7 @@ pub async fn create(Ctx { state, who }: Ctx, Json(body): Json<NewAlbum>) -> Res<
     let out = run(&state, move |c| {
         // One album per folder, so asking again gives the one there is.
         let shown = find_folder(c, &who, &body.folder)?;
-        if let Some(id) = albums::of_folder(c, who.user_id, shown.folder_id)? {
+        if let Some(id) = albums::of_folder(c, who.user_id, shown.folder_id, &shown.path)? {
             return load_album(c, &who, id);
         }
         let name = match body.name.trim() {
@@ -139,6 +139,7 @@ pub async fn create(Ctx { state, who }: Ctx, Json(body): Json<NewAlbum>) -> Res<
                 name: &name,
                 description: body.description.trim(),
                 folder_id: shown.folder_id,
+                prefix: &shown.path,
                 now: unix_now(),
             },
         )?;
@@ -154,17 +155,18 @@ pub async fn create(Ctx { state, who }: Ctx, Json(body): Json<NewAlbum>) -> Res<
 /// A folder the user can see, as an album shows it.
 struct FolderShown {
     folder_id: i64,
+    /// The path inside the folder, cleaned; empty for the whole folder.
+    path: String,
     /// What to call an album of it.
     name: String,
 }
 
 fn find_folder(c: &mut postgres::Client, who: &Access, place: &Folder) -> anyhow::Result<FolderShown> {
     let found = crate::files::browse::find_folder(c, who, &place.folder)?;
-    if !input::folder_path(&place.path)?.is_empty() {
-        return Err(ApiError::bad("An album shows a whole folder: make the folder you want a folder of its own").into());
-    }
-    let name = found.key.rsplit('/').next().unwrap_or(&found.key).to_string();
-    Ok(FolderShown { folder_id: found.id, name })
+    let path = input::folder_path(&place.path)?;
+    let last = if path.is_empty() { &found.key } else { &path };
+    let name = last.rsplit('/').next().unwrap_or(last).to_string();
+    Ok(FolderShown { folder_id: found.id, path, name })
 }
 
 #[derive(Serialize)]

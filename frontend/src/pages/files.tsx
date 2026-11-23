@@ -226,7 +226,7 @@ export default function Files() {
           {t('Deleted')}
         </label>
         <div className="ms-auto flex items-center gap-2">
-          {folder && !path && hasWorkspace(role) && !showDeleted && <FolderAlbumButton folder={{ folder, path }} />}
+          {folder && hasWorkspace(role) && !showDeleted && <FolderAlbumButton folder={{ folder, path }} />}
           <ToggleGroup value={view} onValueChange={(v) => v && go({ view: v === 'grid' ? 'grid' : null }, true)}>
             <ToggleGroupItem value="list" aria-label={t('List')} title={t('List')}><List /></ToggleGroupItem>
             <ToggleGroupItem value="grid" aria-label={t('Grid')} title={t('Grid')}><Grid2x2 /></ToggleGroupItem>
@@ -245,8 +245,8 @@ export default function Files() {
             {hasWorkspace(role) && !showDeleted && chosen.length === 1 && chosen[0].kind === 'folder' && chosen[0].writable && chosen[0].folder_kind === 'user' && (
               <Button size="sm" variant="outline" onClick={() => setRenaming(chosen[0].folder)}><Pencil className="size-4" />{t('Rename folder')}</Button>
             )}
-            {hasWorkspace(role) && !showDeleted && chosen.length === 1 && chosen[0].kind === 'folder' && ['user', 'master'].includes(chosen[0].folder_kind ?? '') && (
-              <Button size="sm" variant="outline" onClick={() => setAlbumOf({ folder: chosen[0].folder, path: '' })}>
+            {hasWorkspace(role) && !showDeleted && chosen.length === 1 && (chosen[0].kind === 'dir' || (chosen[0].kind === 'folder' && ['user', 'master'].includes(chosen[0].folder_kind ?? ''))) && (
+              <Button size="sm" variant="outline" onClick={() => setAlbumOf({ folder: chosen[0].folder, path: chosen[0].kind === 'dir' ? chosen[0].path : '' })}>
                 <Images className="size-4" />{t('Show as album')}
               </Button>
             )}

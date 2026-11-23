@@ -156,5 +156,5 @@ WHERE (l.direction = 'in' AND l.folder_id = :id AND (:all::boolean OR l.user_id 
 ORDER BY l.name;
 
 --! folder_album
--- The album of the user that is a shortcut to the folder.
-SELECT id, name FROM albums WHERE folder_id = :id AND user_id = :user::bigint LIMIT 1;
+-- The album of the user that is a shortcut to the whole folder.
+SELECT id, name FROM albums WHERE folder_id = :id AND user_id = :user::bigint AND folder_prefix = '' LIMIT 1;
