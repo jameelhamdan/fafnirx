@@ -120,7 +120,6 @@
   "All the work done in the background: reading details, making pictures, reading sources, copying to mirrors, and what the modules that are set up are working on.": "バックグラウンドで行われるすべての作業: 詳細の読み取り、画像の作成、ソースの読み取り、ミラーへのコピー、設定済みモジュールの作業。",
   "Amazon S3, Wasabi, Cloudflare R2, MinIO and others.": "Amazon S3、Wasabi、Cloudflare R2、MinIO など。",
   "An album needs a name of 1 to 120 characters": "アルバム名は 1〜120 文字にしてください",
-  "An album shows a whole folder: make the folder you want a folder of its own": "アルバムはフォルダー全体を表示します。表示したいものを独立したフォルダーにしてください",
   "An album shows everything in the folder, new files included, and follows the folder if it is renamed. It is yours alone.": "アルバムはフォルダの中身をすべて（新しいファイルも）表示し、フォルダ名が変わっても追従します。あなただけのものです。",
   "An RSS or Atom feed whose entries link to files, read on every run. A feed only adds files: what it stops listing is not deleted.": "エントリがファイルへリンクしている RSS または Atom フィードで、実行のたびに読み込まれます。フィードはファイルを追加するだけで、一覧から消えたものは削除されません。",
   "Any other storage rclone supports, such as Google Drive. Name the backend and put its settings under More backend options, one key=value per line.": "rclone が対応するその他のストレージ（Google Drive など）。バックエンド名を入力し、設定は「その他のバックエンドオプション」に 1 行ずつ key=value で書いてください。",

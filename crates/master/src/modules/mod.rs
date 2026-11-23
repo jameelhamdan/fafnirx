@@ -382,7 +382,10 @@ pub fn can_poster() -> bool {
 /// module's "no such file" is not a problem of the module's mount, and the library is the one that is out of step with the disk.
 fn in_the_tree(file: &Path, p: &str, module: &str) -> Result<()> {
     if !file.is_file() {
-        bail!("{p} is in the library but not in the master's file store ({}), so the {module} module cannot read it", file.display());
+        bail!(
+            "{p} is in the library but not in the master's file store ({}), so the {module} module cannot read it",
+            file.display()
+        );
     }
     Ok(())
 }

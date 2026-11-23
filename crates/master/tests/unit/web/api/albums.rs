@@ -80,10 +80,15 @@ fn a_folder_inside_a_folder_is_an_album_and_follows_a_rename() {
         assert_eq!(all["count"], 4);
 
         // Renaming the folder moves the album with it.
-        let (status, moved) = api.json(Method::POST, "/api/files/move", json!({"folder": "admin/show", "from": "S2", "to": "Season 2"})).await;
+        let (status, moved) = api
+            .json(Method::POST, "/api/files/move", json!({"folder": "admin/show", "from": "S2", "to": "Season 2"}))
+            .await;
         assert_eq!(status, StatusCode::OK, "{moved}");
         let (_, album) = api.get(&format!("/api/albums/{id}")).await;
-        assert_eq!((album["album"]["folder"]["path"].clone(), album["album"]["count"].clone()), (json!("Season 2"), json!(2)));
+        assert_eq!(
+            (album["album"]["folder"]["path"].clone(), album["album"]["count"].clone()),
+            (json!("Season 2"), json!(2))
+        );
     });
 }
 

@@ -196,7 +196,10 @@ pub(crate) fn source_of(app: &App, q: &Which) -> Result<PathBuf, Failure> {
     if !source.is_file() {
         // The module's own view of the data folder is what is missing it: say where it looked, so a mount that differs from the
         // master's (the data folder of the video container must be the master's) shows in the error.
-        return Err(fail(StatusCode::NOT_FOUND, format!("no such file: {} is not in the data folder the video module sees", source.display())));
+        return Err(fail(
+            StatusCode::NOT_FOUND,
+            format!("no such file: {} is not in the data folder the video module sees", source.display()),
+        ));
     }
     Ok(source)
 }

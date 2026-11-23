@@ -120,7 +120,6 @@
   "All the work done in the background: reading details, making pictures, reading sources, copying to mirrors, and what the modules that are set up are working on.": "كل العمل الذي يجري في الخلفية: قراءة التفاصيل وإنشاء الصور وقراءة المصادر والنسخ إلى المرايا وما تعمل عليه الوحدات المُعدّة.",
   "Amazon S3, Wasabi, Cloudflare R2, MinIO and others.": "Amazon S3 وWasabi وCloudflare R2 وMinIO وغيرها.",
   "An album needs a name of 1 to 120 characters": "يحتاج الألبوم إلى اسم من 1 إلى 120 حرفًا",
-  "An album shows a whole folder: make the folder you want a folder of its own": "يعرض الألبوم مجلدًا كاملًا: اجعل ما تريده مجلدًا مستقلًا",
   "An album shows everything in the folder, new files included, and follows the folder if it is renamed. It is yours alone.": "يعرض الألبوم كل ما في المجلد، بما في ذلك الملفات الجديدة، ويتبع المجلد إذا أُعيدت تسميته. وهو لك وحدك.",
   "An RSS or Atom feed whose entries link to files, read on every run. A feed only adds files: what it stops listing is not deleted.": "تغذية RSS أو Atom تشير مدخلاتها إلى ملفات، وتُقرأ في كل دورة. التغذية تضيف الملفات فقط: ما تتوقف عن عرضه لا يُحذف.",
   "Any other storage rclone supports, such as Google Drive. Name the backend and put its settings under More backend options, one key=value per line.": "أي تخزين آخر يدعمه rclone، مثل Google Drive. اكتب اسم الواجهة وضع إعداداتها ضمن «خيارات إضافية للواجهة الخلفية»، بمعدل key=value في كل سطر.",

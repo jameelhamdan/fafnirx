@@ -120,7 +120,6 @@
   "All the work done in the background: reading details, making pictures, reading sources, copying to mirrors, and what the modules that are set up are working on.": "后台完成的所有工作：读取详情、生成图片、读取来源、复制到镜像，以及已设置的模块正在做的事。",
   "Amazon S3, Wasabi, Cloudflare R2, MinIO and others.": "Amazon S3、Wasabi、Cloudflare R2、MinIO 等。",
   "An album needs a name of 1 to 120 characters": "相册名称需要 1 到 120 个字符",
-  "An album shows a whole folder: make the folder you want a folder of its own": "相册显示整个文件夹：请把你想要的内容单独放进一个文件夹",
   "An album shows everything in the folder, new files included, and follows the folder if it is renamed. It is yours alone.": "相册显示文件夹中的全部内容（包括新文件），文件夹重命名后仍然跟随。它只属于你。",
   "An RSS or Atom feed whose entries link to files, read on every run. A feed only adds files: what it stops listing is not deleted.": "条目链接到文件的 RSS 或 Atom 订阅源，每次运行都会读取。订阅源只会添加文件：它不再列出的内容不会被删除。",
   "Any other storage rclone supports, such as Google Drive. Name the backend and put its settings under More backend options, one key=value per line.": "rclone 支持的其他存储，例如 Google Drive。填写后端名称，并在“更多后端选项”中每行写一个 key=value 设置。",

@@ -120,7 +120,6 @@
   "All the work done in the background: reading details, making pictures, reading sources, copying to mirrors, and what the modules that are set up are working on.": "Todo el trabajo en segundo plano: leer detalles, hacer imágenes, leer fuentes, copiar a espejos y lo que hacen los módulos configurados.",
   "Amazon S3, Wasabi, Cloudflare R2, MinIO and others.": "Amazon S3, Wasabi, Cloudflare R2, MinIO y otros.",
   "An album needs a name of 1 to 120 characters": "Un álbum necesita un nombre de 1 a 120 caracteres",
-  "An album shows a whole folder: make the folder you want a folder of its own": "Un álbum muestra una carpeta entera: convierte lo que quieres en una carpeta propia",
   "An album shows everything in the folder, new files included, and follows the folder if it is renamed. It is yours alone.": "Un álbum muestra todo lo que hay en la carpeta, incluidos los archivos nuevos, y sigue a la carpeta si se le cambia el nombre. Es solo tuyo.",
   "An RSS or Atom feed whose entries link to files, read on every run. A feed only adds files: what it stops listing is not deleted.": "Un feed RSS o Atom cuyas entradas enlazan a archivos, leído en cada ejecución. Un feed solo añade archivos: lo que deja de listar no se borra.",
   "Any other storage rclone supports, such as Google Drive. Name the backend and put its settings under More backend options, one key=value per line.": "Cualquier otro almacenamiento compatible con rclone, como Google Drive. Indica el backend y pon sus ajustes en «Más opciones del backend», una clave=valor por línea.",
